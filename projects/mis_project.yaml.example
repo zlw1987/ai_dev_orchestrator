@@ -1,60 +1,105 @@
-# Example project workspace-boundary config.
-# Copy to projects/<name>.yaml and edit. Contains NO secrets — boundaries only.
+# Example project config (EXAMPLE ONLY).
+# Copy to projects/<name>.yaml and edit. Contains NO secrets — provider
+# connection details are referenced by ENV VAR NAME only (see *_env fields).
+# The workspace_path below is configuration/documentation only; Phase 1 code
+# never reads or touches that folder.
 
-# Logical name for this project workspace.
-name: mis_project
+project_id: mis_project
+display_name: MIS_PROJECT
 
-# Absolute path the orchestrator is allowed to operate within.
-# All file changes (in future phases) must stay inside this root.
-root: C:/dev/mis_project
+repo:
+  workspace_path: "C:/dev/mis_project"
+  github_repo: "zlw1987/mis_project"
+  default_base_branch: "main"
+  branch_prefix: "ai/mis"
 
-# Paths (relative to root) the orchestrator may read/modify.
-allow_paths:
-  - documents/**
-  - .github/ISSUE_TEMPLATE/**
-  - .github/pull_request_template.md
-  - .github/workflows/**
-  - accounts/**
-  - project_requests/**
-  - external_auth/**
-  - templates/**
-  - config/**
-  - requirements.txt
-  - manage.py
+workspace_policy:
+  deny_outside_workspace: true
+  allow_symlinks: false
+  max_changed_files: 20
 
-# Sensitive paths that require extra review / stronger guards (even if allowed).
+# Paths (relative to workspace) the orchestrator may read/modify.
+allowed_paths:
+  - "documents/**"
+  - ".github/ISSUE_TEMPLATE/**"
+  - ".github/pull_request_template.md"
+  - ".github/workflows/**"
+  - "accounts/**"
+  - "project_requests/**"
+  - "external_auth/**"
+  - "templates/**"
+  - "config/**"
+  - "requirements.txt"
+  - "manage.py"
+
+# Sensitive paths requiring explicit authorization to modify (even if allowed).
 protected_paths:
-  - config/settings.py
-  - requirements.txt
-  - external_auth/**
+  - "config/settings.py"
+  - "requirements.txt"
+  - "external_auth/**"
   - "**/migrations/**"
-  - .github/workflows/**
+  - ".github/workflows/**"
 
-# Paths the orchestrator must never read or modify, even if inside root.
+# Paths the orchestrator must never read or modify. Forbidden beats everything.
 forbidden_paths:
-  - .git/**
-  - .env
-  - .venv/**
-  - db.sqlite3
-  - media/**
-  - __pycache__/**
+  - ".git"
+  - ".git/**"
+  - ".env"
+  - ".venv"
+  - ".venv/**"
+  - "db.sqlite3"
+  - "media"
+  - "media/**"
+  - "__pycache__/**"
+  - "**/__pycache__/**"
   - "*.pyc"
-  - .ai_runs/**
+  - ".ai_runs"
+  - ".ai_runs/**"
 
-# Default model provider for this project. Internal LiteLLM only in Phase 0.
-provider: litellm
+# Model providers. Default is the internal LiteLLM OpenAI-compatible endpoint.
+# Secrets come from the named environment variables, never from this file.
+providers:
+  litellm_local:
+    type: openai_compatible
+    base_url_env: LITELLM_BASE_URL
+    api_key_env: LITELLM_API_KEY
+    timeout_seconds: 600
+    default_headers:
+      User-Agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 
-# Models exposed to this project (placeholder; not called in Phase 0).
-models:
-  default: minimax-m2.7
-  alternates:
-    - qwen3.6-27b
+ai_roles:
+  implementer:
+    provider: litellm_local
+    model: minimax-m2.7
+    temperature: 0.2
+    max_tokens: 8192
+    can_edit_files: true
+  reviewer:
+    provider: litellm_local
+    model: qwen3.6-27b
+    temperature: 0.1
+    max_tokens: 8192
+    can_edit_files: false
+  fixer:
+    provider: litellm_local
+    model: minimax-m2.7
+    temperature: 0.15
+    max_tokens: 8192
+    can_edit_files: true
 
-# Allowlisted checks the orchestrator may run (future phase; not executed yet).
-allowed_checks:
-  - pytest
+# External integrations are OPTIONAL and disabled by default.
+external_integrations:
+  openai_api:
+    enabled: false
+  anthropic_api:
+    enabled: false
+  github_copilot_review:
+    enabled: false
+  codex_review:
+    enabled: false
 
-# Controlled automation level (future phase; not enforced in Phase 0).
-# L1 = plan-only (the orchestrator proposes a plan, makes no changes).
-# Later phases may add L2/L3/L4 for progressively more automation.
-automation_level: L1
+run_limits:
+  max_model_calls_per_issue: 20
+  max_review_loops: 3
+  max_ci_fix_loops: 2
+  max_total_runtime_minutes: 60
