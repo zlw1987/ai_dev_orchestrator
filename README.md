@@ -17,18 +17,21 @@ changes. The eventual design will:
 
 The emphasis is on **control and review**, not autonomous action.
 
-## Current status: Phase 0 (bootstrap)
+## Current status: Phase 2 (read-only GitHub issue reader)
 
-This is a **skeleton only**. The following are intentionally **not** implemented yet:
+What exists today: package layout and CLI; typed project-config loading and
+workspace path-policy enforcement (Phase 1); and **read-only** GitHub issue
+inspection that fetches one issue and parses its Markdown sections (Phase 2).
 
-- No GitHub API calls.
+The following are intentionally **not** implemented yet:
+
+- No **GitHub writes** (read-only issue access only — no comments, labels,
+  branches, or PRs).
 - No LiteLLM (or any model) calls.
 - No agent logic.
 - No file editing or command execution.
+- No reads or writes of configured **target project workspaces**.
 - No agent framework (LangGraph / CrewAI / AutoGen / n8n).
-
-What exists today: package layout, a CLI with `--help` and a `version` command,
-and a minimal config-loading placeholder.
 
 ## Provider policy
 
@@ -56,6 +59,18 @@ python -m ai_dev_orchestrator --help
 python -m ai_dev_orchestrator version
 ```
 
+### Inspecting a GitHub issue (Phase 2, read-only)
+
+```bash
+python -m ai_dev_orchestrator inspect-issue --repo owner/repo --issue 1
+```
+
+Phase 2 adds **read-only** GitHub issue inspection: it fetches one issue and
+reports its parsed Markdown sections (and any missing required sections). It
+**does not write to GitHub**, **does not call LiteLLM**, and **does not touch
+configured project workspaces**. A `GITHUB_TOKEN` is used if present
+(public repos may be readable without one).
+
 ## Tests
 
 ```bash
@@ -71,5 +86,8 @@ secrets**.
 
 ## Next phase
 
-Phase 1 will add read-only config validation and a typed model for project
-workspace boundaries, still without any network calls.
+Phase 3 will add an internal LiteLLM / OpenAI-compatible client abstraction for
+company-hosted models. It must remain mockable and environment-driven, with
+external providers disabled by default. Phase 3 should still avoid agent
+automation, file editing, command execution, GitHub writes, and target project
+workspace reads/writes unless explicitly authorized in a later phase.
