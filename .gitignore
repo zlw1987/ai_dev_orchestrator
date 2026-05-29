@@ -1,0 +1,20 @@
+# Virtual environments
+.venv/
+
+# Python caches
+__pycache__/
+*.py[cod]
+
+# Test caches
+.pytest_cache/
+
+# Local secrets / environment
+.env
+.claude/
+# Orchestrator run artifacts
+.ai_runs/
+
+# Build artifacts
+*.egg-info/
+build/
+dist/
