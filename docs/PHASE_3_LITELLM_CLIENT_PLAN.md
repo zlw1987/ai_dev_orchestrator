@@ -182,9 +182,16 @@ interpreting, applying, or acting on that text is never the client's job.
 - **Phase 3B — typed models + config loader.** Add `llm/models.py` and
   `llm/config.py` with the §4 models and env loading from the §2 variables.
   Unit tests for model validation and config loading. No network code.
-- **Phase 3C — mockable LiteLLM client.** Add `llm/client.py` with chat
-  completion, timeouts, retries, and typed errors (§5). Tests use a mocked
-  `httpx` transport; no real calls.
+- **Phase 3C — mockable LiteLLM client. (DONE.)** Added
+  [llm/client.py](../src/ai_dev_orchestrator/llm/client.py) with `LLMClient`:
+  one chat completion (`POST {base_url}/chat/completions`), `config`-driven
+  timeout, bounded retries on transient failures (timeout, transport error,
+  HTTP 429/5xx) with minimal injectable backoff, and the §5 typed errors
+  (`LLMClientError`, `LLMAuthError`, `LLMTimeoutError`, `LLMTransportError`,
+  `LLMResponseError`). The client reads no env vars, makes no request at import
+  or construction time, and never logs the API key. Tests
+  ([tests/test_llm_client.py](../tests/test_llm_client.py)) use
+  `httpx.MockTransport`; no real calls.
 - **Phase 3D — CLI smoke test (mocked / dry-run only).** Wire a CLI entry that
   exercises the client against a **faked provider or explicit dry-run** —
   still no real model call by default.

@@ -17,19 +17,23 @@ changes. The eventual design will:
 
 The emphasis is on **control and review**, not autonomous action.
 
-## Current status: Phase 3B (typed LLM models + env config loader)
+## Current status: Phase 3C (mockable internal LiteLLM client)
 
 What exists today: package layout and CLI; typed project-config loading and
 workspace path-policy enforcement (Phase 1); **read-only** GitHub issue
 inspection that fetches one issue and parses its Markdown sections (Phase 2);
-and **typed LLM request/response/config models** plus an environment-driven
-`LLMClientConfig` loader (Phase 3B). The Phase 3B loader reads only environment
-variables (canonical `AIDO_LITELLM_*` names) and makes **no** network calls.
+**typed LLM request/response/config models** plus an environment-driven
+`LLMClientConfig` loader (Phase 3B); and a **mockable, OpenAI-compatible chat
+client** (`LLMClient`) that consumes those models to POST one chat completion
+to an internal LiteLLM endpoint with bounded retries and typed errors
+(Phase 3C). The client reads no environment variables, makes no network call at
+import or construction time, never logs the API key, and is fully testable with
+a faked HTTP transport (no real model is ever called in tests).
 
 The following are intentionally **not** implemented yet:
 
-- No **LiteLLM HTTP client** and no actual model calls (Phase 3B is models and
-  config only).
+- No CLI wiring that calls the client, and no actual model calls by default
+  (Phase 3D will add a mocked/dry-run CLI smoke test).
 - No **GitHub writes** (read-only issue access only — no comments, labels,
   branches, or PRs).
 - No agent logic.
@@ -90,9 +94,8 @@ secrets**.
 
 ## Next phase
 
-Phase 3C will add the internal LiteLLM / OpenAI-compatible **client** that
-consumes the Phase 3B models and config. It must remain mockable and
-environment-driven, with external providers disabled by default. It should still
-avoid agent automation, file editing, command execution, GitHub writes, and
-target project workspace reads/writes unless explicitly authorized in a later
-phase.
+Phase 3D will add a **mocked / dry-run CLI smoke test** that exercises the
+Phase 3C client against a faked provider or an explicit dry-run — still **no
+real model call by default**. It should remain offline-testable and avoid agent
+automation, file editing, command execution, GitHub writes, and target project
+workspace reads/writes unless explicitly authorized in a later phase.
