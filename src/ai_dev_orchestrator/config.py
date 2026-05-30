@@ -1,8 +1,12 @@
-"""Config loading placeholder.
+"""Top-level orchestrator settings.
 
-Phase 0: defines the typed shape of orchestrator settings and a loader that
-reads ONLY environment variables. It performs no network calls, contacts no
-GitHub or LiteLLM endpoint, and stores no secrets in files.
+Defines the typed shape of orchestrator settings and a loader that reads ONLY
+environment variables. It performs no network calls, contacts no GitHub or
+LiteLLM endpoint, and stores no secrets in files.
+
+LiteLLM connection variables use the canonical ``AIDO_`` prefix (decided in
+Phase 3B). The detailed LLM client config and its env loader live in
+:mod:`ai_dev_orchestrator.llm.config`.
 
 External AI providers (OpenAI, Anthropic, Copilot/Codex) are disabled by
 default; the internal LiteLLM endpoint is the intended default provider.
@@ -48,7 +52,7 @@ def load_settings() -> Settings:
     Does NOT read a .env file, make network calls, or validate credentials.
     """
     return Settings(
-        litellm_base_url=os.environ.get("LITELLM_BASE_URL"),
-        litellm_api_key=os.environ.get("LITELLM_API_KEY"),
+        litellm_base_url=os.environ.get("AIDO_LITELLM_BASE_URL"),
+        litellm_api_key=os.environ.get("AIDO_LITELLM_API_KEY"),
         github_token=os.environ.get("GITHUB_TOKEN"),
     )

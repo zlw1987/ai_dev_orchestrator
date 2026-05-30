@@ -43,7 +43,23 @@ def test_loads_the_example_config():
     cfg = load_project_config(EXAMPLE_CONFIG)
     assert cfg.project_id == "mis_project"
     assert "minimax-m2.7" == cfg.ai_roles["implementer"].model
-    assert cfg.providers["litellm_local"].base_url_env == "LITELLM_BASE_URL"
+    assert cfg.providers["litellm_local"].base_url_env == "AIDO_LITELLM_BASE_URL"
+
+
+# Old unprefixed env names; superseded by the canonical AIDO_-prefixed names.
+_DEPRECATED_ENV_NAMES = {"LITELLM_BASE_URL", "LITELLM_API_KEY"}
+
+
+def test_example_configs_use_canonical_env_names():
+    """Checked-in example configs must not reference the old unprefixed names."""
+    examples = sorted((REPO_ROOT / "projects").glob("*.yaml.example"))
+    assert examples, "expected at least one example project config"
+    for example in examples:
+        cfg = load_project_config(example)
+        for name, provider in cfg.providers.items():
+            referenced = {provider.base_url_env, provider.api_key_env}
+            stale = referenced & _DEPRECATED_ENV_NAMES
+            assert not stale, f"{example.name} provider {name!r} uses stale env names: {stale}"
 
 
 def test_missing_required_field_fails(tmp_path):

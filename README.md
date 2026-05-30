@@ -17,17 +17,21 @@ changes. The eventual design will:
 
 The emphasis is on **control and review**, not autonomous action.
 
-## Current status: Phase 2 (read-only GitHub issue reader)
+## Current status: Phase 3B (typed LLM models + env config loader)
 
 What exists today: package layout and CLI; typed project-config loading and
-workspace path-policy enforcement (Phase 1); and **read-only** GitHub issue
-inspection that fetches one issue and parses its Markdown sections (Phase 2).
+workspace path-policy enforcement (Phase 1); **read-only** GitHub issue
+inspection that fetches one issue and parses its Markdown sections (Phase 2);
+and **typed LLM request/response/config models** plus an environment-driven
+`LLMClientConfig` loader (Phase 3B). The Phase 3B loader reads only environment
+variables (canonical `AIDO_LITELLM_*` names) and makes **no** network calls.
 
 The following are intentionally **not** implemented yet:
 
+- No **LiteLLM HTTP client** and no actual model calls (Phase 3B is models and
+  config only).
 - No **GitHub writes** (read-only issue access only — no comments, labels,
   branches, or PRs).
-- No LiteLLM (or any model) calls.
 - No agent logic.
 - No file editing or command execution.
 - No reads or writes of configured **target project workspaces**.
@@ -86,8 +90,9 @@ secrets**.
 
 ## Next phase
 
-Phase 3 will add an internal LiteLLM / OpenAI-compatible client abstraction for
-company-hosted models. It must remain mockable and environment-driven, with
-external providers disabled by default. Phase 3 should still avoid agent
-automation, file editing, command execution, GitHub writes, and target project
-workspace reads/writes unless explicitly authorized in a later phase.
+Phase 3C will add the internal LiteLLM / OpenAI-compatible **client** that
+consumes the Phase 3B models and config. It must remain mockable and
+environment-driven, with external providers disabled by default. It should still
+avoid agent automation, file editing, command execution, GitHub writes, and
+target project workspace reads/writes unless explicitly authorized in a later
+phase.

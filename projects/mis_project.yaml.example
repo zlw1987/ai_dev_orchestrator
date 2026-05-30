@@ -61,8 +61,8 @@ forbidden_paths:
 providers:
   litellm_local:
     type: openai_compatible
-    base_url_env: LITELLM_BASE_URL
-    api_key_env: LITELLM_API_KEY
+    base_url_env: AIDO_LITELLM_BASE_URL
+    api_key_env: AIDO_LITELLM_API_KEY
     timeout_seconds: 600
     default_headers:
       User-Agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"

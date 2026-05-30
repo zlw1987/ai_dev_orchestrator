@@ -47,12 +47,13 @@ Explicitly **out of scope** for all of Phase 3:
 | `AIDO_LITELLM_API_KEY` | API key for the internal LiteLLM endpoint. |
 | `AIDO_LITELLM_DEFAULT_MODEL` | Default model name when a caller omits one. |
 
-> **Naming note:** Phase 0/1 currently reads unprefixed names
-> (`LITELLM_BASE_URL`, `LITELLM_API_KEY`) in
-> [config.py](../src/ai_dev_orchestrator/config.py). The `AIDO_` prefix is
-> proposed to namespace orchestrator settings and avoid collisions. Phase 3B
-> must decide whether to **adopt the `AIDO_` prefix** (preferred) and migrate,
-> or keep the existing names. This reconciliation is a Phase 3B task, not 3A.
+> **Naming note (resolved):** Phase 3B **adopted the `AIDO_` prefix as
+> canonical** and migrated [config.py](../src/ai_dev_orchestrator/config.py) off
+> the unprefixed Phase 0 names (`LITELLM_BASE_URL`, `LITELLM_API_KEY`). The full
+> set is `AIDO_LITELLM_BASE_URL`, `AIDO_LITELLM_API_KEY`,
+> `AIDO_LITELLM_DEFAULT_MODEL`, plus optional `AIDO_LITELLM_TIMEOUT_SECONDS` and
+> `AIDO_LITELLM_MAX_RETRIES`, loaded by
+> [llm/config.py](../src/ai_dev_orchestrator/llm/config.py).
 
 ### Likely company models
 
