@@ -17,23 +17,29 @@ changes. The eventual design will:
 
 The emphasis is on **control and review**, not autonomous action.
 
-## Current status: Phase 3C (mockable internal LiteLLM client)
+## Current status: Phase 3D (mocked / dry-run CLI smoke test)
 
 What exists today: package layout and CLI; typed project-config loading and
 workspace path-policy enforcement (Phase 1); **read-only** GitHub issue
 inspection that fetches one issue and parses its Markdown sections (Phase 2);
 **typed LLM request/response/config models** plus an environment-driven
-`LLMClientConfig` loader (Phase 3B); and a **mockable, OpenAI-compatible chat
+`LLMClientConfig` loader (Phase 3B); a **mockable, OpenAI-compatible chat
 client** (`LLMClient`) that consumes those models to POST one chat completion
 to an internal LiteLLM endpoint with bounded retries and typed errors
-(Phase 3C). The client reads no environment variables, makes no network call at
-import or construction time, never logs the API key, and is fully testable with
-a faked HTTP transport (no real model is ever called in tests).
+(Phase 3C); and a **CLI smoke-test command**, `llm-smoke-test`, that exercises
+the Phase 3C `LLMClient` end-to-end against an in-process fake provider
+(Phase 3D).
+
+`llm-smoke-test` is **fake-provider / dry-run only**: it builds its own fake
+`LLMClientConfig` and an `httpx.MockTransport` internally, reads **no**
+`AIDO_LITELLM_*` (or any other) environment variables, and makes **no real
+network call or real model call**. There is currently **no CLI command that
+can call a real model** — no `--real`/`--live`/`--use-env` option exists
+anywhere in the CLI.
 
 The following are intentionally **not** implemented yet:
 
-- No CLI wiring that calls the client, and no actual model calls by default
-  (Phase 3D will add a mocked/dry-run CLI smoke test).
+- No CLI command that calls a real model (by design — see above).
 - No **GitHub writes** (read-only issue access only — no comments, labels,
   branches, or PRs).
 - No agent logic.
@@ -79,6 +85,21 @@ reports its parsed Markdown sections (and any missing required sections). It
 configured project workspaces**. A `GITHUB_TOKEN` is used if present
 (public repos may be readable without one).
 
+### LLM smoke test (Phase 3D, fake-provider / dry-run only)
+
+```bash
+python -m ai_dev_orchestrator llm-smoke-test
+python -m ai_dev_orchestrator llm-smoke-test --model qwen3.6-27b --message "hello"
+```
+
+Phase 3D adds `llm-smoke-test`, a **dry-run smoke test** of the Phase 3C
+`LLMClient`. It builds a fake `LLMClientConfig` and an `httpx.MockTransport`
+in-process and sends one `LLMRequest` through the real client code path. It
+**reads no environment variables**, **makes no real network call**, and
+**never calls a real model** — the response is a deterministic fake generated
+locally. Output states clearly that it is a dry-run, that no real model was
+called, and reports the model name, response content, and token usage.
+
 ## Tests
 
 ```bash
@@ -94,8 +115,7 @@ secrets**.
 
 ## Next phase
 
-Phase 3D will add a **mocked / dry-run CLI smoke test** that exercises the
-Phase 3C client against a faked provider or an explicit dry-run — still **no
-real model call by default**. It should remain offline-testable and avoid agent
-automation, file editing, command execution, GitHub writes, and target project
-workspace reads/writes unless explicitly authorized in a later phase.
+Phase 4 will add an **L1 plan generator**. It should remain offline-testable
+where possible and continue to avoid agent automation, file editing, command
+execution, GitHub writes, and target project workspace reads/writes unless
+explicitly authorized in that phase.

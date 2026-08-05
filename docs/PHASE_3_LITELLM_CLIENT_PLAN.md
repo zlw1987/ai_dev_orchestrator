@@ -14,8 +14,11 @@
 >   ([llm/client.py](../src/ai_dev_orchestrator/llm/client.py)) and its tests
 >   ([tests/test_llm_client.py](../tests/test_llm_client.py)). Tests use a faked
 >   HTTP transport; no real model is ever called.
-> - **Phase 3D** remains **future** — a mocked / dry-run CLI smoke test with no
->   real model call by default.
+> - **Phase 3D** added the **CLI smoke-test command**, `llm-smoke-test`
+>   ([cli.py](../src/ai_dev_orchestrator/cli.py)), which exercises the Phase 3C
+>   client end-to-end against an in-process fake provider
+>   ([tests/test_cli_llm_smoke.py](../tests/test_cli_llm_smoke.py)). No real
+>   model call, no env vars read, no real network call.
 >
 > Throughout, the safety boundaries hold: no real model calls by default, no
 > agent behavior, no file editing, no command execution, no GitHub writes, and
@@ -208,9 +211,13 @@ interpreting, applying, or acting on that text is never the client's job.
   or construction time, and never logs the API key. Tests
   ([tests/test_llm_client.py](../tests/test_llm_client.py)) use
   `httpx.MockTransport`; no real calls.
-- **Phase 3D — CLI smoke test (mocked / dry-run only).** Wire a CLI entry that
-  exercises the client against a **faked provider or explicit dry-run** —
-  still no real model call by default.
+- **Phase 3D — CLI smoke test (mocked / dry-run only). (DONE.)** Added the
+  `llm-smoke-test` CLI command, which wires the real Phase 3C `LLMClient` to
+  an in-process `httpx.MockTransport` fake provider and sends one
+  `LLMRequest`. No env vars are read, no real network call is made, and no
+  real model call is possible from this command.
+- **Phase 4 — L1 plan generator.** Next phase. Out of scope for all of
+  Phase 3.
 - **Later — implementer / reviewer role wiring.** Connect `minimax-m2.7` and
   `qwen3.6-27b` to orchestrator roles. Out of scope for all of Phase 3.
 
@@ -249,9 +256,19 @@ model call or external network call is made in any phase's tests.**
 - [x] Tests (`tests/test_llm_client.py`) use `httpx.MockTransport`; **no real
   network call and no real model call.**
 
-### Phase 3D — CLI smoke test (FUTURE)
+### Phase 3D — CLI smoke test (DONE)
 
-- [ ] A CLI entry exercises the client against a **faked provider or explicit
-  dry-run**, with **no real model call by default**.
-- [ ] Remains offline-testable; no agent behavior, file editing, command
-  execution, GitHub writes, or target-workspace access is introduced.
+- [x] The `llm-smoke-test` CLI command exercises the client against an
+  in-process **fake provider** (`httpx.MockTransport`), with **no real model
+  call**.
+- [x] Reads no `AIDO_LITELLM_*` (or any other) environment variables and makes
+  no real network call.
+- [x] No `--real`/`--live`/`--use-env` option or any other path to a real
+  model exists.
+- [x] Remains offline-testable ([tests/test_cli_llm_smoke.py](../tests/test_cli_llm_smoke.py));
+  no agent behavior, file editing, command execution, GitHub writes, or
+  target-workspace access is introduced.
+
+### Phase 4 — L1 plan generator (NEXT)
+
+Not started. Out of scope for this document; will get its own plan.
