@@ -1,9 +1,25 @@
 # Phase 3 — Internal LiteLLM Client Plan
 
-> **This document is planning only (Phase 3A). It is not an implementation and
-> describes no shipped behavior.** No runtime code, no module, no test, and no
-> network call is added by this phase. It records intent for the future LiteLLM
-> client and how it will be split across later sub-phases.
+> **This document began as the Phase 3A plan and is now maintained as the
+> Phase 3 status/plan document.** It records both what has shipped and what
+> remains planned across the Phase 3 sub-phases:
+>
+> - **Phase 3A** was **docs-only** — this plan, with no runtime code, module,
+>   test, or network call.
+> - **Phase 3B** added the typed request/response/config **models**
+>   ([llm/models.py](../src/ai_dev_orchestrator/llm/models.py)) and the
+>   environment-driven **config loader**
+>   ([llm/config.py](../src/ai_dev_orchestrator/llm/config.py)). No network code.
+> - **Phase 3C** added the **mockable OpenAI-compatible client**
+>   ([llm/client.py](../src/ai_dev_orchestrator/llm/client.py)) and its tests
+>   ([tests/test_llm_client.py](../tests/test_llm_client.py)). Tests use a faked
+>   HTTP transport; no real model is ever called.
+> - **Phase 3D** remains **future** — a mocked / dry-run CLI smoke test with no
+>   real model call by default.
+>
+> Throughout, the safety boundaries hold: no real model calls by default, no
+> agent behavior, no file editing, no command execution, no GitHub writes, and
+> no target-workspace access.
 
 This plan refines item **"Phase 3 — LiteLLM client"** of
 [AI_DEV_ORCHESTRATOR_PLAN.md](AI_DEV_ORCHESTRATOR_PLAN.md).
@@ -182,20 +198,60 @@ interpreting, applying, or acting on that text is never the client's job.
 - **Phase 3B — typed models + config loader.** Add `llm/models.py` and
   `llm/config.py` with the §4 models and env loading from the §2 variables.
   Unit tests for model validation and config loading. No network code.
-- **Phase 3C — mockable LiteLLM client.** Add `llm/client.py` with chat
-  completion, timeouts, retries, and typed errors (§5). Tests use a mocked
-  `httpx` transport; no real calls.
+- **Phase 3C — mockable LiteLLM client. (DONE.)** Added
+  [llm/client.py](../src/ai_dev_orchestrator/llm/client.py) with `LLMClient`:
+  one chat completion (`POST {base_url}/chat/completions`), `config`-driven
+  timeout, bounded retries on transient failures (timeout, transport error,
+  HTTP 429/5xx) with minimal injectable backoff, and the §5 typed errors
+  (`LLMClientError`, `LLMAuthError`, `LLMTimeoutError`, `LLMTransportError`,
+  `LLMResponseError`). The client reads no env vars, makes no request at import
+  or construction time, and never logs the API key. Tests
+  ([tests/test_llm_client.py](../tests/test_llm_client.py)) use
+  `httpx.MockTransport`; no real calls.
 - **Phase 3D — CLI smoke test (mocked / dry-run only).** Wire a CLI entry that
   exercises the client against a **faked provider or explicit dry-run** —
   still no real model call by default.
 - **Later — implementer / reviewer role wiring.** Connect `minimax-m2.7` and
   `qwen3.6-27b` to orchestrator roles. Out of scope for all of Phase 3.
 
-## 8. Acceptance criteria for Phase 3A
+## 8. Phase acceptance criteria / current status
 
-- The design doc (`docs/PHASE_3_LITELLM_CLIENT_PLAN.md`) exists.
-- **No runtime code added** — no `src/` or `tests/` changes.
-- No tests are required for this phase (docs-only) unless a docs index exists
-  and needs updating; none does today.
-- **No external calls** of any kind.
-- The working tree contains **docs-only** changes.
+Per-sub-phase acceptance criteria. Boxes are checked as each ships; **no real
+model call or external network call is made in any phase's tests.**
+
+### Phase 3A — design doc (DONE)
+
+- [x] The design doc (`docs/PHASE_3_LITELLM_CLIENT_PLAN.md`) exists.
+- [x] **No runtime code added in this phase** — no `src/` or `tests/` changes.
+- [x] No tests required (docs-only).
+- [x] **No external calls** of any kind.
+
+### Phase 3B — typed models + config loader (DONE)
+
+- [x] `llm/models.py` defines `LLMMessage`, `LLMRequest`, `LLMResponse`,
+  `LLMUsage`, and `LLMClientConfig` as pydantic models.
+- [x] `llm/config.py` builds `LLMClientConfig` from `AIDO_LITELLM_*` env vars
+  only (no `.env` files), raising `LLMConfigError` on missing/invalid values.
+- [x] Unit tests cover model validation and env loading.
+- [x] **No network code** and no model call.
+
+### Phase 3C — mockable client (DONE)
+
+- [x] `llm/client.py` defines `LLMClient` plus the typed errors
+  `LLMClientError`, `LLMAuthError`, `LLMTimeoutError`, `LLMTransportError`,
+  `LLMResponseError`.
+- [x] `chat()` POSTs to `{base_url}/chat/completions`, uses
+  `config.timeout_seconds`, and applies bounded retries
+  (`config.max_retries`) only on transient failures (timeout, transport error,
+  HTTP 429/5xx).
+- [x] The client reads no env vars, makes no request at import or construction
+  time, and never logs the API key, prompts, or completions.
+- [x] Tests (`tests/test_llm_client.py`) use `httpx.MockTransport`; **no real
+  network call and no real model call.**
+
+### Phase 3D — CLI smoke test (FUTURE)
+
+- [ ] A CLI entry exercises the client against a **faked provider or explicit
+  dry-run**, with **no real model call by default**.
+- [ ] Remains offline-testable; no agent behavior, file editing, command
+  execution, GitHub writes, or target-workspace access is introduced.
