@@ -11,6 +11,12 @@
 > - **Phase 4B** added the typed **`L1Plan` model**
 >   ([plan/models.py](../src/ai_dev_orchestrator/plan/models.py)) with field
 >   validation only. No planning logic, no model calls, no network calls.
+> - **Phase 4C** added the **`FakeL1Planner` engine**
+>   ([plan/fake_planner.py](../src/ai_dev_orchestrator/plan/fake_planner.py)),
+>   a deterministic, offline transformation from an already-fetched
+>   `GitHubIssue` / `ParsedIssue` / `ProjectConfig` into an `L1Plan`. No model
+>   calls, no network calls, no env var reads, no file/workspace reads, no
+>   CLI command.
 
 This plan refines item **"Phase 4 — L1 plan generator"** of
 [AI_DEV_ORCHESTRATOR_PLAN.md](AI_DEV_ORCHESTRATOR_PLAN.md).
@@ -199,9 +205,27 @@ and the provider policy in
   model calls, no file/network/command IO. Unit tests
   ([tests/test_l1_plan_models.py](../tests/test_l1_plan_models.py)) cover
   every validation rule plus an import-time IO/network guard.
-- **Phase 4C — fake planner engine.** A deterministic function from a parsed
-  issue (§2) to an `L1Plan` (§3), with no model call — the plan-generation
-  analog of the Phase 3C mockable client. Unit tests only, fully offline.
+- **Phase 4C — fake planner engine. (DONE.)** Added
+  [`plan/fake_planner.py`](../src/ai_dev_orchestrator/plan/fake_planner.py)
+  with `FakeL1Planner.create_plan(issue, parsed, project) -> L1Plan`: a
+  deterministic function from a parsed issue (§2) to an `L1Plan` (§3), with
+  no model call — the plan-generation analog of the Phase 3C mockable
+  client. `summary`/`scope_summary` come from the issue's `Goal`/`Scope`
+  sections (falling back to the issue title / safe fallback text);
+  `non_goals`/`required_verification` are parsed bullet lists;
+  `files_likely_to_change` and the non-goals half of
+  `files_forbidden_or_out_of_scope` are inferred only from explicit path-like
+  tokens in section text (plain string matching — never resolved, stat'd, or
+  normalized); `files_forbidden_or_out_of_scope` also always includes
+  `ProjectConfig.forbidden_paths` verbatim; missing required sections and
+  configured `protected_paths` surface as `risks`; vague/unresolvable scope
+  surfaces as `open_questions`; `proposed_steps` are four fixed, descriptive
+  (non-executable) review steps; `automation_level` and
+  `requires_human_approval` are left to the `L1Plan` model's own fixed
+  defaults. No model/network/env/file/workspace IO, no CLI command. Unit
+  tests ([tests/test_fake_l1_planner.py](../tests/test_fake_l1_planner.py))
+  cover every mapping rule, missing-section fallbacks, determinism, and an
+  IO guard. Unit tests only, fully offline.
 - **Phase 4D — CLI command for fake/offline plan generation.** A command
   (e.g. `generate-plan`) that wires Phase 2's issue reader/parser to the
   Phase 4C fake planner and prints an `L1Plan`, mirroring how
@@ -244,3 +268,28 @@ and the provider policy in
   writes, or model/network calls** anywhere in this phase.
 - [x] No CLI plan-generation command and no fake planner engine added (both
   deferred to Phase 4C/4D).
+
+## 10. Acceptance criteria for Phase 4C (DONE)
+
+- [x] `plan/fake_planner.py` defines `FakeL1Planner` with
+  `create_plan(issue, parsed, project) -> L1Plan`, mapping every §3 field per
+  the rules described in §7.
+- [x] `plan/__init__.py` exports `FakeL1Planner` alongside `L1Plan` /
+  `L1PlanSource`; **not wired into the CLI**.
+- [x] Deterministic: identical inputs produce identical `L1Plan.model_dump()`.
+- [x] **No file reads, workspace path resolution/stat/normalization, command
+  execution, GitHub writes, or model/network/environment-variable calls**
+  anywhere in this phase.
+- [x] Missing required issue sections never crash the planner — they produce
+  safe fallback text plus a `risks`/`open_questions` entry.
+- [x] `files_forbidden_or_out_of_scope` always includes
+  `ProjectConfig.forbidden_paths` verbatim as plain strings.
+- [x] Configured `protected_paths` produce a `risks` entry.
+- [x] `automation_level` is always `"L1"` and `requires_human_approval` is
+  always `True` (enforced by the underlying `L1Plan` model, per §9).
+- [x] Unit tests (`tests/test_fake_l1_planner.py`) cover valid-plan
+  construction, Goal/Scope mapping, bullet-list parsing, missing-section
+  fallbacks, forbidden/protected path handling, path inference from Scope,
+  a file/network/process/env IO guard, determinism, and confirm no CLI
+  plan command exists.
+- [x] No CLI plan-generation command added (deferred to Phase 4D).

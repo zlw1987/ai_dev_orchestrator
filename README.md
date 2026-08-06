@@ -17,7 +17,7 @@ changes. The eventual design will:
 
 The emphasis is on **control and review**, not autonomous action.
 
-## Current status: Phase 4B (L1 plan generator — typed models)
+## Current status: Phase 4C (L1 plan generator — fake/offline planner engine)
 
 What exists today: package layout and CLI; typed project-config loading and
 workspace path-policy enforcement (Phase 1); **read-only** GitHub issue
@@ -28,10 +28,13 @@ client** (`LLMClient`) that consumes those models to POST one chat completion
 to an internal LiteLLM endpoint with bounded retries and typed errors
 (Phase 3C); a **CLI smoke-test command**, `llm-smoke-test`, that exercises
 the Phase 3C `LLMClient` end-to-end against an in-process fake provider
-(Phase 3D); and a **typed `L1Plan` model** (`plan/models.py`) describing the
-structured, human-reviewable plan-only output shape a future L1 planner will
-produce, with field validation only — no planning logic, no CLI command, and
-no model or network calls (Phase 4B).
+(Phase 3D); a **typed `L1Plan` model** (`plan/models.py`) describing the
+structured, human-reviewable plan-only output shape an L1 planner produces,
+with field validation only (Phase 4B); and a **deterministic, offline
+`FakeL1Planner` engine** (`plan/fake_planner.py`) that transforms an
+already-fetched `GitHubIssue` / parsed sections / `ProjectConfig` into an
+`L1Plan` — no planning model, no CLI command yet, and no model, network,
+environment-variable, or file/workspace IO (Phase 4C).
 
 `llm-smoke-test` is **fake-provider / dry-run only**: it builds its own fake
 `LLMClientConfig` and an `httpx.MockTransport` internally, reads **no**
@@ -121,9 +124,10 @@ secrets**.
 Phase 4 adds an **L1 plan generator**
 ([docs/PHASE_4_L1_PLAN_GENERATOR_PLAN.md](docs/PHASE_4_L1_PLAN_GENERATOR_PLAN.md)).
 Phase 4A was a design doc only; Phase 4B added the typed `L1Plan` model with
-validation (no planning logic yet). Next is **Phase 4C — fake planner
-engine**: a deterministic function from a parsed issue to an `L1Plan`, with
-no model call. It should remain offline-testable where possible and continue
-to avoid agent automation, file editing, command execution, GitHub writes,
-and target project workspace reads/writes unless explicitly authorized in a
-later sub-phase.
+validation; Phase 4C added the deterministic, offline `FakeL1Planner` engine
+(no CLI command yet). Next is **Phase 4D — fake/offline CLI command**: wire
+Phase 2's issue reader/parser to the Phase 4C `FakeL1Planner` and print an
+`L1Plan`, mirroring how `llm-smoke-test` wired Phase 3C. It should remain
+offline-testable where possible and continue to avoid agent automation, file
+editing, command execution, GitHub writes, and target project workspace
+reads/writes unless explicitly authorized in a later sub-phase.
