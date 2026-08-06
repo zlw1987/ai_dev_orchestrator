@@ -17,7 +17,14 @@ changes. The eventual design will:
 
 The emphasis is on **control and review**, not autonomous action.
 
-## Current status: Phase 4G (fake model-backed L1 planner, library only)
+## Current status: Phase 4H (gated real model planner — design only)
+
+Phase 4H is a **design review only**: it added
+[docs/PHASE_4H_GATED_REAL_MODEL_PLANNER_DESIGN.md](docs/PHASE_4H_GATED_REAL_MODEL_PLANNER_DESIGN.md)
+and **no runtime code, no CLI command or option, no model call, no network
+call, and no environment-variable read**. Real model-backed planning remains
+**unauthorized and unimplemented**; the shipped runtime behavior is still
+Phase 4G's, described below.
 
 What exists today: package layout and CLI; typed project-config loading and
 workspace path-policy enforcement (Phase 1); **read-only** GitHub issue
@@ -231,10 +238,23 @@ an injected `httpx.MockTransport`. Neither added a runtime real-model call or
 any CLI behavior; the shipped CLI behavior is still Phase 4D's offline
 `generate-plan`.
 
-Next is **Phase 4H — an optional, gated *real* model planner**, which is
-**proposed and not authorized**. It would be the first phase permitted to open
-a real socket for planning, and it requires its own design review plus explicit
-authorization before any implementation. Until then, real model-backed planning
-stays off everywhere, and the project continues to avoid agent automation, file
-editing, command execution, GitHub writes, and target project workspace
-reads/writes unless explicitly authorized in a later sub-phase.
+Phase 4H was a design review only — see
+[docs/PHASE_4H_GATED_REAL_MODEL_PLANNER_DESIGN.md](docs/PHASE_4H_GATED_REAL_MODEL_PLANNER_DESIGN.md),
+which specifies the fail-closed gate a future *real* model planner would need:
+opt-in only and never default, a separate command rather than a `--real` flag
+on `generate-plan`, a project-local `real_model_planning` allowlist, a
+non-suppressible warning naming the endpoint host and model (never the API key),
+`GitHubIssue` / `ParsedIssue` / `ProjectConfig` as the only inputs, explicit
+engine provenance as wrapper metadata around `L1Plan`, and no silent fallback in
+either direction. Phase 4H added **no runtime code, no CLI behavior, no model
+call, no network call, and no environment-variable read**.
+
+Next are **Phases 4I–4L**, all **proposed and not authorized**: a typed
+`real_model_planning` config model (4I), the gate as a library function tested
+with mocked env and transport (4J), and — only if explicitly authorized — a
+gated real model smoke test (4K) and a gated real model plan command (4L). 4K
+and 4L would be the first phases permitted to open a real socket. Until then,
+real model-backed planning stays off everywhere, and the project continues to
+avoid agent automation, file editing, command execution, GitHub writes, and
+target project workspace reads/writes unless explicitly authorized in a later
+sub-phase.

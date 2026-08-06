@@ -45,6 +45,12 @@
 >   no real model, no real network call, no env var read, no
 >   `load_llm_client_config_from_env` call, no file/workspace IO, and no CLI
 >   behavior.
+> - **Phase 4H** was **docs-only** — a design review for a *future*, optional,
+>   explicitly gated **real** model planner
+>   ([PHASE_4H_GATED_REAL_MODEL_PLANNER_DESIGN.md](PHASE_4H_GATED_REAL_MODEL_PLANNER_DESIGN.md)),
+>   with no runtime code, module, test, CLI option, model call, network call, or
+>   env var read. Real model-backed planning remains **unauthorized and
+>   unimplemented**.
 
 This plan refines item **"Phase 4 — L1 plan generator"** of
 [AI_DEV_ORCHESTRATOR_PLAN.md](AI_DEV_ORCHESTRATOR_PLAN.md).
@@ -399,10 +405,44 @@ and the provider policy in
   forbidding only what could construct a client (`httpx`, `LLMClient`,
   `LLMClientConfig`, `requests`), because building an `LLMRequest` is exactly
   what the newly authorized prompt builder does.
-- **Phase 4H — optional gated real model planner CLI design/implementation,
-  only if explicitly authorized.** Proposed, **not authorized**. The first
-  phase that could open a real socket for planning; requires its own design
-  review.
+- **Phase 4H — gated real model planner design review. (DONE.)** A **design
+  review only**, not an implementation — see
+  [PHASE_4H_GATED_REAL_MODEL_PLANNER_DESIGN.md](PHASE_4H_GATED_REAL_MODEL_PLANNER_DESIGN.md).
+  It designs the fail-closed real-call gate (opt-in only, never default; an
+  explicit entry point plus a project-local opt-in; a non-suppressible
+  before/after warning naming the endpoint **host** and model but never the API
+  key; every precondition checked before any client is constructed; no silent
+  fake→real or real→fake fallback; explicit engine provenance); a proposed
+  `real_model_planning` project-config block (`enabled: false` by default, an
+  exact-match `allowed_models` list where empty means none, and
+  `allow_prompt_audit_files: false`) that is **not implemented** and would be
+  rejected by today's `extra="forbid"` loader; env rules reusing the existing
+  Phase 3B `AIDO_LITELLM_*` names, read **only** in the future real path and
+  never by the fake/offline paths, with keys never logged; a CLI comparison
+  recommending a **separate command** over a `--real` flag on `generate-plan`,
+  so `generate-plan` keeps its offline-only guarantee verbatim; a
+  doubly-opt-in prompt/completion audit design whose path must pass the Phase 4D
+  workspace guard; the allowed inputs (`GitHubIssue` / `ParsedIssue` /
+  `ProjectConfig` only — never workspace tree or file contents); provenance as
+  **wrapper metadata around** `L1Plan` rather than new `L1Plan` fields; the
+  fail-closed failure table reusing the Phase 4F error hierarchy; the remaining
+  open questions; and the 4I/4J/4K/4L implementation split. Phase 4H itself
+  added **no runtime code, no module, no test, no CLI option, no model call, no
+  network call, and no env var read**. Real model planning remains
+  **unauthorized**, and there is still **no CLI command that can call a real
+  model**.
+- **Phase 4I — typed `real_model_planning` config model only.** Proposed,
+  **not authorized**. Pure pydantic models defaulting to disabled; no env read,
+  no CLI change, no client, no network.
+- **Phase 4J — real planner gate as a library function.** Proposed, **not
+  authorized**. The §3.4 preconditions and §10 failure taxonomy over an
+  **injected** env mapping and **injected** client; `httpx.MockTransport` only,
+  no real network.
+- **Phase 4K — optional real model smoke-test command, explicitly gated, only
+  if authorized.** Proposed, **not authorized**. Would be the first phase
+  permitted to open a real socket.
+- **Phase 4L — optional real model plan command, explicitly gated, only if
+  authorized.** Proposed, **not authorized**.
 - **Later — Phase 5: docs-only L2 implementer.** Out of scope for all of
   Phase 4, per
   [AI_DEV_ORCHESTRATOR_PLAN.md §7](AI_DEV_ORCHESTRATOR_PLAN.md#7-mvp-phase-roadmap).
@@ -627,4 +667,29 @@ and the provider policy in
   execution, no file editing engine, no agent logic, and no
   implementer/reviewer/fixer role wiring** anywhere in this phase.
 - [x] Phase 4H (optional gated **real** model planner) remains **proposed and
-  not authorized**.
+  not authorized**. *(Phase 4H has since shipped as a **design review only** —
+  see §15 — and real model planning remains unauthorized and unimplemented.)*
+
+## 15. Acceptance criteria for Phase 4H (DONE)
+
+- [x] The design doc
+  ([PHASE_4H_GATED_REAL_MODEL_PLANNER_DESIGN.md](PHASE_4H_GATED_REAL_MODEL_PLANNER_DESIGN.md))
+  exists and covers the goal, non-goals, the fail-closed real-call gate, the
+  project allowlist, env/config design, CLI options with an explicit
+  recommendation, prompt/audit design, input sources, output provenance,
+  failure handling, remaining open questions, and the post-4H implementation
+  split.
+- [x] **No `src/` or `tests/` changes** in this phase.
+- [x] **No runtime behavior added.**
+- [x] **No model calls, no network calls, no environment-variable reads**, and
+  no call to `load_llm_client_config_from_env`.
+- [x] **No CLI behavior added** — no new command, no new option, no
+  real/live/model option, and no change to `generate-plan`, `llm-smoke-test`,
+  `inspect-issue`, or `version`.
+- [x] No GitHub fetch/write, command execution, file editing engine, agent
+  logic, implementer/reviewer/fixer role wiring, or target project workspace
+  access added.
+- [x] Phase 4H is clearly marked **design-only**; real model planning is
+  **not authorized** and **not implemented**, and there is still no CLI command
+  that can call a real model.
+- [x] Working tree contains **docs-only** changes.

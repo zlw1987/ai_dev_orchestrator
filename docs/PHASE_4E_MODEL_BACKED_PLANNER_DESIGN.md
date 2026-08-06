@@ -445,11 +445,19 @@ authorized by this document.
   `.invalid` base URL, so no socket is opened and no real model is contacted —
   the §5 real-call gate stays shut. This proves the end-to-end shape with a fake
   provider, exactly as `llm-smoke-test` does.
-- **Phase 4H — optional gated real model planner CLI: design and implementation,
-  only if explicitly authorized.** The first phase permitted to open a real
-  socket for planning. Must deliver the §5 gate in full (opt-in, noisy, fails
-  closed), resolve the §7 open questions it depends on, and carry its own design
-  review before implementation. **Not authorized by this document.**
+- **Phase 4H — gated real model planner: design review only. (DONE, and now
+  narrower than proposed here.)** This entry originally proposed 4H as *design
+  and implementation*. It shipped as **design only** —
+  [PHASE_4H_GATED_REAL_MODEL_PLANNER_DESIGN.md](PHASE_4H_GATED_REAL_MODEL_PLANNER_DESIGN.md) —
+  which specifies the §5 gate in full (opt-in, noisy, fails closed), settles
+  open questions 2 and 3 of §7 as *design proposals only* (a project-local
+  `real_model_planning` allowlist; doubly-opt-in audit files), and leaves
+  questions 4 and 5 open. It adds **no runtime code, no CLI option, no model
+  call, no network call, and no env var read**. Implementation is split out into
+  the separately authorized **Phase 4I / 4J / 4K / 4L** sequence (see that
+  document's §12); 4K and 4L are the only phases that would ever open a real
+  socket, and neither is authorized. **Nothing here is authorized by this
+  document either.**
 - **Later — Phase 5: docs-only L2 implementer.** Unchanged and still later, per
   [AI_DEV_ORCHESTRATOR_PLAN.md §7](AI_DEV_ORCHESTRATOR_PLAN.md#7-mvp-phase-roadmap).
   L2 remains out of scope for all of Phase 4.
