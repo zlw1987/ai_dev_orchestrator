@@ -17,7 +17,7 @@ changes. The eventual design will:
 
 The emphasis is on **control and review**, not autonomous action.
 
-## Current status: Phase 4F (typed planner errors + strict output parser)
+## Current status: Phase 4G (fake model-backed L1 planner, library only)
 
 What exists today: package layout and CLI; typed project-config loading and
 workspace path-policy enforcement (Phase 1); **read-only** GitHub issue
@@ -35,9 +35,11 @@ with field validation only (Phase 4B); a **deterministic, offline
 already-fetched `GitHubIssue` / parsed sections / `ProjectConfig` into an
 `L1Plan` (Phase 4C); a **CLI command**, `generate-plan`, that wires
 Phase 2's issue parser and the Phase 4C `FakeL1Planner` together to build and
-print an `L1Plan` from two local files only (Phase 4D); and **typed
+print an `L1Plan` from two local files only (Phase 4D); **typed
 model-planner errors plus a pure strict-JSON output parser**
-(`plan/model_planner.py`) for a *future* model-backed planner (Phase 4F).
+(`plan/model_planner.py`) for a model-backed planner (Phase 4F); and a **pure
+prompt builder plus a fake model-backed planner** in the same module
+(Phase 4G).
 
 Phase 4F is **library-only and entirely offline**:
 `parse_model_l1_plan_response(...)` parses strict JSON **text it is handed**
@@ -51,6 +53,31 @@ command, no new option, and no change to `generate-plan`, `llm-smoke-test`,
 model output, and output proposing forbidden behavior — command execution, file
 edits, branches, PRs, GitHub writes, workspace reads, automation escalation, or
 skipping human approval — is **rejected, never repaired**.
+
+Phase 4G is a **fake model-backed library path only**. It adds
+`build_model_l1_plan_request(...)`, a **pure, deterministic** prompt builder
+(identical inputs produce an identical `LLMRequest`), and
+`ModelBackedL1Planner`, which wires prompt builder → an **injected** chat
+client → the Phase 4F parser → `L1Plan`. Specifically:
+
+- **Fake / `MockTransport` provider only.** The planner never constructs a
+  client — one is always handed to it — and its module imports neither `httpx`
+  nor `LLMClient` at runtime, so it has no code path that could build a real
+  one. Every test injects an `httpx.MockTransport`-backed client.
+- **No real model call** and **no real network call** anywhere. No socket is
+  opened by the suite.
+- **No environment-variable read.** No `AIDO_LITELLM_*`, no other variable, and
+  no call to `load_llm_client_config_from_env`.
+- **No CLI behavior added** — no new command, no new option, and no change to
+  `generate-plan`, `llm-smoke-test`, `inspect-issue`, or `version`.
+- **No file, workspace, or GitHub access.** The prompt conveys the project's
+  allowed/protected/forbidden path patterns and workspace policy flags as
+  **patterns and names only**; target workspace file contents, directory
+  listings, and the configured `repo.workspace_path` itself are never included.
+- Issue text is wrapped in explicit untrusted-data delimiters and labelled as
+  data to summarize, never instructions to follow; the trusted fields come from
+  the caller's own objects, and `project.forbidden_paths` is merged into the
+  result verbatim.
 
 `llm-smoke-test` is **fake-provider / dry-run only**: it builds its own fake
 `LLMClientConfig` and an `httpx.MockTransport` internally, reads **no**
@@ -198,14 +225,16 @@ Phase 4E was a design review only — see
 which describes how an optional, explicitly-gated model-backed planner *could*
 work in a future phase. Phase 4F then implemented the offline half of that
 design — the typed planner errors and the strict output parser described above.
-It added **no runtime model call and no CLI behavior**; the shipped CLI
-behavior is still Phase 4D's offline `generate-plan`.
+Phase 4G completed the fake path: the pure prompt builder and
+`ModelBackedL1Planner`, exercised through the real `LLMClient` code path with
+an injected `httpx.MockTransport`. Neither added a runtime real-model call or
+any CLI behavior; the shipped CLI behavior is still Phase 4D's offline
+`generate-plan`.
 
-Next is **Phase 4G — a fake model-backed planner using `httpx.MockTransport`
-only**: a prompt builder wired through the existing `LLMClient` with an
-injected mock transport into the Phase 4F parser, with no real model, no real
-network, no environment-variable read, and no new CLI command. Any **real**
-model-backed planning remains off by default and behind its own future
-authorization (**Phase 4H — not authorized**), continuing to avoid agent
-automation, file editing, command execution, GitHub writes, and target project
-workspace reads/writes unless explicitly authorized in a later sub-phase.
+Next is **Phase 4H — an optional, gated *real* model planner**, which is
+**proposed and not authorized**. It would be the first phase permitted to open
+a real socket for planning, and it requires its own design review plus explicit
+authorization before any implementation. Until then, real model-backed planning
+stays off everywhere, and the project continues to avoid agent automation, file
+editing, command execution, GitHub writes, and target project workspace
+reads/writes unless explicitly authorized in a later sub-phase.

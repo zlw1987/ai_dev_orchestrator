@@ -364,8 +364,11 @@ def test_parser_performs_no_file_network_process_or_env_io(monkeypatch):
 def test_model_planner_module_has_no_transport_or_client_dependency():
     from ai_dev_orchestrator.plan import model_planner
 
+    # Phase 4G legitimately builds an ``LLMRequest`` here (the pure prompt
+    # builder), so that name is expected. What must stay absent is anything
+    # that could construct a client or open a socket.
     module_globals = vars(model_planner)
-    for name in ("httpx", "LLMClient", "LLMClientConfig", "LLMRequest", "requests"):
+    for name in ("httpx", "LLMClient", "LLMClientConfig", "requests"):
         assert name not in module_globals
 
 

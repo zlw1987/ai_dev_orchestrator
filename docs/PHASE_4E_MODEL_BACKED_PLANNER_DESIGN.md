@@ -390,9 +390,14 @@ corresponding behavior — they are not decided here.
    does not compare equal; a legacy **8.3 short name** (`C:\dev\MIS_PR~1`) does
    not match its long form. Whether to accept this (favoring "never touch the
    path") or to add a bounded, non-following check is open.
-6. **Should the prompt include a nonce/delimiter scheme for untrusted issue
-   text?** §4.5 relies on message-role separation and inert output. Whether an
-   additional delimiter or nonce convention is worth its complexity is open.
+6. ~~**Should the prompt include a nonce/delimiter scheme for untrusted issue
+   text?**~~ **Settled in Phase 4G: yes, a fixed delimiter, no nonce.** Every
+   issue-derived value is wrapped in constant `<<<UNTRUSTED_ISSUE_TEXT>>>` /
+   `<<<END_UNTRUSTED_ISSUE_TEXT>>>` markers, and any occurrence of those markers
+   *inside* the issue text is replaced before wrapping, so issue content cannot
+   close the block early and continue as apparent instructions. A per-request
+   random nonce was rejected because it would make the prompt builder
+   non-deterministic (§3.2) for no gain the escaping already provides.
 7. **Should model output size be bounded before parsing?** An unbounded
    completion parsed into a plan with thousands of list items is a resource and
    readability concern; the appropriate cap (and whether exceeding it is a
@@ -412,18 +417,34 @@ authorized by this document.
   `parse_model_l1_plan_response(...)`. Entirely offline, exactly as described
   here — pure functions and exception classes tested with literal strings, no
   transport of any kind, no client construction, no env reads, no CLI change.
-  The **pure prompt builder (§3.2) was optional and was not built**; it moves
+  The **pure prompt builder (§3.2) was optional and was not built**; it moved
   to Phase 4G. See
   [PHASE_4_L1_PLAN_GENERATOR_PLAN.md §7/§13](PHASE_4_L1_PLAN_GENERATOR_PLAN.md#7-phase-split-recommendation)
   for the shipped detail.
-- **Phase 4G — fake model-backed planner using `MockTransport` only.**
-  Proposed next; **not yet built.** Wire the prompt builder (§3.2, still
-  unbuilt) → `LLMClient` (with an injected `httpx.MockTransport`) →
-  output parser → `L1Plan`, exercising the real client code path with a fake
-  provider, exactly as `llm-smoke-test` does today. Still no real model, no real
-  network, no env reads, and **no CLI command** — or, at most, a clearly
-  fake-labeled one designed in that phase. This proves the end-to-end shape
-  while the real-call gate stays shut.
+- **Phase 4G — fake model-backed planner using `MockTransport` only. (DONE.)**
+  Added the §3.2 pure prompt builder `build_model_l1_plan_request(issue,
+  parsed, project, *, model) -> LLMRequest` and `ModelBackedL1Planner` in
+  [plan/model_planner.py](../src/ai_dev_orchestrator/plan/model_planner.py),
+  wiring prompt builder → `LLMClient` → the Phase 4F output parser → `L1Plan`.
+  The prompt builder is deterministic and IO-free, satisfies the §4 prompt
+  safety rules in full (path patterns and policy flags only — never workspace
+  file contents; `Non-goals` and `forbidden_paths` prominent and early in the
+  system message; issue text delimited and labelled untrusted, with §4.5's
+  optional delimiter scheme adopted and injected delimiters neutralized; strict
+  JSON with exactly the nine model-controlled fields required; the five trusted
+  fields and every forbidden action explicitly forbidden; explicit uncertainty
+  required). The planner takes its client **by injection only** — it constructs
+  none, reads no environment variable, never calls
+  `load_llm_client_config_from_env`, adds no retry logic of its own, logs
+  neither prompts nor completions, and the module imports neither `httpx` nor
+  `LLMClient` at runtime, so no code path here can build a real client. It is a
+  **library path only**: no CLI command, no CLI option, and no change to any
+  existing command. Tests
+  ([tests/test_model_backed_l1_planner.py](../tests/test_model_backed_l1_planner.py))
+  inject `httpx.MockTransport`-backed clients exclusively, against a fake
+  `.invalid` base URL, so no socket is opened and no real model is contacted —
+  the §5 real-call gate stays shut. This proves the end-to-end shape with a fake
+  provider, exactly as `llm-smoke-test` does.
 - **Phase 4H — optional gated real model planner CLI: design and implementation,
   only if explicitly authorized.** The first phase permitted to open a real
   socket for planning. Must deliver the §5 gate in full (opt-in, noisy, fails

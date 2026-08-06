@@ -37,6 +37,14 @@
 >   JSON *text it is handed* into a validated `L1Plan`. No model call, no
 >   `LLMClient` construction, no `httpx`/`MockTransport`, no network call, no
 >   env var read, no file/workspace IO, and no CLI wiring.
+> - **Phase 4G** added the **pure prompt builder and the fake model-backed
+>   planner** ([plan/model_planner.py](../src/ai_dev_orchestrator/plan/model_planner.py))
+>   — `build_model_l1_plan_request(...)` and `ModelBackedL1Planner`, a
+>   **library-only** path wiring prompt builder → an **injected** `LLMClient`
+>   → the Phase 4F parser → `L1Plan`. Tested with `httpx.MockTransport` only:
+>   no real model, no real network call, no env var read, no
+>   `load_llm_client_config_from_env` call, no file/workspace IO, and no CLI
+>   behavior.
 
 This plan refines item **"Phase 4 — L1 plan generator"** of
 [AI_DEV_ORCHESTRATOR_PLAN.md](AI_DEV_ORCHESTRATOR_PLAN.md).
@@ -332,10 +340,65 @@ and the provider policy in
   cover all of the above plus an IO/network/env guard and a check that the
   existing CLI commands are unchanged. No prompt builder was added in this
   phase.
-- **Phase 4G — fake model-backed planner using `httpx.MockTransport` only.**
-  Proposed next. Wire a prompt builder → `LLMClient` (injected
-  `httpx.MockTransport`) → the Phase 4F parser → `L1Plan`. No real model, no
-  real network, no env reads, no CLI command.
+- **Phase 4G — fake model-backed planner using `httpx.MockTransport` only.
+  (DONE.)** Added, to
+  [`plan/model_planner.py`](../src/ai_dev_orchestrator/plan/model_planner.py),
+  the two remaining boxes of
+  [PHASE_4E_MODEL_BACKED_PLANNER_DESIGN.md §3](PHASE_4E_MODEL_BACKED_PLANNER_DESIGN.md#3-future-architecture):
+  - **`build_model_l1_plan_request(issue, parsed, project, *, model) ->
+    LLMRequest`** — the §3.2 **pure** prompt builder. Deterministic (identical
+    inputs produce an identical `LLMRequest.model_dump()`); no clock, no
+    randomness, no env reads, no file/workspace reads, no network, and no
+    client or transport, so it cannot send what it builds. It emits a system
+    message and a user message using the existing `LLMRequest` / `LLMMessage`
+    models. The system message leads with the project's **forbidden paths**,
+    then protected and allowed paths and the `workspace_policy` flags (as
+    **patterns, names, and flags only** — never target workspace file contents,
+    never `repo.workspace_path` itself), then the issue's **Non-goals**, then
+    the untrusted-input rule, then the forbidden-proposal list, and ends with
+    the output contract. The user message carries the issue title, body, all
+    canonical parsed sections in fixed order, and the missing-required-section
+    report. Every issue-derived value is wrapped in explicit
+    `<<<UNTRUSTED_ISSUE_TEXT>>>` / `<<<END_UNTRUSTED_ISSUE_TEXT>>>` markers and
+    labelled as data to summarize, never instructions to follow; markers
+    appearing *inside* issue text are neutralized so the block cannot be closed
+    early. The prompt requires **exactly one strict JSON object** with exactly
+    the nine model-controlled fields, **forbids** the five trusted fields
+    (`issue_number`, `repo`, `title`, `automation_level`,
+    `requires_human_approval`), forbids shell commands, file edits, diffs,
+    branches, PRs, GitHub writes, workspace reads, automation escalation and
+    skipping human approval, and requires explicit uncertainty in `risks` /
+    `open_questions`.
+  - **`ModelBackedL1Planner(client)`** with
+    `create_plan(issue, parsed, project, *, model) -> L1Plan` — builds the
+    request, calls `self.client.chat(request)`, and parses `response.content`
+    with the Phase 4F `parse_model_l1_plan_response(...)`, passing the
+    caller-trusted `issue.number` / `project.repo.github_repo` / `issue.title`
+    and `project.forbidden_paths` as `project_forbidden_paths`. The client is
+    **always injected**: the planner constructs none, loads no config, reads no
+    env var, never calls `load_llm_client_config_from_env`, and the module
+    imports neither `httpx` nor `LLMClient` at runtime (the annotation is
+    `TYPE_CHECKING`-only) — so there is no code path here that can build a real
+    client. No retry logic beyond the injected client's own, and no
+    prompt/completion logging.
+
+  `plan/__init__.py` exports both; **nothing is wired into the CLI**. Unit
+  tests
+  ([tests/test_model_backed_l1_planner.py](../tests/test_model_backed_l1_planner.py))
+  use `httpx.MockTransport` only — every `LLMClient` is built by the test from
+  literal config against a fake `.invalid` base URL and injected — and cover
+  prompt determinism, prompt content, path-patterns-without-file-contents,
+  untrusted marking (including marker-injection), the forbidden trusted fields
+  and actions, an end-to-end valid `L1Plan`, caller-trusted field precedence,
+  rejection of model-supplied trusted fields, rejection of
+  command/GitHub-write/escalation proposals, forbidden-path merging, plus
+  no-socket, no-env-read, no-file/workspace-read, injected-client-required, and
+  unchanged-CLI guards. The Phase 4F module guard
+  ([tests/test_model_planner_output_parser.py](../tests/test_model_planner_output_parser.py))
+  was narrowed from forbidding `LLMRequest` in the module's globals to
+  forbidding only what could construct a client (`httpx`, `LLMClient`,
+  `LLMClientConfig`, `requests`), because building an `LLMRequest` is exactly
+  what the newly authorized prompt builder does.
 - **Phase 4H — optional gated real model planner CLI design/implementation,
   only if explicitly authorized.** Proposed, **not authorized**. The first
   phase that could open a real socket for planning; requires its own design
@@ -501,3 +564,67 @@ and the provider policy in
   no agent logic, and no implementer/reviewer/fixer role wiring** anywhere in
   this phase.
 - [x] No prompt builder added (optional in the 4E split; deferred to Phase 4G).
+
+## 14. Acceptance criteria for Phase 4G (DONE)
+
+- [x] [`plan/model_planner.py`](../src/ai_dev_orchestrator/plan/model_planner.py)
+  defines the **pure** prompt builder
+  `build_model_l1_plan_request(issue, parsed, project, *, model) -> LLMRequest`,
+  built on the existing `LLMRequest` / `LLMMessage` models.
+- [x] The prompt builder is deterministic — identical inputs produce an
+  identical `LLMRequest.model_dump()` — and constructs no `LLMClient`, reads no
+  environment variable, makes no network call, performs no file or workspace
+  read, and uses no clock or randomness.
+- [x] The prompt includes the issue **title**, **body**, all canonical **parsed
+  sections** (in fixed canonical order), and the missing-required-section
+  report.
+- [x] The prompt includes `allowed_paths` / `protected_paths` /
+  `forbidden_paths` and the `workspace_policy` flags **as patterns, names and
+  flags only** — and includes **no** target workspace file contents, directory
+  listing, file tree, git history, or `repo.workspace_path` value.
+- [x] The issue's **Non-goals** and the project's **forbidden paths** appear
+  prominently and early in the **system** message, ahead of the output
+  contract.
+- [x] All issue-derived text is clearly marked as **untrusted data, not
+  instructions**, inside explicit delimiters; delimiters occurring within issue
+  text are neutralized so the untrusted block cannot be closed early.
+- [x] The prompt requires **exactly one strict JSON object** with exactly the
+  nine model-controlled fields (`summary`, `scope_summary`, `non_goals`,
+  `proposed_steps`, `files_likely_to_change`,
+  `files_forbidden_or_out_of_scope`, `required_verification`, `risks`,
+  `open_questions`), and explicitly **forbids** the trusted fields
+  `issue_number` / `repo` / `title` / `automation_level` /
+  `requires_human_approval`.
+- [x] The prompt **forbids** proposing shell commands, file edits, diffs or
+  patches, branch creation, pull requests, GitHub writes, workspace reads,
+  automation escalation, and skipping human approval — and requires explicit
+  uncertainty in `risks` / `open_questions`.
+- [x] `ModelBackedL1Planner.__init__(self, client)` stores an **injected**
+  client; `create_plan(issue, parsed, project, *, model) -> L1Plan` builds the
+  request, calls `self.client.chat(request)`, and parses `response.content`
+  with the Phase 4F `parse_model_l1_plan_response(...)`.
+- [x] The planner passes the caller-trusted `issue.number`,
+  `project.repo.github_repo` and `issue.title`, and passes
+  `project.forbidden_paths` as `project_forbidden_paths`; trusted fields are
+  never taken from model output, and output supplying them is rejected.
+- [x] The planner **constructs no `LLMClient`**, loads no config, reads no
+  environment variable, never calls `load_llm_client_config_from_env`, and the
+  module imports neither `httpx` nor `LLMClient` at runtime — it has no way to
+  build a real client. No retry logic beyond the injected client's own, and no
+  prompt/completion logging.
+- [x] `plan/__init__.py` exports `build_model_l1_plan_request` and
+  `ModelBackedL1Planner`; **nothing is wired into the CLI** and no existing CLI
+  command changed.
+- [x] Unit tests
+  ([tests/test_model_backed_l1_planner.py](../tests/test_model_backed_l1_planner.py))
+  use `httpx.MockTransport` only, never call real LiteLLM, never read
+  `AIDO_LITELLM_*`, use only fake/`.invalid` URL strings, and never inspect a
+  target workspace. They cover every rule above plus no-socket,
+  no-environment-read, no-file/workspace-read, injected-client-required, and
+  unchanged-CLI guards.
+- [x] **No real model call, no real network call, no environment-variable read,
+  no file/workspace IO, no CLI behavior, no GitHub fetch or write, no command
+  execution, no file editing engine, no agent logic, and no
+  implementer/reviewer/fixer role wiring** anywhere in this phase.
+- [x] Phase 4H (optional gated **real** model planner) remains **proposed and
+  not authorized**.
