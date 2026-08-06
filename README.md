@@ -17,14 +17,35 @@ changes. The eventual design will:
 
 The emphasis is on **control and review**, not autonomous action.
 
-## Current status: Phase 4H (gated real model planner — design only)
+## Current status: Phase 4I (typed `real_model_planning` config model only)
 
-Phase 4H is a **design review only**: it added
-[docs/PHASE_4H_GATED_REAL_MODEL_PLANNER_DESIGN.md](docs/PHASE_4H_GATED_REAL_MODEL_PLANNER_DESIGN.md)
-and **no runtime code, no CLI command or option, no model call, no network
-call, and no environment-variable read**. Real model-backed planning remains
-**unauthorized and unimplemented**; the shipped runtime behavior is still
-Phase 4G's, described below.
+Phase 4I adds a **typed project-config model and nothing else**:
+`RealModelPlanningConfig` (`enabled`, `allowed_models`,
+`allow_prompt_audit_files`) plus an optional `real_model_planning` field on
+`ProjectConfig`. Specifically:
+
+- **Config model only.** No behavior consumes it.
+- **Default disabled.** `enabled` defaults to `false`, and a config that
+  **omits** the block loads exactly as before and is behaviorally
+  indistinguishable from one that sets `enabled: false`. An empty
+  `allowed_models` means **no** model is allowed, never "any".
+- **No environment-variable read**, and no call to
+  `load_llm_client_config_from_env`. The block holds **no** credential,
+  endpoint, or env value, and `extra="forbid"` rejects keys like `api_key`,
+  `base_url`, and `endpoint`.
+- **No CLI behavior.** No new command, no new option, and no change to
+  `generate-plan`, `llm-smoke-test`, `inspect-issue`, or `version`.
+- **No real model call and no network call.** No `LLMClient` is constructed and
+  no transport is imported.
+- **No gate function yet** — no allowlist check, no env loading, no audit file
+  writing, no real-model command. Enforcement is the separately authorized
+  Phase 4J.
+
+Phase 4H before it was a **design review only**
+([docs/PHASE_4H_GATED_REAL_MODEL_PLANNER_DESIGN.md](docs/PHASE_4H_GATED_REAL_MODEL_PLANNER_DESIGN.md)),
+adding no runtime code. Real model-backed planning remains **unauthorized and
+unimplemented**; the shipped runtime behavior is still Phase 4G's, described
+below.
 
 What exists today: package layout and CLI; typed project-config loading and
 workspace path-policy enforcement (Phase 1); **read-only** GitHub issue
@@ -249,11 +270,18 @@ engine provenance as wrapper metadata around `L1Plan`, and no silent fallback in
 either direction. Phase 4H added **no runtime code, no CLI behavior, no model
 call, no network call, and no environment-variable read**.
 
-Next are **Phases 4I–4L**, all **proposed and not authorized**: a typed
-`real_model_planning` config model (4I), the gate as a library function tested
-with mocked env and transport (4J), and — only if explicitly authorized — a
-gated real model smoke test (4K) and a gated real model plan command (4L). 4K
-and 4L would be the first phases permitted to open a real socket. Until then,
+Phase 4I then typed the `real_model_planning` block described in that design —
+config shape only, defaulting to disabled, with no env read, no CLI behavior, no
+real model call, no network call, and no gate function (see the status section
+above).
+
+Next is **Phase 4J**: the real planner gate as a **library function** over an
+**injected** env mapping and an **injected** client — the §3.4 preconditions and
+§10 failure taxonomy, tested with literal env dicts and `httpx.MockTransport`
+only, with **no real network call**. **Phases 4K and 4L** remain **proposed and
+not authorized**: a gated real model smoke test (4K) and a gated real model plan
+command (4L), which would be the first phases permitted to open a real socket.
+Until then,
 real model-backed planning stays off everywhere, and the project continues to
 avoid agent automation, file editing, command execution, GitHub writes, and
 target project workspace reads/writes unless explicitly authorized in a later

@@ -187,8 +187,12 @@ this phase.** `ProjectConfig`
 ([models.py](../src/ai_dev_orchestrator/models.py)) is `extra="forbid"`, so this
 block would be **rejected** by today's loader; adding it is Phase 4I's job (§12).
 
+> **Update (Phase 4I, DONE):** the block below is now a real, typed, validated
+> config field — and nothing more. It **parses**; it is still **never read** by
+> any gate, env loader, client, or command. Enforcement remains Phase 4J's.
+
 ```yaml
-# projects/<project>.yaml  — PROPOSED, not implemented in Phase 4H
+# projects/<project>.yaml  — typed in Phase 4I; enforced by nothing yet
 real_model_planning:
   enabled: false
   allowed_models:
@@ -612,11 +616,15 @@ authorized by this document.** This supersedes the single "Phase 4H — design a
 implementation" entry in
 [PHASE_4E_MODEL_BACKED_PLANNER_DESIGN.md §8](PHASE_4E_MODEL_BACKED_PLANNER_DESIGN.md#8-phase-split-after-4e).
 
-- **Phase 4I — typed config model for the `real_model_planning` allowlist.**
-  Pure pydantic models only (§4), defaulting to disabled: **no env read, no CLI
-  change, no client, no network.** Loading a config that omits the block must
-  keep working, and a project with the block present but `enabled: false` must
-  be indistinguishable, behaviorally, from one without it.
+- **Phase 4I — typed config model for the `real_model_planning` allowlist.
+  (DONE.)** `RealModelPlanningConfig` and `ProjectConfig.real_model_planning`
+  now exist in [models.py](../src/ai_dev_orchestrator/models.py) as pure
+  pydantic models (§4), defaulting to disabled: **no env read, no CLI change,
+  no client, no network, and no gate function.** A config omitting the block
+  still loads, and a block with `enabled: false` is behaviorally
+  indistinguishable from an absent one. `allowed_models` rejects blank names and
+  duplicates; `extra="forbid"` rejects credential-shaped keys. Nothing reads the
+  block yet — enforcement is Phase 4J's job.
 - **Phase 4J — the real planner gate as a library function.** The precondition
   checks of §3.4 and the failure taxonomy of §10, implemented as a pure-ish
   function over an **injected** env mapping and an **injected** client — no

@@ -98,6 +98,15 @@ external_integrations:
   codex_review:
     enabled: false
 
+# Real model-backed L1 planning. DISABLED, and documentation only — nothing
+# reads this block yet (no gate, no env read, no CLI command, no model call).
+# An empty allowed_models list means NO model is permitted, even if enabled.
+# Never put credentials or endpoints here; providers name env vars instead.
+real_model_planning:
+  enabled: false
+  allowed_models: []
+  allow_prompt_audit_files: false
+
 run_limits:
   max_model_calls_per_issue: 20
   max_review_loops: 3

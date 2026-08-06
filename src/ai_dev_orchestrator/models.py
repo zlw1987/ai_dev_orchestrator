@@ -8,7 +8,7 @@ secrets — provider connection details are referenced by environment-variable
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class _Strict(BaseModel):
@@ -89,6 +89,48 @@ class RunLimitsConfig(_Strict):
     max_total_runtime_minutes: int = Field(default=60, ge=0)
 
 
+class RealModelPlanningConfig(_Strict):
+    """Per-project opt-in for a future **real** model-backed L1 planner.
+
+    Phase 4I ships the typed shape only — see
+    ``docs/PHASE_4H_GATED_REAL_MODEL_PLANNER_DESIGN.md`` §4. Nothing reads this
+    block yet: there is no gate function, no environment read, no client, no
+    CLI command, and no model call. It fails closed by construction — an absent
+    block is identical to an explicitly disabled one.
+
+    It holds **no credentials**: no api key, no base URL, no endpoint. Those are
+    named by environment-variable *name* on :class:`ProviderConfig`, per the
+    Phase 1 rule, and unknown fields here are rejected.
+    """
+
+    enabled: bool = Field(
+        default=False,
+        description="Whether this project may ever be planned with a real model.",
+    )
+    allowed_models: list[str] = Field(
+        default_factory=list,
+        description="Exact model names permitted for this project. Empty means "
+        "no model is allowed, even when 'enabled' is true.",
+    )
+    allow_prompt_audit_files: bool = Field(
+        default=False,
+        description="Whether prompts/completions (i.e. issue text) may be "
+        "written to disk by a future audited real path.",
+    )
+
+    @field_validator("allowed_models")
+    @classmethod
+    def _check_allowed_models(cls, models: list[str]) -> list[str]:
+        seen: set[str] = set()
+        for model in models:
+            if not model.strip():
+                raise ValueError("allowed_models entries must be non-blank strings")
+            if model in seen:
+                raise ValueError(f"duplicate model name in allowed_models: {model!r}")
+            seen.add(model)
+        return models
+
+
 class ProjectConfig(_Strict):
     """Top-level typed project configuration."""
 
@@ -109,6 +151,9 @@ class ProjectConfig(_Strict):
         default_factory=dict
     )
     run_limits: RunLimitsConfig = Field(default_factory=RunLimitsConfig)
+    real_model_planning: RealModelPlanningConfig = Field(
+        default_factory=RealModelPlanningConfig
+    )
 
     @property
     def path_rules(self) -> PathRulesConfig:

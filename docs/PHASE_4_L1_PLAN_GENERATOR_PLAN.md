@@ -51,6 +51,11 @@
 >   with no runtime code, module, test, CLI option, model call, network call, or
 >   env var read. Real model-backed planning remains **unauthorized and
 >   unimplemented**.
+> - **Phase 4I** added the **typed `real_model_planning` config model only**
+>   ([models.py](../src/ai_dev_orchestrator/models.py)) — `enabled: false` by
+>   default, an absent block identical to a disabled one, and **no gate
+>   function, no env read, no client, no network call, and no CLI behavior**.
+>   Real model-backed planning remains **unauthorized and unimplemented**.
 
 This plan refines item **"Phase 4 — L1 plan generator"** of
 [AI_DEV_ORCHESTRATOR_PLAN.md](AI_DEV_ORCHESTRATOR_PLAN.md).
@@ -431,9 +436,21 @@ and the provider policy in
   network call, and no env var read**. Real model planning remains
   **unauthorized**, and there is still **no CLI command that can call a real
   model**.
-- **Phase 4I — typed `real_model_planning` config model only.** Proposed,
-  **not authorized**. Pure pydantic models defaulting to disabled; no env read,
-  no CLI change, no client, no network.
+- **Phase 4I — typed `real_model_planning` config model only. (DONE.)**
+  `RealModelPlanningConfig` in
+  [models.py](../src/ai_dev_orchestrator/models.py) — `enabled: bool = False`,
+  `allowed_models: list[str] = []` (non-blank entries, duplicates rejected),
+  and `allow_prompt_audit_files: bool = False` — plus an optional
+  `real_model_planning` field on `ProjectConfig` that defaults to a disabled
+  instance, so configs omitting the block keep loading and are behaviorally
+  indistinguishable from ones that set `enabled: false`. It is `extra="forbid"`
+  like every other config model, so credential-shaped keys (`api_key`,
+  `base_url`, `endpoint`) are rejected as unknown fields, and it holds **no**
+  credential, endpoint, or env-var value. Nothing reads it yet: **no allowlist
+  check function, no env read, no client construction, no audit file writing,
+  no CLI command or option, no model call, and no network call.**
+  [projects/mis_project.yaml.example](../projects/mis_project.yaml.example)
+  documents the block in its explicitly disabled form.
 - **Phase 4J — real planner gate as a library function.** Proposed, **not
   authorized**. The §3.4 preconditions and §10 failure taxonomy over an
   **injected** env mapping and **injected** client; `httpx.MockTransport` only,
@@ -693,3 +710,43 @@ and the provider policy in
   **not authorized** and **not implemented**, and there is still no CLI command
   that can call a real model.
 - [x] Working tree contains **docs-only** changes.
+
+## 16. Acceptance criteria for Phase 4I (DONE)
+
+- [x] `RealModelPlanningConfig` exists in
+  [models.py](../src/ai_dev_orchestrator/models.py) with `enabled: bool = False`,
+  `allowed_models: list[str] = []`, and
+  `allow_prompt_audit_files: bool = False`.
+- [x] `ProjectConfig.real_model_planning` defaults to a disabled instance, so a
+  config **omitting** the block still loads and is behaviorally identical to one
+  that sets `enabled: false`. All other config behavior is unchanged.
+- [x] Validation: blank/whitespace-only model names are rejected; duplicate
+  `allowed_models` entries are **rejected** (not silently deduplicated) so
+  config mistakes surface; an empty `allowed_models` is valid config that
+  permits no model; unknown fields are rejected (`extra="forbid"`), which is
+  what rejects credential-shaped keys such as `api_key`, `base_url`, and
+  `endpoint`.
+- [x] **No credential, endpoint, or environment-variable value** appears in the
+  model or in the example YAML.
+- [x] [projects/mis_project.yaml.example](../projects/mis_project.yaml.example)
+  documents the block in its explicitly disabled form.
+- [x] **No gate logic**: no allowlist-checking function, no env loading, no real
+  model client construction, no audit file writing, and no real-model CLI,
+  smoke-test, or planner command.
+- [x] **No model call, no network call, no `httpx`/`MockTransport` use, no
+  `LLMClient` construction, and no environment-variable read** — asserted by
+  tests that monkeypatch `os.getenv` / `os.environ.get` / `socket` /
+  `subprocess.Popen`.
+- [x] **No CLI behavior added** — root `--help` still exposes only `version`,
+  `inspect-issue`, `llm-smoke-test`, and `generate-plan`; `generate-plan` and
+  `llm-smoke-test` are unchanged and still have no real/live/model option.
+- [x] No GitHub fetch/write, command execution, file editing engine, agent
+  logic, implementer/reviewer/fixer role wiring, or target project workspace
+  access added.
+- [x] Tests in [tests/test_config_loader.py](../tests/test_config_loader.py)
+  cover the absent block, the explicit disabled block, enabled-with-models,
+  enabled-with-empty-list, blank names, duplicates, extra fields,
+  credential-like extras, the defaults, and the guards above; the existing
+  config tests still pass.
+- [x] Real model planning remains **unauthorized and unimplemented**, and there
+  is still no CLI command that can call a real model.
