@@ -56,6 +56,18 @@
 >   default, an absent block identical to a disabled one, and **no gate
 >   function, no env read, no client, no network call, and no CLI behavior**.
 >   Real model-backed planning remains **unauthorized and unimplemented**.
+> - **Phase 4J** added the **real model planning gate as a library function**
+>   ([plan/real_model_gate.py](../src/ai_dev_orchestrator/plan/real_model_gate.py))
+>   — `check_real_model_planning_gate(...)`,
+>   `create_real_model_l1_plan_with_gate(...)`,
+>   `endpoint_host_from_base_url(...)`, `build_real_model_provenance(...)`, and
+>   `RealModelPlanningGateError`. It reads an **injected** env mapping (never
+>   `os.environ`), plans with an **injected** client (never one it builds), and
+>   validates `audit_dir` as a **flag only** — no file is created, read, stat'd,
+>   or resolved. Tested with `httpx.MockTransport` and literal env dicts only:
+>   **no real model call, no real network call, no real env read, and no CLI
+>   behavior.** A **real** model-backed *command* remains **unauthorized and
+>   unimplemented**.
 
 This plan refines item **"Phase 4 — L1 plan generator"** of
 [AI_DEV_ORCHESTRATOR_PLAN.md](AI_DEV_ORCHESTRATOR_PLAN.md).
@@ -451,10 +463,26 @@ and the provider policy in
   no CLI command or option, no model call, and no network call.**
   [projects/mis_project.yaml.example](../projects/mis_project.yaml.example)
   documents the block in its explicitly disabled form.
-- **Phase 4J — real planner gate as a library function.** Proposed, **not
-  authorized**. The §3.4 preconditions and §10 failure taxonomy over an
-  **injected** env mapping and **injected** client; `httpx.MockTransport` only,
-  no real network.
+- **Phase 4J — real planner gate as a library function. (DONE.)**
+  [plan/real_model_gate.py](../src/ai_dev_orchestrator/plan/real_model_gate.py)
+  implements the design §3.4 preconditions and §10 failure taxonomy over an
+  **injected** env mapping and an **injected** client:
+  `RealModelPlanningGateError` (a `ModelPlannerError` subclass, gate failures
+  only), `endpoint_host_from_base_url(...)` (pure URL parsing to `host` or
+  `host:port`, dropping userinfo/path/query/fragment),
+  `check_real_model_planning_gate(...)` (project opt-in → non-blank requested
+  model → non-empty allowlist → exact match → audit flag → injected env →
+  endpoint shape, returning an `LLMClientConfig` whose `default_model` is pinned
+  to the requested model), `build_real_model_provenance(...)` (pure,
+  clock-free, key-free), and `create_real_model_l1_plan_with_gate(...)`, which
+  runs the gate first and then calls the Phase 4G `ModelBackedL1Planner` with
+  the **caller's** client. It reads **no** `os.environ` (a missing mapping is a
+  gate error, never a fallback), constructs **no** client or transport (`httpx`
+  is not imported; `LLMClient` is `TYPE_CHECKING`-only), makes **no** network
+  call, touches **no** filesystem (`audit_dir` is a flag, never created, read,
+  stat'd, or resolved — audit writing stays unimplemented), and adds **no CLI
+  behavior**. Tested with `httpx.MockTransport` and literal env dicts only.
+  A **real** model-backed command remains **unauthorized**.
 - **Phase 4K — optional real model smoke-test command, explicitly gated, only
   if authorized.** Proposed, **not authorized**. Would be the first phase
   permitted to open a real socket.
@@ -750,3 +778,74 @@ and the provider policy in
   config tests still pass.
 - [x] Real model planning remains **unauthorized and unimplemented**, and there
   is still no CLI command that can call a real model.
+
+## 17. Acceptance criteria for Phase 4J (DONE)
+
+- [x] [plan/real_model_gate.py](../src/ai_dev_orchestrator/plan/real_model_gate.py)
+  exists and is **library-only**: `RealModelPlanningGateError`,
+  `endpoint_host_from_base_url(...)`, `check_real_model_planning_gate(...)`,
+  `build_real_model_provenance(...)`, and
+  `create_real_model_l1_plan_with_gate(...)`, all exported from
+  [plan/__init__.py](../src/ai_dev_orchestrator/plan/__init__.py) and wired into
+  **nothing**.
+- [x] `RealModelPlanningGateError` subclasses `ModelPlannerError` and is raised
+  for **gate/precondition failures only** — never for parser failures (Phase 4F
+  types) or transport failures (Phase 3C `LLMClientError` family), both of which
+  propagate unchanged.
+- [x] **Fails closed** (design §3.4/§4): an absent or `enabled: false`
+  `real_model_planning` block is refused; an empty `allowed_models` permits no
+  model even when enabled; a blank requested model is refused; and the requested
+  model must match an `allowed_models` entry **exactly** — prefixes, suffixes,
+  case differences, surrounding whitespace, and glob-looking names are all
+  refused. Duplicate model names remain **Phase 4I config-level** validation,
+  so the gate needs no dedupe logic.
+- [x] **The environment is injected, never read.** `os.environ` is never
+  touched, `load_llm_client_config_from_env(...)` is called **only** with the
+  injected mapping, and a missing mapping is a gate error rather than a silent
+  fallback to the process environment. Missing or blank required
+  `AIDO_LITELLM_*` values raise `LLMConfigError` **before the client is used**.
+- [x] **`AIDO_LITELLM_DEFAULT_MODEL` cannot select the planning model.** A
+  differing env default is not fatal; instead the returned `LLMClientConfig` has
+  `default_model` **pinned to the allowlisted `requested_model`**, and
+  `create_real_model_l1_plan_with_gate(...)` passes `requested_model` to the
+  planner explicitly. The env supplies *connection* details; the project config
+  supplies *permission* (design §4.3).
+- [x] `endpoint_host_from_base_url(...)` is **pure string/URL parsing**: it
+  returns `host` or `host:port` and never returns userinfo, an API key, a path,
+  a query string, or a fragment. A blank, schemeless, unparseable, or
+  invalid-port URL raises `RealModelPlanningGateError`, and **no error message
+  echoes the base URL** (which may itself embed a credential).
+- [x] **No client is ever constructed.** `httpx` is not imported by the module,
+  `LLMClient` appears only under `TYPE_CHECKING`, the validated config is used
+  for validation/provenance only, and the **injected** client is the only one
+  used. Every test injects an `httpx.MockTransport`-backed client.
+- [x] **No real model call and no real network call** — asserted by tests that
+  monkeypatch `socket.socket` / `socket.create_connection` /
+  `socket.getaddrinfo` / `socket.gethostbyname` / `subprocess.Popen`.
+- [x] **No filesystem or workspace IO.** `audit_dir` is validated as a **flag
+  only**: refused when `allow_prompt_audit_files` is false (and when blank), and
+  otherwise never created, read, stat'd, resolved, or listed. **Audit file
+  writing is not implemented in this phase.** Asserted by tests that
+  monkeypatch `builtins.open`, `os.stat`, `os.listdir`, `os.scandir`,
+  `os.makedirs`, `os.path.exists`, `os.path.abspath`, and `os.path.realpath`.
+- [x] `build_real_model_provenance(...)` is **pure and deterministic** with
+  `engine: "real-model"`, `real_call: true`, the requested model, a **host-only**
+  endpoint, and issue/repo/title/project id from trusted inputs. It carries
+  **no `generated_at`** (clock use is not authorized here) and **no API key**,
+  and it is wired into no command.
+- [x] **No CLI behavior added** — root `--help` still exposes only `version`,
+  `inspect-issue`, `llm-smoke-test`, and `generate-plan`; `generate-plan` still
+  has no `--real`/`--live`/`--model`/`--use-env`/`--github`/`--fetch`/
+  `--audit-dir` option, and `llm-smoke-test` is unchanged (its pre-existing
+  `--model` still names a *fake* model for the in-process fake provider).
+- [x] No GitHub fetch/write, command execution, file editing engine, agent
+  logic, implementer/reviewer/fixer role wiring, or target project workspace
+  access added; the gate module imports no GitHub client.
+- [x] Tests in
+  [tests/test_real_model_planner_gate.py](../tests/test_real_model_planner_gate.py)
+  cover all of the above, use `httpx.MockTransport` and literal env dicts only,
+  and never read `AIDO_LITELLM_*` from the real process environment.
+- [x] A **real** model-backed command remains **unauthorized and
+  unimplemented**: there is still no CLI command that can call a real model.
+  Phase 4K (a gated real model smoke-test command) is **not authorized** unless
+  explicitly approved.

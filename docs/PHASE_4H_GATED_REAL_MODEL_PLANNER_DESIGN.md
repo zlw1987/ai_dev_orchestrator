@@ -188,8 +188,13 @@ this phase.** `ProjectConfig`
 block would be **rejected** by today's loader; adding it is Phase 4I's job (§12).
 
 > **Update (Phase 4I, DONE):** the block below is now a real, typed, validated
-> config field — and nothing more. It **parses**; it is still **never read** by
-> any gate, env loader, client, or command. Enforcement remains Phase 4J's.
+> config field.
+>
+> **Update (Phase 4J, DONE):** it is now also **enforced** — by the library gate
+> in
+> [plan/real_model_gate.py](../src/ai_dev_orchestrator/plan/real_model_gate.py)
+> (§12), over an **injected** env mapping and an **injected** client. No command
+> reads it: there is still no CLI path to a real model call.
 
 ```yaml
 # projects/<project>.yaml  — typed in Phase 4I; enforced by nothing yet
@@ -625,12 +630,27 @@ implementation" entry in
   indistinguishable from an absent one. `allowed_models` rejects blank names and
   duplicates; `extra="forbid"` rejects credential-shaped keys. Nothing reads the
   block yet — enforcement is Phase 4J's job.
-- **Phase 4J — the real planner gate as a library function.** The precondition
-  checks of §3.4 and the failure taxonomy of §10, implemented as a pure-ish
-  function over an **injected** env mapping and an **injected** client — no
-  `os.environ` read, no real client construction, **no real network**, tested
-  with `httpx.MockTransport` and literal env dicts only. This is where the gate
-  logic earns its tests while still being unable to reach a socket.
+- **Phase 4J — the real planner gate as a library function. (DONE.)** The
+  precondition checks of §3.4 and the failure taxonomy of §10 now exist in
+  [plan/real_model_gate.py](../src/ai_dev_orchestrator/plan/real_model_gate.py)
+  as `check_real_model_planning_gate(...)`,
+  `create_real_model_l1_plan_with_gate(...)`,
+  `endpoint_host_from_base_url(...)`, `build_real_model_provenance(...)`, and
+  the typed `RealModelPlanningGateError` (a `ModelPlannerError` subclass, per
+  §10). The env mapping is **injected** — `os.environ` is never read, and a
+  missing mapping is a gate error rather than a fallback — and the client is
+  **injected**, so the module constructs none (`httpx` is not imported;
+  `LLMClient` is `TYPE_CHECKING`-only) and **no real network call** is possible.
+  `audit_dir` is validated as a **flag only** per §4.4: refused unless
+  `allow_prompt_audit_files` is true, and never created, read, stat'd, or
+  resolved — §7's audit *writing* is still unimplemented. Per §4.3 a differing
+  `AIDO_LITELLM_DEFAULT_MODEL` is not fatal but cannot select the model: the
+  returned `LLMClientConfig` has `default_model` pinned to the allowlisted
+  `requested_model`, which is also what is passed to the Phase 4G planner.
+  Provenance (§9.2) is built without `generated_at`, since clock use was not
+  authorized here. Tested with `httpx.MockTransport` and literal env dicts only.
+  **No CLI behavior was added**, and there is still no command that can call a
+  real model.
 - **Phase 4K — optional real model *smoke test* command, explicitly gated, only
   if authorized.** The smallest possible first real call: a trivial prompt, the
   full §3.3 banner, the full §3.4 preconditions, no issue text, no planning.
