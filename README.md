@@ -17,7 +17,7 @@ changes. The eventual design will:
 
 The emphasis is on **control and review**, not autonomous action.
 
-## Current status: Phase 4D (L1 plan generator — offline CLI command)
+## Current status: Phase 4F (typed planner errors + strict output parser)
 
 What exists today: package layout and CLI; typed project-config loading and
 workspace path-policy enforcement (Phase 1); **read-only** GitHub issue
@@ -33,9 +33,24 @@ structured, human-reviewable plan-only output shape an L1 planner produces,
 with field validation only (Phase 4B); a **deterministic, offline
 `FakeL1Planner` engine** (`plan/fake_planner.py`) that transforms an
 already-fetched `GitHubIssue` / parsed sections / `ProjectConfig` into an
-`L1Plan` (Phase 4C); and a **CLI command**, `generate-plan`, that wires
+`L1Plan` (Phase 4C); a **CLI command**, `generate-plan`, that wires
 Phase 2's issue parser and the Phase 4C `FakeL1Planner` together to build and
-print an `L1Plan` from two local files only (Phase 4D).
+print an `L1Plan` from two local files only (Phase 4D); and **typed
+model-planner errors plus a pure strict-JSON output parser**
+(`plan/model_planner.py`) for a *future* model-backed planner (Phase 4F).
+
+Phase 4F is **library-only and entirely offline**:
+`parse_model_l1_plan_response(...)` parses strict JSON **text it is handed**
+into a validated `L1Plan`. It makes **no model call**, constructs **no**
+`LLMClient`, imports **no** transport (`httpx`/`MockTransport`), makes **no
+network call**, reads **no** environment variable, performs **no** file IO, and
+performs **no** workspace path resolution. It adds **no CLI behavior** — no new
+command, no new option, and no change to `generate-plan`, `llm-smoke-test`,
+`inspect-issue`, or `version`. The trusted fields (`issue_number`, `repo`,
+`title`, `automation_level`, `requires_human_approval`) are never read from
+model output, and output proposing forbidden behavior — command execution, file
+edits, branches, PRs, GitHub writes, workspace reads, automation escalation, or
+skipping human approval — is **rejected, never repaired**.
 
 `llm-smoke-test` is **fake-provider / dry-run only**: it builds its own fake
 `LLMClientConfig` and an `httpx.MockTransport` internally, reads **no**
@@ -178,15 +193,19 @@ Phase 4A was a design doc only; Phase 4B added the typed `L1Plan` model with
 validation; Phase 4C added the deterministic, offline `FakeL1Planner` engine;
 Phase 4D added the offline `generate-plan` CLI command described above.
 
-**Phase 4E is complete and was a design review only** — see
+Phase 4E was a design review only — see
 [docs/PHASE_4E_MODEL_BACKED_PLANNER_DESIGN.md](docs/PHASE_4E_MODEL_BACKED_PLANNER_DESIGN.md),
 which describes how an optional, explicitly-gated model-backed planner *could*
-work in a future phase. It added **no runtime code, no CLI option, no model
-call, no network call, and no environment-variable read**; the shipped runtime
+work in a future phase. Phase 4F then implemented the offline half of that
+design — the typed planner errors and the strict output parser described above.
+It added **no runtime model call and no CLI behavior**; the shipped CLI
 behavior is still Phase 4D's offline `generate-plan`.
 
-Next is **Phase 4F — typed prompt/output parser errors only**, still with no
-model call. Any real model-backed planning remains off by default and behind
-its own future authorization (proposed Phase 4H), continuing to avoid agent
+Next is **Phase 4G — a fake model-backed planner using `httpx.MockTransport`
+only**: a prompt builder wired through the existing `LLMClient` with an
+injected mock transport into the Phase 4F parser, with no real model, no real
+network, no environment-variable read, and no new CLI command. Any **real**
+model-backed planning remains off by default and behind its own future
+authorization (**Phase 4H — not authorized**), continuing to avoid agent
 automation, file editing, command execution, GitHub writes, and target project
 workspace reads/writes unless explicitly authorized in a later sub-phase.

@@ -403,14 +403,22 @@ corresponding behavior — they are not decided here.
 Recommended sequence. Each is a separate, separately authorized phase; none is
 authorized by this document.
 
-- **Phase 4F — typed prompt/output parser errors only. No model call.**
-  Add the typed error hierarchy (§6) and, optionally, the pure prompt builder
-  (§3.2) and pure output parser (§3.4). Entirely offline: pure functions and
-  exception classes, tested with literal strings — **not even a mock transport
-  is needed**, because nothing in this phase sends anything. No client
-  construction, no env reads, no CLI change.
+- **Phase 4F — typed prompt/output parser errors only. No model call.
+  (DONE.)** Added the typed error hierarchy (§6) and the pure output parser
+  (§3.4) in
+  [plan/model_planner.py](../src/ai_dev_orchestrator/plan/model_planner.py):
+  `ModelPlannerError` / `ModelPlannerParseError` /
+  `ModelPlannerValidationError` / `ModelPlannerPolicyError` plus
+  `parse_model_l1_plan_response(...)`. Entirely offline, exactly as described
+  here — pure functions and exception classes tested with literal strings, no
+  transport of any kind, no client construction, no env reads, no CLI change.
+  The **pure prompt builder (§3.2) was optional and was not built**; it moves
+  to Phase 4G. See
+  [PHASE_4_L1_PLAN_GENERATOR_PLAN.md §7/§13](PHASE_4_L1_PLAN_GENERATOR_PLAN.md#7-phase-split-recommendation)
+  for the shipped detail.
 - **Phase 4G — fake model-backed planner using `MockTransport` only.**
-  Wire prompt builder → `LLMClient` (with an injected `httpx.MockTransport`) →
+  Proposed next; **not yet built.** Wire the prompt builder (§3.2, still
+  unbuilt) → `LLMClient` (with an injected `httpx.MockTransport`) →
   output parser → `L1Plan`, exercising the real client code path with a fake
   provider, exactly as `llm-smoke-test` does today. Still no real model, no real
   network, no env reads, and **no CLI command** — or, at most, a clearly

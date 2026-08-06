@@ -29,6 +29,14 @@
 >   ([PHASE_4E_MODEL_BACKED_PLANNER_DESIGN.md](PHASE_4E_MODEL_BACKED_PLANNER_DESIGN.md)),
 >   with no runtime code, module, test, CLI option, model call, network call,
 >   or env var read.
+> - **Phase 4F** added the **typed model-planner errors and the pure strict
+>   output parser**
+>   ([plan/model_planner.py](../src/ai_dev_orchestrator/plan/model_planner.py)) —
+>   `ModelPlannerError` and its `ParseError`/`ValidationError`/`PolicyError`
+>   subclasses plus `parse_model_l1_plan_response(...)`, which turns strict
+>   JSON *text it is handed* into a validated `L1Plan`. No model call, no
+>   `LLMClient` construction, no `httpx`/`MockTransport`, no network call, no
+>   env var read, no file/workspace IO, and no CLI wiring.
 
 This plan refines item **"Phase 4 — L1 plan generator"** of
 [AI_DEV_ORCHESTRATOR_PLAN.md](AI_DEV_ORCHESTRATOR_PLAN.md).
@@ -285,11 +293,49 @@ and the provider policy in
   option, no model call, no network call, and no env var read**. Real model
   calls remain opt-in and off by default everywhere until a later sub-phase
   explicitly implements and authorizes them.
-- **Phase 4F — typed prompt/output parser errors only, no model call.**
-  Proposed next. Offline pure functions and typed exception classes; no client
-  construction, no env reads, no CLI change.
+- **Phase 4F — typed planner errors + strict output parser only, no model
+  call. (DONE.)** Added
+  [`plan/model_planner.py`](../src/ai_dev_orchestrator/plan/model_planner.py)
+  with the §6 typed error hierarchy — `ModelPlannerError` and its
+  `ModelPlannerParseError` / `ModelPlannerValidationError` /
+  `ModelPlannerPolicyError` subclasses — and the pure output parser
+  `parse_model_l1_plan_response(text, *, issue_number, repo, title,
+  project_forbidden_paths=None) -> L1Plan` described in
+  [PHASE_4E_MODEL_BACKED_PLANNER_DESIGN.md §3.4](PHASE_4E_MODEL_BACKED_PLANNER_DESIGN.md#34-output-parser--pure-function).
+  It parses **text it is handed**: no model call, no `LLMClient`
+  construction, no `httpx`/`MockTransport`, no network call, no env var read,
+  no file IO, and no workspace path resolution/stat/normalization. Strict
+  shape only — exactly one JSON object (markdown fences, prose before/after,
+  arrays and scalars are rejected), no extra top-level keys, no missing
+  required model-controlled fields (`summary`, `scope_summary`, `non_goals`,
+  `proposed_steps`, `files_likely_to_change`,
+  `files_forbidden_or_out_of_scope`, `required_verification`, `risks`,
+  `open_questions`). The trusted fields `issue_number` / `repo` / `title` come
+  from the caller's arguments and `automation_level` / `requires_human_approval`
+  are fixed to `"L1"` / `True`; a response that supplies any of the five is
+  **rejected**, not silently ignored, so injection attempts surface.
+  `project_forbidden_paths` are merged into
+  `files_forbidden_or_out_of_scope` verbatim and deduplicated, order-preserving,
+  as plain strings. The final object is validated through the Phase 4B `L1Plan`
+  model, whose `ValidationError` is re-raised as `ModelPlannerValidationError`.
+  A small, deterministic policy guard rejects obvious proposals of automation
+  escalation, skipping human approval, command execution, direct file edits,
+  branch creation, PRs, GitHub comment/label/issue writes, or target workspace
+  reads with `ModelPlannerPolicyError` — conservative by design, with no
+  negation handling, so a response that merely mentions a forbidden action is
+  rejected for human review rather than sanitized ("reject, never repair",
+  §3.5). Only model-controlled values are scanned; caller-supplied forbidden
+  paths are merged afterwards and never scanned. `plan/__init__.py` exports the
+  parser and the four error classes; **nothing is wired into the CLI**. Unit
+  tests
+  ([tests/test_model_planner_output_parser.py](../tests/test_model_planner_output_parser.py))
+  cover all of the above plus an IO/network/env guard and a check that the
+  existing CLI commands are unchanged. No prompt builder was added in this
+  phase.
 - **Phase 4G — fake model-backed planner using `httpx.MockTransport` only.**
-  Proposed. No real model, no real network, no env reads.
+  Proposed next. Wire a prompt builder → `LLMClient` (injected
+  `httpx.MockTransport`) → the Phase 4F parser → `L1Plan`. No real model, no
+  real network, no env reads, no CLI command.
 - **Phase 4H — optional gated real model planner CLI design/implementation,
   only if explicitly authorized.** Proposed, **not authorized**. The first
   phase that could open a real socket for planning; requires its own design
@@ -413,3 +459,45 @@ and the provider policy in
 - [x] No GitHub fetch/write, command execution, file editing engine, agent
   logic, role wiring, or target project workspace access added.
 - [x] Working tree contains **docs-only** changes.
+
+## 13. Acceptance criteria for Phase 4F (DONE)
+
+- [x] [`plan/model_planner.py`](../src/ai_dev_orchestrator/plan/model_planner.py)
+  defines the typed error hierarchy `ModelPlannerError` with
+  `ModelPlannerParseError`, `ModelPlannerValidationError`, and
+  `ModelPlannerPolicyError` subclasses.
+- [x] It defines the **pure** parser
+  `parse_model_l1_plan_response(text, *, issue_number, repo, title,
+  project_forbidden_paths=None) -> L1Plan`, with no file IO, no env reads, no
+  network, no model client, and no workspace path operations.
+- [x] Accepts exactly one strict JSON object; rejects markdown fences, prose
+  before/after the object, arrays, strings, numbers, booleans, and null.
+- [x] Invalid JSON raises `ModelPlannerParseError`.
+- [x] Unexpected extra top-level keys, missing required model-controlled
+  fields, and wrong field types raise `ModelPlannerValidationError`.
+- [x] Trusted fields are never taken from model output: `issue_number` /
+  `repo` / `title` come from the arguments, `automation_level` is always
+  `"L1"`, `requires_human_approval` is always `True`, and a response
+  containing any of the five is rejected with
+  `ModelPlannerValidationError`.
+- [x] `project_forbidden_paths` are merged into
+  `files_forbidden_or_out_of_scope` verbatim and deduplicated as plain
+  strings, with no path resolution, `stat`, globbing, or normalization.
+- [x] The final object is validated through the Phase 4B `L1Plan`; a pydantic
+  `ValidationError` is re-raised as `ModelPlannerValidationError`.
+- [x] Obvious proposals of automation escalation, no-human-approval, command
+  execution, direct file edits, branch creation, PRs, GitHub
+  comment/label/issue writes, or target workspace reads raise
+  `ModelPlannerPolicyError`.
+- [x] `plan/__init__.py` exports the parser and all four error classes;
+  **nothing is wired into the CLI** and no existing CLI command changed.
+- [x] Unit tests
+  ([tests/test_model_planner_output_parser.py](../tests/test_model_planner_output_parser.py))
+  cover every rule above plus a file/network/process/env IO guard, a
+  path-resolution guard, and an existing-CLI-commands check.
+- [x] **No model call, no `LLMClient` construction, no `httpx`/`MockTransport`,
+  no network call, no environment-variable read, no file IO, no workspace
+  access, no GitHub fetch/write, no command execution, no file editing engine,
+  no agent logic, and no implementer/reviewer/fixer role wiring** anywhere in
+  this phase.
+- [x] No prompt builder added (optional in the 4E split; deferred to Phase 4G).
