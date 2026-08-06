@@ -176,10 +176,17 @@ Phase 4 adds an **L1 plan generator**
 ([docs/PHASE_4_L1_PLAN_GENERATOR_PLAN.md](docs/PHASE_4_L1_PLAN_GENERATOR_PLAN.md)).
 Phase 4A was a design doc only; Phase 4B added the typed `L1Plan` model with
 validation; Phase 4C added the deterministic, offline `FakeL1Planner` engine;
-Phase 4D added the offline `generate-plan` CLI command described above. Next
-is **Phase 4E — design review only** for an optional, explicitly-gated
-model-backed planner. Phase 4E is a design review, not an implementation:
-any real model-backed planning remains off by default and behind its own
-future authorization, continuing to avoid agent automation, file editing,
-command execution, GitHub writes, and target project workspace reads/writes
-unless explicitly authorized in a later sub-phase.
+Phase 4D added the offline `generate-plan` CLI command described above.
+
+**Phase 4E is complete and was a design review only** — see
+[docs/PHASE_4E_MODEL_BACKED_PLANNER_DESIGN.md](docs/PHASE_4E_MODEL_BACKED_PLANNER_DESIGN.md),
+which describes how an optional, explicitly-gated model-backed planner *could*
+work in a future phase. It added **no runtime code, no CLI option, no model
+call, no network call, and no environment-variable read**; the shipped runtime
+behavior is still Phase 4D's offline `generate-plan`.
+
+Next is **Phase 4F — typed prompt/output parser errors only**, still with no
+model call. Any real model-backed planning remains off by default and behind
+its own future authorization (proposed Phase 4H), continuing to avoid agent
+automation, file editing, command execution, GitHub writes, and target project
+workspace reads/writes unless explicitly authorized in a later sub-phase.

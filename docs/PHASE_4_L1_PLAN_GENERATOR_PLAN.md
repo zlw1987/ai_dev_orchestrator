@@ -24,6 +24,11 @@
 >   `L1Plan`. No GitHub fetch, no model call, no env var reads, no
 >   `repo.workspace_path` reads, no file editing, no command execution, no
 >   GitHub writes.
+> - **Phase 4E** was **docs-only** — a design review for a *future* optional
+>   model-backed planner
+>   ([PHASE_4E_MODEL_BACKED_PLANNER_DESIGN.md](PHASE_4E_MODEL_BACKED_PLANNER_DESIGN.md)),
+>   with no runtime code, module, test, CLI option, model call, network call,
+>   or env var read.
 
 This plan refines item **"Phase 4 — L1 plan generator"** of
 [AI_DEV_ORCHESTRATOR_PLAN.md](AI_DEV_ORCHESTRATOR_PLAN.md).
@@ -264,11 +269,31 @@ and the provider policy in
   `repo.workspace_path` before it is read, `--format` rejection of non-`json`
   values, absence of live/model options from `generate-plan --help`, presence
   of all existing commands, and no command execution / GitHub writes.
-- **Phase 4E — optional model-backed planner design review.** A **design
-  review only**, not an implementation — proposing how a future model-backed
-  planner could work, behind an explicit dry-run / gated flag. Real model
-  calls remain opt-in and off by default everywhere else until a later
-  sub-phase explicitly implements and authorizes them.
+- **Phase 4E — optional model-backed planner design review. (DONE.)** A
+  **design review only**, not an implementation — see
+  [PHASE_4E_MODEL_BACKED_PLANNER_DESIGN.md](PHASE_4E_MODEL_BACKED_PLANNER_DESIGN.md).
+  It describes how a future model-backed planner could produce the same typed
+  `L1Plan` from the same three inputs (`GitHubIssue` / `ParsedIssue` /
+  `ProjectConfig`) via a pure prompt builder, the existing Phase 3C
+  `LLMClient`, and a strict-JSON output parser that rejects (never repairs)
+  invalid or policy-violating output; the prompt-safety rules (path patterns
+  only, never workspace file contents, non-goals and forbidden paths
+  prominent, strict JSON required, shell/file-edit/GitHub-write/branch/
+  escalation proposals forbidden); the model-call gate; typed failure
+  handling; still-open security questions; and the recommended 4F/4G/4H
+  split. Phase 4E itself added **no runtime code, no module, no test, no CLI
+  option, no model call, no network call, and no env var read**. Real model
+  calls remain opt-in and off by default everywhere until a later sub-phase
+  explicitly implements and authorizes them.
+- **Phase 4F — typed prompt/output parser errors only, no model call.**
+  Proposed next. Offline pure functions and typed exception classes; no client
+  construction, no env reads, no CLI change.
+- **Phase 4G — fake model-backed planner using `httpx.MockTransport` only.**
+  Proposed. No real model, no real network, no env reads.
+- **Phase 4H — optional gated real model planner CLI design/implementation,
+  only if explicitly authorized.** Proposed, **not authorized**. The first
+  phase that could open a real socket for planning; requires its own design
+  review.
 - **Later — Phase 5: docs-only L2 implementer.** Out of scope for all of
   Phase 4, per
   [AI_DEV_ORCHESTRATOR_PLAN.md §7](AI_DEV_ORCHESTRATOR_PLAN.md#7-mvp-phase-roadmap).
@@ -372,3 +397,19 @@ and the provider policy in
   guard.
 - [x] No agent logic, implementer/reviewer/fixer role wiring, or file editing
   engine added.
+
+## 12. Acceptance criteria for Phase 4E (DONE)
+
+- [x] The design doc
+  ([PHASE_4E_MODEL_BACKED_PLANNER_DESIGN.md](PHASE_4E_MODEL_BACKED_PLANNER_DESIGN.md))
+  exists and covers goal, non-goals, future architecture, prompt safety, the
+  model call gate, failure handling, open security questions, and the
+  post-4E phase split.
+- [x] **No `src/` or `tests/` changes** in this phase.
+- [x] **No runtime behavior added.**
+- [x] **No model calls, no network calls, no environment-variable reads.**
+- [x] **No CLI behavior added** — no new command or option, and no change to
+  `generate-plan`, `llm-smoke-test`, `inspect-issue`, or `version`.
+- [x] No GitHub fetch/write, command execution, file editing engine, agent
+  logic, role wiring, or target project workspace access added.
+- [x] Working tree contains **docs-only** changes.
