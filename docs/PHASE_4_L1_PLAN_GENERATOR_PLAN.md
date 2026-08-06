@@ -1,11 +1,16 @@
 # Phase 4 — L1 Plan Generator Plan
 
-> **This document is the Phase 4A design doc: planning only.** No runtime
-> code, module, test, or network call is added in Phase 4A. It records the
-> intended design for the future **L1 — plan only** automation level and
-> proposes how Phase 4 should be split into sub-phases, mirroring how
+> **This document began as the Phase 4A design doc and is now maintained as
+> the Phase 4 status/plan document.** It records both what has shipped and
+> what remains planned across the Phase 4 sub-phases, mirroring how
 > [PHASE_3_LITELLM_CLIENT_PLAN.md](PHASE_3_LITELLM_CLIENT_PLAN.md) staged
 > Phase 3.
+>
+> - **Phase 4A** was **docs-only** — this plan, with no runtime code, module,
+>   test, or network call.
+> - **Phase 4B** added the typed **`L1Plan` model**
+>   ([plan/models.py](../src/ai_dev_orchestrator/plan/models.py)) with field
+>   validation only. No planning logic, no model calls, no network calls.
 
 This plan refines item **"Phase 4 — L1 plan generator"** of
 [AI_DEV_ORCHESTRATOR_PLAN.md](AI_DEV_ORCHESTRATOR_PLAN.md).
@@ -60,10 +65,15 @@ The future L1 planner is designed to consume:
 
 ## 3. Output: `L1Plan`
 
-Proposed **future** typed output model (pydantic `BaseModel`, consistent with
-[`github/models.py`](../src/ai_dev_orchestrator/github/models.py) and
-[`llm/models.py`](../src/ai_dev_orchestrator/llm/models.py)). **Not
-implemented in Phase 4A** — described here for Phase 4B to build.
+**Phase 4A proposed** this typed output model (pydantic `BaseModel`,
+consistent with [`github/models.py`](../src/ai_dev_orchestrator/github/models.py)
+and [`llm/models.py`](../src/ai_dev_orchestrator/llm/models.py)). **Phase 4B
+has implemented it** in
+[`plan/models.py`](../src/ai_dev_orchestrator/plan/models.py), with field
+validation for every rule described below (see §9). No sub-phase through 4D
+generates an `L1Plan` from a real issue yet — Phase 4B adds only the typed
+shape and its validation; the fields below still describe the intended
+schema and safety meaning of `L1Plan`.
 
 ### `L1Plan`
 
@@ -85,7 +95,8 @@ implemented in Phase 4A** — described here for Phase 4B to build.
 - `risks: list[str]` — plan-author-identified risks or ambiguities.
 - `open_questions: list[str]` — points the plan could not resolve from the
   issue text alone.
-- `automation_level: str` — always `"L1"` for this generator's output.
+- `automation_level: Literal["L1"]` — always `"L1"` for this generator's
+  output.
 - `requires_human_approval: bool` — always `True` for L1 output (see §6).
 
 *Reasoning:* the same normalized-output principle as
@@ -174,11 +185,20 @@ and the provider policy in
 
 ## 7. Phase split recommendation
 
-- **Phase 4A — design doc only.** *(this document)* No runtime code.
-- **Phase 4B — typed `L1Plan` models + validation.** Add the pydantic model
-  from §3 (proposed `plan/models.py`, mirroring the `llm/` and `github/`
-  subpackage layout) with field validation. No planning logic, no model
-  calls.
+- **Phase 4A — design doc only. (DONE.)** *(this document)* No runtime code.
+- **Phase 4B — typed `L1Plan` models + validation. (DONE.)** Added
+  [`plan/models.py`](../src/ai_dev_orchestrator/plan/models.py) with the §3
+  `L1Plan` pydantic model (plus an optional `L1PlanSource` helper), mirroring
+  the `llm/` and `github/` subpackage layout, and field validation for every
+  rule in §3/§6 (positive `issue_number`, `owner/repo`-shaped `repo`,
+  non-blank required strings, non-empty `proposed_steps` /
+  `required_verification`, non-blank list items, `automation_level` fixed to
+  `"L1"`, `requires_human_approval` fixed to `True`). Path-like fields
+  (`files_likely_to_change`, `files_forbidden_or_out_of_scope`) are plain
+  strings only — never resolved, stat'd, or normalized. No planning logic, no
+  model calls, no file/network/command IO. Unit tests
+  ([tests/test_l1_plan_models.py](../tests/test_l1_plan_models.py)) cover
+  every validation rule plus an import-time IO/network guard.
 - **Phase 4C — fake planner engine.** A deterministic function from a parsed
   issue (§2) to an `L1Plan` (§3), with no model call — the plan-generation
   analog of the Phase 3C mockable client. Unit tests only, fully offline.
@@ -194,7 +214,7 @@ and the provider policy in
   Phase 4, per
   [AI_DEV_ORCHESTRATOR_PLAN.md §7](AI_DEV_ORCHESTRATOR_PLAN.md#7-mvp-phase-roadmap).
 
-## 8. Acceptance criteria for Phase 4A
+## 8. Acceptance criteria for Phase 4A (DONE)
 
 - [x] The design doc (`docs/PHASE_4_L1_PLAN_GENERATOR_PLAN.md`) exists.
 - [x] **No `src/` or `tests/` changes** in this phase.
@@ -202,3 +222,25 @@ and the provider policy in
 - [x] **No model calls.**
 - [x] **No network calls** beyond existing commands if manually run.
 - [x] Working tree contains **docs-only** changes.
+
+## 9. Acceptance criteria for Phase 4B (DONE)
+
+- [x] `plan/models.py` defines `L1Plan` (and the optional `L1PlanSource`
+  helper) as pydantic `BaseModel`s with every field from §3.
+- [x] Validation enforces: positive `issue_number`; non-blank `repo` shaped
+  like `owner/repo`; non-blank `title` / `summary` / `scope_summary`;
+  non-empty `proposed_steps` and `required_verification`; every list field
+  rejects blank/whitespace-only items; `automation_level` accepts only
+  `"L1"`; `requires_human_approval` accepts only `True`.
+- [x] Path-like fields (`files_likely_to_change`,
+  `files_forbidden_or_out_of_scope`) remain plain strings — no path
+  resolution, `stat`, or normalization performed.
+- [x] `plan/__init__.py` exports `L1Plan` and `L1PlanSource`; **not wired into
+  the CLI**.
+- [x] Unit tests (`tests/test_l1_plan_models.py`) cover every validation rule
+  and confirm importing `ai_dev_orchestrator.plan` performs no
+  network/process IO.
+- [x] **No file reads, workspace path checks, command execution, GitHub
+  writes, or model/network calls** anywhere in this phase.
+- [x] No CLI plan-generation command and no fake planner engine added (both
+  deferred to Phase 4C/4D).
