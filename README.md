@@ -17,7 +17,7 @@ changes. The eventual design will:
 
 The emphasis is on **control and review**, not autonomous action.
 
-## Current status: Phase 3D (mocked / dry-run CLI smoke test)
+## Current status: Phase 4A (L1 plan generator — design only)
 
 What exists today: package layout and CLI; typed project-config loading and
 workspace path-policy enforcement (Phase 1); **read-only** GitHub issue
@@ -115,7 +115,10 @@ secrets**.
 
 ## Next phase
 
-Phase 4 will add an **L1 plan generator**. It should remain offline-testable
-where possible and continue to avoid agent automation, file editing, command
-execution, GitHub writes, and target project workspace reads/writes unless
-explicitly authorized in that phase.
+Phase 4 adds an **L1 plan generator**. Phase 4A
+([docs/PHASE_4_L1_PLAN_GENERATOR_PLAN.md](docs/PHASE_4_L1_PLAN_GENERATOR_PLAN.md))
+is a **design doc only** — no runtime code, no model calls, no network calls.
+It should remain offline-testable where possible and continue to avoid agent
+automation, file editing, command execution, GitHub writes, and target
+project workspace reads/writes unless explicitly authorized in a later
+sub-phase.
