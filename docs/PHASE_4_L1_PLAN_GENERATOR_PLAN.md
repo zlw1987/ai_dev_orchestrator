@@ -17,6 +17,13 @@
 >   `GitHubIssue` / `ParsedIssue` / `ProjectConfig` into an `L1Plan`. No model
 >   calls, no network calls, no env var reads, no file/workspace reads, no
 >   CLI command.
+> - **Phase 4D** added the **`generate-plan` CLI command**
+>   ([cli.py](../src/ai_dev_orchestrator/cli.py)), an offline-only command
+>   wiring the Phase 2 issue parser and the Phase 4C `FakeL1Planner` together
+>   from two local files (`--project-config`, `--body-file`) into a printed
+>   `L1Plan`. No GitHub fetch, no model call, no env var reads, no
+>   `repo.workspace_path` reads, no file editing, no command execution, no
+>   GitHub writes.
 
 This plan refines item **"Phase 4 — L1 plan generator"** of
 [AI_DEV_ORCHESTRATOR_PLAN.md](AI_DEV_ORCHESTRATOR_PLAN.md).
@@ -226,14 +233,42 @@ and the provider policy in
   tests ([tests/test_fake_l1_planner.py](../tests/test_fake_l1_planner.py))
   cover every mapping rule, missing-section fallbacks, determinism, and an
   IO guard. Unit tests only, fully offline.
-- **Phase 4D — CLI command for fake/offline plan generation.** A command
-  (e.g. `generate-plan`) that wires Phase 2's issue reader/parser to the
-  Phase 4C fake planner and prints an `L1Plan`, mirroring how
-  `llm-smoke-test` wired Phase 3C. No real model call, no env vars required,
-  no GitHub writes.
-- **Phase 4E — optional model-backed planner**, behind an explicit dry-run /
-  gated flag. Only introduced with its own design review; real model calls
-  remain opt-in and off by default everywhere else.
+- **Phase 4D — CLI command for fake/offline plan generation. (DONE.)** Added
+  the `generate-plan` command
+  ([cli.py](../src/ai_dev_orchestrator/cli.py)), which wires Phase 2's
+  `parse_issue_body` and the Phase 4C `FakeL1Planner` together, mirroring how
+  `llm-smoke-test` wired Phase 3C. It reads only two local files explicitly
+  passed in — `--project-config` (a project config YAML) and `--body-file`
+  (local issue body text) — and builds a synthetic in-memory `GitHubIssue`
+  from `--repo`/`--issue`/`--title`/the body file. The project config is
+  loaded **first**, with the existing `load_project_config` loader (which
+  itself never reads `repo.workspace_path`); the command then rejects a
+  `--body-file` that is, or sits under, the configured `repo.workspace_path`
+  **before reading the body file** — a string/path normalization check only,
+  never touching that path on disk — and never reads that path itself either.
+  It makes **no GitHub fetch**, **no model call**, **no `AIDO_LITELLM_*` or
+  other environment-variable read**, **no file edit**, **no command
+  execution**, and **no GitHub write**. `--format` accepts only `json`
+  (enforced via a `click`/`typer` enum choice). Output is deterministic
+  pretty-printed JSON that always includes `automation_level: "L1"`,
+  `requires_human_approval: true`, and a `notice` field stating the output is
+  a plan-only artifact requiring human review and approval — not executable
+  instructions. `generate-plan` has no
+  `--live`/`--real`/`--github`/`--fetch`/`--model`/`--use-env` (or
+  equivalent) option. Unit tests
+  ([tests/test_cli_generate_plan.py](../tests/test_cli_generate_plan.py))
+  cover success with temp files, JSON/`L1Plan` validation, expected field
+  content, the `L1`/human-approval guarantees, missing-required-section
+  fallback behavior, no real network call, no required env vars, no
+  `repo.workspace_path` reads, rejection of a body file inside
+  `repo.workspace_path` before it is read, `--format` rejection of non-`json`
+  values, absence of live/model options from `generate-plan --help`, presence
+  of all existing commands, and no command execution / GitHub writes.
+- **Phase 4E — optional model-backed planner design review.** A **design
+  review only**, not an implementation — proposing how a future model-backed
+  planner could work, behind an explicit dry-run / gated flag. Real model
+  calls remain opt-in and off by default everywhere else until a later
+  sub-phase explicitly implements and authorizes them.
 - **Later — Phase 5: docs-only L2 implementer.** Out of scope for all of
   Phase 4, per
   [AI_DEV_ORCHESTRATOR_PLAN.md §7](AI_DEV_ORCHESTRATOR_PLAN.md#7-mvp-phase-roadmap).
@@ -293,3 +328,47 @@ and the provider policy in
   a file/network/process/env IO guard, determinism, and confirm no CLI
   plan command exists.
 - [x] No CLI plan-generation command added (deferred to Phase 4D).
+
+## 11. Acceptance criteria for Phase 4D (DONE)
+
+- [x] A `generate-plan` CLI command exists in
+  [cli.py](../src/ai_dev_orchestrator/cli.py) with required options
+  `--project-config`, `--repo`, `--issue`, `--title`, `--body-file`, and an
+  optional `--format` (default/only `json`).
+- [x] Reads **only** the two local files explicitly passed in
+  (`--project-config`, `--body-file`); does not scan the `projects/`
+  directory, list directories, or read the configured `repo.workspace_path`.
+- [x] Loads the project config with the existing `load_project_config`
+  **first**; parses the body file with the Phase 2 `parse_issue_body`; builds
+  a synthetic `GitHubIssue` from `--repo`/`--issue`/`--title`/body; calls the
+  Phase 4C `FakeL1Planner.create_plan(...)`.
+- [x] Rejects (exit code 1, clear stderr message) a `--body-file` that is, or
+  sits under, the configured `repo.workspace_path` — checked **before** the
+  body file is read, using string/path normalization only, never reading,
+  listing, stat'ing, or resolving that path on disk.
+- [x] Prints the resulting `L1Plan` as deterministic pretty JSON that
+  validates against the `L1Plan` model and always carries
+  `automation_level: "L1"` and `requires_human_approval: true`, plus a
+  `notice` field stating the output is a plan-only artifact requiring human
+  review and approval.
+- [x] **No GitHub fetch, no model call, no network call, no
+  `AIDO_LITELLM_*`/other environment-variable read, no file editing, no
+  command execution, and no GitHub write** anywhere in the command.
+- [x] `generate-plan` has no
+  `--live`/`--real`/`--github`/`--fetch`/`--model`/`--use-env` (or
+  equivalent) option, and **no CLI command can call a real model**. (The
+  pre-existing `llm-smoke-test` does expose a `--model` option, but it only
+  names the fake model echoed by its in-process mock transport — it selects
+  nothing real and calls no real model.)
+- [x] `--format` rejects values other than `json`.
+- [x] Missing required issue sections still produce valid, non-crashing JSON
+  (fallback `risks`/`open_questions`, per the Phase 4C planner).
+- [x] Unit tests
+  ([tests/test_cli_generate_plan.py](../tests/test_cli_generate_plan.py))
+  cover all of the above plus a no-real-network-call guard, an env-var
+  guard, a `repo.workspace_path` read guard, a guard proving a body file
+  inside `repo.workspace_path` is rejected before being read,
+  existing-commands presence, and a no-command-execution / no-GitHub-write
+  guard.
+- [x] No agent logic, implementer/reviewer/fixer role wiring, or file editing
+  engine added.

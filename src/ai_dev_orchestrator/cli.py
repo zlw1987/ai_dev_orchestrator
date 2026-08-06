@@ -1,12 +1,19 @@
 """Command-line interface for the AI Dev Orchestrator.
 
-Commands are read-only / dry-run so far: a `version` command, `inspect-issue`
-(read-only GitHub issue inspection), and `llm-smoke-test` (a fake-provider
-dry-run of the Phase 3C LLM client — no real model call). No agent logic,
-file editing, command execution, or GitHub writes are wired up.
+Commands are read-only / dry-run / offline so far: a `version` command,
+`inspect-issue` (read-only GitHub issue inspection), `llm-smoke-test` (a
+fake-provider dry-run of the Phase 3C LLM client — no real model call), and
+`generate-plan` (an offline fake/deterministic L1 plan generator — Phase 4D,
+no GitHub fetch, no model call). No agent logic, file editing, command
+execution, or GitHub writes are wired up.
 """
 
 from __future__ import annotations
+
+import enum
+import json
+import os
+from pathlib import Path
 
 import typer
 
@@ -145,6 +152,130 @@ def llm_smoke_test(
             f"{response.usage.completion_tokens} total="
             f"{response.usage.total_tokens}"
         )
+
+
+class GeneratePlanFormat(str, enum.Enum):
+    """Supported output formats for `generate-plan`. Only JSON exists so far."""
+
+    json = "json"
+
+
+def _is_same_or_under(candidate: Path, root: str) -> bool:
+    """Report whether ``candidate`` is ``root`` itself or sits beneath it.
+
+    **String/path normalization only.** Both operands are treated as opaque
+    strings: neither is read, listed, stat'd, resolved, or otherwise touched
+    on disk. ``os.path.abspath`` only joins against the current working
+    directory and normalizes separators — it performs no filesystem access.
+    """
+    normalized_candidate = os.path.normcase(os.path.abspath(str(candidate)))
+    normalized_root = os.path.normcase(os.path.abspath(str(root)))
+    if normalized_candidate == normalized_root:
+        return True
+    return normalized_candidate.startswith(normalized_root + os.sep)
+
+
+@app.command("generate-plan")
+def generate_plan(
+    project_config: Path = typer.Option(
+        ...,
+        "--project-config",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Path to a project config YAML file inside this repo, "
+        "e.g. projects/mis_project.yaml.example.",
+    ),
+    repo: str = typer.Option(
+        ..., "--repo", help="Repository as owner/repo for the synthetic issue."
+    ),
+    issue: int = typer.Option(
+        ..., "--issue", help="Issue number for the synthetic issue."
+    ),
+    title: str = typer.Option(
+        ..., "--title", help="Issue title for the synthetic issue."
+    ),
+    body_file: Path = typer.Option(
+        ...,
+        "--body-file",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Path to a local markdown/text file containing the issue body.",
+    ),
+    output_format: GeneratePlanFormat = typer.Option(
+        GeneratePlanFormat.json,
+        "--format",
+        help="Output format. Only 'json' is currently supported.",
+    ),
+) -> None:
+    """Build an offline, fake/deterministic L1 plan from local files only.
+
+    **Offline-only (Phase 4D)**: reads only the two local files explicitly
+    given via ``--project-config`` and ``--body-file``. Does not fetch the
+    issue from GitHub, does not call any model, does not read
+    ``AIDO_LITELLM_*`` or any other environment variable, and does not read
+    the project's configured ``repo.workspace_path``.
+
+    A ``--body-file`` that is the configured ``repo.workspace_path`` itself,
+    or sits under it, is rejected before the file is read — enforced with
+    string/path normalization only, never by touching that path on disk.
+
+    The printed JSON is an **L1 (plan-only) artifact**: it always carries
+    ``automation_level: "L1"`` and ``requires_human_approval: true``, and its
+    ``proposed_steps`` are descriptive review steps, not executable
+    instructions.
+    """
+    # Imported lazily, matching the inspect-issue/llm-smoke-test pattern.
+    from ai_dev_orchestrator.config_loader import ConfigError, load_project_config
+    from ai_dev_orchestrator.github.issue_parser import parse_issue_body
+    from ai_dev_orchestrator.github.models import GitHubIssue
+    from ai_dev_orchestrator.plan import FakeL1Planner
+
+    try:
+        project = load_project_config(project_config)
+    except ConfigError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1)
+
+    # Refuse to read an issue body that lives inside the configured target
+    # workspace. Checked BEFORE the body file is read, using string/path
+    # normalization only — repo.workspace_path is never read, listed, stat'd,
+    # resolved, or otherwise touched.
+    if _is_same_or_under(body_file, project.repo.workspace_path):
+        typer.echo(
+            "Error: --body-file is inside the project's configured "
+            f"repo.workspace_path ({project.repo.workspace_path}). "
+            "generate-plan never reads target project workspaces; copy the "
+            "issue body to a file outside that path and retry.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    body_text = body_file.read_text(encoding="utf-8")
+
+    synthetic_issue = GitHubIssue(
+        number=issue,
+        title=title,
+        body=body_text,
+        state="open",
+        html_url=f"(offline synthetic issue, not fetched from GitHub) {repo}#{issue}",
+    )
+    parsed = parse_issue_body(synthetic_issue.body)
+
+    plan = FakeL1Planner().create_plan(synthetic_issue, parsed, project)
+
+    output = {
+        "notice": (
+            "L1 PLAN ONLY — generated offline by a fake/deterministic "
+            "planner. This is not executable instructions. A human must "
+            "review and approve before any implementation work proceeds."
+        ),
+        **plan.model_dump(),
+    }
+    typer.echo(json.dumps(output, indent=2))
 
 
 if __name__ == "__main__":

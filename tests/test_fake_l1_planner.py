@@ -231,7 +231,8 @@ def test_deterministic_same_inputs_equal_model_dump():
     assert plan_a.model_dump() == plan_b.model_dump()
 
 
-def test_no_cli_plan_command_added():
+def test_only_generate_plan_cli_command_exists():
+    """Phase 4C had no CLI plan command; Phase 4D added exactly `generate-plan`."""
     from typer.testing import CliRunner
 
     from ai_dev_orchestrator.cli import app
@@ -239,7 +240,7 @@ def test_no_cli_plan_command_added():
     runner = CliRunner()
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
-    assert "plan" not in result.output.lower()
+    assert "generate-plan" in result.output.lower()
 
 
 @pytest.mark.parametrize(

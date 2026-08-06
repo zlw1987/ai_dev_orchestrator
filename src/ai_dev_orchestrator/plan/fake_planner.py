@@ -130,7 +130,8 @@ class FakeL1Planner:
             "Review the issue goal, scope, non-goals, and acceptance criteria.",
             "Identify the allowed in-scope files from the project config.",
             "Draft changes only within allowed paths and outside forbidden paths.",
-            "Run the required verification listed in the issue.",
+            "Record the required verification listed in the issue for later "
+            "human-approved execution.",
         ]
 
         return L1Plan(
