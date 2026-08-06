@@ -20,6 +20,13 @@
 >
 > **The invariant in [README.md](../README.md) is unchanged by this phase:
 > there is still no CLI command that can call a real model.**
+>
+> **Update (Phase 4K, DONE):** that invariant has since been **deliberately
+> retired by an explicitly authorized phase**. `real-llm-smoke-test` (§12) can
+> call a real model — but only a *connectivity* call, only behind the full gate
+> below, and only with an explicit `--real-model` flag. It sends a fixed prompt
+> and **no issue text**, and produces **no plan**. There is still no CLI command
+> that can plan with a real model.
 
 ## 1. Goal
 
@@ -585,7 +592,10 @@ behavior, not here.
 
 1. **Exact CLI command name.** `generate-model-plan`, `generate-plan-real`,
    `plan-with-model`, or something else. §6 recommends the *shape* (a separate
-   command plus an explicit flag), not the spelling.
+   command plus an explicit flag), not the spelling. *(Settled for the
+   smoke test only: Phase 4K shipped `real-llm-smoke-test`, adopting the
+   recommended shape — separate command plus a required `--real-model` flag.
+   The **planner** command's name remains open.)*
 2. **Exact project config schema.** Field names (`real_model_planning` vs.
    something scoped differently), whether it nests under an existing block,
    whether `allowed_models` should reference the existing `providers` /
@@ -651,20 +661,42 @@ implementation" entry in
   authorized here. Tested with `httpx.MockTransport` and literal env dicts only.
   **No CLI behavior was added**, and there is still no command that can call a
   real model.
-- **Phase 4K — optional real model *smoke test* command, explicitly gated, only
-  if authorized.** The smallest possible first real call: a trivial prompt, the
-  full §3.3 banner, the full §3.4 preconditions, no issue text, no planning.
-  Doing connectivity before planning keeps the first real socket as boring as
-  possible.
+- **Phase 4K — real model *smoke test* command. (DONE — explicitly
+  authorized.)** `real-llm-smoke-test` in
+  [cli.py](../src/ai_dev_orchestrator/cli.py) is the smallest possible first
+  real call, and the first code in this repo permitted to open a real socket:
+  a fixed trivial prompt, the full §3.3 banner before and after, the full §3.4
+  preconditions via the Phase 4J gate, **no issue text, and no planning**. It
+  follows §6's recommendation exactly — a **separate command** (Option B), plus
+  a required explicit `--real-model` flag, plus an explicitly named `--model`
+  that must pass the §4.3 allowlist; the command name alone authorizes nothing.
+  Ordering per §3.4: the flag, the project config, the project opt-in, and the
+  allowlist are all checked **before** any `AIDO_LITELLM_*` value is read (the
+  gate is probed with an empty mapping to get exactly that ordering), and the
+  banner is printed **before** the client is constructed. Per §5.3 the API key
+  is never printed and the endpoint is shown as a **host only**; per §7.2 no
+  prompt/completion audit file is written and no `--audit-dir` option exists.
+  Output carries §9.2-shaped provenance with `operation: "smoke-test"` — and
+  no `generated_at`, which stays open for §9. Failures follow §10: no output on
+  stdout, exit non-zero, and the post-call block appears only when a real call
+  was actually attempted. Its tests use `httpx.MockTransport` and literal env
+  dicts only and open no socket.
 - **Phase 4L — optional real model *plan* command, explicitly gated, only if
   authorized.** The §6 separate command, wiring Phase 4J's gate to the Phase 4G
-  planner with a real client, emitting the §9 provenance wrapper.
+  planner with a real client, emitting the §9 provenance wrapper. **Still
+  proposed and not authorized:** Phase 4K's authorization covers the smoke-test
+  command only and does not extend to planning, issue text, GitHub access, file
+  edits, command execution, agent logic, or workspace access.
 - **Later — Phase 5: docs-only L2 implementer.** Unchanged and still later, per
   [AI_DEV_ORCHESTRATOR_PLAN.md §7](AI_DEV_ORCHESTRATOR_PLAN.md#7-mvp-phase-roadmap).
   L2 remains out of scope for all of Phase 4.
 
 Phases 4K and 4L are the **only** ones that would ever open a real socket, and
-both are explicitly conditional on authorization that has **not** been given.
+both were explicitly conditional on authorization. **4K has since been
+authorized and shipped**; its socket is reachable only through
+`real-llm-smoke-test --real-model` with an allowlisting project config, and it
+carries no issue text. **4L remains unauthorized**, so no real model call can
+still be made on behalf of a *planner*.
 
 ## 13. Acceptance criteria for Phase 4H (DONE)
 

@@ -68,6 +68,16 @@
 >   **no real model call, no real network call, no real env read, and no CLI
 >   behavior.** A **real** model-backed *command* remains **unauthorized and
 >   unimplemented**.
+> - **Phase 4K** added the **gated real model smoke-test command**,
+>   `real-llm-smoke-test` ([cli.py](../src/ai_dev_orchestrator/cli.py)) — the
+>   first and only command that may open a **real socket**, and only after
+>   `--real-model`, a loaded project config, the project opt-in, the model
+>   allowlist, and the Phase 4J gate all pass. It sends a **fixed, harmless
+>   connectivity prompt** and **no issue text**, does **no planning**, fetches
+>   and writes **nothing** on GitHub, reads no workspace, and writes no audit
+>   file. Tests use `httpx.MockTransport` and literal env dicts only and open no
+>   socket. A real model **plan** command (Phase 4L) remains **unauthorized and
+>   unimplemented**.
 
 This plan refines item **"Phase 4 — L1 plan generator"** of
 [AI_DEV_ORCHESTRATOR_PLAN.md](AI_DEV_ORCHESTRATOR_PLAN.md).
@@ -482,12 +492,29 @@ and the provider policy in
   call, touches **no** filesystem (`audit_dir` is a flag, never created, read,
   stat'd, or resolved — audit writing stays unimplemented), and adds **no CLI
   behavior**. Tested with `httpx.MockTransport` and literal env dicts only.
-  A **real** model-backed command remains **unauthorized**.
-- **Phase 4K — optional real model smoke-test command, explicitly gated, only
-  if authorized.** Proposed, **not authorized**. Would be the first phase
-  permitted to open a real socket.
+  A real model-backed **plan** command remains **unauthorized** (Phase 4L).
+- **Phase 4K — gated real model smoke-test command. (DONE — explicitly
+  authorized.)** `real-llm-smoke-test` in
+  [cli.py](../src/ai_dev_orchestrator/cli.py): a **separate** command (design
+  §6 Option B), requiring an explicit `--real-model` flag, `--project-config`,
+  and `--model`. In order: the flag is checked, the config is loaded, the
+  Phase 4J gate is probed with an **empty** mapping so a project-opt-in or
+  allowlist failure surfaces **before any environment value is read**, then and
+  only then are the five `AIDO_LITELLM_*` names read and the gate run for real,
+  then the §3.3 warning block is written to stderr, and only then is a real
+  `LLMClient` built. It sends a **fixed connectivity prompt** — no issue text,
+  no file or workspace contents, no project data — with the explicit `--model`,
+  never the env default. A matching post-call block reports success or failure;
+  JSON with `provenance.operation: "smoke-test"` goes to stdout. The API key is
+  never printed and the endpoint appears as a **host only**. No `--issue`,
+  `--body-file`, `--github`, `--fetch`, `--audit-dir`, or `--message` option
+  exists; no audit file is written; no plan is produced. Tests use
+  `httpx.MockTransport` and literal env dicts only and open no socket.
 - **Phase 4L — optional real model plan command, explicitly gated, only if
-  authorized.** Proposed, **not authorized**.
+  authorized.** Proposed, **not authorized**. Phase 4K's authorization covers
+  the **smoke-test command only**; it does not extend to planning, issue text,
+  GitHub access, file edits, command execution, agent logic, or workspace
+  access.
 - **Later — Phase 5: docs-only L2 implementer.** Out of scope for all of
   Phase 4, per
   [AI_DEV_ORCHESTRATOR_PLAN.md §7](AI_DEV_ORCHESTRATOR_PLAN.md#7-mvp-phase-roadmap).
@@ -848,4 +875,64 @@ and the provider policy in
 - [x] A **real** model-backed command remains **unauthorized and
   unimplemented**: there is still no CLI command that can call a real model.
   Phase 4K (a gated real model smoke-test command) is **not authorized** unless
-  explicitly approved.
+  explicitly approved. *(Phase 4K was subsequently authorized and has since
+  shipped — see §18. The gate above is unchanged by it.)*
+
+## 18. Acceptance criteria for Phase 4K (DONE)
+
+- [x] A **separate** command, `real-llm-smoke-test`, exists in
+  [cli.py](../src/ai_dev_orchestrator/cli.py) (design §6 Option B — not a flag
+  on an existing command), exposing exactly `--project-config`, `--model`, and
+  `--real-model`.
+- [x] **Explicitly authorized.** The user authorized Phase 4K and authorized
+  opening a real socket when *manually* running this command. That
+  authorization covers **this command only** — not a real planner, issue text,
+  GitHub access, file edits, command execution, agent logic, role wiring, or
+  target workspace access.
+- [x] **Fails closed without `--real-model`**: the flag is checked first, so a
+  plain invocation reads **no** environment variable, builds **no** client, and
+  makes **no** network call, exiting 1 with a clear stderr message.
+- [x] **Ordering is enforced.** Flag → project config load → project opt-in →
+  model allowlist → *then* environment read → gate → banner → client. The
+  opt-in/allowlist checks run by probing the Phase 4J gate with an **empty**
+  mapping, so those failures surface with the gate's own message while the real
+  environment is still untouched.
+- [x] **Only the five Phase 3B `AIDO_LITELLM_*` names are read**, only inside
+  this command, and only after the checks above. No value is printed, and the
+  API key is never read into any output path.
+- [x] **The Phase 4J gate is authoritative**: a disabled project, an empty
+  `allowed_models`, a non-allowlisted model, and missing/blank required
+  environment values all fail with exit 1, **before** any client is built.
+- [x] **Non-suppressible stderr banner before the call** naming the endpoint
+  **host only**, the model, the project id, and stating that no issue text is
+  sent and no files/workspaces/GitHub are read or written (design §3.3); a
+  matching **after-call** block reports completion or failure and is printed
+  **only** when a real call was actually attempted.
+- [x] **A fixed, harmless prompt only** — a connectivity system message plus
+  "Reply with exactly: AIDO_REAL_SMOKE_OK", with `temperature=0.0` and a small
+  `max_tokens`. No issue text, no file or workspace contents, and no project
+  data are transmitted; the explicit `--model` is sent, never the env default.
+- [x] **JSON to stdout on success only**, carrying `provenance.engine:
+  "real-model"`, `provenance.operation: "smoke-test"`, `real_call: true`, the
+  model, the endpoint **host**, the project id, the response content, and usage.
+  No API key, no base URL, and no prompt text. Nothing is printed to stdout on
+  any failure path.
+- [x] **No audit files** are written, and no `--audit-dir` option exists.
+- [x] **No other CLI behavior changed**: `generate-plan` stays offline-only with
+  no `--real`/`--real-model`/`--live`/`--model`/`--use-env`/`--github`/
+  `--fetch`/`--audit-dir`; `llm-smoke-test` stays fake-provider only, with its
+  pre-existing `--model` still naming a fake model; `inspect-issue` and
+  `version` are untouched.
+- [x] **No `--issue`, `--body-file`, `--github`, `--fetch`, or `--message`
+  option**, so there is no way to supply issue text or reach GitHub from this
+  command, and no GitHub client is used by it.
+- [x] **Only the explicitly named project config file is read.** The configured
+  `repo.workspace_path` is never read, listed, stat'd, or resolved.
+- [x] **Tests never open a real socket and never read a real environment
+  value**: [tests/test_cli_real_llm_smoke_test.py](../tests/test_cli_real_llm_smoke_test.py)
+  injects a literal env mapping and an `httpx.MockTransport`-backed client into
+  a private helper, monkeypatches `socket.*`/`subprocess.Popen` to raise, and
+  drives fail-closed and help behavior through the CLI.
+- [x] The real model **plan** command (Phase 4L) remains **unauthorized and
+  unimplemented**, along with agent logic, role wiring, file editing, command
+  execution, GitHub writes, and target workspace access.

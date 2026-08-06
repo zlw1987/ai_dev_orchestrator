@@ -1,11 +1,16 @@
 """Command-line interface for the AI Dev Orchestrator.
 
-Commands are read-only / dry-run / offline so far: a `version` command,
-`inspect-issue` (read-only GitHub issue inspection), `llm-smoke-test` (a
-fake-provider dry-run of the Phase 3C LLM client — no real model call), and
-`generate-plan` (an offline fake/deterministic L1 plan generator — Phase 4D,
-no GitHub fetch, no model call). No agent logic, file editing, command
-execution, or GitHub writes are wired up.
+Commands: a `version` command, `inspect-issue` (read-only GitHub issue
+inspection), `llm-smoke-test` (a fake-provider dry-run of the Phase 3C LLM
+client — no real model call), `generate-plan` (an offline fake/deterministic L1
+plan generator — Phase 4D, no GitHub fetch, no model call), and
+`real-llm-smoke-test` (Phase 4K — the **one** command that may open a real
+socket, and only after every gate precondition passes).
+
+`real-llm-smoke-test` is a **connectivity check, not a planner**: it sends a
+fixed, harmless prompt, never issue text, and produces no plan. Every other
+command remains offline. No agent logic, file editing, command execution, or
+GitHub writes are wired up anywhere.
 """
 
 from __future__ import annotations
@@ -276,6 +281,278 @@ def generate_plan(
         **plan.model_dump(),
     }
     typer.echo(json.dumps(output, indent=2))
+
+
+# -- real model smoke test (Phase 4K) -----------------------------------------
+
+# The ONLY environment variables this command may read (the Phase 3B names).
+# Values are never printed, and the API key never reaches any output path.
+_REAL_SMOKE_ENV_NAMES = (
+    "AIDO_LITELLM_BASE_URL",
+    "AIDO_LITELLM_API_KEY",
+    "AIDO_LITELLM_DEFAULT_MODEL",
+    "AIDO_LITELLM_TIMEOUT_SECONDS",
+    "AIDO_LITELLM_MAX_RETRIES",
+)
+
+# A fixed, harmless connectivity prompt. It carries no issue text, no file
+# contents, no workspace path, and no project data beyond nothing at all — the
+# only variable part of the request is the model name.
+_REAL_SMOKE_SYSTEM_PROMPT = (
+    "You are responding to a connectivity smoke test for AI Dev Orchestrator. "
+    "Do not include secrets. Reply briefly."
+)
+_REAL_SMOKE_USER_PROMPT = "Reply with exactly: AIDO_REAL_SMOKE_OK"
+_REAL_SMOKE_MAX_TOKENS = 32
+
+_REAL_SMOKE_NOTICE = (
+    "REAL MODEL SMOKE TEST ONLY — no issue text, planning, file edits, "
+    "commands, GitHub writes, or workspace access."
+)
+
+
+def _read_real_llm_env() -> dict[str, str]:
+    """Snapshot **only** the five ``AIDO_LITELLM_*`` names from the environment.
+
+    This is the one place in the codebase that reads the real process
+    environment, and the command calls it only after ``--real-model`` was given,
+    the project config loaded, the project opted in, and the model passed the
+    allowlist. No other variable is read, and no value is printed.
+    """
+    return {
+        name: os.environ[name]
+        for name in _REAL_SMOKE_ENV_NAMES
+        if name in os.environ
+    }
+
+
+def _build_real_llm_client(config):
+    """Construct the real, socket-capable client. The only such call site."""
+    from ai_dev_orchestrator.llm.client import LLMClient
+
+    return LLMClient(config)
+
+
+def _echo_real_smoke_banner(*, endpoint_host: str, model: str, project_id: str) -> None:
+    """Print the non-suppressible pre-call warning block to stderr (design §3.3).
+
+    Host only — never the full base URL (which may embed userinfo or a query
+    string) and never the API key.
+    """
+    for line in (
+        "=== REAL MODEL SMOKE TEST — a real network call is about to be made ===",
+        f"Endpoint host: {endpoint_host}",
+        f"Model:         {model}",
+        f"Project:       {project_id}",
+        "No issue text is sent: the prompt is a fixed connectivity check.",
+        "No files, workspaces, or GitHub data are read or written.",
+        "No plan is generated. The API key is never printed.",
+        "=" * 71,
+    ):
+        typer.echo(line, err=True)
+
+
+def _echo_real_smoke_result(
+    *, endpoint_host: str, model: str, succeeded: bool, detail: str = ""
+) -> None:
+    """Print the matching post-call block to stderr.
+
+    Printed only when a real call was actually attempted, so its presence in a
+    scrollback means a request left the machine.
+    """
+    headline = (
+        "=== REAL MODEL SMOKE TEST COMPLETED ==="
+        if succeeded
+        else "=== REAL MODEL SMOKE TEST FAILED (a real call was attempted) ==="
+    )
+    typer.echo(headline, err=True)
+    typer.echo(f"Endpoint host: {endpoint_host}", err=True)
+    typer.echo(f"Model:         {model}", err=True)
+    if detail:
+        typer.echo(f"Detail:        {detail}", err=True)
+
+
+def _run_real_llm_smoke_test(
+    *,
+    project_config: Path,
+    model: str,
+    real_model: bool,
+    read_env=_read_real_llm_env,
+    client_factory=_build_real_llm_client,
+) -> None:
+    """Gate, then run one real chat completion. Extracted so tests can inject.
+
+    ``read_env`` and ``client_factory`` are injection points: the CLI wrapper
+    supplies the real environment reader and the real client builder, while
+    tests supply a literal mapping and an ``httpx.MockTransport``-backed client,
+    so the test suite never reads a real value or opens a real socket.
+
+    Ordering is the safety property. In sequence: ``--real-model`` must be
+    present, the project config must load, the project must opt in, and the
+    model must be allowlisted — **all before** ``read_env`` is called — and only
+    then may a client be built.
+    """
+    from ai_dev_orchestrator.config_loader import ConfigError, load_project_config
+    from ai_dev_orchestrator.llm.client import LLMClientError
+    from ai_dev_orchestrator.llm.config import LLMConfigError
+    from ai_dev_orchestrator.llm.models import LLMMessage, LLMRequest
+    from ai_dev_orchestrator.plan import (
+        RealModelPlanningGateError,
+        check_real_model_planning_gate,
+        endpoint_host_from_base_url,
+    )
+
+    # 1. Explicit confirmation. Checked first, so a plain invocation cannot read
+    #    the environment, build a client, or reach the network.
+    if not real_model:
+        typer.echo(
+            "Error: real-llm-smoke-test makes a REAL model call and requires "
+            "the explicit --real-model flag. Nothing was read and no call was "
+            "made.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # 2. Project config: the only file this command reads. The configured
+    #    repo.workspace_path is never read, listed, stat'd, or resolved.
+    try:
+        project = load_project_config(project_config)
+    except ConfigError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1)
+
+    # 3. Probe the Phase 4J gate with an EMPTY mapping. The gate checks the
+    #    project opt-in and the model allowlist before it looks at any
+    #    environment value, so a project/model failure surfaces here — with the
+    #    gate's own message — while the real environment is still untouched. A
+    #    probe that gets as far as LLMConfigError has passed those checks, which
+    #    is exactly the point at which reading the environment becomes allowed.
+    try:
+        check_real_model_planning_gate(
+            project=project, requested_model=model, env={}
+        )
+    except RealModelPlanningGateError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        typer.echo(
+            "No environment variable was read, no client was built, and no "
+            "network call was made.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    except LLMConfigError:
+        # Expected: the probe mapping deliberately carries no connection values.
+        pass
+
+    # 4. Now — and only now — read the five AIDO_LITELLM_* names and run the
+    #    authoritative gate over them.
+    env = read_env()
+    try:
+        config = check_real_model_planning_gate(
+            project=project, requested_model=model, env=env
+        )
+        endpoint_host = endpoint_host_from_base_url(config.base_url)
+    except (RealModelPlanningGateError, LLMConfigError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        typer.echo("No client was built and no network call was made.", err=True)
+        raise typer.Exit(code=1)
+
+    # 5. Warn before the socket exists, not after.
+    _echo_real_smoke_banner(
+        endpoint_host=endpoint_host, model=model, project_id=project.project_id
+    )
+
+    # 6. The gate has passed: build the real client and send the fixed prompt.
+    #    ``model`` is the explicit --model value; the environment's default
+    #    model never selects what is sent.
+    client = client_factory(config)
+    request = LLMRequest(
+        model=model,
+        messages=[
+            LLMMessage(role="system", content=_REAL_SMOKE_SYSTEM_PROMPT),
+            LLMMessage(role="user", content=_REAL_SMOKE_USER_PROMPT),
+        ],
+        temperature=0.0,
+        max_tokens=_REAL_SMOKE_MAX_TOKENS,
+    )
+
+    try:
+        response = client.chat(request)
+    except LLMClientError as exc:
+        _echo_real_smoke_result(
+            endpoint_host=endpoint_host,
+            model=model,
+            succeeded=False,
+            detail=f"{type(exc).__name__}: {exc}",
+        )
+        raise typer.Exit(code=1)
+
+    _echo_real_smoke_result(
+        endpoint_host=endpoint_host, model=model, succeeded=True
+    )
+
+    output = {
+        "notice": _REAL_SMOKE_NOTICE,
+        "provenance": {
+            "engine": "real-model",
+            "operation": "smoke-test",
+            "real_call": True,
+            "model": model,
+            "endpoint_host": endpoint_host,
+            "project_id": project.project_id,
+        },
+        "response_content": response.content,
+        "usage": response.usage.model_dump() if response.usage is not None else None,
+    }
+    typer.echo(json.dumps(output, indent=2))
+
+
+@app.command("real-llm-smoke-test")
+def real_llm_smoke_test(
+    project_config: Path = typer.Option(
+        ...,
+        "--project-config",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Path to a project config YAML file whose real_model_planning "
+        "block enables real model use.",
+    ),
+    model: str = typer.Option(
+        ...,
+        "--model",
+        help="Exact model name to contact. Must be listed in the project's "
+        "real_model_planning.allowed_models.",
+    ),
+    real_model: bool = typer.Option(
+        False,
+        "--real-model",
+        help="Required explicit confirmation that a REAL model call may be "
+        "made. Without it this command fails without reading anything.",
+    ),
+) -> None:
+    """Gated REAL model connectivity smoke test (opens a real socket).
+
+    **This is the only command that can contact a real model.** It requires the
+    explicit ``--real-model`` flag *and* a project config whose
+    ``real_model_planning`` block enables real model use and allowlists
+    ``--model``; either alone is not enough, and every precondition is checked
+    before the environment is read or a client is built.
+
+    It is a **connectivity check, not a planner**: it sends a fixed, harmless
+    prompt and never issue text, never file or workspace contents, and never
+    project data. It fetches nothing from GitHub, writes nothing to GitHub,
+    generates no plan, edits no file, runs no command, and writes no audit file.
+
+    Only the five ``AIDO_LITELLM_*`` variables are read, and only after the gate
+    passes. The API key is never printed; the endpoint is reported as a **host**
+    only. A warning block is written to stderr before the call and a matching
+    block after it, so a real call is impossible to miss in a scrollback, and
+    the JSON result goes to stdout.
+    """
+    _run_real_llm_smoke_test(
+        project_config=project_config, model=model, real_model=real_model
+    )
 
 
 if __name__ == "__main__":
