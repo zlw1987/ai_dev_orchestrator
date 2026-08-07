@@ -509,7 +509,22 @@ permitted to open a real socket, it transmits only the issue title and the local
 body file text explicitly named on the command line, and its output is an L1 plan
 that still requires human approval.
 
-Next is **Phase 5**, a docs-only L2 implementer design. Until that is explicitly
-authorized, the project continues to avoid agent automation, file editing,
-command execution, GitHub writes, GitHub issue fetching inside a real model
-command, and target project workspace reads/writes.
+**Phase 5A** is a **design review only** — see
+[docs/PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md](docs/PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md),
+which designs the L1-to-L2 boundary: an approved-plan handoff artifact whose
+approval metadata sits *around* an untouched `L1Plan` snapshot, a fail-closed
+approval gate on a separate command (off by default, exact project/repo/issue
+matching, and approval that can never be inferred from a file's existence or
+from an issue's `Automation Authorization` text), staged capability boundaries
+that put read-only inspection and patch *proposals* ahead of any file write, the
+workspace/command/git/model policies a future L2 would need, and a decision that
+the known lexical path-normalization gap (symlinks, junctions, UNC, mapped
+drives, 8.3 names) must be closed **before** anything touches a target
+workspace. Phase 5A added **no runtime code, no CLI behavior, no model call, no
+network call, and no environment-variable read**.
+
+**L2 is proposed, not built.** No command can invoke it, and every later Phase 5
+sub-phase remains unauthorized. Until one is explicitly authorized, the project
+continues to avoid agent automation, file editing, command execution, GitHub
+writes, GitHub issue fetching inside a real model command, and target project
+workspace reads/writes.

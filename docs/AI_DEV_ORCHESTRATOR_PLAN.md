@@ -79,10 +79,13 @@ Model roles must be configurable. Each role specifies:
 - **Phase 1 — config + workspace policy.**
 - **Phase 2 — GitHub issue reader.**
 - **Phase 3 — LiteLLM client.**
-- **Phase 4 — L1 plan generator.** Design started —
+- **Phase 4 — L1 plan generator.** Complete through Phase 4L —
   [PHASE_4_L1_PLAN_GENERATOR_PLAN.md](PHASE_4_L1_PLAN_GENERATOR_PLAN.md)
-  (Phase 4A, docs-only).
-- **Phase 5 — docs-only L2 implementer.**
+  (4A docs-only, through the gated real model `generate-model-plan` command).
+- **Phase 5 — docs-only L2 implementer.** Design started —
+  [PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md](PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md)
+  (Phase 5A, docs-only). **L2 is proposed, not built**, and no command can
+  invoke it.
 - **Phase 6 — qwen reviewer.**
 - **Phase 7 — fix loop.**
 - **Phase 8 — local commit.**

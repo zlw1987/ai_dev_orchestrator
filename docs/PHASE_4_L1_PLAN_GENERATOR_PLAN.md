@@ -546,6 +546,11 @@ and the provider policy in
 - **Later — Phase 5: docs-only L2 implementer.** Out of scope for all of
   Phase 4, per
   [AI_DEV_ORCHESTRATOR_PLAN.md §7](AI_DEV_ORCHESTRATOR_PLAN.md#7-mvp-phase-roadmap).
+  *(Phase 5A has since shipped as a **design review only** —
+  [PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md](PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md)
+  — describing how a future L2 implementer could consume an **approved**
+  `L1Plan`. It added no runtime code and no CLI behavior; **L2 remains
+  proposed, not built**, and no command can invoke it.)*
 
 ## 8. Acceptance criteria for Phase 4A (DONE)
 
