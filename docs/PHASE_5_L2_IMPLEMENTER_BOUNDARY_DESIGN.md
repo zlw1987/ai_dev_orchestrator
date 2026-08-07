@@ -13,14 +13,17 @@
 > **L2 remains proposed, not built.** Nothing described here is authorized to be
 > implemented by this phase. Every sub-phase in §13 (Phase 5B and later) is a
 > *proposal* and requires its own explicit authorization. (Phase 5B has since
-> been authorized and implemented as **typed models and a parser only** — §15.
-> Phase 5C onward remain proposals, and L2 is still not built.)
+> been authorized and implemented as **typed models and a parser only** — §15 —
+> and Phase 5C as a **dry-run validation command only** — §16. Phase 5D onward
+> remain proposals, and L2 is still not built.)
 >
 > **L2 may not be invoked by any existing command after this phase.** After
 > Phase 5A the shipped CLI surface is exactly what Phase 4L left behind —
 > `version`, `inspect-issue`, `llm-smoke-test`, `generate-plan`,
 > `real-llm-smoke-test`, `generate-model-plan` — and none of them gains an L2
-> path, an `--apply` flag, or any other way to reach an implementer.
+> path, an `--apply` flag, or any other way to reach an implementer. (Phase 5C
+> later added one **new** command, `l2-dry-run`, which validates and prints and
+> takes no action; it changed none of the six above.)
 >
 > It refines item **"Phase 5 — docs-only L2 implementer"** of
 > [AI_DEV_ORCHESTRATOR_PLAN.md §7](AI_DEV_ORCHESTRATOR_PLAN.md#7-mvp-phase-roadmap)
@@ -30,8 +33,15 @@
 > **Phase 5B is now DONE** (§15). It implemented the §3 artifact as **typed
 > models and a strict parser only** — no CLI behavior, no file loading, no
 > workspace access, no model/network/environment access, and no L2 action.
-> **Phase 5C and every later sub-phase in §13 remain proposed and not
-> authorized.**
+>
+> **Phase 5C is now DONE** (§16). It added the `l2-dry-run` command: it reads a
+> project config and an approved-plan artifact, validates them, and prints the
+> scope a future L2 *would* be bounded by. **No workspace access, no
+> implementation, no model/network/environment access, no GitHub fetch or
+> write, no command execution, no file editing, and no approval stamping.**
+> **Phase 5D and every later sub-phase in §13 remain proposed and not
+> authorized**, and Phase 5D is additionally blocked on the §6.4
+> canonicalization work.
 
 ## 1. Goal
 
@@ -736,9 +746,10 @@ abandoned.
   Phase 4B/4F style. Library only, wired into nothing. **No workspace access, no
   CLI behavior, no model call, no network call, no environment read.** See §15.
 - **Phase 5C — L2 dry-run CLI that validates an approved plan and prints the
-  intended scope only.** A separate command running the §4 gate end to end and
-  printing what *would* be in scope. **No workspace access**, no reads of
-  `repo.workspace_path`, no edits, no commands.
+  intended scope only. DONE.** A separate command running the §4 gate as far as
+  this phase is authorized to go and printing what *would* be in scope. **No
+  workspace access**, no reads of `repo.workspace_path`, no edits, no commands.
+  See §16.
 - **Phase 5D — read-only workspace inspection under path policy.** The first
   phase that touches a target workspace, and therefore the phase that **must be
   preceded by the §6.4 canonicalization work**. Reads only; no writes.
@@ -821,6 +832,11 @@ check remains a later phase's problem.
 
 ### 15.2 What it is not
 
+*(Statements in this sub-section describe the tree as Phase 5B left it. Phase 5C
+later added the `l2-dry-run` command, which is the first and only caller of this
+package and the first code that reads an approved-plan artifact from disk — see
+§16. Everything else below still holds.)*
+
 - **Typed models and a parser only.** Phase 5B added no behavior beyond turning
   text it is handed into a validated object.
 - **No CLI behavior.** No command and no option was added, and none was changed.
@@ -882,4 +898,140 @@ check remains a later phase's problem.
   touched.
 - [x] **L2 is still not built and cannot be invoked.**
 - [x] **Phase 5C and every later sub-phase in §13 remain proposed and not
-  authorized.**
+  authorized.** *(Phase 5C was subsequently authorized and implemented — see
+  §16. Phase 5D onward are still unauthorized.)*
+
+## 16. Phase 5C — L2 dry-run validation command (DONE)
+
+Phase 5C added **one** command, `l2-dry-run`. It runs the §4 gate as far as this
+phase is authorized to go and **prints what a future L2 would be bounded by**.
+It is the analog of `generate-plan`, one level down: a read-and-report command
+that changes nothing.
+
+### 16.1 What it is
+
+```bash
+python -m ai_dev_orchestrator l2-dry-run \
+  --project-config projects/my_project.yaml \
+  --approved-plan path/to/approved_plan.json \
+  --apply-approved-plan
+```
+
+- [cli.py](../src/ai_dev_orchestrator/cli.py) — the private helper
+  `_run_l2_dry_run(...)` and the `l2-dry-run` command wrapping it. Options:
+  `--project-config`, `--approved-plan`, `--apply-approved-plan`, and
+  `--format json`. There is no `--model`, `--real-model`, `--body-file`,
+  `--issue`, `--title`, `--github`, `--fetch`, `--workspace`, `--file`,
+  `--context-file`, `--command`, `--edit`, or `--audit-dir`.
+- [tests/test_cli_l2_dry_run.py](../tests/test_cli_l2_dry_run.py) — literal
+  artifacts under pytest's `tmp_path` only; no environment value is read, no
+  socket is opened, no command is run, and no configured workspace is touched.
+
+**It reads exactly two files, in this order:** the `--project-config` YAML and
+the `--approved-plan` artifact. Nothing else. The artifact is validated with the
+Phase 5B parser `parse_approved_l1_plan_artifact`, then cross-checked against the
+config for exact `project_id`, `repo`, `plan.repo`, and `plan_provenance.repo`
+equality (§3.5). The issue number comes from the artifact alone — GitHub is not
+contacted to confirm it.
+
+**Gate ordering (§4.3, fail closed, cheapest first):**
+
+1. `--apply-approved-plan` present? No → exit 1, **nothing read at all** — not
+   the artifact, and not even the project config.
+2. Project config loads and validates. On failure → exit 1, artifact never
+   opened.
+3. `--approved-plan` is not `repo.workspace_path` itself and does not sit under
+   it → checked with the existing `_is_same_or_under` string/path normalization,
+   **before** the artifact is read or stat'd. This is why `--approved-plan`
+   carries no Typer `exists=`/`readable=` check: those would touch the path
+   before the guard could run, exactly as for Phase 4L's `--body-file`.
+4. The artifact is read. A missing or unreadable file → exit 1.
+5. Strict parse. `ApprovedPlanParseError` and `ApprovedPlanValidationError` are
+   reported **by category and by name**, and the artifact text and plan prose are
+   never echoed (Phase 4L precedent).
+6. Exact identity matching against the config. A mismatch names the field and
+   both values, and stops.
+7. Only then is the scope JSON printed to stdout.
+
+Every failure exits non-zero, writes to **stderr only**, and prints **no stdout
+JSON**. There is no partial output and no "continuing with warnings".
+
+**Output.** One JSON object carrying: a `notice` stating no workspace was read,
+no file was edited, no command was run and no implementation occurred; `mode:
+"l2-dry-run"`; the project's `project_id`, `repo` and `workspace_policy` flags;
+the approval's `approved_by` / `approved_at` / `source`, the plan's engine, its
+`real_call` flag and model, and the issue number and title; an `intended_scope`
+block copying `files_likely_to_change`, `files_forbidden_or_out_of_scope`,
+`required_verification`, `proposed_steps`, `risks` and `open_questions`
+**verbatim** from the approved plan snapshot, under a `note` labelling them as
+plan text that was not acted on; and `next_authorization_required`.
+
+Deliberately **not** in the output: the raw artifact text, any prompt or
+completion, any API key or base URL, the configured `workspace_path`, any source
+file content, and `approval_text` (it is required to equal a fixed phrase, so
+echoing it adds nothing to the `approved_by`/`approved_at` pair).
+
+### 16.2 What it is not
+
+- **No workspace access.** The configured `repo.workspace_path` is never read,
+  listed, stat'd, or resolved; nothing under it is opened; and no path named in
+  `files_likely_to_change` is read, stat'd, resolved, globbed, or checked for
+  existence. Plan paths remain plain strings — hints a later phase would have to
+  validate, exactly as §12 requires.
+- **No implementation.** Nothing is inspected, proposed, patched, edited, or
+  applied. No branch, commit, or PR. No `required_verification` entry is run —
+  they are carried as labelled plan text.
+- **No command execution, no file editing engine, no agent logic, and no
+  implementer/reviewer/fixer role wiring.**
+- **No model call, no network call, no environment read.** No `AIDO_LITELLM_*`
+  read, no `LLMClient` construction, no `httpx`/`requests` import in the command
+  path, no socket.
+- **No GitHub fetch and no GitHub write.** There is no option to reach GitHub.
+- **No artifact writing and no approval stamping.** The command reads the
+  artifact and never rewrites it; the orchestrator still never writes an
+  `approval` block (§3.6). Approval remains a human act performed outside this
+  tool.
+- **No change to any other command.** `version`, `inspect-issue`,
+  `llm-smoke-test`, `generate-plan`, `real-llm-smoke-test`, and
+  `generate-model-plan` are untouched, and none of them gained an `--apply`,
+  `--approved-plan`, or any other L2 path.
+- **Not a project-level L2 opt-in.** Step 3 of §4.3 — an L2 config block, the
+  analog of `real_model_planning` — is deliberately **not** implemented here:
+  this command takes no L2 action, so there is nothing for a project to opt into
+  yet. It belongs with the phase that first touches a workspace, and Phase 5C
+  added no config field.
+
+### 16.3 Acceptance criteria for Phase 5C (DONE)
+
+- [x] Exactly one new command, `l2-dry-run`, exposing `--project-config`,
+  `--approved-plan`, `--apply-approved-plan`, and `--format`, and none of the
+  forbidden options.
+- [x] **Fails closed without `--apply-approved-plan`**, before any file is read —
+  including before the project config.
+- [x] **An `--approved-plan` inside `repo.workspace_path` is rejected before the
+  artifact is read or stat'd**, by string/path normalization only, and its
+  content never surfaces on stdout or stderr.
+- [x] **A missing or unreadable artifact fails cleanly** with exit code 1 after
+  the config load and the path guard.
+- [x] **Parse and validation failures fail closed** with the category named, no
+  stdout JSON, and no echo of artifact text or plan prose.
+- [x] **Identity mismatches fail** — `project_id`, `repo`, `plan.repo`,
+  `plan_provenance.repo` — with exact string equality, no case folding.
+- [x] **A valid artifact prints the dry-run scope JSON**, including the notice,
+  the approval metadata, the issue number and title, the intended scope copied
+  from the plan, and the next-authorization statement.
+- [x] **Output excludes** raw artifact text, `approval_text`, API keys, base
+  URLs, `workspace_path`, and source file contents.
+- [x] **Exactly two files are read on success**, in order: config, then artifact.
+- [x] **No target project workspace access** — verified by tracking every path
+  passed to `builtins.open`, `os.stat`, `os.listdir`, `os.scandir`,
+  `os.path.exists` and `os.path.realpath`, and by detonating those entry points
+  around a run. `os.path.abspath` is left working because `_is_same_or_under`
+  needs it and it touches no filesystem.
+- [x] **No environment read, no socket, no subprocess, no `LLMClient`, no
+  `httpx`/`requests`, no `GitHubClient`.**
+- [x] **No artifact writing and no approval stamping.**
+- [x] **No CLI behavior changed except adding `l2-dry-run`.**
+- [x] **Phase 5D and every later sub-phase in §13 remain proposed and not
+  authorized.** Phase 5D is the first phase that might touch a workspace and is
+  blocked on the §6.4 canonicalization work.

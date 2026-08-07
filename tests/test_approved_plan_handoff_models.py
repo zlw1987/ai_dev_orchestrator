@@ -881,6 +881,10 @@ def test_required_approval_text_is_the_design_phrase():
 # -- 10. No CLI behavior was added --------------------------------------------
 
 
+# Phase 5B added no command; the first five are Phase 4L's surface. Phase 5C
+# then added `l2-dry-run` — a validator that prints intended scope and takes no
+# action — and nothing else. The `handoff` package is still imported by no
+# module-level code, which is what the tests below actually pin down.
 EXPECTED_COMMANDS = [
     "version",
     "inspect-issue",
@@ -888,10 +892,11 @@ EXPECTED_COMMANDS = [
     "generate-plan",
     "real-llm-smoke-test",
     "generate-model-plan",
+    "l2-dry-run",
 ]
 
 
-def test_root_help_lists_exactly_the_phase_4l_commands():
+def test_root_help_lists_exactly_the_shipped_commands():
     result = runner.invoke(app, ["--help"])
 
     assert result.exit_code == 0
@@ -905,15 +910,16 @@ def test_root_help_lists_exactly_the_phase_4l_commands():
     assert registered == EXPECTED_COMMANDS
 
 
-def test_no_l2_or_approved_plan_command_exists():
+def test_no_l2_implementer_or_approval_stamping_command_exists():
     result = runner.invoke(app, ["--help"])
 
     assert result.exit_code == 0
+    # Phase 5C's `l2-dry-run` validates an approved plan and prints intended
+    # scope. No command applies a plan, implements one, or stamps an approval.
     for absent in (
         "apply-approved-plan",
         "approve-plan",
         "implement",
-        "l2",
         "handoff",
     ):
         assert absent not in result.output

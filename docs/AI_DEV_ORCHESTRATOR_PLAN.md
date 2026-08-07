@@ -85,8 +85,10 @@ Model roles must be configurable. Each role specifies:
 - **Phase 5 — docs-only L2 implementer.** Design started —
   [PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md](PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md)
   (Phase 5A docs-only; Phase 5B typed the §3 approved-plan handoff models and
-  strict parser, library only). **L2 is proposed, not built**, and no command
-  can invoke it.
+  strict parser, library only; Phase 5C added the `l2-dry-run` command, which
+  validates an approved plan and prints intended scope with no workspace access
+  and no implementation). **L2 is proposed, not built**, and no command can
+  invoke it.
 - **Phase 6 — qwen reviewer.**
 - **Phase 7 — fix loop.**
 - **Phase 8 — local commit.**

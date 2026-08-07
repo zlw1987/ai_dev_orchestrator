@@ -3,9 +3,11 @@
 Commands: a `version` command, `inspect-issue` (read-only GitHub issue
 inspection), `llm-smoke-test` (a fake-provider dry-run of the Phase 3C LLM
 client — no real model call), `generate-plan` (an offline fake/deterministic L1
-plan generator — Phase 4D, no GitHub fetch, no model call), and the **two**
-commands that may open a real socket, each only after every gate precondition
-passes: `real-llm-smoke-test` (Phase 4K) and `generate-model-plan` (Phase 4L).
+plan generator — Phase 4D, no GitHub fetch, no model call), `l2-dry-run` (an
+offline validator that reports what a future L2 *would* have in scope — Phase
+5C, no workspace access and no implementation), and the **two** commands that
+may open a real socket, each only after every gate precondition passes:
+`real-llm-smoke-test` (Phase 4K) and `generate-model-plan` (Phase 4L).
 
 `real-llm-smoke-test` is a **connectivity check, not a planner**: it sends a
 fixed, harmless prompt, never issue text, and produces no plan.
@@ -18,6 +20,12 @@ and allowlists the model.
 Every other command remains offline. No GitHub fetch happens in either gated
 command, and no agent logic, role wiring, file editing, command execution, or
 GitHub writes are wired up anywhere.
+
+`l2-dry-run` is the one command that reads an approved-plan artifact, and it
+does exactly two file reads — the `--project-config` YAML and the
+`--approved-plan` artifact, in that order — before printing the scope a future
+L2 *would* be bounded by. **L2 itself is still not built**: nothing is
+inspected, proposed, edited, run, committed, or pushed.
 """
 
 from __future__ import annotations
@@ -970,6 +978,283 @@ def generate_model_plan(
         real_model=real_model,
         read_env=_read_real_llm_env,
         client_factory=_build_real_llm_client,
+    )
+
+
+# -- L2 dry run (Phase 5C) -----------------------------------------------------
+
+_L2_DRY_RUN_NOTICE = (
+    "L2 DRY RUN ONLY — no workspace was read, no files were edited, no "
+    "commands were run, and no implementation occurred."
+)
+
+_L2_DRY_RUN_NEXT_AUTHORIZATION = (
+    "Phase 5D or later must be explicitly authorized before any workspace "
+    "inspection or implementation, and Phase 5D is additionally blocked on the "
+    "path-canonicalization work in the Phase 5A design §6.4."
+)
+
+# Printed alongside the copied plan fields so the block cannot be mistaken for
+# an instruction set. `required_verification` in particular tends to read like a
+# list of commands to run; it is prose from the plan, and this command ran none
+# of it.
+_L2_INTENDED_SCOPE_NOTE = (
+    "Plan text only, copied verbatim from the approved plan snapshot and never "
+    "acted on. No path listed here was read, stat'd, resolved, globbed, or "
+    "checked for existence, and every required_verification entry is plan text "
+    "that this command did not execute."
+)
+
+# Human-readable categories for the Phase 5B handoff errors, following the Phase
+# 4L precedent: name *what kind* of thing failed. The exception messages are
+# safe to show — Phase 5B guarantees they name the failed field and category and
+# never echo the artifact text, plan prose, or any supplied value.
+_APPROVED_PLAN_FAILURE_CATEGORIES: dict[str, str] = {
+    "ApprovedPlanParseError": (
+        "parse failure — the artifact text was not exactly one strict JSON object"
+    ),
+    "ApprovedPlanValidationError": (
+        "validation failure — the artifact had missing, extra, or wrong-typed "
+        "fields, an absent or invalid approval block, an identity mismatch, or "
+        "a plan that is not an unescalated L1 plan"
+    ),
+}
+
+
+def _run_l2_dry_run(
+    *,
+    project_config: Path,
+    approved_plan: Path,
+    apply_approved_plan: bool,
+) -> None:
+    """Validate an approved plan and print the scope a future L2 would have.
+
+    Extracted from the command body so tests can call it directly and track
+    exactly which files are read, in which order.
+
+    Ordering is the safety property, and it is the Phase 5A §4.3 gate as far as
+    this phase is authorized to go. In sequence: ``--apply-approved-plan`` must
+    be present, the project config must load, and ``--approved-plan`` must be
+    outside the configured ``repo.workspace_path`` — **all before** the artifact
+    is opened — then the artifact is read, parsed, and identity-matched against
+    the config, and only then is anything printed.
+
+    Step 3 of §4.3 (a project-level L2 opt-in block) is deliberately **not**
+    implemented here: this command performs no L2 action, so there is nothing
+    for a project to opt into yet. It belongs with the phase that first touches
+    a workspace.
+
+    Nothing here reads an environment variable, opens a socket, builds a client,
+    contacts GitHub, executes a command, edits a file, or reads/lists/stats/
+    resolves any target project workspace.
+    """
+    from ai_dev_orchestrator.config_loader import ConfigError, load_project_config
+    from ai_dev_orchestrator.handoff import (
+        ApprovedPlanError,
+        parse_approved_l1_plan_artifact,
+    )
+
+    # 1. Explicit confirmation. Checked first, so a plain invocation reads no
+    #    file at all — not the config, and certainly not the artifact.
+    if not apply_approved_plan:
+        typer.echo(
+            "Error: l2-dry-run acts on a human-approved plan artifact and "
+            "requires the explicit --apply-approved-plan flag. Nothing was "
+            "read.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # 2. Project config: the first file read. The configured repo.workspace_path
+    #    is never read, listed, stat'd, or resolved.
+    try:
+        project = load_project_config(project_config)
+    except ConfigError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        typer.echo("The approved plan artifact was not read.", err=True)
+        raise typer.Exit(code=1)
+
+    # 3. Refuse an artifact that lives inside the configured target workspace,
+    #    BEFORE it is read or stat'd — which is also why --approved-plan carries
+    #    no Typer exists=/readable= check: those would touch the path before this
+    #    guard could run. String/path normalization only; the workspace path
+    #    itself is never read, listed, stat'd, or resolved.
+    if _is_same_or_under(approved_plan, project.repo.workspace_path):
+        typer.echo(
+            "Error: --approved-plan is inside the project's configured "
+            f"repo.workspace_path ({project.repo.workspace_path}). "
+            "l2-dry-run never reads target project workspaces; move the "
+            "approved plan artifact outside that path and retry.",
+            err=True,
+        )
+        typer.echo("The approved plan artifact was not read.", err=True)
+        raise typer.Exit(code=1)
+
+    # 4. The guard has passed, so the artifact may be read. It is the second and
+    #    final file read by this command.
+    try:
+        artifact_text = approved_plan.read_text(encoding="utf-8")
+    except OSError as exc:
+        typer.echo(f"Error: could not read --approved-plan: {exc}", err=True)
+        raise typer.Exit(code=1)
+
+    # 5. Parse strictly (Phase 5B). Rejected, never repaired.
+    try:
+        artifact = parse_approved_l1_plan_artifact(artifact_text)
+    except ApprovedPlanError as exc:
+        name = type(exc).__name__
+        category = _APPROVED_PLAN_FAILURE_CATEGORIES.get(name, "artifact failure")
+        typer.echo(f"Error: {name}: {category}. {exc}", err=True)
+        typer.echo(
+            "The artifact text and the plan prose are not echoed. No scope was "
+            "printed and no L2 action was taken.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # 6. The artifact and the config are independent inputs that can disagree.
+    #    Exact string equality only — no normalization, no case folding, no
+    #    prefix matching (design §3.5). The issue number comes from the artifact
+    #    alone; GitHub is not contacted to confirm it.
+    mismatches = [
+        f"{label}: artifact has {artifact_value!r}, project config has "
+        f"{config_value!r}"
+        for label, artifact_value, config_value in (
+            ("project_id", artifact.project_id, project.project_id),
+            ("repo", artifact.repo, project.repo.github_repo),
+            ("plan.repo", artifact.plan.repo, project.repo.github_repo),
+            (
+                "plan_provenance.repo",
+                artifact.plan_provenance.repo,
+                project.repo.github_repo,
+            ),
+        )
+        if artifact_value != config_value
+    ]
+    if mismatches:
+        typer.echo(
+            "Error: the approved plan does not match this project config "
+            "exactly. A plan approved for one project/repo grants nothing for "
+            "another.",
+            err=True,
+        )
+        for mismatch in mismatches:
+            typer.echo(f"  Mismatch in {mismatch}", err=True)
+        raise typer.Exit(code=1)
+
+    approval = artifact.approval
+    provenance = artifact.plan_provenance
+    plan = artifact.plan
+
+    # 7. Report. Deliberately absent: the raw artifact text, the raw prompt or
+    #    completion, any API key or base URL, and the configured workspace path.
+    #    `approval_text` is omitted too — it is required to equal a fixed phrase,
+    #    so echoing it conveys nothing the `approved_by`/`approved_at` pair does
+    #    not already carry.
+    output = {
+        "notice": _L2_DRY_RUN_NOTICE,
+        "mode": "l2-dry-run",
+        "project": {
+            "project_id": project.project_id,
+            "repo": project.repo.github_repo,
+            "workspace_policy": {
+                "deny_outside_workspace": (
+                    project.workspace_policy.deny_outside_workspace
+                ),
+                "allow_symlinks": project.workspace_policy.allow_symlinks,
+                "max_changed_files": project.workspace_policy.max_changed_files,
+            },
+        },
+        "approved_plan": {
+            "approved_by": approval.approved_by,
+            "approved_at": approval.approved_at.isoformat(),
+            "source": approval.source,
+            "plan_engine": provenance.engine,
+            "real_call": provenance.real_call,
+            "model": provenance.model,
+            "issue_number": artifact.issue_number,
+            "title": plan.title,
+        },
+        "intended_scope": {
+            "note": _L2_INTENDED_SCOPE_NOTE,
+            "files_likely_to_change": list(plan.files_likely_to_change),
+            "files_forbidden_or_out_of_scope": list(
+                plan.files_forbidden_or_out_of_scope
+            ),
+            "required_verification": list(plan.required_verification),
+            "proposed_steps": list(plan.proposed_steps),
+            "risks": list(plan.risks),
+            "open_questions": list(plan.open_questions),
+        },
+        "next_authorization_required": _L2_DRY_RUN_NEXT_AUTHORIZATION,
+    }
+    typer.echo(json.dumps(output, indent=2))
+
+
+@app.command("l2-dry-run")
+def l2_dry_run(
+    project_config: Path = typer.Option(
+        ...,
+        "--project-config",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Path to the project config YAML the approved plan must match.",
+    ),
+    approved_plan: Path = typer.Option(
+        ...,
+        "--approved-plan",
+        # Deliberately no exists=/readable= check: Typer would stat the path
+        # before the command body could reject one inside the configured
+        # workspace. The guard runs first; the file is opened only afterwards.
+        help="Path to a human-approved L1 plan artifact (Phase 5B shape). Must "
+        "not be inside the project's configured workspace path.",
+    ),
+    apply_approved_plan: bool = typer.Option(
+        False,
+        "--apply-approved-plan",
+        help="Required explicit confirmation that an approved plan may be "
+        "acted on. Without it this command fails without reading anything.",
+    ),
+    output_format: GeneratePlanFormat = typer.Option(
+        GeneratePlanFormat.json,
+        "--format",
+        help="Output format. Only 'json' is currently supported.",
+    ),
+) -> None:
+    """Validate an approved L1 plan and print the scope a future L2 would have.
+
+    **Dry run only, and L2 is still not built.** This command reads exactly two
+    local files — the ``--project-config`` YAML and the ``--approved-plan``
+    artifact, in that order — validates the artifact with the Phase 5B parser,
+    checks it against the config, and prints what a future implementer *would*
+    be bounded by. It inspects nothing, proposes nothing, and changes nothing.
+
+    It does **not**: read, list, stat, or resolve the project's configured
+    ``repo.workspace_path`` or any target workspace; check whether any file the
+    plan names exists; run any ``required_verification`` entry or any other
+    command; generate or apply a patch; edit a file; create a branch, commit, or
+    PR; fetch from or write to GitHub; call a model; open a socket; or read
+    ``AIDO_LITELLM_*`` or any other environment variable.
+
+    It also never writes or stamps an approval: the approval block must already
+    have been written by a human, and it must carry a non-blank ``approved_by``,
+    a parseable ``approved_at``, ``source: "manual"``, and an ``approval_text``
+    matching the required phrase exactly. An artifact merely existing, or merely
+    parsing, is not approval.
+
+    The gate fails closed in order: ``--apply-approved-plan`` first (without it
+    nothing is read at all), then the config, then a string/path check rejecting
+    an ``--approved-plan`` inside the configured workspace **before** it is read
+    or stat'd, then the strict parse, then exact ``project_id``/``repo``
+    matching against the config. Any failure exits non-zero with stderr only and
+    nothing on stdout, and never echoes the artifact text or the plan prose.
+    """
+    _run_l2_dry_run(
+        project_config=project_config,
+        approved_plan=approved_plan,
+        apply_approved_plan=apply_approved_plan,
     )
 
 
