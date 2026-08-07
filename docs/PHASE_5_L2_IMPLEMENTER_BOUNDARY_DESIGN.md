@@ -12,7 +12,9 @@
 >
 > **L2 remains proposed, not built.** Nothing described here is authorized to be
 > implemented by this phase. Every sub-phase in §13 (Phase 5B and later) is a
-> *proposal* and requires its own explicit authorization.
+> *proposal* and requires its own explicit authorization. (Phase 5B has since
+> been authorized and implemented as **typed models and a parser only** — §15.
+> Phase 5C onward remain proposals, and L2 is still not built.)
 >
 > **L2 may not be invoked by any existing command after this phase.** After
 > Phase 5A the shipped CLI surface is exactly what Phase 4L left behind —
@@ -24,6 +26,12 @@
 > [AI_DEV_ORCHESTRATOR_PLAN.md §7](AI_DEV_ORCHESTRATOR_PLAN.md#7-mvp-phase-roadmap)
 > and picks up where
 > [PHASE_4_L1_PLAN_GENERATOR_PLAN.md](PHASE_4_L1_PLAN_GENERATOR_PLAN.md) stops.
+>
+> **Phase 5B is now DONE** (§15). It implemented the §3 artifact as **typed
+> models and a strict parser only** — no CLI behavior, no file loading, no
+> workspace access, no model/network/environment access, and no L2 action.
+> **Phase 5C and every later sub-phase in §13 remain proposed and not
+> authorized.**
 
 ## 1. Goal
 
@@ -137,8 +145,12 @@ writes are on the table:
 
 ## 3. L1-to-L2 handoff artifact
 
-**Not implemented now.** This section designs a shape; Phase 5B would be the
-earliest possible phase to type it, and Phase 5B is not authorized.
+**Typed in Phase 5B** — see §15. The shape below is now
+[handoff/models.py](../src/ai_dev_orchestrator/handoff/models.py):
+`PlanApproval`, `L1PlanProvenance`, `ApprovedL1PlanArtifact`, and the strict
+parser `parse_approved_l1_plan_artifact`. Typing it added **models and a parser
+only**: nothing loads such an artifact from disk, nothing consumes one, and no
+command can reach it.
 
 ### 3.1 Suggested future shape
 
@@ -719,10 +731,10 @@ sub-phase requires its own explicit prompt, and each may be re-scoped or
 abandoned.
 
 - **Phase 5A — this docs-only boundary design.** No code. *(This document.)*
-- **Phase 5B — typed approved-plan handoff models and parser only.** The §3
-  wrapper as pydantic models plus a strict parser, `extra="forbid"`, in the
+- **Phase 5B — typed approved-plan handoff models and parser only. DONE.** The
+  §3 wrapper as pydantic models plus a strict parser, `extra="forbid"`, in the
   Phase 4B/4F style. Library only, wired into nothing. **No workspace access, no
-  CLI behavior, no model call, no network call, no environment read.**
+  CLI behavior, no model call, no network call, no environment read.** See §15.
 - **Phase 5C — L2 dry-run CLI that validates an approved plan and prints the
   intended scope only.** A separate command running the §4 gate end to end and
   printing what *would* be in scope. **No workspace access**, no reads of
@@ -775,4 +787,99 @@ would mean a single authorization crossing three distinct risk boundaries.
 - [x] **L2 is not implemented and cannot be invoked.** No existing command gains
   an L2 path, and no L2 entry point exists.
 - [x] **Phase 5B and every later sub-phase in §13 remain proposed and not
+  authorized.** *(Phase 5B was subsequently authorized and implemented — see
+  §15. Phase 5C onward are still unauthorized.)*
+
+## 15. Phase 5B — typed handoff models and strict parser (DONE)
+
+Phase 5B implemented §3 of this document, and **only** §3's data shape.
+
+### 15.1 What it is
+
+- [handoff/models.py](../src/ai_dev_orchestrator/handoff/models.py) —
+  `ApprovedPlanError` / `ApprovedPlanParseError` / `ApprovedPlanValidationError`,
+  the exact constant `REQUIRED_APPROVAL_TEXT`, the `PlanApproval`,
+  `L1PlanProvenance` and `ApprovedL1PlanArtifact` models (all `extra="forbid"`),
+  and the pure function `parse_approved_l1_plan_artifact(text) ->
+  ApprovedL1PlanArtifact`.
+- [handoff/\_\_init\_\_.py](../src/ai_dev_orchestrator/handoff/__init__.py) —
+  exports those eight names and nothing else.
+- [tests/test_approved_plan_handoff_models.py](../tests/test_approved_plan_handoff_models.py)
+  — literal JSON strings only; no artifact is read from disk, no environment
+  value is read, no socket is opened.
+
+The parser is strict in the Phase 4F sense: exactly one JSON object, surrounding
+whitespace tolerated, and **reject rather than repair** — markdown fences, prose
+before or after, arrays, strings, numbers, booleans and `null` all fail, unknown
+fields are never stripped, and missing fields are never inferred.
+
+`L1Plan` is **unchanged**. Approval, provenance, and identity are wrapper fields
+(§3.2), and `ApprovedL1PlanArtifact` additionally rejects any field inside `plan`
+that `L1Plan` does not declare — so a forged `plan.approval` fails the artifact
+instead of being silently dropped (§3.6). No digest was added; §3.3's integrity
+check remains a later phase's problem.
+
+### 15.2 What it is not
+
+- **Typed models and a parser only.** Phase 5B added no behavior beyond turning
+  text it is handed into a validated object.
+- **No CLI behavior.** No command and no option was added, and none was changed.
+  The shipped surface is still exactly `version`, `inspect-issue`,
+  `llm-smoke-test`, `generate-plan`, `real-llm-smoke-test`,
+  `generate-model-plan`. `generate-plan` is still offline-only and
+  `generate-model-plan` is unchanged. Nothing imports the `handoff` package.
+- **No file loading.** There is no artifact loader. The parser takes a string;
+  obtaining that string is out of scope, and no implementation code reads or
+  writes an approved-plan artifact on disk.
+- **No workspace access.** No target project workspace was read, listed, stat'd,
+  or resolved. Path-like plan fields stay plain strings, exactly as in Phase 4B.
+- **No model call, no network call, no environment read.** `httpx`, `requests`,
+  `LLMClient`, `LLMClientConfig`, `load_llm_client_config_from_env` and
+  `GitHubClient` are absent from the module's globals, and so are `os`, `socket`
+  and `subprocess`.
+- **No clock.** `approved_at` and `generated_at` are *parsed* when supplied and
+  are never produced. There is no default timestamp and no staleness check.
+- **No L2 action.** A successful parse means the artifact is well-formed and
+  carries a valid approval. It authorizes nothing, because nothing consumes it.
+- **No approval stamping.** The orchestrator still never writes an `approval`
+  block (§3.6). No command creates one.
+- **No GitHub fetch or write, no command execution, no file editing engine, no
+  agent logic, and no implementer/reviewer/fixer role wiring.**
+
+### 15.3 Acceptance criteria for Phase 5B (DONE)
+
+- [x] Typed errors, the exact `REQUIRED_APPROVAL_TEXT` constant, the three
+  models, and the strict parser exist and are exported from the `handoff`
+  package.
+- [x] **Approval fails closed.** A missing, null, empty, incomplete, or
+  malformed `approval` block is rejected; `approval_text` must match the
+  required phrase **exactly**; `approved_by` must be non-blank; `source` must be
+  exactly `"manual"`; `approved_at` must parse. No approval field has a default.
+- [x] **`Automation Authorization` text is not approval.** An artifact whose plan
+  prose asserts automation was authorized is still rejected without a valid
+  wrapper approval block.
+- [x] **Identity mismatches are rejected** — wrapper vs provenance
+  (`project_id`, `repo`, `issue_number`), wrapper vs plan (`repo`,
+  `issue_number`), and provenance vs plan (`title`) — with exact string
+  equality, no normalization.
+- [x] **The plan must still be an unescalated L1 plan** —
+  `automation_level == "L1"` and `requires_human_approval is True`, checked
+  explicitly by the wrapper.
+- [x] **`extra="forbid"` everywhere**, including a wrapper-side rejection of
+  unknown fields inside `plan`. API-key-, base-URL-, prompt- and
+  completion-shaped fields in provenance are rejected as extras, and
+  `endpoint_host` is **rejected — never stripped** when it contains `/`, `?`,
+  `#`, or `@`.
+- [x] **The parser performs no IO**, verified by monkeypatching `builtins.open`,
+  `os.getenv`, `os.environ.get`, `os.stat`, `os.listdir`, `os.scandir`,
+  `os.path.exists`, `os.path.abspath`, `os.path.realpath`, `socket.socket`,
+  `socket.create_connection`, `socket.getaddrinfo` and `subprocess.Popen` around
+  both a successful parse and the failure paths.
+- [x] **`L1Plan` was not modified** and carries no approval field.
+- [x] **No CLI behavior added**, per §15.2.
+- [x] **No target project workspace access** — `C:\dev\mis_project`,
+  `C:\dev\a8_oa`, `C:\dev\bible_reading_v2`, and the `C:\dev` parent were not
+  touched.
+- [x] **L2 is still not built and cannot be invoked.**
+- [x] **Phase 5C and every later sub-phase in §13 remain proposed and not
   authorized.**

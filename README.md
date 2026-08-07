@@ -17,7 +17,43 @@ changes. The eventual design will:
 
 The emphasis is on **control and review**, not autonomous action.
 
-## Current status: Phase 4L (gated real model **L1 plan** command)
+## Current status: Phase 5B (typed approved-plan handoff models, library only)
+
+Phase 5B adds the `ai_dev_orchestrator.handoff` package: typed
+**approved-plan handoff models** and a strict parser for artifact text it is
+handed. It is a schema, in the Phase 4B/4F style, and it is **wired into
+nothing**.
+
+- **L2 is still not built.** No implementer exists.
+- **No command can invoke L2.** The shipped CLI surface is exactly what Phase 4L
+  left behind — `version`, `inspect-issue`, `llm-smoke-test`, `generate-plan`,
+  `real-llm-smoke-test`, `generate-model-plan`. Phase 5B added no command and no
+  option, and changed none of them. Nothing imports the `handoff` package.
+- **Approved-plan artifacts can be parsed as data only.** A successful parse
+  means the text is well-formed and carries a valid human approval. It
+  authorizes nothing, because nothing consumes the result.
+- **No workspace access and no implementation behavior exists.** No target
+  project workspace is read, listed, stat'd, or resolved; no file is edited; no
+  command is executed; nothing is fetched from or written to GitHub.
+- **No file loading.** There is no artifact loader — the parser takes a string.
+  No implementation code reads or writes an approved-plan artifact on disk.
+- **No model call, no network call, no environment read, and no clock.**
+  `approved_at` and `generated_at` are parsed when supplied and never produced.
+- **Approval is never inferred.** Not from an artifact existing, not from it
+  parsing, and not from `Automation Authorization` text in an issue or in plan
+  prose. It requires a non-blank `approved_by`, a parseable `approved_at`, an
+  `approval_text` equal to `"I approve this L1 plan for L2 implementation"`
+  **exactly**, and `source: "manual"`. The orchestrator never writes that block.
+- **`L1Plan` is unchanged.** Approval, provenance, and identity are wrapper
+  fields sitting *around* an untouched plan snapshot, and a forged `approval`
+  key inside `plan` is **rejected**, not stripped.
+- **Every model is `extra="forbid"`**, and the project/repo/issue/title identity
+  fields are compared with exact string equality.
+
+See
+[docs/PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md §15](docs/PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md).
+
+### Phase 4L (gated real model **L1 plan** command)
 
 Phase 4L adds `generate-model-plan`, a **separate, explicitly gated real model
 L1 planner**. It was explicitly authorized, and that authorization covers **this
@@ -522,6 +558,14 @@ the known lexical path-normalization gap (symlinks, junctions, UNC, mapped
 drives, 8.3 names) must be closed **before** anything touches a target
 workspace. Phase 5A added **no runtime code, no CLI behavior, no model call, no
 network call, and no environment-variable read**.
+
+**Phase 5B** then typed that design's §3 handoff artifact — the
+`ai_dev_orchestrator.handoff` package described in the status section above.
+It is **models and a strict parser only**, wired into nothing: no CLI behavior,
+no artifact loader and no disk read, no workspace access, no model call, no
+network call, no environment read, no clock, and no L2 action. `L1Plan` is
+unchanged, approval can never be inferred, and a parsed artifact is data
+describing an approval — never permission to do anything.
 
 **L2 is proposed, not built.** No command can invoke it, and every later Phase 5
 sub-phase remains unauthorized. Until one is explicitly authorized, the project
