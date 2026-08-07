@@ -17,7 +17,56 @@ changes. The eventual design will:
 
 The emphasis is on **control and review**, not autonomous action.
 
-## Current status: Phase 5C (L2 dry-run validation command — no implementation)
+## Current status: Phase 5D0 (canonical path guard library — no CLI behavior)
+
+Phase 5D0 adds a **library-only** canonical path guard,
+`ai_dev_orchestrator.workspace.canonical`: given a workspace root and one
+candidate path, it canonicalizes both on disk and proves the candidate is
+genuinely inside the root. It exists because the Phase 5A design §6.4 requires
+path canonicalization to be strengthened **before** any read-only workspace
+inspection, so the prerequisite is built and reviewable ahead of the phase that
+would use it.
+
+- **L2 is still not built.** No implementer exists, and Phase 5D0 does not move
+  toward one — it hardens a check.
+- **No workspace inspection exists yet.** This is not it. The guard reads no
+  file contents, lists no directory, globs nothing, and walks no tree; it
+  answers one question about one path the caller already named.
+- **The guard is library-only and is not wired into any command.** No command
+  and no option was added, and none was changed. Nothing in the shipped code
+  calls it — only the `workspace` package re-exports it, and a test asserts
+  that.
+- **`l2-dry-run` remains validation and printing only**, exactly as Phase 5C
+  left it, and `generate-plan`, `generate-model-plan`, `version`,
+  `inspect-issue`, `llm-smoke-test` and `real-llm-smoke-test` are unchanged.
+- **No target project workspace is touched by any shipped command.** The guard's
+  tests create and inspect pytest `tmp_path` directories only.
+- **Fails closed.** Unsafe or ambiguous path forms — UNC (`\\server\share\...`),
+  extended-length (`\\?\C:\...`), device (`\\.\...`), components ending in a
+  space or a dot, and 8.3-short-name-looking components (`PROGRA~1`) — are
+  refused **before any filesystem call**, never normalized or repaired. This is
+  deliberately conservative and may reject strings that name a real file on
+  Windows. Containment is re-verified after resolution with
+  `os.path.commonpath`, not a string prefix test, so a sibling sharing a prefix
+  (`repo` vs `repo_evil`) is outside; a drive mismatch is refused as ambiguous
+  rather than guessed.
+- **Symlinks, NTFS junctions, and other reparse points are refused by default.**
+  With `allow_symlinks=False` a symlinked workspace root, any linked component
+  between the root and the candidate, and link-mediated entry into the workspace
+  are all rejected — before the path is accepted, even when the link points back
+  inside. With `allow_symlinks=True` links are followed and containment is still
+  re-checked, so a link resolving outside the workspace is rejected anyway.
+- **Containment is not authorization.** A successful result says a path is inside
+  a root. Whether it is *allowed* remains the Phase 1 `PathPolicy` question, and
+  a future caller must satisfy both. The lexical policy is unchanged.
+- **No model call, no network call, no environment read, no GitHub fetch or
+  write, no command execution, no file editing, no agent logic or role wiring,
+  and no approval stamping.**
+
+See
+[docs/PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md §17](docs/PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md).
+
+### Phase 5C (L2 dry-run validation command — no implementation)
 
 Phase 5C adds **one** command, `l2-dry-run`. It reads a project config and a
 human-approved L1 plan artifact, validates them, and prints the scope a
@@ -308,6 +357,8 @@ The following are intentionally **not** implemented yet:
 - No agent logic.
 - No file editing or command execution.
 - No reads or writes of configured **target project workspaces**.
+- No **workspace inspection**. The Phase 5D0 canonical path guard is a library
+  with no caller; nothing resolves, stats, or reads a path a plan names.
 - No agent framework (LangGraph / CrewAI / AutoGen / n8n).
 
 ## Provider policy
@@ -656,11 +707,15 @@ no environment read, no GitHub fetch or write, no command execution, no file
 editing, no agent logic or role wiring, and no approval stamping**, and it
 changed none of the six commands Phase 4L left behind.
 
+**Phase 5D0** then built the path canonicalization work that design §6.4 named as
+a prerequisite — the library-only guard described in the status section above.
+It is **not** workspace inspection: it adds no command and no option, no shipped
+code path calls it, and its tests use pytest `tmp_path` directories only.
+
 **L2 is proposed, not built.** No command can invoke it, and every later Phase 5
 sub-phase remains unauthorized — including **Phase 5D**, the first phase that
-might touch a target workspace, which is additionally blocked on the path
-canonicalization work (symlinks, junctions, UNC, mapped drives, 8.3 names)
-described in the Phase 5A design §6.4. Until one is explicitly authorized, the
+might touch a target workspace. Phase 5D0 satisfied its §6.4 prerequisite; it
+did not authorize it. Until one is explicitly authorized, the
 project continues to avoid agent automation, file editing, command execution,
 GitHub writes, GitHub issue fetching inside a real model command, and target
 project workspace reads/writes.

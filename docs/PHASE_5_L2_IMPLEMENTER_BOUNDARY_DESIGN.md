@@ -14,8 +14,9 @@
 > implemented by this phase. Every sub-phase in §13 (Phase 5B and later) is a
 > *proposal* and requires its own explicit authorization. (Phase 5B has since
 > been authorized and implemented as **typed models and a parser only** — §15 —
-> and Phase 5C as a **dry-run validation command only** — §16. Phase 5D onward
-> remain proposals, and L2 is still not built.)
+> and Phase 5C as a **dry-run validation command only** — §16, and Phase 5D0 as
+> a **canonical path guard library only** — §17. Phase 5D onward remain
+> proposals, and L2 is still not built.)
 >
 > **L2 may not be invoked by any existing command after this phase.** After
 > Phase 5A the shipped CLI surface is exactly what Phase 4L left behind —
@@ -39,9 +40,15 @@
 > scope a future L2 *would* be bounded by. **No workspace access, no
 > implementation, no model/network/environment access, no GitHub fetch or
 > write, no command execution, no file editing, and no approval stamping.**
+>
+> **Phase 5D0 is now DONE** (§17). It implemented the §6.4 canonicalization
+> sketch as a **library-only** path guard —
+> `workspace/canonical.py` — and nothing else. **It is not workspace
+> inspection**: no CLI command was added or changed, no shipped code path calls
+> it, and its tests use pytest `tmp_path` directories only. It is the
+> **prerequisite** §6.4 requires before Phase 5D.
 > **Phase 5D and every later sub-phase in §13 remain proposed and not
-> authorized**, and Phase 5D is additionally blocked on the §6.4
-> canonicalization work.
+> authorized.**
 
 ## 1. Goal
 
@@ -540,6 +547,13 @@ What strengthening should look like, as a design sketch for a future phase:
 
 This work is a **prerequisite** for Phase 5D in §13, not a follow-up to it.
 
+**Phase 5D0 has since implemented this sketch as a library** — see §17. The
+lexical gate is unchanged, and the new module adds the on-disk second gate,
+the reparse-point check, the fail-closed ambiguity handling, and explicit
+UNC/extended-length/device/trailing-dot-or-space/8.3 rejection. It is **not**
+wired into anything: the prerequisite is now built, and Phase 5D itself remains
+unauthorized.
+
 ## 7. Command execution policy for future L2
 
 Design only. **Nothing in this repo executes commands**, and Phase 5A adds no
@@ -750,9 +764,16 @@ abandoned.
   this phase is authorized to go and printing what *would* be in scope. **No
   workspace access**, no reads of `repo.workspace_path`, no edits, no commands.
   See §16.
+- **Phase 5D0 — canonical path guard library only. DONE.** The §6.4
+  canonicalization step as a reusable library: strict on-disk canonicalization,
+  robust containment re-verification, a symlink/junction/reparse-point policy,
+  and a fail-closed lexical precheck for ambiguous Windows path forms. **Library
+  only** — no CLI behavior, no command, no option, and no caller. **It is not
+  workspace inspection**, and its tests use pytest `tmp_path` only. See §17.
 - **Phase 5D — read-only workspace inspection under path policy.** The first
   phase that touches a target workspace, and therefore the phase that **must be
-  preceded by the §6.4 canonicalization work**. Reads only; no writes.
+  preceded by the §6.4 canonicalization work** — now available as the Phase 5D0
+  library. Reads only; no writes. **Still proposed and not authorized.**
 - **Phase 5E — patch proposal artifact only.** Produce a diff/edit list outside
   the workspace. **No file edits.**
 - **Phase 5F — controlled file editing under `allowed_paths`.** The first write.
@@ -1035,3 +1056,182 @@ echoing it adds nothing to the `approved_by`/`approved_at` pair).
 - [x] **Phase 5D and every later sub-phase in §13 remain proposed and not
   authorized.** Phase 5D is the first phase that might touch a workspace and is
   blocked on the §6.4 canonicalization work.
+
+## 17. Phase 5D0 — canonical path guard library (DONE)
+
+Phase 5D0 implemented the §6.4 design sketch as a **library**, and nothing else.
+It exists because §6.4 decided that canonicalization must be strengthened
+**before** read-only workspace inspection, not after it — so the prerequisite is
+built and reviewable on its own, ahead of the phase that would use it.
+
+**Phase 5D0 is not Phase 5D.** It performs no workspace inspection, adds no
+command, and is called by nothing.
+
+### 17.1 What it is
+
+- [workspace/canonical.py](../src/ai_dev_orchestrator/workspace/canonical.py) —
+  the error family `CanonicalPathError` /  `CanonicalPathInputError` /
+  `CanonicalPathResolutionError` / `CanonicalPathContainmentError` /
+  `CanonicalPathSymlinkError` / `CanonicalPathAmbiguityError`, the frozen
+  data-only `CanonicalWorkspacePath`, and the single entry point
+  `canonicalize_existing_path_under_workspace(workspace_root, candidate, *,
+  allow_symlinks=False)`.
+- [workspace/\_\_init\_\_.py](../src/ai_dev_orchestrator/workspace/__init__.py) —
+  exports those eight names alongside the existing Phase 1 path-policy names.
+- [tests/test_workspace_canonical_path_guard.py](../tests/test_workspace_canonical_path_guard.py)
+  — pytest `tmp_path` directories and files only.
+
+The function proves one claim about one path: *this existing candidate is
+genuinely inside this existing workspace root*. It runs in this order, cheapest
+and most conservative first:
+
+1. **Type and blank checks** on both inputs, and on `allow_symlinks`.
+2. **A fail-closed lexical precheck**, before any filesystem call: UNC
+   (`\\server\share\...`), extended-length (`\\?\C:\...`), device (`\\.\...`),
+   any component ending in a space or a dot, and any 8.3-short-name-looking
+   component (`PROGRA~1`, `LONGFI~1.TXT`) are **refused, never normalized or
+   repaired**. Both separators are treated alike, so the forward-slash spellings
+   are refused too. This is deliberately **conservative** and may reject strings
+   that name a real file on Windows: every form here can denote the same
+   location as some other string, which is exactly what makes containment
+   reasoning unsound.
+3. **Existence and kind checks** — `os.lstat` for existence (so a dangling
+   symlink surfaces as a *symlink* decision, not a missing path), and the
+   workspace root must resolve to a directory.
+4. **The symlink / reparse-point policy** (§17.2).
+5. **Strict canonicalization** of both paths, `Path.resolve(strict=True)`.
+6. **Containment re-verification** of the resolved candidate against the
+   resolved root, via `os.path.commonpath` on `os.path.normcase`-normalized
+   paths — **not** a string prefix test. A sibling sharing a string prefix
+   (`repo` vs `repo_evil`) is outside. A comparison that cannot be made at all —
+   a drive mismatch — raises `CanonicalPathAmbiguityError` rather than being
+   guessed.
+
+A relative candidate is joined to the workspace root before resolution; an
+absolute candidate is never joined and is validated against the root as given.
+`relative_path` is returned relative to the resolved root. A candidate **equal
+to** the workspace root is **accepted as inside**, reporting `relative_path ==
+"."` — a deliberate choice, documented on the function: "inside the workspace"
+and "is a file" are different questions, and a future caller that needs a file
+must check the kind separately.
+
+Inputs are not mutated, nothing is created, and nothing is deleted.
+
+### 17.2 Symlink, junction, and reparse-point policy
+
+With `allow_symlinks=False` (the default) the guard refuses:
+
+- a workspace root that is itself a symlink or reparse point;
+- any component between the root and the candidate that is one;
+- and a candidate that is not *lexically* under the root — so a link cannot be
+  used to **enter** the workspace either.
+
+Rejection happens **before** the path is accepted, even when the link points
+back inside the workspace. Note the guard never inspects components *above* the
+workspace root: the root is the boundary, and walking above it would make the
+check depend on the ancestors of whatever directory the operator configured.
+
+With `allow_symlinks=True` links are followed and containment is then re-checked
+against the resolved root: a link resolving outside the workspace is still
+rejected, and one resolving inside may be accepted.
+
+Detection is best-effort and platform-aware. POSIX symlinks appear in
+`st_mode`. Windows junctions and directory mount points are reparse points that
+`stat` follows silently and that `S_ISLNK` does not report, so
+`st_file_attributes & FILE_ATTRIBUTE_REPARSE_POINT` and `st_reparse_tag` are
+checked as well.
+
+**Time of check is not time of use.** A returned decision describes the
+filesystem as it was during the call. Per §6.4 a future caller must re-establish
+containment immediately before each read — never cache one answer and reuse it.
+
+### 17.3 What it is not
+
+- **Not workspace inspection.** Phase 5D is still proposed and unauthorized.
+  This module reads no file contents, lists no directory, globs nothing, and
+  walks no tree. It answers one question about one path the caller already
+  named.
+- **No CLI behavior.** No command and no option was added, and none was changed.
+  The shipped surface is exactly what Phase 5C left: `version`,
+  `inspect-issue`, `llm-smoke-test`, `generate-plan`, `real-llm-smoke-test`,
+  `generate-model-plan`, `l2-dry-run`. `l2-dry-run`, `generate-plan` and
+  `generate-model-plan` behave identically to before.
+- **Not wired in.** No shipped module imports `workspace.canonical` or calls
+  `canonicalize_existing_path_under_workspace`; only the package `__init__`
+  re-exports it, and a test asserts that.
+- **No target workspace access by any shipped command.** Nothing under any
+  configured `repo.workspace_path` was read, listed, stat'd, or resolved, and
+  no path named by an approved plan was inspected.
+- **Not a permission decision.** Containment is not authorization. A returned
+  `CanonicalWorkspacePath` says the path is inside the root; whether the path is
+  *allowed* remains `PathPolicy`'s question (§6.2), and a future caller must
+  satisfy **both** gates. The lexical Phase 1 policy is unchanged and stays the
+  cheap first gate.
+- **No model call, no network call, no environment read, no command execution,
+  no file editing, no agent logic, and no implementer/reviewer/fixer role
+  wiring.** `httpx`, `requests`, `LLMClient`, `LLMClientConfig`,
+  `load_llm_client_config_from_env`, `GitHubClient`, `typer`, `socket` and
+  `subprocess` are absent from the module's globals.
+- **No GitHub fetch and no GitHub write.**
+- **No approved-plan artifact was created or modified, and no approval was
+  stamped.**
+- **No config change.** No new config field, and `workspace_policy.allow_symlinks`
+  is **not** read by this module — `allow_symlinks` is an explicit keyword
+  argument, so nothing here silently inherits a project setting. Connecting the
+  two belongs to the phase that first calls the guard.
+
+### 17.4 Acceptance criteria for Phase 5D0 (DONE)
+
+- [x] The six-error hierarchy, the frozen data-only `CanonicalWorkspacePath`,
+  and `canonicalize_existing_path_under_workspace` exist and are exported from
+  the `workspace` package — those eight names and nothing else added.
+- [x] **Happy paths pass**: an existing file under the workspace, an existing
+  directory, a relative candidate, and an absolute candidate are all accepted;
+  `relative_path` is relative and stable across spellings; and
+  `resolved_candidate` is inside `resolved_workspace_root`.
+- [x] **Input failures fail closed**: blank or wrongly-typed `workspace_root`
+  or `candidate`, a missing workspace root, a workspace root that is a file, and
+  a missing candidate.
+- [x] **Escapes fail closed**: a relative candidate escaping via `..`, an
+  absolute candidate outside the workspace, the workspace parent, and sibling
+  prefix confusion (`repo` vs `repo_evil`) — all rejected, with and without
+  `allow_symlinks`.
+- [x] **Containment is commonpath-based, not prefix-based**, case handling
+  follows `os.path.normcase`, and a drive mismatch fails closed as ambiguity.
+  Case behavior is tested in a platform-aware way only.
+- [x] **The symlink policy is tested**: a symlink inside the workspace pointing
+  inside is rejected with `allow_symlinks=False` and accepted with
+  `allow_symlinks=True`; one pointing outside is rejected either way; an
+  intermediate directory symlink is rejected; a symlinked workspace root is
+  rejected with `allow_symlinks=False`; and a dangling symlink fails closed.
+  Symlink tests skip gracefully where the platform or user cannot create one.
+  Windows junctions need no admin rights to create but do need a subprocess, so
+  reparse-point detection is covered instead by exercising the detector against
+  fabricated `st_file_attributes` / `st_reparse_tag` stat results, plus two
+  end-to-end runs with `os.lstat` faked to report a reparse point on the root
+  and on an intermediate component.
+- [x] **Unsafe lexical forms are rejected before any disk touch** — UNC,
+  extended-length, device, trailing-dot, trailing-space, and 8.3-like
+  components, in both separator spellings, for both the workspace root and the
+  candidate — proven by detonating `os.stat`, `os.lstat`, `Path.resolve`,
+  `os.path.realpath`, `os.path.exists`, `os.listdir`, `os.scandir` and
+  `builtins.open` around the call. `.` and `..` are not mistaken for
+  trailing-dot components.
+- [x] **No forbidden behavior**, verified by test: the forbidden names are absent
+  from module globals; the happy path and the failure paths run with
+  `builtins.open`, `os.getenv`, `os.environ.get`, `os.listdir`, `os.scandir`,
+  `os.walk`, `os.system`, `subprocess.Popen`, `subprocess.run`,
+  `socket.socket`, `socket.create_connection` and `socket.getaddrinfo` all
+  detonating.
+- [x] **Every path touched is under `tmp_path`**, asserted by tracking every
+  argument passed to `os.lstat`, `os.stat` and `Path.resolve` during a run; and
+  neither the implementation nor the test module names a real `C:\dev` project
+  workspace.
+- [x] **No CLI behavior changed.** Root help still lists exactly the seven
+  Phase 5C commands and gains no canonicalization command; `l2-dry-run`,
+  `generate-plan` and `generate-model-plan` help are unchanged and gain no
+  `--allow-symlinks` or equivalent option.
+- [x] **Nothing calls the guard.** Asserted across the whole package.
+- [x] **Phase 5D and every later sub-phase in §13 remain proposed and not
+  authorized.** Phase 5D0 satisfies the §6.4 prerequisite; it does not authorize
+  the phase that would use it.

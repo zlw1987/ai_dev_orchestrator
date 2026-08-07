@@ -87,8 +87,9 @@ Model roles must be configurable. Each role specifies:
   (Phase 5A docs-only; Phase 5B typed the §3 approved-plan handoff models and
   strict parser, library only; Phase 5C added the `l2-dry-run` command, which
   validates an approved plan and prints intended scope with no workspace access
-  and no implementation). **L2 is proposed, not built**, and no command can
-  invoke it.
+  and no implementation; Phase 5D0 added the §6.4 canonical path guard as a
+  library with no caller — **not** workspace inspection, and no CLI behavior).
+  **L2 is proposed, not built**, and no command can invoke it.
 - **Phase 6 — qwen reviewer.**
 - **Phase 7 — fix loop.**
 - **Phase 8 — local commit.**
