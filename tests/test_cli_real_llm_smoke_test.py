@@ -226,8 +226,10 @@ def test_existing_commands_still_appear_in_root_help():
     for command in ("version", "inspect-issue", "llm-smoke-test", "generate-plan"):
         assert command in result.output
 
-    # Phase 4K adds a smoke test, not a planner.
-    for absent in ("generate-model-plan", "real-generate-plan", "plan-from-model"):
+    # Phase 4K added a smoke test, not a planner. (Phase 4L later added the
+    # planner as a *separate* command, `generate-model-plan`; these names have
+    # never existed.)
+    for absent in ("real-generate-plan", "plan-from-model"):
         assert absent not in result.output
 
 

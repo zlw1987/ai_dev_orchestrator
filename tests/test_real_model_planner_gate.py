@@ -828,11 +828,12 @@ def test_root_help_is_unchanged():
     for command in ("version", "inspect-issue", "llm-smoke-test", "generate-plan"):
         assert command in result.stdout
 
-    # Phase 4J wires nothing into the CLI.
+    # Phase 4J wires nothing into the CLI. (`generate-model-plan` arrived much
+    # later, in the separately authorized Phase 4L; the `--real-model` flag it
+    # and the smoke test require still never surfaces in the root help.)
     for absent in (
-        "model-plan",
         "plan-from-model",
-        "generate-model-plan",
+        "real-generate-plan",
         "real-model",
     ):
         assert absent not in result.stdout

@@ -652,8 +652,9 @@ def test_existing_cli_commands_unchanged():
     for command in ("version", "inspect-issue", "llm-smoke-test", "generate-plan"):
         assert command in result.stdout
 
-    # Phase 4G wires nothing into the CLI.
-    for absent in ("model-plan", "plan-from-model", "generate-model-plan"):
+    # Phase 4G wires nothing into the CLI. (`generate-model-plan` arrived much
+    # later, in the separately authorized Phase 4L.)
+    for absent in ("plan-from-model", "real-generate-plan"):
         assert absent not in result.stdout
 
 

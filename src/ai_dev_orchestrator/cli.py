@@ -3,13 +3,20 @@
 Commands: a `version` command, `inspect-issue` (read-only GitHub issue
 inspection), `llm-smoke-test` (a fake-provider dry-run of the Phase 3C LLM
 client — no real model call), `generate-plan` (an offline fake/deterministic L1
-plan generator — Phase 4D, no GitHub fetch, no model call), and
-`real-llm-smoke-test` (Phase 4K — the **one** command that may open a real
-socket, and only after every gate precondition passes).
+plan generator — Phase 4D, no GitHub fetch, no model call), and the **two**
+commands that may open a real socket, each only after every gate precondition
+passes: `real-llm-smoke-test` (Phase 4K) and `generate-model-plan` (Phase 4L).
 
 `real-llm-smoke-test` is a **connectivity check, not a planner**: it sends a
-fixed, harmless prompt, never issue text, and produces no plan. Every other
-command remains offline. No agent logic, file editing, command execution, or
+fixed, harmless prompt, never issue text, and produces no plan.
+`generate-model-plan` is the planner: it transmits the issue title and the body
+text of the local file explicitly named on the command line, and nothing else —
+no source files, no workspace contents, no directory listings, no git history.
+Both require an explicit `--real-model` flag plus a project config that opts in
+and allowlists the model.
+
+Every other command remains offline. No GitHub fetch happens in either gated
+command, and no agent logic, role wiring, file editing, command execution, or
 GitHub writes are wired up anywhere.
 """
 
@@ -551,7 +558,418 @@ def real_llm_smoke_test(
     the JSON result goes to stdout.
     """
     _run_real_llm_smoke_test(
-        project_config=project_config, model=model, real_model=real_model
+        project_config=project_config,
+        model=model,
+        real_model=real_model,
+        read_env=_read_real_llm_env,
+        client_factory=_build_real_llm_client,
+    )
+
+
+# -- real model L1 plan (Phase 4L) --------------------------------------------
+
+_MODEL_PLAN_NOTICE = (
+    "REAL MODEL L1 PLAN ONLY — issue text was sent to a real model. This is "
+    "not executable instructions. A human must review and approve before any "
+    "implementation work proceeds."
+)
+
+# Human-readable categories for the Phase 4F planner errors. The category is
+# printed instead of, or alongside, the exception message so the operator can
+# tell "the model replied with garbage" from "the model proposed something
+# forbidden" without the model's reply being echoed.
+_PLANNER_FAILURE_CATEGORIES: dict[str, str] = {
+    "ModelPlannerParseError": (
+        "parser failure — the reply was not exactly one strict JSON object"
+    ),
+    "ModelPlannerValidationError": (
+        "validation failure — the reply had missing, extra, or wrong-typed "
+        "fields, supplied a caller-controlled field, or failed L1Plan validation"
+    ),
+    "ModelPlannerPolicyError": (
+        "policy failure — the reply proposed forbidden, non-L1 behavior"
+    ),
+}
+
+# A validation error's message can embed pydantic's echo of the offending input
+# values, i.e. fragments of the completion. Those messages are withheld; the
+# other two categories build their messages from fixed strings, field names, and
+# JSON decoder positions only, so they are safe to show.
+_PLANNER_ERRORS_WITH_UNSAFE_MESSAGES = frozenset({"ModelPlannerValidationError"})
+
+
+def _utc_now_iso() -> str:
+    """Return the current UTC time as a second-resolution ISO-8601 stamp."""
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+class _UsageRecordingClient:
+    """Delegating chat client that remembers **only** the last reply's usage.
+
+    The Phase 4G planner returns an ``L1Plan``, not the raw response, so token
+    counts would otherwise be unavailable to the command. This wrapper keeps the
+    counts and nothing else: the prompt and the completion are never stored,
+    logged, or printed.
+    """
+
+    def __init__(self, client) -> None:
+        self._client = client
+        self.usage = None
+
+    def chat(self, request):
+        response = self._client.chat(request)
+        self.usage = response.usage
+        return response
+
+
+def _echo_model_plan_banner(
+    *,
+    endpoint_host: str,
+    model: str,
+    project_id: str,
+    repo: str,
+    issue_number: int,
+    title: str,
+) -> None:
+    """Print the non-suppressible pre-call warning block to stderr (design §3.3).
+
+    Unlike the smoke test's banner, this one has to say plainly that issue text
+    leaves the machine. Host only — never the full base URL (which may embed
+    userinfo or a query string) and never the API key.
+    """
+    for line in (
+        "=== REAL MODEL L1 PLAN — a real network call is about to be made ===",
+        f"Endpoint host: {endpoint_host}",
+        f"Model:         {model}",
+        f"Project:       {project_id}",
+        f"Repo:          {repo}",
+        f"Issue:         #{issue_number} {title}",
+        "The issue title and the text of the local body file WILL be "
+        "transmitted to the model above.",
+        "Nothing else is sent: no source files, no workspace contents, no "
+        "directory listings, no git history, no GitHub token, no API key.",
+        "Nothing is fetched from or written to GitHub. No file is edited and "
+        "no command is run. No audit file is written.",
+        "The result is an L1 plan only and still requires human approval.",
+        "=" * 71,
+    ):
+        typer.echo(line, err=True)
+
+
+def _echo_model_plan_result(
+    *, endpoint_host: str, model: str, succeeded: bool, detail: str = ""
+) -> None:
+    """Print the matching post-call block to stderr.
+
+    Printed only when a real call was actually attempted, so its presence in a
+    scrollback means issue text left the machine.
+    """
+    typer.echo(
+        "=== REAL MODEL L1 PLAN COMPLETED ==="
+        if succeeded
+        else "=== REAL MODEL L1 PLAN FAILED (a real call was attempted) ===",
+        err=True,
+    )
+    typer.echo(f"Endpoint host: {endpoint_host}", err=True)
+    typer.echo(f"Model:         {model}", err=True)
+    if detail:
+        typer.echo(f"Detail:        {detail}", err=True)
+
+
+def _run_generate_model_plan(
+    *,
+    project_config: Path,
+    issue: int,
+    title: str,
+    body_file: Path,
+    model: str,
+    real_model: bool,
+    read_env=_read_real_llm_env,
+    client_factory=_build_real_llm_client,
+) -> None:
+    """Gate, then produce one real model-backed L1 plan. Extracted for tests.
+
+    ``read_env`` and ``client_factory`` are injection points: the CLI wrapper
+    supplies the real environment reader and the real client builder, while tests
+    supply a literal mapping and an ``httpx.MockTransport``-backed client, so the
+    test suite never reads a real value or opens a real socket.
+
+    Ordering is the safety property, and it is stricter than the smoke test's
+    because this command transmits issue text. In sequence: ``--real-model`` must
+    be present, the project config must load, ``--body-file`` must be outside the
+    configured ``repo.workspace_path``, the project must opt in, and the model
+    must be allowlisted — **all before** ``read_env`` is called — then the
+    environment gate must pass, and only *then* is the body file read, the banner
+    printed, and a client built.
+    """
+    from ai_dev_orchestrator.config_loader import ConfigError, load_project_config
+    from ai_dev_orchestrator.github.issue_parser import parse_issue_body
+    from ai_dev_orchestrator.github.models import GitHubIssue
+    from ai_dev_orchestrator.llm.client import LLMClientError
+    from ai_dev_orchestrator.llm.config import LLMConfigError
+    from ai_dev_orchestrator.plan import (
+        ModelBackedL1Planner,
+        ModelPlannerError,
+        RealModelPlanningGateError,
+        check_real_model_planning_gate,
+        endpoint_host_from_base_url,
+    )
+
+    # 1. Explicit confirmation. Checked first, so a plain invocation reads no
+    #    environment value, reads no issue body, builds no client, and reaches no
+    #    network.
+    if not real_model:
+        typer.echo(
+            "Error: generate-model-plan sends the issue text to a REAL model and "
+            "requires the explicit --real-model flag. Nothing was read and no "
+            "call was made.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # 2. Project config: the only file read before gating. The configured
+    #    repo.workspace_path is never read, listed, stat'd, or resolved.
+    try:
+        project = load_project_config(project_config)
+    except ConfigError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1)
+
+    # 3. Refuse an issue body that lives inside the configured target workspace,
+    #    BEFORE that file is read or stat'd — which is also why --body-file
+    #    carries no Typer exists=/readable= check: those would touch the path
+    #    before this guard could run. String/path normalization only; the
+    #    workspace path itself is never read, listed, stat'd, or resolved.
+    if _is_same_or_under(body_file, project.repo.workspace_path):
+        typer.echo(
+            "Error: --body-file is inside the project's configured "
+            f"repo.workspace_path ({project.repo.workspace_path}). "
+            "generate-model-plan never reads target project workspaces; copy "
+            "the issue body to a file outside that path and retry.",
+            err=True,
+        )
+        typer.echo(
+            "The body file was not read, no environment variable was read, no "
+            "client was built, and no network call was made.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # 4. Probe the Phase 4J gate with an EMPTY mapping. The gate checks the
+    #    project opt-in and the model allowlist before it looks at any
+    #    environment value, so a project/model failure surfaces here — with the
+    #    gate's own message — while the real environment and the issue body are
+    #    both still untouched. A probe that gets as far as LLMConfigError has
+    #    passed those checks, which is the point at which reading the environment
+    #    becomes allowed.
+    try:
+        check_real_model_planning_gate(project=project, requested_model=model, env={})
+    except RealModelPlanningGateError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        typer.echo(
+            "The body file was not read, no environment variable was read, no "
+            "client was built, and no network call was made.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    except LLMConfigError:
+        # Expected: the probe mapping deliberately carries no connection values.
+        pass
+
+    # 5. Now — and only now — read the five AIDO_LITELLM_* names and run the
+    #    authoritative gate over them.
+    env = read_env()
+    try:
+        config = check_real_model_planning_gate(
+            project=project, requested_model=model, env=env
+        )
+        endpoint_host = endpoint_host_from_base_url(config.base_url)
+    except (RealModelPlanningGateError, LLMConfigError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        typer.echo(
+            "The body file was not read, no client was built, and no network "
+            "call was made.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # 6. Every gate has passed, so the issue body may finally be read. It is
+    #    read from the local path given on the command line and nowhere else;
+    #    GitHub is not contacted.
+    try:
+        body_text = body_file.read_text(encoding="utf-8")
+    except OSError as exc:
+        typer.echo(f"Error: could not read --body-file: {exc}", err=True)
+        typer.echo("No client was built and no network call was made.", err=True)
+        raise typer.Exit(code=1)
+
+    synthetic_issue = GitHubIssue(
+        number=issue,
+        title=title,
+        body=body_text,
+        state="open",
+        html_url=(
+            "(local issue body, not fetched from GitHub) "
+            f"{project.repo.github_repo}#{issue}"
+        ),
+    )
+    parsed = parse_issue_body(synthetic_issue.body)
+
+    # 7. Warn before the socket exists, not after.
+    _echo_model_plan_banner(
+        endpoint_host=endpoint_host,
+        model=model,
+        project_id=project.project_id,
+        repo=project.repo.github_repo,
+        issue_number=issue,
+        title=title,
+    )
+
+    # 8. Build the real client and plan with it. ``model`` is the explicit
+    #    --model value; the environment's default model never selects what is
+    #    sent. Neither the prompt nor the completion is logged or written to disk.
+    client = _UsageRecordingClient(client_factory(config))
+    try:
+        plan = ModelBackedL1Planner(client).create_plan(
+            synthetic_issue, parsed, project, model=model
+        )
+    except LLMClientError as exc:
+        _echo_model_plan_result(
+            endpoint_host=endpoint_host,
+            model=model,
+            succeeded=False,
+            detail=f"{type(exc).__name__}: {exc}",
+        )
+        raise typer.Exit(code=1)
+    except ModelPlannerError as exc:
+        name = type(exc).__name__
+        category = _PLANNER_FAILURE_CATEGORIES.get(name, "planner failure")
+        detail = f"{name}: {category}"
+        if name not in _PLANNER_ERRORS_WITH_UNSAFE_MESSAGES:
+            detail = f"{detail}. {exc}"
+        _echo_model_plan_result(
+            endpoint_host=endpoint_host,
+            model=model,
+            succeeded=False,
+            detail=detail,
+        )
+        typer.echo(
+            "The model reply is not echoed and no audit file was written.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    _echo_model_plan_result(endpoint_host=endpoint_host, model=model, succeeded=True)
+
+    output = {
+        "notice": _MODEL_PLAN_NOTICE,
+        "provenance": {
+            "engine": "real-model",
+            "operation": "l1-plan",
+            "real_call": True,
+            "model": model,
+            "endpoint_host": endpoint_host,
+            "project_id": project.project_id,
+            "repo": project.repo.github_repo,
+            "issue_number": issue,
+            "title": title,
+            "generated_at": _utc_now_iso(),
+        },
+        "plan": plan.model_dump(),
+        "usage": client.usage.model_dump() if client.usage is not None else None,
+    }
+    typer.echo(json.dumps(output, indent=2))
+
+
+@app.command("generate-model-plan")
+def generate_model_plan(
+    project_config: Path = typer.Option(
+        ...,
+        "--project-config",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Path to a project config YAML file whose real_model_planning "
+        "block enables real model use.",
+    ),
+    issue: int = typer.Option(
+        ..., "--issue", help="Issue number for the synthetic issue."
+    ),
+    title: str = typer.Option(
+        ..., "--title", help="Issue title. It is sent to the model."
+    ),
+    body_file: Path = typer.Option(
+        ...,
+        "--body-file",
+        # Deliberately no exists=/readable= check: Typer would stat the path
+        # before the command body could reject one inside the configured
+        # workspace. The guard runs first; the file is opened only afterwards.
+        help="Path to a local markdown/text file containing the issue body. "
+        "Its text is sent to the model. Must not be inside the project's "
+        "configured workspace path.",
+    ),
+    model: str = typer.Option(
+        ...,
+        "--model",
+        help="Exact model name to plan with. Must be listed in the project's "
+        "real_model_planning.allowed_models.",
+    ),
+    real_model: bool = typer.Option(
+        False,
+        "--real-model",
+        help="Required explicit confirmation that a REAL model call may be "
+        "made. Without it this command fails without reading anything.",
+    ),
+    output_format: GeneratePlanFormat = typer.Option(
+        GeneratePlanFormat.json,
+        "--format",
+        help="Output format. Only 'json' is currently supported.",
+    ),
+) -> None:
+    """Gated REAL model L1 plan (opens a real socket, sends the issue text).
+
+    **This command transmits issue text to a real model.** It requires the
+    explicit ``--real-model`` flag *and* a project config whose
+    ``real_model_planning`` block enables real model use and allowlists
+    ``--model``; either alone is not enough, and every precondition is checked
+    before the environment is read, the body file is opened, or a client is
+    built.
+
+    What is sent: the ``--title`` value, the text of the ``--body-file``, its
+    parsed issue sections, and the project's allowed/protected/forbidden path
+    **patterns** and policy flags. What is never sent: source files, workspace
+    contents, directory listings, git history, the GitHub token, and the API key.
+
+    A ``--body-file`` that is the configured ``repo.workspace_path`` itself, or
+    sits under it, is rejected before the file is read or stat'd — enforced with
+    string/path normalization only, never by touching that path on disk.
+
+    Nothing is fetched from GitHub and nothing is written to GitHub: there is no
+    option to reach it. No plan or command is executed, no file is edited, and no
+    prompt/completion audit file is written.
+
+    Only the five ``AIDO_LITELLM_*`` variables are read, and only after the gate
+    passes. The API key is never printed; the endpoint is reported as a **host**
+    only. A warning block goes to stderr before the call and a matching block
+    after it, so a real call is impossible to miss in a scrollback, and the JSON
+    result goes to stdout.
+
+    The result is an **L1 (plan-only) artifact**: ``automation_level: "L1"`` and
+    ``requires_human_approval: true`` are set by the orchestrator, never read
+    from model output. No L2/L3 automation is authorized by this command.
+    """
+    _run_generate_model_plan(
+        project_config=project_config,
+        issue=issue,
+        title=title,
+        body_file=body_file,
+        model=model,
+        real_model=real_model,
+        read_env=_read_real_llm_env,
+        client_factory=_build_real_llm_client,
     )
 
 

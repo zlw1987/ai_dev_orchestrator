@@ -271,7 +271,9 @@ def test_no_cli_behavior_added():
     assert result.exit_code == 0
     for command in ("version", "inspect-issue", "llm-smoke-test", "generate-plan"):
         assert command in result.stdout
-    for absent in ("model-plan", "plan-from-model", "generate-model-plan"):
+    # Phase 4I added no command of its own. (`generate-model-plan` arrived much
+    # later, in the separately authorized Phase 4L.)
+    for absent in ("plan-from-model", "real-generate-plan"):
         assert absent not in result.stdout
 
 

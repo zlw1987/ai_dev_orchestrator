@@ -17,12 +17,53 @@ changes. The eventual design will:
 
 The emphasis is on **control and review**, not autonomous action.
 
-## Current status: Phase 4K (gated real model **smoke-test** command)
+## Current status: Phase 4L (gated real model **L1 plan** command)
 
-Phase 4K adds `real-llm-smoke-test`, a **separate, explicitly gated
-connectivity check** — and the only command in this repo that can open a real
-socket. It was explicitly authorized, and that authorization covers **this
+Phase 4L adds `generate-model-plan`, a **separate, explicitly gated real model
+L1 planner**. It was explicitly authorized, and that authorization covers **this
 command only**.
+
+```bash
+python -m ai_dev_orchestrator generate-model-plan --project-config projects/my_project.yaml --issue 42 --title "Add currency formatting helper" --body-file path\to\issue_body.md --model minimax-m2.7 --real-model
+```
+
+- **Real model L1 plan command only.** It produces a plan for a human to read.
+  It implements nothing.
+- **Explicit separate command.** `generate-plan` is unchanged and still
+  offline-only; using the real path means typing a different command.
+- **Requires `--real-model`.** Without the flag it fails closed with exit 1
+  before reading the project config, the issue body, or any environment
+  variable, building any client, or making any network call.
+- **Uses the Phase 4J project allowlist gate.** The project's
+  `real_model_planning.enabled` must be true and `--model` must appear
+  **exactly** in `allowed_models`. Those checks run *before* any
+  `AIDO_LITELLM_*` value is read and *before* the issue body is read; only the
+  five Phase 3B names are ever read, and the explicit `--model` is sent, never
+  the environment's default model.
+- **Sends the explicitly provided local issue body text** — the `--title` value,
+  the text of `--body-file`, and its parsed issue sections — to the real model,
+  wrapped in untrusted-data delimiters. The stderr banner says so before
+  anything leaves the machine.
+- **Sends no source files**, no workspace contents, no directory listings, no
+  git history, no GitHub token, and no API key. Project path rules travel as
+  **patterns and names only**.
+- **No GitHub fetch and no GitHub write.** The issue is synthesized in memory
+  from the command line and the local body file; there is no option to reach
+  GitHub.
+- **No file editing, no command execution, no agent logic, no
+  implementer/reviewer/fixer role wiring, and no target workspace access.** The
+  only files read are the two named on the command line, and a `--body-file`
+  inside the configured `repo.workspace_path` is rejected before it is read.
+- **No audit files.** There is no `--audit-dir` option in this phase.
+- **Output is an L1 plan only.** `automation_level: "L1"` and
+  `requires_human_approval: true` are set by the orchestrator, never read from
+  model output. **No L2/L3 automation is authorized.**
+- **Tests never open a socket or read a real environment value** — they inject a
+  literal env mapping and an `httpx.MockTransport`-backed client.
+
+Phase 4K before it added `real-llm-smoke-test`, a **separate, explicitly gated
+connectivity check** — and the first command in this repo that could open a real
+socket. It too was explicitly authorized for **that command only**.
 
 ```bash
 python -m ai_dev_orchestrator real-llm-smoke-test --project-config projects/mis_project.yaml.example --model minimax-m2.7 --real-model
@@ -58,10 +99,7 @@ python -m ai_dev_orchestrator real-llm-smoke-test --project-config projects/mis_
 - **Tests never open a socket or read a real environment value** — they inject a
   literal env mapping and an `httpx.MockTransport`-backed client.
 
-**Phase 4L — a real model *plan* command — remains not authorized** and is not
-implemented; it stays that way unless explicitly approved.
-
-Phase 4J before it added the **fail-closed gate** that a real model-backed
+Phase 4J before that added the **fail-closed gate** that a real model-backed
 planner would have to pass, as a **library function and nothing else**
 (`plan/real_model_gate.py`): `check_real_model_planning_gate(...)`,
 `create_real_model_l1_plan_with_gate(...)`, `endpoint_host_from_base_url(...)`,
@@ -69,7 +107,7 @@ planner would have to pass, as a **library function and nothing else**
 `RealModelPlanningGateError`. Specifically:
 
 - **Library gate only.** It is exported from `ai_dev_orchestrator.plan`; the
-  Phase 4K smoke-test command is its only caller.
+  Phase 4K smoke-test and Phase 4L plan commands are its only callers.
 - **Injected environment mapping only.** `os.environ` is **never** read;
   `load_llm_client_config_from_env(...)` is called only with the injected
   mapping, and omitting the mapping is a gate error, not a fallback to the real
@@ -82,7 +120,7 @@ planner would have to pass, as a **library function and nothing else**
   environment anywhere in the suite.
 - **No real network call and no real model call** in the gate module itself.
 - **No CLI behavior of its own.** Phase 4J added no command and no option; the
-  command came separately, in the authorized Phase 4K above.
+  commands came separately, in the authorized Phase 4K and 4L above.
 - **Fails closed.** An absent or disabled `real_model_planning` block is
   refused; an empty `allowed_models` permits no model even when enabled; a blank
   model is refused; and the requested model must match an allowlist entry
@@ -107,9 +145,9 @@ defaulting to disabled, holding **no** credential, endpoint, or env value, with
 
 Phase 4H before that was a **design review only**
 ([docs/PHASE_4H_GATED_REAL_MODEL_PLANNER_DESIGN.md](docs/PHASE_4H_GATED_REAL_MODEL_PLANNER_DESIGN.md)),
-adding no runtime code. Real model-backed **planning** remains **unauthorized
-and unimplemented**; the shipped planning behavior is still Phase 4D's offline
-`generate-plan` and Phase 4G's fake model-backed library path, described below.
+adding no runtime code. It is the design Phase 4L implements; the offline
+planning behavior it describes as the safe default — Phase 4D's `generate-plan`
+and Phase 4G's fake model-backed library path — is unchanged and described below.
 
 What exists today: package layout and CLI; typed project-config loading and
 workspace path-policy enforcement (Phase 1); **read-only** GitHub issue
@@ -132,9 +170,10 @@ model-planner errors plus a pure strict-JSON output parser**
 (`plan/model_planner.py`) for a model-backed planner (Phase 4F); and a **pure
 prompt builder plus a fake model-backed planner** in the same module
 (Phase 4G); the **fail-closed real model planning gate**
-(`plan/real_model_gate.py`) described above (Phase 4J); and the **gated real
-model connectivity smoke test**, `real-llm-smoke-test`, the only command that
-can contact a real model (Phase 4K).
+(`plan/real_model_gate.py`) described above (Phase 4J); the **gated real
+model connectivity smoke test**, `real-llm-smoke-test` (Phase 4K); and the
+**gated real model L1 plan command**, `generate-model-plan` — the only two
+commands that can contact a real model (Phase 4L).
 
 Phase 4F is **library-only and entirely offline**:
 `parse_model_l1_plan_response(...)` parses strict JSON **text it is handed**
@@ -186,21 +225,24 @@ environment variable, does not read the project's configured
 `repo.workspace_path`, does not edit files, does not execute commands, and
 does not write to GitHub.
 
-`real-llm-smoke-test` (Phase 4K) is the **only** command that can call a real
-model, and it is a **connectivity smoke test, not a planner** — see the status
-section above. Every other command remains offline: `generate-plan` has no
-`--model`, `--live`, `--real`, `--github`, `--fetch`, or `--use-env` option, and
-`llm-smoke-test` does have a `--model` option, but it only names the **fake**
-model echoed back by the in-process mock transport — it selects nothing real and
-calls no real model.
+`real-llm-smoke-test` (Phase 4K) and `generate-model-plan` (Phase 4L) are the
+**only** commands that can call a real model, each requires `--real-model` plus
+an allowlisting project config, and each is described in the status section
+above. Every other command remains offline: `generate-plan` has no `--model`,
+`--live`, `--real`, `--real-model`, `--github`, `--fetch`, or `--use-env`
+option, and `llm-smoke-test` does have a `--model` option, but it only names the
+**fake** model echoed back by the in-process mock transport — it selects nothing
+real and calls no real model.
 
 The following are intentionally **not** implemented yet:
 
-- No CLI command that **plans** with a real model. The only real-model command
-  is the Phase 4K connectivity smoke test, which sends a fixed prompt and no
-  issue text.
+- No **GitHub fetch** in either real-model command. `generate-model-plan` reads
+  the issue body from a local file named on the command line; combining a GitHub
+  fetch with a real model call in one command remains unimplemented.
 - No **GitHub writes** (read-only issue access only — no comments, labels,
   branches, or PRs).
+- No **L2/L3 automation**. The real-model planner produces an L1 plan that
+  requires human approval, and nothing acts on it.
 - No agent logic.
 - No file editing or command execution.
 - No reads or writes of configured **target project workspaces**.
@@ -307,7 +349,7 @@ python -m ai_dev_orchestrator real-llm-smoke-test \
   --real-model
 ```
 
-Phase 4K adds `real-llm-smoke-test`, the **only** command that can contact a
+Phase 4K adds `real-llm-smoke-test`, the first command that can contact a
 real model. It is a **connectivity check, not a planner**: it sends a fixed,
 harmless prompt ("Reply with exactly: AIDO_REAL_SMOKE_OK") and prints what came
 back. It requires **both** the explicit `--real-model` flag **and** a project
@@ -338,6 +380,72 @@ supplies connection defaults and can never select the model. On success the JSON
 on stdout carries `provenance.engine: "real-model"`,
 `provenance.operation: "smoke-test"`, `real_call: true`, the model, the endpoint
 host, the project id, the response content, and token usage.
+
+### Real model L1 plan (Phase 4L, gated — opens a real socket, sends issue text)
+
+```bash
+python -m ai_dev_orchestrator generate-model-plan \
+  --project-config projects/my_project.yaml \
+  --issue 42 \
+  --title "Add currency formatting helper" \
+  --body-file path/to/local/issue_body.md \
+  --model minimax-m2.7 \
+  --real-model
+```
+
+Phase 4L adds `generate-model-plan`, a **separate** command that plans with a
+real model. It requires **both** the explicit `--real-model` flag **and** a
+project config whose `real_model_planning` block sets `enabled: true` and lists
+`--model` in `allowed_models` — either alone is not enough. `generate-plan` is
+untouched and still offline-only.
+
+In order, before anything leaves the machine: the flag is checked, the config is
+loaded, `--body-file` is checked against the configured `repo.workspace_path`,
+the project opt-in and the model allowlist are enforced, **then** the five
+`AIDO_LITELLM_*` variables are read, **then** the body file is read, **then** a
+warning block naming the endpoint host, model, project, repo, and issue is
+written to stderr — stating plainly that the issue text will be transmitted —
+and only then is a real client built. Any failure before the call exits non-zero
+with nothing on stdout.
+
+What **is** sent: the `--title` value, the text of `--body-file`, its parsed
+issue sections (all wrapped in untrusted-data delimiters and labelled as data,
+never instructions), and the project's allowed/protected/forbidden path
+**patterns** and workspace policy flags.
+
+`generate-model-plan` **does not**:
+
+- send source files, workspace contents, directory listings, git history, the
+  GitHub token, or the API key,
+- fetch anything from GitHub or write anything to GitHub — the issue is
+  synthesized in memory from the command line and the local body file, and there
+  is no option to reach GitHub,
+- read the project's configured `repo.workspace_path` or any target project
+  workspace — the only files read are the `--project-config` YAML and the
+  `--body-file`, and a body file inside the configured workspace path is
+  rejected with exit code 1 **before it is read or stat'd**, by string/path
+  normalization only,
+- edit files, execute commands, run agent logic, or wire up
+  implementer/reviewer/fixer roles,
+- write prompt/completion audit files — there is no `--audit-dir` option,
+- print the API key or the full base URL — the endpoint is reported as a
+  **host** only, in both the stderr banner and the stdout JSON,
+- echo the raw prompt or the raw model reply, including on parser, validation,
+  and policy failures (which are still identified by type, so the three are
+  distinguishable).
+
+The explicit `--model` value is what gets planned with; `AIDO_LITELLM_DEFAULT_MODEL`
+supplies connection defaults and can never select the model. On success the JSON
+on stdout carries `provenance.engine: "real-model"`,
+`provenance.operation: "l1-plan"`, `real_call: true`, the model, the endpoint
+host, the project id, the repo, the issue number and title, a UTC `generated_at`,
+the `L1Plan` under `plan`, and token usage under `usage`.
+
+The plan is an **L1 (plan-only) artifact**: `automation_level: "L1"` and
+`requires_human_approval: true` are set by the orchestrator and are never read
+from model output, and the `notice` states that a human must review and approve
+before any implementation work proceeds. **No L2/L3 automation is authorized by
+this command**, and nothing in this repo acts on the plan.
 
 ## Tests
 
@@ -395,10 +503,13 @@ command described in the status section above — the first code here permitted 
 open a real socket, and only for a fixed connectivity prompt behind the full
 gate.
 
-Next would be **Phase 4L**: a gated real model *plan* command, which remains
-**proposed and not authorized** and will not be built unless explicitly
-approved. Phase 4K's authorization does not extend to it. Until then, real
-model-backed **planning** stays off everywhere, and the project continues to
-avoid agent automation, file editing, command execution, GitHub writes, and
-target project workspace reads/writes unless explicitly authorized in a later
-sub-phase.
+Phase 4L then added the **explicitly authorized** real model *plan* command,
+`generate-model-plan`, also described above. It is the second and last command
+permitted to open a real socket, it transmits only the issue title and the local
+body file text explicitly named on the command line, and its output is an L1 plan
+that still requires human approval.
+
+Next is **Phase 5**, a docs-only L2 implementer design. Until that is explicitly
+authorized, the project continues to avoid agent automation, file editing,
+command execution, GitHub writes, GitHub issue fetching inside a real model
+command, and target project workspace reads/writes.

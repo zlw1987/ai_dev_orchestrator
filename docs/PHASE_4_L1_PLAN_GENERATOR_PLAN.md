@@ -76,8 +76,20 @@
 >   connectivity prompt** and **no issue text**, does **no planning**, fetches
 >   and writes **nothing** on GitHub, reads no workspace, and writes no audit
 >   file. Tests use `httpx.MockTransport` and literal env dicts only and open no
->   socket. A real model **plan** command (Phase 4L) remains **unauthorized and
->   unimplemented**.
+>   socket.
+> - **Phase 4L** added the **gated real model L1 *plan* command**,
+>   `generate-model-plan` ([cli.py](../src/ai_dev_orchestrator/cli.py)) — a
+>   **separate** command from `generate-plan`, requiring `--real-model`, a
+>   project config that opts in and allowlists `--model`, and a `--body-file`
+>   outside the configured `repo.workspace_path`. It **does** transmit the
+>   `--title` value and the local body file's text to a real model; it sends
+>   **no** source files, workspace contents, directory listings, git history,
+>   GitHub token, or API key. There is **no GitHub fetch and no GitHub write**,
+>   no file editing, no command execution, no agent logic, no role wiring, and
+>   no target workspace access, and no prompt/completion audit file is written.
+>   The output is an **L1 plan only**, always `automation_level: "L1"` with
+>   `requires_human_approval: true`. Tests use `httpx.MockTransport` and literal
+>   env dicts only and open no socket.
 
 This plan refines item **"Phase 4 — L1 plan generator"** of
 [AI_DEV_ORCHESTRATOR_PLAN.md](AI_DEV_ORCHESTRATOR_PLAN.md).
@@ -510,11 +522,27 @@ and the provider policy in
   `--body-file`, `--github`, `--fetch`, `--audit-dir`, or `--message` option
   exists; no audit file is written; no plan is produced. Tests use
   `httpx.MockTransport` and literal env dicts only and open no socket.
-- **Phase 4L — optional real model plan command, explicitly gated, only if
-  authorized.** Proposed, **not authorized**. Phase 4K's authorization covers
-  the **smoke-test command only**; it does not extend to planning, issue text,
-  GitHub access, file edits, command execution, agent logic, or workspace
-  access.
+- **Phase 4L — gated real model *plan* command. (DONE — explicitly
+  authorized.)** `generate-model-plan` in
+  [cli.py](../src/ai_dev_orchestrator/cli.py): a **separate** command (design
+  §6 Option B), requiring `--real-model`, `--project-config`, `--issue`,
+  `--title`, `--body-file`, and `--model`. `generate-plan` is untouched and
+  still offline-only. In order: the flag is checked, the config is loaded, the
+  `--body-file` workspace guard runs, the Phase 4J gate is probed with an
+  **empty** mapping so a project-opt-in or allowlist failure surfaces **before
+  any environment value is read**, then the five `AIDO_LITELLM_*` names are read
+  and the gate runs for real, then — and only then — the body file is read, the
+  §3.3 warning block is written to stderr, and a real `LLMClient` is built. The
+  Phase 4G `ModelBackedL1Planner` does the planning with the explicit `--model`,
+  never the env default. Sent: the title, the body text, its parsed sections,
+  and the project's path **patterns** and policy flags. Not sent: source files,
+  workspace contents, directory listings, git history, the GitHub token, the API
+  key. A matching post-call block reports success or failure — distinguishing
+  parser, validation, and policy failures by name without echoing the reply —
+  and JSON with `provenance.operation: "l1-plan"` plus the `L1Plan` and token
+  usage goes to stdout. No `--github`, `--fetch`, `--repo`, or `--audit-dir`
+  option exists; no audit file is written; no GitHub call is made. Tests use
+  `httpx.MockTransport` and literal env dicts only and open no socket.
 - **Later — Phase 5: docs-only L2 implementer.** Out of scope for all of
   Phase 4, per
   [AI_DEV_ORCHESTRATOR_PLAN.md §7](AI_DEV_ORCHESTRATOR_PLAN.md#7-mvp-phase-roadmap).
@@ -933,6 +961,94 @@ and the provider policy in
   injects a literal env mapping and an `httpx.MockTransport`-backed client into
   a private helper, monkeypatches `socket.*`/`subprocess.Popen` to raise, and
   drives fail-closed and help behavior through the CLI.
-- [x] The real model **plan** command (Phase 4L) remains **unauthorized and
-  unimplemented**, along with agent logic, role wiring, file editing, command
-  execution, GitHub writes, and target workspace access.
+- [x] The real model **plan** command was left for Phase 4L, along with agent
+  logic, role wiring, file editing, command execution, GitHub writes, and target
+  workspace access. *(Phase 4L has since shipped the plan command — and only
+  that; the rest remain unimplemented.)*
+
+## 19. Acceptance criteria for Phase 4L (DONE)
+
+- [x] A **separate** command, `generate-model-plan`, exists in
+  [cli.py](../src/ai_dev_orchestrator/cli.py) (design §6 Option B — not a flag
+  on `generate-plan`), exposing `--project-config`, `--issue`, `--title`,
+  `--body-file`, `--model`, `--real-model`, and `--format`.
+- [x] **Explicitly authorized.** The user authorized Phase 4L and authorized
+  opening a real socket when *manually* running this command, and authorized
+  sending the explicitly provided local issue body text to the real model after
+  all gates pass. That authorization covers **this command only** — not GitHub
+  writes, file edits, command execution, agent logic, role wiring, target
+  workspace access, or using real project source files as model context.
+- [x] **Fails closed without `--real-model`**: the flag is checked first, so a
+  plain invocation reads **no** environment variable, **no** project config,
+  **no** body file, builds **no** client, and makes **no** network call, exiting
+  1 with a clear stderr message and nothing on stdout.
+- [x] **Ordering is enforced.** Flag → project config load → `--body-file`
+  workspace guard → project opt-in → model allowlist → *then* environment read →
+  gate → **body file read** → banner → client. The opt-in/allowlist checks run
+  by probing the Phase 4J gate with an **empty** mapping, so those failures
+  surface with the gate's own message while the real environment and the issue
+  body are both still untouched.
+- [x] **The `--body-file` guard runs before the file is touched.** A body file
+  that is the configured `repo.workspace_path` or sits under it is rejected with
+  exit 1 before it is read or stat'd. `--body-file` deliberately carries **no**
+  Typer `exists=`/`readable=` check, because those would stat the path before
+  the guard could run. The check is string/path normalization only
+  (`_is_same_or_under`); the configured workspace path is never read, listed,
+  stat'd, or resolved.
+- [x] **Only the two explicitly named files are read**, in that order: the
+  `--project-config` YAML, then the `--body-file`. Nothing else on disk is
+  opened, listed, or resolved, and a missing/unreadable body file after the gate
+  exits 1 with no client built and no call made.
+- [x] **Only the five Phase 3B `AIDO_LITELLM_*` names are read**, only inside
+  this command, and only after the checks above. No value is printed, and the
+  API key never reaches any output path.
+- [x] **The Phase 4J gate is authoritative**: a disabled project, an empty
+  `allowed_models`, a non-allowlisted model, and missing/blank required
+  environment values all fail with exit 1, **before** the body file is read and
+  before any client is built.
+- [x] **Non-suppressible stderr banner before the call** naming the endpoint
+  **host only**, the model, the project id, the repo, and the issue number and
+  title, and stating plainly that the issue title and body text **will be
+  transmitted** and that no source files, workspace contents, GitHub writes, or
+  commands are involved (design §3.3); a matching **after-call** block reports
+  completion or failure and is printed **only** when a real call was actually
+  attempted.
+- [x] **The explicit `--model` is sent, never the env default.**
+  `AIDO_LITELLM_DEFAULT_MODEL` supplies connection details only; the gate pins
+  the returned config's `default_model` to the allowlisted request, and the
+  model name is passed to the Phase 4G planner explicitly.
+- [x] **No GitHub fetch and no GitHub write.** The `GitHubIssue` is synthesized
+  in memory from `--issue`/`--title`/the body file, with an `html_url` that says
+  so; no GitHub client is constructed or called, and no option could reach one.
+- [x] **JSON to stdout on success only**, carrying `provenance.engine:
+  "real-model"`, `provenance.operation: "l1-plan"`, `real_call: true`, the
+  model, the endpoint **host**, the project id, the repo, the issue number, the
+  title, a UTC `generated_at`, the `L1Plan` under `plan`, and token usage under
+  `usage`. No API key, no base URL, no raw prompt, no raw completion, no source
+  files, and no workspace path. Nothing is printed to stdout on any failure path.
+- [x] **The plan is L1 only**: `plan.automation_level` is `"L1"` and
+  `plan.requires_human_approval` is `true`, both set by the orchestrator and
+  never read from model output, with the notice stating a human must review and
+  approve before any implementation work proceeds. No L2/L3 automation is
+  authorized.
+- [x] **Failures after a call was attempted are loud and quiet at once**: the
+  after-call failure block names the endpoint host, the model, and — for
+  `ModelPlannerParseError` / `ModelPlannerValidationError` /
+  `ModelPlannerPolicyError` — the failure category by type name, while the raw
+  model reply is never echoed (a validation error's message is withheld entirely,
+  because pydantic embeds the offending input values in it).
+- [x] **No audit files** are written, and no `--audit-dir` option exists.
+- [x] **No other CLI behavior changed**: `generate-plan` stays offline-only with
+  no `--real`/`--real-model`/`--live`/`--model`/`--use-env`/`--github`/
+  `--fetch`/`--audit-dir`; `llm-smoke-test` stays fake-provider only;
+  `real-llm-smoke-test` stays a smoke test with no `--issue`/`--body-file`/
+  `--title`; `inspect-issue` and `version` are untouched.
+- [x] **Tests never open a real socket and never read a real environment
+  value**: [tests/test_cli_generate_model_plan.py](../tests/test_cli_generate_model_plan.py)
+  injects a literal env mapping and an `httpx.MockTransport`-backed client into
+  a private helper, monkeypatches `socket.*`/`subprocess.Popen` to raise, tracks
+  every `Path.read_text` call, and drives fail-closed and help behavior through
+  the CLI.
+- [x] **No file editing, command execution, agent logic, implementer/reviewer/
+  fixer role wiring, GitHub writes, or target project workspace access** was
+  added. L2 remains out of scope.

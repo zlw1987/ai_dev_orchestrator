@@ -592,10 +592,10 @@ behavior, not here.
 
 1. **Exact CLI command name.** `generate-model-plan`, `generate-plan-real`,
    `plan-with-model`, or something else. §6 recommends the *shape* (a separate
-   command plus an explicit flag), not the spelling. *(Settled for the
-   smoke test only: Phase 4K shipped `real-llm-smoke-test`, adopting the
-   recommended shape — separate command plus a required `--real-model` flag.
-   The **planner** command's name remains open.)*
+   command plus an explicit flag), not the spelling. *(Settled. Phase 4K
+   shipped `real-llm-smoke-test` and Phase 4L shipped `generate-model-plan` —
+   the first candidate above — each adopting the recommended shape: a separate
+   command plus a required `--real-model` flag.)*
 2. **Exact project config schema.** Field names (`real_model_planning` vs.
    something scoped differently), whether it nests under an existing block,
    whether `allowed_models` should reference the existing `providers` /
@@ -681,22 +681,44 @@ implementation" entry in
   stdout, exit non-zero, and the post-call block appears only when a real call
   was actually attempted. Its tests use `httpx.MockTransport` and literal env
   dicts only and open no socket.
-- **Phase 4L — optional real model *plan* command, explicitly gated, only if
-  authorized.** The §6 separate command, wiring Phase 4J's gate to the Phase 4G
-  planner with a real client, emitting the §9 provenance wrapper. **Still
-  proposed and not authorized:** Phase 4K's authorization covers the smoke-test
-  command only and does not extend to planning, issue text, GitHub access, file
-  edits, command execution, agent logic, or workspace access.
+- **Phase 4L — gated real model *plan* command. (DONE — explicitly
+  authorized.)** `generate-model-plan` in
+  [cli.py](../src/ai_dev_orchestrator/cli.py) is the §6 separate command,
+  wiring Phase 4J's gate to the Phase 4G planner with a real client and emitting
+  the §9 provenance wrapper. It follows §6 exactly — a separate command (Option
+  B) rather than a flag on `generate-plan`, plus a required `--real-model`, plus
+  an explicitly named `--model` that must pass the §4.3 allowlist. Ordering per
+  §3.4, with one step more than 4K because this command transmits issue text:
+  the flag, the project config, the §8.3/Phase 4D `--body-file` workspace guard,
+  the project opt-in, and the allowlist are all checked **before** any
+  `AIDO_LITELLM_*` value is read (the gate is probed with an empty mapping to
+  get that ordering), the environment gate runs next, and **only then** is the
+  body file opened, the §3.3 banner printed, and the client constructed. The
+  banner states plainly that the issue title and body text will be transmitted.
+  Inputs are exactly §8's: `GitHubIssue` (synthesized in memory from `--issue` /
+  `--title` / the local body file), `ParsedIssue`, and `ProjectConfig` — **no
+  GitHub fetch** (§8.4), no source files, no workspace contents, no directory
+  listings, and no git history. Per §5.3 the API key is never printed and the
+  endpoint is shown as a **host only**; per §7.2 no prompt/completion audit file
+  is written and no `--audit-dir` option exists. Output carries §9.2-shaped
+  provenance with `operation: "l1-plan"` — and, unlike 4K, a `generated_at` UTC
+  stamp, settling that part of §9 — wrapped around `plan` (the `L1Plan`) and
+  `usage`. Failures follow §10: nothing on stdout, exit non-zero, the post-call
+  block only when a real call was attempted, and parse/validation/policy
+  failures distinguished **by type name without echoing the completion**. Its
+  tests use `httpx.MockTransport` and literal env dicts only and open no socket.
 - **Later — Phase 5: docs-only L2 implementer.** Unchanged and still later, per
   [AI_DEV_ORCHESTRATOR_PLAN.md §7](AI_DEV_ORCHESTRATOR_PLAN.md#7-mvp-phase-roadmap).
   L2 remains out of scope for all of Phase 4.
 
 Phases 4K and 4L are the **only** ones that would ever open a real socket, and
-both were explicitly conditional on authorization. **4K has since been
-authorized and shipped**; its socket is reachable only through
-`real-llm-smoke-test --real-model` with an allowlisting project config, and it
-carries no issue text. **4L remains unauthorized**, so no real model call can
-still be made on behalf of a *planner*.
+both were explicitly conditional on authorization. **Both have since been
+authorized and shipped.** Those two sockets are reachable only through
+`real-llm-smoke-test --real-model` (which carries no issue text) and
+`generate-model-plan --real-model` (which carries the explicitly provided local
+issue text and nothing else), each with an allowlisting project config. Neither
+fetches from or writes to GitHub, edits a file, runs a command, reads a target
+workspace, or produces anything above **L1**.
 
 ## 13. Acceptance criteria for Phase 4H (DONE)
 
