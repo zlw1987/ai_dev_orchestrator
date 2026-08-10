@@ -893,6 +893,8 @@ EXPECTED_COMMANDS = [
     "real-llm-smoke-test",
     "generate-model-plan",
     "l2-dry-run",
+    # Phase 5D1. Read-only path metadata inspection; still not an implementer.
+    "l2-inspect-workspace",
 ]
 
 

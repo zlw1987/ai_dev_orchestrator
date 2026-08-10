@@ -26,6 +26,16 @@ does exactly two file reads — the `--project-config` YAML and the
 `--approved-plan` artifact, in that order — before printing the scope a future
 L2 *would* be bounded by. **L2 itself is still not built**: nothing is
 inspected, proposed, edited, run, committed, or pushed.
+
+`l2-inspect-workspace` (Phase 5D1) is the one command that may touch a
+configured target workspace, and it touches it only as `stat`. It reads the
+same two files, and then — behind `--apply-approved-plan`, `--inspect-workspace`,
+a project-level `read_only_workspace_inspection` opt-in, artifact validation,
+exact identity matching, candidate-count caps, the lexical Phase 1 path policy,
+and the Phase 5D0 canonical guard — reports whether each path the plan names
+exists, whether it is a file or a directory, and how big it is. **It reads no
+file contents and lists no directory**, and it edits nothing, runs nothing, and
+proposes nothing.
 """
 
 from __future__ import annotations
@@ -1255,6 +1265,521 @@ def l2_dry_run(
         project_config=project_config,
         approved_plan=approved_plan,
         apply_approved_plan=apply_approved_plan,
+    )
+
+
+# -- L2 read-only workspace metadata inspection (Phase 5D1) --------------------
+
+_L2_INSPECT_NOTICE = (
+    "L2 WORKSPACE METADATA INSPECTION ONLY — workspace paths were canonicalized "
+    "and stat'd, but no file contents were read, no files were edited, no "
+    "commands were run, and no implementation occurred."
+)
+
+_L2_INSPECT_NEXT_AUTHORIZATION = (
+    "Phase 5E or later must be explicitly authorized before any patch proposal, "
+    "file edit, command execution, commit, push, or PR."
+)
+
+# Printed inside the inspection block so a reader knows exactly how far the
+# command went: it proved paths exist and recorded their kind and size, and it
+# stopped there.
+_L2_INSPECT_ITEMS_NOTE = (
+    "Metadata only. Each path was checked against the lexical path policy, "
+    "canonicalized against the configured workspace root, and stat'd. No file "
+    "was opened or read, no directory was listed, and nothing was executed."
+)
+
+_L2_INSPECT_EMPTY_NOTE = (
+    "The approved plan named no files_likely_to_change, so there was nothing to "
+    "inspect and the configured workspace was not touched at all."
+)
+
+
+def _dedupe_preserving_order(values: list[str]) -> list[str]:
+    """Drop exact duplicate strings, keeping the first occurrence's position."""
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        ordered.append(value)
+    return ordered
+
+
+def _stat_kind_and_size(resolved_candidate: str) -> tuple[str, int | None]:
+    """Classify an already-canonicalized path from its metadata alone.
+
+    ``os.stat`` and nothing else: the path is never opened, never read, and
+    never listed. A directory reports its kind and a ``None`` size — its
+    entries are not enumerated.
+    """
+    import stat as stat_module
+
+    result = os.stat(resolved_candidate)
+    if stat_module.S_ISDIR(result.st_mode):
+        return "directory", None
+    if stat_module.S_ISREG(result.st_mode):
+        return "file", result.st_size
+    return "other", None
+
+
+def _run_l2_inspect_workspace(
+    *,
+    project_config: Path,
+    approved_plan: Path,
+    apply_approved_plan: bool,
+    inspect_workspace: bool,
+) -> None:
+    """Report metadata for the paths an approved plan names. Extracted for tests.
+
+    This is the **first shipped code that may touch a configured target
+    workspace**, and the ordering below is the whole safety argument. Every
+    cheap, local, disk-free check runs first; the workspace is touched only
+    after all of them pass, and then only through the Phase 5D0 canonical guard
+    and :func:`os.stat`.
+
+    In sequence: ``--apply-approved-plan``, then ``--inspect-workspace`` (both
+    before any file is read), then the project config, then the project-level
+    ``read_only_workspace_inspection`` opt-in, then a string/path check
+    rejecting an ``--approved-plan`` inside the configured workspace, then the
+    artifact read, the strict Phase 5B parse, exact identity matching, the
+    candidate-count caps, and the lexical Phase 1 path policy for **every**
+    candidate. Only after all of that does any path get canonicalized or stat'd.
+
+    Nothing here reads file contents, lists a directory, globs, walks a tree,
+    executes a command, edits a file, runs a ``required_verification`` entry,
+    reads an environment variable, opens a socket, calls a model, or contacts
+    GitHub.
+    """
+    from ai_dev_orchestrator.config_loader import ConfigError, load_project_config
+    from ai_dev_orchestrator.handoff import (
+        ApprovedPlanError,
+        parse_approved_l1_plan_artifact,
+    )
+    from ai_dev_orchestrator.workspace import (
+        CanonicalPathError,
+        CanonicalPathInputError,
+        PathClassification,
+        PathPolicy,
+        canonicalize_existing_path_under_workspace,
+    )
+
+    # 1. Explicit confirmation that an approved plan may be acted on. Checked
+    #    first, so a plain invocation reads no file at all.
+    if not apply_approved_plan:
+        typer.echo(
+            "Error: l2-inspect-workspace acts on a human-approved plan artifact "
+            "and requires the explicit --apply-approved-plan flag. Nothing was "
+            "read and no workspace was touched.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # 2. Explicit confirmation that the target workspace may be inspected. This
+    #    is a second, separate consent: approving a plan is not the same act as
+    #    permitting a workspace to be examined.
+    if not inspect_workspace:
+        typer.echo(
+            "Error: l2-inspect-workspace reads path metadata from the project's "
+            "configured workspace and requires the explicit --inspect-workspace "
+            "flag. Nothing was read and no workspace was touched.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # 3. Project config: the first file read. repo.workspace_path is still only
+    #    a string at this point — it is not read, listed, stat'd, or resolved.
+    try:
+        project = load_project_config(project_config)
+    except ConfigError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        typer.echo(
+            "The approved plan artifact was not read and no workspace was "
+            "touched.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # 4. Project-level opt-in. An absent block is identical to a disabled one,
+    #    and either fails before the artifact is opened.
+    inspection = project.read_only_workspace_inspection
+    if not inspection.enabled:
+        typer.echo(
+            "Error: this project does not enable read-only workspace "
+            "inspection. Set read_only_workspace_inspection.enabled to true in "
+            "the project config to permit path metadata inspection.",
+            err=True,
+        )
+        typer.echo(
+            "The approved plan artifact was not read and no workspace was "
+            "touched.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # 5. Refuse an artifact that lives inside the configured target workspace,
+    #    BEFORE it is read or stat'd — which is why --approved-plan carries no
+    #    Typer exists=/readable= check. String/path normalization only.
+    if _is_same_or_under(approved_plan, project.repo.workspace_path):
+        typer.echo(
+            "Error: --approved-plan is inside the project's configured "
+            f"repo.workspace_path ({project.repo.workspace_path}). The approved "
+            "plan must live outside the workspace it authorizes; move it "
+            "outside that path and retry.",
+            err=True,
+        )
+        typer.echo(
+            "The approved plan artifact was not read and no workspace was "
+            "touched.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # 6. The guard has passed, so the artifact may be read. It is the second and
+    #    final file this command reads.
+    try:
+        artifact_text = approved_plan.read_text(encoding="utf-8")
+    except OSError as exc:
+        typer.echo(f"Error: could not read --approved-plan: {exc}", err=True)
+        typer.echo("No workspace was touched.", err=True)
+        raise typer.Exit(code=1)
+
+    # 7. Parse strictly (Phase 5B). Rejected, never repaired.
+    try:
+        artifact = parse_approved_l1_plan_artifact(artifact_text)
+    except ApprovedPlanError as exc:
+        name = type(exc).__name__
+        category = _APPROVED_PLAN_FAILURE_CATEGORIES.get(name, "artifact failure")
+        typer.echo(f"Error: {name}: {category}. {exc}", err=True)
+        typer.echo(
+            "The artifact text and the plan prose are not echoed. No workspace "
+            "was touched and no path was inspected.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # 8. Exact identity matching against the config (design §3.5). A plan
+    #    approved for one project/repo grants nothing for another — and here
+    #    that mistake would mean stat'ing another project's files.
+    mismatches = [
+        f"{label}: artifact has {artifact_value!r}, project config has "
+        f"{config_value!r}"
+        for label, artifact_value, config_value in (
+            ("project_id", artifact.project_id, project.project_id),
+            ("repo", artifact.repo, project.repo.github_repo),
+            ("plan.repo", artifact.plan.repo, project.repo.github_repo),
+            (
+                "plan_provenance.repo",
+                artifact.plan_provenance.repo,
+                project.repo.github_repo,
+            ),
+        )
+        if artifact_value != config_value
+    ]
+    if mismatches:
+        typer.echo(
+            "Error: the approved plan does not match this project config "
+            "exactly. A plan approved for one project/repo grants nothing for "
+            "another.",
+            err=True,
+        )
+        for mismatch in mismatches:
+            typer.echo(f"  Mismatch in {mismatch}", err=True)
+        typer.echo("No workspace was touched.", err=True)
+        raise typer.Exit(code=1)
+
+    plan = artifact.plan
+
+    # 9. Candidates come from files_likely_to_change and nowhere else.
+    #    files_forbidden_or_out_of_scope is never inspected — naming a path as
+    #    out of scope must not become a way to have it examined — and
+    #    proposed_steps / required_verification / risks / open_questions are
+    #    prose that is never treated as a path.
+    candidates = _dedupe_preserving_order(list(plan.files_likely_to_change))
+
+    if len(candidates) > inspection.max_inspected_files:
+        typer.echo(
+            f"Error: the approved plan names {len(candidates)} distinct paths, "
+            "which exceeds read_only_workspace_inspection.max_inspected_files "
+            f"({inspection.max_inspected_files}). No workspace was touched.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    if len(candidates) > project.workspace_policy.max_changed_files:
+        typer.echo(
+            f"Error: the approved plan names {len(candidates)} distinct paths, "
+            "which exceeds workspace_policy.max_changed_files "
+            f"({project.workspace_policy.max_changed_files}). No workspace was "
+            "touched.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # 10. The lexical Phase 1 policy runs for EVERY candidate before any of them
+    #     is canonicalized or stat'd. A single failure stops the whole run: a
+    #     plan that names one forbidden path does not get a partial inspection
+    #     of its other paths.
+    policy = PathPolicy.from_project_config(project)
+    normalized: list[tuple[str, str]] = []
+    refusals: list[str] = []
+    for original in candidates:
+        decision = policy.check_read(original)
+        if decision.classification is PathClassification.PROTECTED:
+            if not inspection.allow_protected_paths:
+                refusals.append(
+                    f"{original!r}: classified protected, and "
+                    "read_only_workspace_inspection.allow_protected_paths is "
+                    "false"
+                )
+                continue
+        elif not decision.permitted:
+            refusals.append(
+                f"{original!r}: classified {decision.classification.value} "
+                f"({decision.reason})"
+            )
+            continue
+        normalized.append((original, decision.path))
+
+    if refusals:
+        typer.echo(
+            "Error: the approved plan names paths the project's path policy "
+            "refuses to read. The whole inspection is abandoned; no path was "
+            "canonicalized, stat'd, or otherwise touched.",
+            err=True,
+        )
+        for refusal in refusals:
+            typer.echo(f"  Refused {refusal}", err=True)
+        raise typer.Exit(code=1)
+
+    # 11. Every candidate passed the lexical gate, so — and only so — the
+    #     configured workspace may be touched. The root is canonicalized first,
+    #     which proves it exists, is a directory, and satisfies the symlink
+    #     policy before any candidate is resolved against it. With no candidates
+    #     there is nothing to inspect and the workspace stays untouched.
+    items: list[dict] = []
+    allow_symlinks = project.workspace_policy.allow_symlinks
+
+    if normalized:
+        try:
+            canonicalize_existing_path_under_workspace(
+                project.repo.workspace_path,
+                project.repo.workspace_path,
+                allow_symlinks=allow_symlinks,
+            )
+        except CanonicalPathError as exc:
+            typer.echo(
+                "Error: the configured repo.workspace_path could not be "
+                f"canonicalized. {type(exc).__name__}: {exc}",
+                err=True,
+            )
+            typer.echo("No candidate path was inspected.", err=True)
+            raise typer.Exit(code=1)
+
+    for original, candidate in normalized:
+        missing = {
+            "original_plan_path": original,
+            "canonical_relative_path": None,
+            "status": "missing",
+            "kind": None,
+            "size_bytes": None,
+            "symlinks_allowed": allow_symlinks,
+        }
+        try:
+            resolved = canonicalize_existing_path_under_workspace(
+                project.repo.workspace_path,
+                candidate,
+                allow_symlinks=allow_symlinks,
+            )
+        except CanonicalPathInputError:
+            # The root was proven good above and the candidate is a non-blank
+            # string that passed the lexical gate, so the only remaining input
+            # failure is "this path does not exist". That is an ordinary,
+            # reportable answer, not a boundary violation.
+            items.append(missing)
+            continue
+        except CanonicalPathError as exc:
+            # Containment, symlink, ambiguity, and resolution failures are
+            # boundary violations. They stop the whole run.
+            typer.echo(
+                f"Error: {original!r} failed the canonical workspace path "
+                f"guard. {type(exc).__name__}: {exc}",
+                err=True,
+            )
+            typer.echo(
+                "The inspection is abandoned; no result is printed.", err=True
+            )
+            raise typer.Exit(code=1)
+
+        try:
+            kind, size_bytes = _stat_kind_and_size(resolved.resolved_candidate)
+        except FileNotFoundError:
+            # Time-of-check/time-of-use: the path existed a moment ago and does
+            # not now. Reported as missing rather than as a violation.
+            items.append(missing)
+            continue
+        except OSError as exc:
+            typer.echo(
+                f"Error: metadata for {original!r} could not be read after "
+                f"canonicalization. {type(exc).__name__}: {exc}",
+                err=True,
+            )
+            typer.echo(
+                "The inspection is abandoned; no result is printed.", err=True
+            )
+            raise typer.Exit(code=1)
+
+        items.append(
+            {
+                "original_plan_path": original,
+                "canonical_relative_path": resolved.relative_path.replace(
+                    "\\", "/"
+                ),
+                "status": "exists",
+                "kind": kind,
+                "size_bytes": size_bytes,
+                "symlinks_allowed": allow_symlinks,
+            }
+        )
+
+    approval = artifact.approval
+    provenance = artifact.plan_provenance
+
+    # 12. Report. Deliberately absent: the configured workspace_path, any
+    #     resolved absolute path, any file content, any directory listing, the
+    #     raw artifact text, `approval_text`, any prompt or completion, and any
+    #     API key or base URL. `required_verification` is absent too — this
+    #     command did not run it, and reprinting it here would only invite
+    #     someone to.
+    output = {
+        "notice": _L2_INSPECT_NOTICE,
+        "mode": "l2-inspect-workspace",
+        "project": {
+            "project_id": project.project_id,
+            "repo": project.repo.github_repo,
+            "workspace_policy": {
+                "deny_outside_workspace": (
+                    project.workspace_policy.deny_outside_workspace
+                ),
+                "allow_symlinks": project.workspace_policy.allow_symlinks,
+                "max_changed_files": project.workspace_policy.max_changed_files,
+            },
+            "inspection_policy": {
+                "enabled": inspection.enabled,
+                "max_inspected_files": inspection.max_inspected_files,
+                "allow_protected_paths": inspection.allow_protected_paths,
+            },
+        },
+        "approved_plan": {
+            "approved_by": approval.approved_by,
+            "approved_at": approval.approved_at.isoformat(),
+            "source": approval.source,
+            "plan_engine": provenance.engine,
+            "real_call": provenance.real_call,
+            "model": provenance.model,
+            "issue_number": artifact.issue_number,
+            "title": plan.title,
+        },
+        "workspace_inspection": {
+            "note": _L2_INSPECT_ITEMS_NOTE if items else _L2_INSPECT_EMPTY_NOTE,
+            "candidate_source": "approved_plan.files_likely_to_change",
+            "file_contents_read": False,
+            "directories_listed": False,
+            "commands_run": False,
+            "items": items,
+        },
+        "next_authorization_required": _L2_INSPECT_NEXT_AUTHORIZATION,
+    }
+    typer.echo(json.dumps(output, indent=2))
+
+
+@app.command("l2-inspect-workspace")
+def l2_inspect_workspace(
+    project_config: Path = typer.Option(
+        ...,
+        "--project-config",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Path to the project config YAML the approved plan must match. "
+        "Its read_only_workspace_inspection block must enable inspection.",
+    ),
+    approved_plan: Path = typer.Option(
+        ...,
+        "--approved-plan",
+        # Deliberately no exists=/readable= check: Typer would stat the path
+        # before the command body could reject one inside the configured
+        # workspace. The guard runs first; the file is opened only afterwards.
+        help="Path to a human-approved L1 plan artifact (Phase 5B shape). Must "
+        "not be inside the project's configured workspace path.",
+    ),
+    apply_approved_plan: bool = typer.Option(
+        False,
+        "--apply-approved-plan",
+        help="Required explicit confirmation that an approved plan may be "
+        "acted on. Without it this command fails without reading anything.",
+    ),
+    inspect_workspace: bool = typer.Option(
+        False,
+        "--inspect-workspace",
+        help="Required explicit confirmation that the project's configured "
+        "workspace may be inspected for path metadata. Without it this command "
+        "fails without reading anything.",
+    ),
+    output_format: GeneratePlanFormat = typer.Option(
+        GeneratePlanFormat.json,
+        "--format",
+        help="Output format. Only 'json' is currently supported.",
+    ),
+) -> None:
+    """Report path metadata for an approved plan's files. **Read-only.**
+
+    This is the first command permitted to touch a configured target workspace,
+    and it makes the smallest possible touch: for each path the approved plan
+    lists under ``files_likely_to_change``, it canonicalizes the path against
+    the workspace root and calls ``stat``, reporting whether the path exists,
+    whether it is a file or a directory, and how large a regular file is.
+
+    It does **not**: read or open any file's contents; list, glob, or walk any
+    directory (a candidate that *is* a directory is reported as one and its
+    entries are not enumerated); inspect any path outside
+    ``files_likely_to_change``, including ``files_forbidden_or_out_of_scope``;
+    treat ``proposed_steps``, ``required_verification``, ``risks``, or
+    ``open_questions`` as paths; run any ``required_verification`` entry or any
+    other command; generate or apply a patch; edit or write any file; create a
+    branch, commit, or PR; fetch from or write to GitHub; call a model; open a
+    socket; or read ``AIDO_LITELLM_*`` or any other environment variable. It
+    never writes or stamps an approval.
+
+    Four things must all be true before the workspace is touched: both
+    ``--apply-approved-plan`` and ``--inspect-workspace`` must be given, the
+    project config's ``read_only_workspace_inspection.enabled`` must be true,
+    and the approved plan must validate and match the config exactly. The gate
+    then fails closed in order: the two flags first (without either, nothing is
+    read at all), then the config, then the project opt-in, then a string/path
+    check rejecting an ``--approved-plan`` inside the configured workspace
+    **before** it is read or stat'd, then the strict Phase 5B parse, then exact
+    ``project_id``/``repo`` matching, then the candidate-count caps from
+    ``max_inspected_files`` and ``max_changed_files``, then the lexical Phase 1
+    path policy for **every** candidate — forbidden, outside, and unlisted
+    paths always refused, and protected paths refused unless
+    ``allow_protected_paths`` is true.
+
+    Only after all of that is any path canonicalized, through the Phase 5D0
+    guard honoring ``workspace_policy.allow_symlinks``. A path that does not
+    exist is reported as ``missing`` and the run continues; a containment,
+    symlink, ambiguity, or resolution failure stops the whole run. Any failure
+    exits non-zero with stderr only and nothing on stdout, and never echoes the
+    artifact text, the plan prose, or any file content.
+    """
+    _run_l2_inspect_workspace(
+        project_config=project_config,
+        approved_plan=approved_plan,
+        apply_approved_plan=apply_approved_plan,
+        inspect_workspace=inspect_workspace,
     )
 
 

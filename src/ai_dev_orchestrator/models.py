@@ -131,6 +131,42 @@ class RealModelPlanningConfig(_Strict):
         return models
 
 
+class ReadOnlyWorkspaceInspectionConfig(_Strict):
+    """Per-project opt-in for **read-only workspace metadata inspection** (Phase 5D1).
+
+    This is the first project-level block that can permit a command to touch the
+    configured ``repo.workspace_path`` at all, and it permits the smallest
+    possible touch: canonicalizing a path named by an approved plan and calling
+    ``stat`` on it. It never authorizes reading file contents, listing a
+    directory, running a command, editing a file, or calling a model.
+
+    It fails closed by construction — an absent block is identical to an
+    explicitly disabled one — and it holds **no credentials**: no API key, no
+    base URL, no endpoint, no model name, and no environment-variable name.
+    Unknown fields are rejected.
+    """
+
+    enabled: bool = Field(
+        default=False,
+        description="Whether this project's workspace may be inspected for "
+        "path metadata at all. Absent or false means no workspace touch.",
+    )
+    max_inspected_files: int = Field(
+        default=20,
+        gt=0,
+        le=100,
+        description="Hard cap on how many approved-plan paths one invocation "
+        "may canonicalize and stat. Exceeding it fails the whole run before "
+        "the workspace is touched.",
+    )
+    allow_protected_paths: bool = Field(
+        default=False,
+        description="Whether a path classified PROTECTED by the Phase 1 path "
+        "policy may be inspected. Forbidden and unlisted paths are refused "
+        "regardless.",
+    )
+
+
 class ProjectConfig(_Strict):
     """Top-level typed project configuration."""
 
@@ -153,6 +189,9 @@ class ProjectConfig(_Strict):
     run_limits: RunLimitsConfig = Field(default_factory=RunLimitsConfig)
     real_model_planning: RealModelPlanningConfig = Field(
         default_factory=RealModelPlanningConfig
+    )
+    read_only_workspace_inspection: ReadOnlyWorkspaceInspectionConfig = Field(
+        default_factory=ReadOnlyWorkspaceInspectionConfig
     )
 
     @property

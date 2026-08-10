@@ -107,6 +107,17 @@ real_model_planning:
   allowed_models: []
   allow_prompt_audit_files: false
 
+# Read-only workspace metadata inspection (Phase 5D1). DISABLED. While disabled,
+# `l2-inspect-workspace` refuses to touch this project's workspace at all — it
+# fails before the approved-plan artifact is even opened. When enabled it may
+# only canonicalize and stat the paths an approved plan lists under
+# files_likely_to_change; it never reads file contents, never lists a directory,
+# never runs a command, and never edits a file. Never put credentials here.
+read_only_workspace_inspection:
+  enabled: false
+  max_inspected_files: 20
+  allow_protected_paths: false
+
 run_limits:
   max_model_calls_per_issue: 20
   max_review_loops: 3

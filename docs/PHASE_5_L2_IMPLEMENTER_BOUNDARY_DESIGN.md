@@ -14,9 +14,10 @@
 > implemented by this phase. Every sub-phase in §13 (Phase 5B and later) is a
 > *proposal* and requires its own explicit authorization. (Phase 5B has since
 > been authorized and implemented as **typed models and a parser only** — §15 —
-> and Phase 5C as a **dry-run validation command only** — §16, and Phase 5D0 as
-> a **canonical path guard library only** — §17. Phase 5D onward remain
-> proposals, and L2 is still not built.)
+> Phase 5C as a **dry-run validation command only** — §16, Phase 5D0 as a
+> **canonical path guard library only** — §17, and Phase 5D1 as **read-only
+> workspace metadata inspection only** — §18. Phase 5E onward remain proposals,
+> and L2 is still not built.)
 >
 > **L2 may not be invoked by any existing command after this phase.** After
 > Phase 5A the shipped CLI surface is exactly what Phase 4L left behind —
@@ -24,7 +25,9 @@
 > `real-llm-smoke-test`, `generate-model-plan` — and none of them gains an L2
 > path, an `--apply` flag, or any other way to reach an implementer. (Phase 5C
 > later added one **new** command, `l2-dry-run`, which validates and prints and
-> takes no action; it changed none of the six above.)
+> takes no action; Phase 5D1 added a second, `l2-inspect-workspace`, which
+> reports path metadata and takes no action. Neither changed any of the six
+> above, and neither implements anything.)
 >
 > It refines item **"Phase 5 — docs-only L2 implementer"** of
 > [AI_DEV_ORCHESTRATOR_PLAN.md §7](AI_DEV_ORCHESTRATOR_PLAN.md#7-mvp-phase-roadmap)
@@ -47,7 +50,16 @@
 > inspection**: no CLI command was added or changed, no shipped code path calls
 > it, and its tests use pytest `tmp_path` directories only. It is the
 > **prerequisite** §6.4 requires before Phase 5D.
-> **Phase 5D and every later sub-phase in §13 remain proposed and not
+>
+> **Phase 5D1 is now DONE** (§18). It added the `l2-inspect-workspace` command
+> and is the **first shipped code that may touch a configured target
+> workspace** — as `stat` and nothing more. For each path an approved plan lists
+> under `files_likely_to_change` it reports existence, kind, and size, after two
+> explicit flags, a project-level opt-in, artifact validation, exact identity
+> matching, candidate-count caps, the lexical Phase 1 path policy, and the Phase
+> 5D0 canonical guard. **It reads no file contents, lists no directory, runs no
+> command, edits no file, proposes no patch, and calls no model.**
+> **Phase 5E and every later sub-phase in §13 remain proposed and not
 > authorized.**
 
 ## 1. Goal
@@ -397,6 +409,14 @@ check a plan against reality: does `src/foo/bar.py` exist, does the function the
 plan names appear in it, is a "small change" actually small. It is also the
 first capability that touches a target workspace at all, which is why §6.4's
 canonicalization question must be settled **before** it ships, not after.
+
+*Phase 5D1 has since shipped the first half of this capability* (§18): the
+**metadata** half — existence, kind, and size — and not the content half. The
+split was not in the original plan and is worth recording. "Does `src/foo.py`
+exist and is it 40 lines or 4000" is a genuinely different disclosure from "here
+is what `src/foo.py` says", and it is enough to check a plan's most common
+failure mode (a path that is simply wrong) while disclosing almost nothing.
+Reading contents remains a separate, unauthorized phase.
 
 **2. Patch proposal generation — allowed first.** A patch *proposal* is an
 artifact: a unified diff, or a list of intended edits, written to a path
@@ -770,10 +790,16 @@ abandoned.
   and a fail-closed lexical precheck for ambiguous Windows path forms. **Library
   only** — no CLI behavior, no command, no option, and no caller. **It is not
   workspace inspection**, and its tests use pytest `tmp_path` only. See §17.
-- **Phase 5D — read-only workspace inspection under path policy.** The first
-  phase that touches a target workspace, and therefore the phase that **must be
-  preceded by the §6.4 canonicalization work** — now available as the Phase 5D0
-  library. Reads only; no writes. **Still proposed and not authorized.**
+- **Phase 5D1 — read-only workspace *metadata* inspection. DONE.** The first
+  phase that touches a target workspace, and only through the Phase 5D0 guard
+  plus `stat`: existence, kind, and size for the paths an approved plan lists
+  under `files_likely_to_change`. **No file contents, no directory listing, no
+  glob, no tree walk, no writes, no commands, no model.** See §18.
+- **Phase 5D2 (proposed) — reading file *contents* under the path policy.**
+  Phase 5D1 deliberately stopped short of this: "does `src/foo/bar.py` exist and
+  how big is it" and "what does `src/foo/bar.py` say" are different disclosures,
+  and only the first is shipped. Content reads need their own size caps,
+  redaction question, and authorization. **Proposed and not authorized.**
 - **Phase 5E — patch proposal artifact only.** Produce a diff/edit list outside
   the workspace. **No file edits.**
 - **Phase 5F — controlled file editing under `allowed_paths`.** The first write.
@@ -1020,7 +1046,9 @@ echoing it adds nothing to the `approved_by`/`approved_at` pair).
   analog of `real_model_planning` — is deliberately **not** implemented here:
   this command takes no L2 action, so there is nothing for a project to opt into
   yet. It belongs with the phase that first touches a workspace, and Phase 5C
-  added no config field.
+  added no config field. *(Phase 5D1 is that phase, and it added
+  `read_only_workspace_inspection` — see §18. `l2-dry-run` still does not read
+  the block for any purpose beyond ordinary config loading.)*
 
 ### 16.3 Acceptance criteria for Phase 5C (DONE)
 
@@ -1066,6 +1094,12 @@ built and reviewable on its own, ahead of the phase that would use it.
 
 **Phase 5D0 is not Phase 5D.** It performs no workspace inspection, adds no
 command, and is called by nothing.
+
+*(§17 describes the tree as Phase 5D0 left it. Phase 5D1 later became the
+guard's first and only caller — see §18 — so the "called by nothing" statements
+below record what shipped in 5D0, not what is true today. Everything else in
+§17 still holds: the guard itself is unchanged, adds no command of its own, and
+still reads no file contents and lists no directory.)*
 
 ### 17.1 What it is
 
@@ -1235,3 +1269,230 @@ containment immediately before each read — never cache one answer and reuse it
 - [x] **Phase 5D and every later sub-phase in §13 remain proposed and not
   authorized.** Phase 5D0 satisfies the §6.4 prerequisite; it does not authorize
   the phase that would use it.
+
+## 18. Phase 5D1 — read-only workspace metadata inspection (DONE)
+
+Phase 5D1 added **one** command, `l2-inspect-workspace`. It is the **first
+shipped code that may touch a configured target workspace**, and the touch it
+makes is the smallest one available: canonicalize a path the approved plan
+already named, then `stat` it.
+
+**Phase 5D1 is not L2.** It proposes nothing, patches nothing, edits nothing,
+runs nothing, and commits nothing. It is the analog of `l2-dry-run` with one
+capability added — the dry run says "the plan claims it will change
+`src/foo.py`"; this command says "and that path exists, is a file, and is 1,240
+bytes." That is the whole difference.
+
+### 18.1 What it is
+
+```bash
+python -m ai_dev_orchestrator l2-inspect-workspace \
+  --project-config projects/my_project.yaml \
+  --approved-plan path/to/approved_plan.json \
+  --apply-approved-plan \
+  --inspect-workspace
+```
+
+- [models.py](../src/ai_dev_orchestrator/models.py) — the new
+  `ReadOnlyWorkspaceInspectionConfig` block and the
+  `ProjectConfig.read_only_workspace_inspection` field, defaulting to disabled.
+- [cli.py](../src/ai_dev_orchestrator/cli.py) — the private helpers
+  `_run_l2_inspect_workspace(...)`, `_stat_kind_and_size(...)` and
+  `_dedupe_preserving_order(...)`, and the `l2-inspect-workspace` command
+  wrapping the first. Options: `--project-config`, `--approved-plan`,
+  `--apply-approved-plan`, `--inspect-workspace`, and `--format json`. There is
+  no `--model`, `--real-model`, `--body-file`, `--issue`, `--title`,
+  `--github`, `--fetch`, `--workspace`, `--file`, `--context-file`,
+  `--command`, `--edit`, `--audit-dir`, or `--allow-symlinks`.
+- [projects/mis\_project.yaml.example](../projects/mis_project.yaml.example) —
+  the new block, shipped **disabled**.
+- [tests/test\_cli\_l2\_inspect\_workspace.py](../tests/test_cli_l2_inspect_workspace.py)
+  — pytest `tmp_path` only. The "workspace" every test configures is a directory
+  the test created moments earlier; no real project path is named.
+
+This is the first caller the Phase 5D0 guard has ever had, and it remains the
+only one. The Phase 1 lexical policy is unchanged and still runs first.
+
+### 18.2 The project-level opt-in
+
+`read_only_workspace_inspection` is the §4.3 step-3 block that Phase 5C
+deliberately deferred, added now because this is the phase that first touches a
+workspace and therefore the first phase with something to opt into:
+
+```yaml
+read_only_workspace_inspection:
+  enabled: false
+  max_inspected_files: 20
+  allow_protected_paths: false
+```
+
+`enabled` defaults to `false`; an absent block is identical to a disabled one,
+in the Phase 4I `real_model_planning` style. `max_inspected_files` must be
+`1..100`. `allow_protected_paths` defaults to `false`. `extra="forbid"`, and the
+block holds **no credentials**: no API key, no base URL, no endpoint, no model
+name, and no environment-variable name. It is a separate block rather than a
+reuse of `real_model_planning` for the reason §9 gives: a planning-scoped opt-in
+must not silently authorize a workspace-touching capability.
+
+No other command reads this block for any purpose beyond ordinary config
+loading, and `l2-inspect-workspace` refuses to touch the workspace at all while
+it is disabled — failing before the approved-plan artifact is even opened.
+
+### 18.3 Gate ordering (fail closed, cheapest first)
+
+Ordering *is* the safety property here, because the last step is the one that
+touches another project's files.
+
+1. `--apply-approved-plan` present? No → exit 1, **nothing read at all**.
+2. `--inspect-workspace` present? No → exit 1, **nothing read at all**. Two
+   flags rather than one on purpose: approving a plan and permitting a workspace
+   to be examined are separate consents, and this command needs both.
+3. Project config loads and validates. The first file read.
+4. `read_only_workspace_inspection.enabled` is true → otherwise exit 1, with the
+   artifact never opened and the workspace never touched.
+5. `--approved-plan` is not `repo.workspace_path` and does not sit under it —
+   the existing `_is_same_or_under` string/path check, **before** the artifact is
+   read or stat'd, which is why the option carries no Typer `exists=`/`readable=`
+   check.
+6. The artifact is read. The second and final file read.
+7. Strict Phase 5B parse. Failures are reported by category and by name; the
+   artifact text and the plan prose are never echoed.
+8. Exact identity matching against the config — `project_id`, `repo`,
+   `plan.repo`, `plan_provenance.repo` (§3.5). This check matters more here than
+   in Phase 5C: getting it wrong would mean stat'ing another project's files.
+9. Candidates are taken from `plan.files_likely_to_change` **only**, exact
+   duplicates dropped with order preserved. `files_forbidden_or_out_of_scope` is
+   never inspected — naming a path as out of scope must not become a way to have
+   it examined — and `proposed_steps`, `required_verification`, `risks`, and
+   `open_questions` are prose that is never treated as a path. An empty list
+   succeeds with an empty result and touches nothing. The count must not exceed
+   `read_only_workspace_inspection.max_inspected_files` **or**
+   `workspace_policy.max_changed_files`.
+10. The lexical Phase 1 `PathPolicy.check_read` runs for **every** candidate.
+    Forbidden, outside-the-workspace, traversal-escaping, and unlisted paths are
+    refused always; protected paths are refused unless `allow_protected_paths`
+    is true. One refusal abandons the **whole** run — a plan naming one
+    forbidden path gets no partial inspection of its other paths, per §10's
+    no-partial-run rule.
+11. **Only now** is the workspace touched. The configured root is canonicalized
+    first, which proves it exists, is a directory, and satisfies the symlink
+    policy before any candidate is resolved against it. Then each candidate goes
+    through `canonicalize_existing_path_under_workspace(...)` with
+    `allow_symlinks=project.workspace_policy.allow_symlinks` — the connection
+    §17.3 said belonged to "the phase that first calls the guard" — and, on
+    success, through a single `os.stat`.
+
+### 18.4 What is reported
+
+One JSON object on stdout carrying: the `notice`; `mode:
+"l2-inspect-workspace"`; the project's `project_id`, `repo`, `workspace_policy`
+flags, and `inspection_policy` flags; the approval metadata, plan engine,
+`real_call`, model, issue number and title; a `workspace_inspection` block; and
+`next_authorization_required`.
+
+Each inspected item carries `original_plan_path`, `canonical_relative_path`,
+`status`, `kind` (`file` / `directory` / `other`), `size_bytes` (regular files
+only), and `symlinks_allowed`. The block also carries the literal
+`candidate_source`, and `file_contents_read`, `directories_listed` and
+`commands_run` — all three permanently `false`, stated rather than implied.
+
+A candidate that does not exist is reported as `status: "missing"` and the run
+continues: a plan naming a file that has not been created yet is ordinary, not a
+boundary violation. A containment, symlink, ambiguity, or resolution failure is
+a boundary violation and stops the **whole** run with no stdout output. A `stat`
+that fails after canonicalization stops the run too, except for a
+`FileNotFoundError`, which is the time-of-check/time-of-use race §17.2 describes
+and is recorded as `missing`.
+
+Deliberately **not** in the output: the configured `workspace_path`, any
+resolved absolute path, any file content, any directory listing, the raw
+artifact text, `approval_text`, any prompt or completion, and any API key or
+base URL. `required_verification` is absent too — this command did not run it,
+and reprinting it here would only invite someone to.
+
+Every failure exits non-zero, writes to **stderr only**, and prints **no stdout
+JSON**.
+
+### 18.5 What it is not
+
+- **Not file content access.** No workspace file is opened or read. Verified by
+  replacing `Path.read_text` and `builtins.open` with guards that raise for any
+  workspace path while leaving the config and artifact reads working.
+- **Not directory listing.** A candidate that *is* a directory is reported as
+  one and its entries are never enumerated. Verified with `os.listdir`,
+  `os.scandir` and `os.walk` detonating around a run that inspects a directory.
+- **Not globbing or tree walking.** Candidates come from the plan, one string at
+  a time. Nothing is discovered.
+- **Not patch proposal, file editing, or command execution.** No diff is
+  produced, no file is written, and no `required_verification` entry — or any
+  other command — is run. `subprocess.Popen`, `subprocess.run` and `os.system`
+  detonate during the tests.
+- **Not model-backed.** No model call, no network call, no environment read, no
+  `LLMClient`, no `httpx`/`requests` in the command path, no socket.
+- **No GitHub fetch and no GitHub write.** There is no option to reach it.
+- **No branch, commit, push, or PR.**
+- **No artifact writing and no approval stamping.** The command reads the
+  artifact and never rewrites it; the orchestrator still never writes an
+  `approval` block (§3.6).
+- **No agent logic and no implementer/reviewer/fixer role wiring.**
+- **No change to any other command.** `version`, `inspect-issue`,
+  `llm-smoke-test`, `generate-plan`, `real-llm-smoke-test`,
+  `generate-model-plan`, and `l2-dry-run` are untouched, and none of them gained
+  an `--inspect-workspace` path or any other L2 option.
+
+### 18.6 Acceptance criteria for Phase 5D1 (DONE)
+
+- [x] Exactly one new command, `l2-inspect-workspace`, exposing
+  `--project-config`, `--approved-plan`, `--apply-approved-plan`,
+  `--inspect-workspace`, and `--format`, and none of the forbidden options.
+- [x] `ReadOnlyWorkspaceInspectionConfig` exists, defaults to disabled, bounds
+  `max_inspected_files` to `1..100`, defaults `allow_protected_paths` to false,
+  forbids extra fields, holds no secrets, and is absent-means-disabled. The
+  example YAML ships it **disabled**.
+- [x] **Both confirmation flags fail closed before any file is read** — not the
+  artifact, and not even the project config.
+- [x] **A disabled or absent config block fails before the artifact is read and
+  before the workspace is touched.**
+- [x] **An `--approved-plan` inside `repo.workspace_path` is rejected before the
+  artifact is read or stat'd**, and its content never surfaces.
+- [x] **Parse, validation, and identity failures all occur before any workspace
+  touch**, verified by tracking every path passed to `os.stat`, `os.lstat`,
+  `os.listdir`, `os.scandir`, `os.path.exists`, `os.path.realpath` and
+  `builtins.open`.
+- [x] **Candidate-count caps fail before any workspace touch**, for both
+  `max_inspected_files` and `max_changed_files`.
+- [x] **Lexical `PathPolicy` refusals happen before any canonicalization or
+  stat** — forbidden, unlisted, traversal-escaping, absolute-outside, and
+  (without `allow_protected_paths`) protected — proven by detonating `os.stat`,
+  `os.lstat`, `os.listdir`, `os.scandir`, `os.walk`, `os.path.exists`,
+  `os.path.realpath`, `Path.resolve` and `builtins.open` around the call. One
+  refusal abandons the whole run.
+- [x] **A valid run reports metadata** for existing files (kind, size, canonical
+  relative path), existing directories (kind `directory`, null size, contents
+  not listed), and missing paths (`status: "missing"`, run continues).
+  Duplicates are deduplicated with order preserved.
+- [x] **Only `files_likely_to_change` is inspected.**
+  `files_forbidden_or_out_of_scope` is not, and `proposed_steps`,
+  `required_verification`, `risks` and `open_questions` are never treated as
+  paths — asserted by tracking every `os.stat` argument and by checking that
+  path-shaped sentinels in those fields never reach stdout.
+- [x] **Output omits** `workspace_path`, resolved absolute paths, file contents,
+  raw artifact text, `approval_text`, prompt/completion, and any API key or base
+  URL.
+- [x] **The Phase 5D0 guard is used for every existing candidate**, the root is
+  canonicalized first, and `workspace_policy.allow_symlinks` is passed through —
+  asserted by spying on the guard. A symlink inside the workspace is rejected
+  when `allow_symlinks` is false; one pointing outside is rejected even when it
+  is true; and containment/symlink/ambiguity/resolution errors fail closed with
+  no stdout.
+- [x] **No forbidden behavior**, verified by test: workspace file contents are
+  never opened or read; no directory is listed; no command is executed; no
+  environment variable, socket, `LLMClient` or `GitHubClient` is reached; no
+  file in the workspace or in `tmp_path` is created, modified, or deleted; and
+  no artifact is written and no approval stamped.
+- [x] **Tests use pytest `tmp_path` only** and name no real target workspace.
+- [x] **No CLI behavior changed except adding `l2-inspect-workspace`.**
+- [x] **Phase 5D2, Phase 5E, and every later sub-phase in §13 remain proposed
+  and not authorized.** Reading file *contents*, proposing a patch, editing a
+  file, executing a command, committing, pushing, and opening a PR all still
+  require their own explicit authorization.

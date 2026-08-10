@@ -17,7 +17,62 @@ changes. The eventual design will:
 
 The emphasis is on **control and review**, not autonomous action.
 
-## Current status: Phase 5D0 (canonical path guard library — no CLI behavior)
+## Current status: Phase 5D1 (read-only workspace metadata inspection)
+
+Phase 5D1 adds **one** command, `l2-inspect-workspace`. It is the **first
+command here that may touch a configured target workspace**, and the touch it
+makes is the smallest one available: for each path an approved plan lists under
+`files_likely_to_change`, it canonicalizes the path against the workspace root
+and calls `stat`, reporting whether the path exists, whether it is a file or a
+directory, and how large a regular file is.
+
+- **L2 is still not built.** This command proposes nothing, patches nothing,
+  edits nothing, runs nothing, and commits nothing. It is `l2-dry-run` plus one
+  question: *do the paths in this plan actually exist, and how big are they?*
+- **It reads no file contents.** No workspace file is opened or read. Checking
+  that `src/foo.py` exists and checking what `src/foo.py` says are different
+  disclosures, and only the first is shipped.
+- **It lists no directory.** A candidate that *is* a directory is reported as
+  one and its entries are never enumerated. Nothing globs, and nothing walks a
+  tree — candidates come from the approved plan, one string at a time.
+- **Off by default, per project.** A new `read_only_workspace_inspection` block
+  gates it, and an absent block is identical to a disabled one. While it is
+  disabled the command refuses to touch the workspace at all, failing before the
+  approved-plan artifact is even opened. The example config ships it disabled.
+- **Two explicit flags are required**, `--apply-approved-plan` and
+  `--inspect-workspace`. Approving a plan and permitting a workspace to be
+  examined are separate consents; without either, the command exits non-zero
+  having read nothing at all.
+- **The workspace is touched last.** Both flags, the project opt-in, the
+  approved-plan-outside-the-workspace check, the strict artifact parse, exact
+  `project_id`/`repo` matching, the `max_inspected_files` and
+  `max_changed_files` caps, and the lexical Phase 1 path policy for **every**
+  candidate all pass first. One refused path abandons the whole run — there is
+  no partial inspection.
+- **Only `files_likely_to_change` is inspected.**
+  `files_forbidden_or_out_of_scope` is not, and `proposed_steps`,
+  `required_verification`, `risks` and `open_questions` are prose that is never
+  treated as a path.
+- **The Phase 5D0 canonical guard now has its first caller**, honoring
+  `workspace_policy.allow_symlinks`. A missing path is reported as `missing` and
+  the run continues; a containment, symlink, ambiguity, or resolution failure
+  stops the whole run with nothing on stdout.
+- **The output is metadata only.** No configured `workspace_path`, no resolved
+  absolute path, no file contents, no directory listing, no raw artifact text,
+  no `approval_text`, no API key or base URL. `required_verification` is left
+  out entirely — this command did not run it.
+- **No model call, no network call, no environment read, no GitHub fetch or
+  write, no command execution, no file editing, no patch proposal, no branch,
+  commit, push or PR, no agent logic or role wiring, and no approval stamping.**
+- **No other command changed.** `version`, `inspect-issue`, `llm-smoke-test`,
+  `generate-plan`, `real-llm-smoke-test`, `generate-model-plan`, and
+  `l2-dry-run` are exactly as they were, and none of them gained an
+  `--inspect-workspace` path.
+
+See
+[docs/PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md §18](docs/PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md).
+
+### Phase 5D0 (canonical path guard library — no CLI behavior)
 
 Phase 5D0 adds a **library-only** canonical path guard,
 `ai_dev_orchestrator.workspace.canonical`: given a workspace root and one
@@ -32,15 +87,15 @@ would use it.
 - **No workspace inspection exists yet.** This is not it. The guard reads no
   file contents, lists no directory, globs nothing, and walks no tree; it
   answers one question about one path the caller already named.
-- **The guard is library-only and is not wired into any command.** No command
-  and no option was added, and none was changed. Nothing in the shipped code
-  calls it — only the `workspace` package re-exports it, and a test asserts
-  that.
+- **The guard was library-only when it shipped.** Phase 5D0 added no command and
+  no option, and nothing in the shipped code called it. *(Phase 5D1 later made
+  `l2-inspect-workspace` its first and only caller — see the status section
+  above.)*
 - **`l2-dry-run` remains validation and printing only**, exactly as Phase 5C
   left it, and `generate-plan`, `generate-model-plan`, `version`,
   `inspect-issue`, `llm-smoke-test` and `real-llm-smoke-test` are unchanged.
-- **No target project workspace is touched by any shipped command.** The guard's
-  tests create and inspect pytest `tmp_path` directories only.
+- **No target project workspace was touched by any shipped command** at Phase
+  5D0. The guard's tests create and inspect pytest `tmp_path` directories only.
 - **Fails closed.** Unsafe or ambiguous path forms — UNC (`\\server\share\...`),
   extended-length (`\\?\C:\...`), device (`\\.\...`), components ending in a
   space or a dot, and 8.3-short-name-looking components (`PROGRA~1`) — are
@@ -356,9 +411,12 @@ The following are intentionally **not** implemented yet:
   requires human approval, and nothing acts on it.
 - No agent logic.
 - No file editing or command execution.
-- No reads or writes of configured **target project workspaces**.
-- No **workspace inspection**. The Phase 5D0 canonical path guard is a library
-  with no caller; nothing resolves, stats, or reads a path a plan names.
+- No **writes** of any kind to a configured **target project workspace**, and no
+  reads of any file's **contents** in one. `l2-inspect-workspace` (Phase 5D1) is
+  the one command that may touch a target workspace, and it only canonicalizes
+  and `stat`s paths an approved plan named — it opens no file, lists no
+  directory, globs nothing, and walks no tree.
+- No **patch proposal**. Nothing produces a diff or an edit list.
 - No agent framework (LangGraph / CrewAI / AutoGen / n8n).
 
 ## Provider policy
@@ -613,6 +671,69 @@ on; and a statement that any later phase must be explicitly authorized.
 - print the raw artifact text, the plan's `approval_text`, an API key, a base
   URL, the configured workspace path, or any source file contents.
 
+### L2 workspace metadata inspection (Phase 5D1, read-only — `stat` and nothing more)
+
+```bash
+python -m ai_dev_orchestrator l2-inspect-workspace --project-config projects/my_project.yaml --approved-plan path/to/approved_plan.json --apply-approved-plan --inspect-workspace
+```
+
+`l2-inspect-workspace` is the **only** command that may touch a configured
+target workspace, and the only thing it does there is canonicalize and `stat`.
+For each path the approved plan lists under `files_likely_to_change` it reports
+existence, kind (`file` / `directory` / `other`), size for a regular file, and
+the canonical path relative to the workspace root. **L2 is not built**, and this
+command is not it: it proposes nothing, edits nothing, and runs nothing.
+
+It requires a project config that opts in:
+
+```yaml
+read_only_workspace_inspection:
+  enabled: false          # must be true for this command to touch the workspace
+  max_inspected_files: 20 # 1..100; a plan naming more fails before any touch
+  allow_protected_paths: false
+```
+
+An absent block is identical to a disabled one, and the example config ships it
+disabled.
+
+The gate fails closed in order. `--apply-approved-plan` and
+`--inspect-workspace` are checked **first** — without either, the command exits
+non-zero having read nothing at all, not even the project config. Then the
+config loads. Then the project opt-in must be enabled — otherwise the run stops
+before the artifact is even opened. Then `--approved-plan` is rejected if it is
+the configured `repo.workspace_path` or sits under it, **before it is read or
+stat'd**. Then the artifact is read, parsed with the Phase 5B strict parser, and
+matched against the config for exact `project_id` / `repo` / `plan.repo` /
+`plan_provenance.repo` equality. Then the candidate count is checked against
+both `max_inspected_files` and `workspace_policy.max_changed_files`. Then the
+Phase 1 lexical path policy runs for **every** candidate — forbidden, outside,
+traversal-escaping and unlisted paths always refused, protected paths refused
+unless `allow_protected_paths` is true — and one refusal abandons the whole run.
+
+**Only after all of that** is the workspace touched: the root is canonicalized
+first, then each candidate goes through the Phase 5D0 guard honoring
+`workspace_policy.allow_symlinks`, then a single `stat`. A path that does not
+exist is reported as `missing` and the run continues. A containment, symlink,
+ambiguity, or resolution failure stops the whole run with nothing on stdout.
+
+`l2-inspect-workspace` **does not**:
+
+- read or open any file's contents in a target workspace,
+- list, glob, or walk any directory — a candidate that *is* a directory is
+  reported as one and its entries are never enumerated,
+- inspect anything outside `files_likely_to_change`, including
+  `files_forbidden_or_out_of_scope`, or treat `proposed_steps`,
+  `required_verification`, `risks`, or `open_questions` as paths,
+- run any `required_verification` entry or any other command,
+- generate or apply a patch, edit or write any file, or create a branch, commit,
+  or PR,
+- fetch anything from GitHub or write anything to GitHub,
+- call a model, open a socket, construct an `LLMClient`, or read
+  `AIDO_LITELLM_*` or any other environment variable,
+- write an artifact or stamp an approval,
+- print the configured workspace path, any resolved absolute path, any file
+  contents, the raw artifact text, `approval_text`, an API key, or a base URL.
+
 ## Tests
 
 ```bash
@@ -712,10 +833,21 @@ a prerequisite — the library-only guard described in the status section above.
 It is **not** workspace inspection: it adds no command and no option, no shipped
 code path calls it, and its tests use pytest `tmp_path` directories only.
 
+**Phase 5D1** then added the `l2-inspect-workspace` command described in the
+status and usage sections above — the first code here permitted to touch a
+configured target workspace, and the guard's first caller. It touches it as
+`stat` and nothing else: existence, kind, and size for the paths an approved
+plan already named, behind two explicit flags, a project-level opt-in, artifact
+validation, exact identity matching, candidate-count caps, the lexical path
+policy, and the canonical guard. It adds **no file content reads, no directory
+listings, no patch proposal, no file editing, no command execution, no model
+call, no network call, no environment read, no GitHub fetch or write, no agent
+logic or role wiring, and no approval stamping**, and it changed none of the
+seven commands that came before it.
+
 **L2 is proposed, not built.** No command can invoke it, and every later Phase 5
-sub-phase remains unauthorized — including **Phase 5D**, the first phase that
-might touch a target workspace. Phase 5D0 satisfied its §6.4 prerequisite; it
-did not authorize it. Until one is explicitly authorized, the
-project continues to avoid agent automation, file editing, command execution,
-GitHub writes, GitHub issue fetching inside a real model command, and target
-project workspace reads/writes.
+sub-phase remains unauthorized — including reading file **contents** from a
+workspace, which Phase 5D1 deliberately stopped short of. Until one is
+explicitly authorized, the project continues to avoid agent automation, patch
+proposals, file editing, command execution, GitHub writes, GitHub issue fetching
+inside a real model command, and target project workspace writes.

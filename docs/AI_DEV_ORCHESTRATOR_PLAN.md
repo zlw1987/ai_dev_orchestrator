@@ -88,7 +88,12 @@ Model roles must be configurable. Each role specifies:
   strict parser, library only; Phase 5C added the `l2-dry-run` command, which
   validates an approved plan and prints intended scope with no workspace access
   and no implementation; Phase 5D0 added the §6.4 canonical path guard as a
-  library with no caller — **not** workspace inspection, and no CLI behavior).
+  library with no caller — **not** workspace inspection, and no CLI behavior;
+  Phase 5D1 added the `l2-inspect-workspace` command, the first code here that
+  may touch a configured target workspace and only as `stat` — path existence,
+  kind, and size for an approved plan's `files_likely_to_change`, behind a
+  project-level opt-in, with **no file content reads, no directory listings, no
+  patch proposal, no file editing, and no command execution**).
   **L2 is proposed, not built**, and no command can invoke it.
 - **Phase 6 — qwen reviewer.**
 - **Phase 7 — fix loop.**

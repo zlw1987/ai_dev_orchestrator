@@ -715,7 +715,13 @@ def test_this_suite_names_no_real_target_workspace():
 # -- 8. Nothing is wired into the CLI -----------------------------------------
 
 
-def test_root_help_lists_exactly_the_phase_5c_commands():
+def test_root_help_lists_the_shipped_commands_and_no_canonicalization_command():
+    """Phase 5D1 later added ``l2-inspect-workspace``, the guard's first caller.
+
+    That command is *read-only metadata inspection*, not a canonicalization
+    command: the guard is still not exposed directly, and nothing here reads a
+    workspace on its own.
+    """
     result = runner.invoke(app, ["--help"])
 
     assert result.exit_code == 0
@@ -727,12 +733,12 @@ def test_root_help_lists_exactly_the_phase_5c_commands():
         "real-llm-smoke-test",
         "generate-model-plan",
         "l2-dry-run",
+        "l2-inspect-workspace",
     ):
         assert command in result.output
     for absent in (
         "canonical",
         "canonicalize",
-        "inspect-workspace",
         "workspace-inspect",
         "read-workspace",
     ):
@@ -758,8 +764,17 @@ def test_command_help_gains_no_canonical_option(command):
         assert absent not in result.output
 
 
-def test_no_shipped_module_calls_the_canonical_guard():
-    """The guard is library-only: only the package export references it."""
+def test_the_canonical_guard_has_exactly_one_caller():
+    """Phase 5D1 gave the guard its first and only caller, ``cli.py``.
+
+    Phase 5D0 shipped it with none. The assertion is kept rather than deleted
+    because "how many things can reach a workspace?" is the number worth
+    watching: it went from zero to one, deliberately, and a second entry would
+    be a change someone should have to make on purpose.
+
+    Nobody imports the private module path either — the guard is reached only
+    through the ``workspace`` package's public export.
+    """
     package_root = Path(canonical.__file__).resolve().parents[1]
     exporter = Path(canonical.__file__).resolve().parent / "__init__.py"
     callers = []
@@ -771,4 +786,4 @@ def test_no_shipped_module_calls_the_canonical_guard():
         if "canonicalize_existing_path_under_workspace" in source:
             callers.append(module_path.name)
         assert "workspace.canonical" not in source, module_path.name
-    assert callers == []
+    assert callers == ["cli.py"]
