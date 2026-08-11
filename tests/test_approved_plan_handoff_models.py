@@ -901,6 +901,10 @@ EXPECTED_COMMANDS = [
     # Phase 5D2. Bounded, redacted read-only file-content inspection; no diff,
     # no edits, no commands. Still not an implementer.
     "l2-read-workspace-files",
+    # Phase 5E3. Deterministic, offline unified diff *proposal* generation from
+    # local JSON inputs: diff text is produced and printed, nothing is applied,
+    # nothing is edited, nothing is run. Still not an implementer.
+    "generate-diff-proposal",
 ]
 
 

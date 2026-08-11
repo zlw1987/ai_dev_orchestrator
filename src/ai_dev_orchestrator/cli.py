@@ -2734,5 +2734,331 @@ def l2_read_workspace_files(
     )
 
 
+# -- deterministic diff proposal (Phase 5E3) -----------------------------------
+
+# Human-readable categories for the Phase 5E3 generator errors, following the
+# Phase 4L/5C/5E1 precedent: name *what kind* of thing failed. The exception
+# messages are safe to show — Phase 5E3 guarantees they name the failed field,
+# category, or path and never echo the artifact text, the plan prose, the
+# proposed content, any original file content, the generated diff, or any
+# secret-like value.
+_DIFF_PROPOSAL_INPUT_FAILURE_CATEGORIES = {
+    "DiffProposalInputParseError": (
+        "input parse failure — the file was not exactly one strict JSON object"
+    ),
+    "DiffProposalInputValidationError": (
+        "input validation failure — the JSON object was not the expected shape"
+    ),
+}
+
+_DIFF_PROPOSAL_FAILURE_CATEGORY = (
+    "generation failure — the approved plan, the project config, and the "
+    "workspace-content packet did not match exactly, a proposed path was out of "
+    "scope or had no usable recorded content, or the generated diff was refused"
+)
+
+
+def _fail_diff_proposal(exc: Exception, what_was_not_done: str) -> None:
+    """Report a Phase 5E3 failure by category and exit non-zero. Never returns.
+
+    The exception message is safe to show; nothing else about the inputs is.
+    Deliberately not echoed here or anywhere on the failure path: the raw input
+    text, the plan prose, the proposed content, any original file content, any
+    generated diff text, and any secret-like value.
+    """
+    name = type(exc).__name__
+    category = _DIFF_PROPOSAL_INPUT_FAILURE_CATEGORIES.get(
+        name, _DIFF_PROPOSAL_FAILURE_CATEGORY
+    )
+    typer.echo(f"Error: {name}: {category}. {exc}", err=True)
+    typer.echo(
+        f"No input text, file content, or diff text is echoed. {what_was_not_done}",
+        err=True,
+    )
+    raise typer.Exit(code=1)
+
+
+def _read_diff_proposal_input(path: Path, label: str) -> str:
+    """Read one explicitly named local input file, or fail closed. For tests.
+
+    Called only after the workspace guard has cleared **all three** input paths,
+    so no read here can reach into the configured target workspace.
+    """
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError as exc:
+        typer.echo(f"Error: could not read {label}: {exc}", err=True)
+        typer.echo("No diff proposal was generated.", err=True)
+        raise typer.Exit(code=1)
+
+
+def _run_generate_diff_proposal(
+    *,
+    project_config: Path,
+    approved_plan: Path,
+    workspace_content: Path,
+    proposed_content: Path,
+    apply_approved_plan: bool,
+    generate_diff: bool,
+) -> None:
+    """Generate a diff proposal artifact and print it. Extracted for tests.
+
+    Ordering is the safety property, and it is `generate-patch-proposal`'s with
+    two more input files in the middle. In sequence: both
+    ``--apply-approved-plan`` and ``--generate-diff`` must be present — with
+    **no file read at all** if either is missing — then the project config
+    loads, then a string/path check rejects **any** of the three inputs that
+    sits inside the configured workspace *before* any of them is opened, then
+    the approved plan is read and strictly parsed, then the Phase 5D2 packet,
+    then the proposed content, then the deterministic generator runs, and only
+    then is anything printed.
+
+    The generator is pure and offline, so this command reads exactly four local
+    files and touches nothing else. Original source text reaches it only as data
+    inside the Phase 5D2 packet named on the command line. Nothing here reads
+    the configured target workspace, lists a directory, applies a diff, checks
+    whether a diff applies, edits a file, executes a command, reads an
+    environment variable, opens a socket, builds a client, contacts GitHub,
+    writes an artifact file, or stamps an approval.
+    """
+    from ai_dev_orchestrator.config_loader import ConfigError, load_project_config
+    from ai_dev_orchestrator.diff_proposal import (
+        DiffProposalGenerationError,
+        build_deterministic_diff_proposal,
+        parse_proposed_content_input,
+        parse_workspace_content_packet,
+    )
+    from ai_dev_orchestrator.handoff import (
+        ApprovedPlanError,
+        parse_approved_l1_plan_artifact,
+    )
+
+    # 1. Explicit confirmation that an approved plan may be acted on. Checked
+    #    first, so a plain invocation reads no file at all.
+    if not apply_approved_plan:
+        typer.echo(
+            "Error: generate-diff-proposal acts on a human-approved plan "
+            "artifact and requires the explicit --apply-approved-plan flag. "
+            "Nothing was read.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # 2. Explicit confirmation that diff text may be produced. A second,
+    #    separate consent: approving a plan is not the same act as asking for a
+    #    diff to be written against it.
+    if not generate_diff:
+        typer.echo(
+            "Error: generate-diff-proposal produces unified diff text and "
+            "requires the explicit --generate-diff flag. Nothing was read.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # 3. Project config: the first file read. The configured repo.workspace_path
+    #    is never read, listed, stat'd, or resolved.
+    try:
+        project = load_project_config(project_config)
+    except ConfigError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        typer.echo(
+            "No input was read and no diff proposal was generated.", err=True
+        )
+        raise typer.Exit(code=1)
+
+    # 4. Refuse any input that lives inside the configured target workspace,
+    #    BEFORE any of them is read or stat'd — which is also why none of the
+    #    three carries a Typer exists=/readable= check: those would touch the
+    #    path before this guard could run. All three are checked together, so a
+    #    later input inside the workspace cannot be reached by an earlier read.
+    #    String/path normalization only; the workspace path itself is never
+    #    read, listed, stat'd, or resolved.
+    for label, candidate in (
+        ("--approved-plan", approved_plan),
+        ("--workspace-content", workspace_content),
+        ("--proposed-content", proposed_content),
+    ):
+        if _is_same_or_under(candidate, project.repo.workspace_path):
+            typer.echo(
+                f"Error: {label} is inside the project's configured "
+                f"repo.workspace_path ({project.repo.workspace_path}). Every "
+                "input must live outside the workspace it describes; move it "
+                "outside that path and retry.",
+                err=True,
+            )
+            typer.echo(
+                "No input was read and no diff proposal was generated.", err=True
+            )
+            raise typer.Exit(code=1)
+
+    # 5/6. The guard has passed, so the approved plan may be read and strictly
+    #      parsed (Phase 5B). Rejected, never repaired.
+    artifact_text = _read_diff_proposal_input(approved_plan, "--approved-plan")
+    try:
+        artifact = parse_approved_l1_plan_artifact(artifact_text)
+    except ApprovedPlanError as exc:
+        name = type(exc).__name__
+        category = _APPROVED_PLAN_FAILURE_CATEGORIES.get(name, "artifact failure")
+        typer.echo(f"Error: {name}: {category}. {exc}", err=True)
+        typer.echo(
+            "The artifact text and the plan prose are not echoed. The remaining "
+            "inputs were not read and no diff proposal was generated.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # 7/8. The Phase 5D2 content packet — the only source of original file text,
+    #      and a file, not a workspace. Parsed immediately, so an invalid packet
+    #      fails before the proposed content is opened at all.
+    packet_text = _read_diff_proposal_input(workspace_content, "--workspace-content")
+    try:
+        packet = parse_workspace_content_packet(packet_text)
+    except DiffProposalGenerationError as exc:
+        _fail_diff_proposal(
+            exc,
+            "The proposed content was not read and no diff proposal was "
+            "generated.",
+        )
+
+    # 9/10. The proposed final content, read last.
+    proposed_text = _read_diff_proposal_input(proposed_content, "--proposed-content")
+    try:
+        proposal_input = parse_proposed_content_input(proposed_text)
+    except DiffProposalGenerationError as exc:
+        _fail_diff_proposal(exc, "No diff proposal was generated.")
+
+    # 11. Generate deterministically and offline. The generator performs the
+    #     exact identity matching against the config and the packet, re-checks
+    #     the L1 invariants, keeps every proposed path inside the approved
+    #     scope, and fails closed on missing, redacted, or wrong-kind original
+    #     content and on a secret-like generated diff.
+    try:
+        proposal = build_deterministic_diff_proposal(
+            approved_plan=artifact,
+            project=project,
+            workspace_content=packet,
+            proposed_content=proposal_input,
+        )
+    except DiffProposalGenerationError as exc:
+        _fail_diff_proposal(
+            exc, "No diff proposal was printed and no file was written."
+        )
+
+    # 12. Print the artifact itself — nothing wrapped around it, so stdout parses
+    #     with parse_diff_proposal_artifact. Deliberately absent, because the
+    #     artifact has no field for any of them: the configured workspace_path,
+    #     any resolved absolute path, the raw text of any input, any command or
+    #     command output, any apply result, any prompt or completion, and any API
+    #     key or base URL. Source text appears only as diff context inside the
+    #     generated unified diffs, and the approval only inside the embedded
+    #     approved-plan snapshot, exactly as it was given.
+    typer.echo(proposal.model_dump_json(indent=2))
+
+
+@app.command("generate-diff-proposal")
+def generate_diff_proposal(
+    project_config: Path = typer.Option(
+        ...,
+        "--project-config",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Path to the project config YAML the approved plan must match.",
+    ),
+    approved_plan: Path = typer.Option(
+        ...,
+        "--approved-plan",
+        # Deliberately no exists=/readable= check on any of the three inputs:
+        # Typer would stat the path before the command body could reject one
+        # inside the configured workspace. The guard runs first; the files are
+        # opened only afterwards.
+        help="Path to a human-approved L1 plan artifact (Phase 5B shape). Must "
+        "not be inside the project's configured workspace path.",
+    ),
+    workspace_content: Path = typer.Option(
+        ...,
+        "--workspace-content",
+        help="Path to JSON previously printed by l2-read-workspace-files. It "
+        "supplies the original text to diff against. Must not be inside the "
+        "project's configured workspace path.",
+    ),
+    proposed_content: Path = typer.Option(
+        ...,
+        "--proposed-content",
+        help="Path to a proposed-content JSON object giving each path's final "
+        "text. Must not be inside the project's configured workspace path.",
+    ),
+    apply_approved_plan: bool = typer.Option(
+        False,
+        "--apply-approved-plan",
+        help="Required explicit confirmation that an approved plan may be "
+        "acted on. Without it this command fails without reading anything.",
+    ),
+    generate_diff: bool = typer.Option(
+        False,
+        "--generate-diff",
+        help="Required explicit confirmation that unified diff text may be "
+        "produced. Without it this command fails without reading anything.",
+    ),
+    output_format: GeneratePlanFormat = typer.Option(
+        GeneratePlanFormat.json,
+        "--format",
+        help="Output format. Only 'json' is currently supported.",
+    ),
+) -> None:
+    """Turn approved-plan, recorded-content, and proposed-content JSON into diffs.
+
+    The proposal is generated **deterministically and offline** from four local
+    files — the project config, the approved plan artifact, a Phase 5D2
+    ``l2-read-workspace-files`` packet, and a proposed-content JSON object, in
+    that order — and nothing else. For each proposed path it runs ``difflib``
+    between the original text the packet recorded and the final text the input
+    supplies, and emits one single-file unified diff. The same inputs always
+    produce a byte-identical artifact.
+
+    **It generates diff text and does nothing with it.** Nothing is applied,
+    staged, or written, and whether a diff would apply is never checked —
+    ``applies_cleanly_checked`` is false because the question was never asked.
+
+    It does **not**: read, list, stat, resolve, or glob the project's configured
+    ``repo.workspace_path`` or any target workspace; open any of the paths the
+    approved plan names — their original text arrives inside the packet or the
+    generation for that path fails; apply a patch; edit or write any file; write
+    the proposal to a file (stdout only); run any verification entry or any
+    other command; create a branch, commit, or PR; fetch from or write to
+    GitHub; call a model; open a socket; or read ``AIDO_LITELLM_*`` or any other
+    environment variable. It never writes or stamps an approval — the approval
+    must already have been written by a human, and it is carried through
+    unchanged inside the embedded plan snapshot.
+
+    The gate fails closed in order: ``--apply-approved-plan`` and
+    ``--generate-diff`` first (without either, nothing is read at all), then the
+    config, then a string/path check rejecting **any** of the three inputs
+    inside the configured workspace **before** any is read or stat'd, then the
+    strict Phase 5B parse, then the packet, then the proposed content, then the
+    generator's exact identity matching against both the config and the packet,
+    its L1 re-check, and its scope containment. Generation also fails closed
+    when a proposed path is absent from the packet, when a modify's recorded
+    content is missing, redacted, or not a regular file's, when a create names a
+    path that was actually read, and when a generated diff matches a
+    secret-like pattern — refused rather than redacted, since a redacted diff
+    could never apply. Any failure exits non-zero with stderr only and nothing
+    on stdout, and never echoes the artifact text, the plan prose, the proposed
+    content, any file content, or any diff text.
+
+    Stdout is the diff proposal artifact itself, with no wrapper, so it parses
+    with ``parse_diff_proposal_artifact``.
+    """
+    _run_generate_diff_proposal(
+        project_config=project_config,
+        approved_plan=approved_plan,
+        workspace_content=workspace_content,
+        proposed_content=proposed_content,
+        apply_approved_plan=apply_approved_plan,
+        generate_diff=generate_diff,
+    )
+
+
 if __name__ == "__main__":
     app()

@@ -110,8 +110,15 @@ Model roles must be configurable. Each role specifies:
   artifact as models plus a strict parser, library only — a diff may now be
   carried and validated **as data**, with **no diff generation, no diff
   application, no apply-cleanliness check, no workspace access, no file content
-  read, and no CLI behavior**).
-  **L2 is proposed, not built**, and no command can invoke it.
+  read, and no CLI behavior**; Phase 5E3 added the deterministic, offline
+  generator and the `generate-diff-proposal` command, which turns an approved
+  plan, a Phase 5D2 content packet, and a proposed-content JSON object — all
+  **local files** — into unified diff text printed to stdout, with **no target
+  workspace file read directly, no diff applied, no apply-cleanliness check, no
+  file editing, no command execution, no artifact file written, and no model
+  call**).
+  **L2 is proposed, not built**, and no command can invoke it. Phase 5F — the
+  first phase that could edit a file — remains proposed and not authorized.
 - **Phase 6 — qwen reviewer.**
 - **Phase 7 — fix loop.**
 - **Phase 8 — local commit.**

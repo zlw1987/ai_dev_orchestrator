@@ -1792,7 +1792,12 @@ def test_implementation_module_imports_no_transport_cli_workspace_or_differ():
         assert forbidden not in text, f"{forbidden!r} must not appear"
 
 
-def test_diff_proposal_package_exports_exactly_the_phase_5e2_surface():
+def test_diff_proposal_package_exports_the_phase_5e2_surface():
+    """The Phase 5E2 names are all still here, and still mean the same thing.
+
+    Phase 5E3 added the generator half to this same package (covered by
+    ``test_diff_proposal_generator.py``); the parser half below is unchanged.
+    """
     from ai_dev_orchestrator import diff_proposal
 
     expected = [
@@ -1806,19 +1811,18 @@ def test_diff_proposal_package_exports_exactly_the_phase_5e2_surface():
         "DiffProposalValidationError",
         "parse_diff_proposal_artifact",
     ]
-    assert sorted(diff_proposal.__all__) == sorted(expected)
     for name in expected:
+        assert name in diff_proposal.__all__
         assert hasattr(diff_proposal, name)
 
-    # No generator, no applier, no loader, no writer. Later phases, if ever.
+    # Still no applier, no loader, no writer, no implementer. Later phases, if
+    # ever. Phase 5E3's producer is a generator and nothing more.
     for absent in (
-        "build_diff_proposal",
-        "generate_diff",
-        "generate_unified_diff",
         "load_diff_proposal_artifact",
         "apply_diff_proposal",
         "write_diff_proposal",
-        "DiffGenerator",
+        "check_applies_cleanly",
+        "DiffApplier",
         "PatchApplier",
         "L2Implementer",
     ):
@@ -1846,8 +1850,9 @@ def test_importing_the_package_touches_nothing(monkeypatch):
 # -- 14. The CLI surface -------------------------------------------------------
 
 
-# Phase 5E2 adds no command and no option. This is the Phase 5D2 surface,
-# unchanged.
+# Phase 5E2 adds no command and no option. Phase 5E3 later added exactly one —
+# `generate-diff-proposal`, the producer for this artifact — and changed nothing
+# else. It prints diff text and applies, edits, and runs nothing.
 EXPECTED_COMMANDS = [
     "version",
     "inspect-issue",
@@ -1859,6 +1864,7 @@ EXPECTED_COMMANDS = [
     "l2-inspect-workspace",
     "generate-patch-proposal",
     "l2-read-workspace-files",
+    "generate-diff-proposal",
 ]
 
 
@@ -1887,27 +1893,31 @@ def test_importing_diff_proposal_adds_no_command():
 
 
 def test_no_diff_apply_or_implement_command_exists():
+    """Phase 5E3 produces diff text. Nothing applies it, and nothing implements.
+
+    ``generate-diff-proposal`` is the one command that writes a diff, and it
+    writes it to stdout.
+    """
     result = runner.invoke(app, ["--help"])
 
     assert result.exit_code == 0
     for absent in (
-        "generate-diff",
-        "generate-diff-proposal",
         "propose-diff",
         "apply-diff",
         "apply-patch",
         "approve-plan",
         "implement",
+        "edit-files",
     ):
         assert absent not in result.output
 
     for absent in (
-        "generate-diff",
-        "generate-diff-proposal",
         "propose-diff",
         "apply-diff",
+        "apply-diff-proposal",
         "apply-patch",
         "apply-patch-proposal",
+        "edit-files",
         "implement-plan",
     ):
         assert runner.invoke(app, [absent, "--help"]).exit_code != 0

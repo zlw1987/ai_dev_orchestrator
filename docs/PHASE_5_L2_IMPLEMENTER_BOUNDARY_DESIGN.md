@@ -19,9 +19,10 @@
 > workspace metadata inspection only** — §18, Phase 5E0 as **patch proposal
 > artifact models and a parser only** — §19, Phase 5E1 as a **deterministic,
 > offline proposal generator and one CLI command** — §20, Phase 5D2 as
-> **bounded read-only file-content inspection only** — §21, and Phase 5E2 as
-> **unified diff proposal artifact models and a parser only** — §22. Phase 5E3
-> onward remain proposals, and L2 is still not built.)
+> **bounded read-only file-content inspection only** — §21, Phase 5E2 as
+> **unified diff proposal artifact models and a parser only** — §22, and Phase
+> 5E3 as a **deterministic, offline diff proposal producer and one CLI command**
+> — §23. Phase 5F onward remain proposals, and L2 is still not built.)
 >
 > **L2 may not be invoked by any existing command after this phase.** After
 > Phase 5A the shipped CLI surface is exactly what Phase 4L left behind —
@@ -35,7 +36,9 @@
 > `generate-patch-proposal`, which generates a prose-only proposal artifact
 > offline and prints it; Phase 5D2 added a fourth,
 > `l2-read-workspace-files`, which prints bounded, redacted file contents and
-> takes no action. Neither changed any of the others, and neither implements
+> takes no action; Phase 5E3 added a fifth, `generate-diff-proposal`, which
+> generates unified diff text offline from local JSON inputs and prints it,
+> applying nothing. None of them changed any of the others, and none implements
 > anything.)
 >
 > It refines item **"Phase 5 — docs-only L2 implementer"** of
@@ -110,8 +113,19 @@
 > access, no file contents read, no file edited, no command run, no model /
 > network / environment access, and no approval stamped.
 >
-> **Phase 5E3 and every later sub-phase in §13 remain proposed and not
-> authorized.**
+> **Phase 5E3 is now DONE** (§23). It added the producer Phase 5E2 withheld:
+> `build_deterministic_diff_proposal`, plus the `generate-diff-proposal` command
+> that reads four local files — a project config, an approved plan, a Phase 5D2
+> `l2-read-workspace-files` packet, and a proposed-content JSON object — runs
+> `difflib` over strings, and prints a Phase 5E2 artifact to stdout. **It reads
+> no target workspace file directly**: original text arrives inside the packet
+> or the generation for that path fails. **It generates diff text and does
+> nothing with it** — no diff applied, no apply-cleanliness checked, no file
+> edited, no command run, no model / network / environment access, no GitHub
+> fetch or write, no artifact file written, and no approval stamped.
+>
+> **Phase 5F and every later sub-phase in §13 remain proposed and not
+> authorized. Phase 5F is the first phase that could edit a file.**
 
 ## 1. Goal
 
@@ -890,11 +904,18 @@ abandoned.
   workspace access, no file contents read, no CLI behavior, no model call, no
   network call, no environment read, no file editing, no command execution, and
   no approval stamping.** See §22.
-- **Phase 5E3 (proposed) — a producer for the Phase 5E2 artifact.** Something
-  that actually *generates* a unified diff, from the Phase 5D2 file-content
-  reads, behind its own gate. The remaining decision — what a generated diff may
-  disclose, and how a proposal that carries one stays unapplyable — is
-  untouched. **No file edits.** **Proposed and not authorized.**
+- **Phase 5E3 — a deterministic producer for the Phase 5E2 artifact. DONE.**
+  Something that actually *generates* a unified diff — from a Phase 5D2 content
+  packet and a proposed-content input supplied as **local JSON files**, never
+  from a direct workspace read of its own — behind its own gate. It ships
+  `build_deterministic_diff_proposal` and the `generate-diff-proposal` command.
+  The remaining decision that Phase 5E2 left open is answered here in the
+  restrictive direction: a diff generated from **redacted** source is refused
+  outright, and a generated diff that looks like it carries a credential is
+  discarded rather than redacted, because a redacted diff reads like a patch and
+  could never apply. **No diff applied, no apply-cleanliness checked, no
+  workspace read, no file edits, no commands, no model, no artifact file
+  written.** See §23.
 - **Phase 5F — controlled file editing under `allowed_paths`.** The first write.
   `max_changed_files` enforced, dirty-tree check enforced. **No command
   execution.**
@@ -2328,14 +2349,178 @@ byte for byte.
   `difflib`, and its source names no transport, CLI, workspace, or clock import.
 - [x] The package exports exactly the nine Phase 5E2 names, and no generator, no
   applier, no loader, and no writer.
-- [x] **No CLI behavior added.** Root help still lists exactly the ten shipped
-  commands; importing `diff_proposal` registers none; `l2-read-workspace-files`,
-  `generate-patch-proposal`, `l2-inspect-workspace`, `l2-dry-run`,
-  `generate-plan` and `generate-model-plan` keep their exact options and gain no
-  `--diff`, `--diff-proposal`, `--apply-patch`, `--edit-files` or `--implement`.
+- [x] **No CLI behavior added.** Importing `diff_proposal` registers no command;
+  `l2-read-workspace-files`, `generate-patch-proposal`, `l2-inspect-workspace`,
+  `l2-dry-run`, `generate-plan` and `generate-model-plan` keep their exact
+  options and gain no `--diff`, `--diff-proposal`, `--apply-patch`,
+  `--edit-files` or `--implement`. *(Phase 5E3 has since added an eleventh
+  command, `generate-diff-proposal`, which produces this artifact and prints it;
+  it changed none of the ten above — see §23.)*
 - [x] **Tests use literal dicts and hand-typed diffs only** — no real file, no
   real environment, no network, no target workspace created or named.
 - [x] **Phase 5E3 and every later sub-phase in §13 remain proposed and not
   authorized.** Generating a diff, applying one, editing a file, executing a
   command, committing, pushing, opening a PR, and sending source contents to a
-  model all still require their own explicit authorization.
+  model all still require their own explicit authorization. *(Phase 5E3 —
+  generating a diff, deterministically and offline, from local JSON inputs, with
+  nothing applied and no workspace read — has since been authorized and
+  implemented; see §23. Applying a diff, editing a file, executing a command,
+  committing, pushing, opening a PR, and sending source contents to a model all
+  still require their own explicit authorization.)*
+
+## 23. Phase 5E3 — deterministic diff proposal generator (DONE)
+
+Phase 5E2 typed the diff proposal artifact and shipped no producer. Phase 5E3 is
+that producer, and it is deliberately the dullest one that could exist:
+`build_deterministic_diff_proposal`, a **pure function over four already-loaded
+objects** that runs `difflib` over strings and returns a validated
+`DiffProposalArtifact`, plus the `generate-diff-proposal` command that loads
+those four objects from local files and prints the result.
+
+The four inputs are the whole story, and **none of them is a workspace**:
+
+1. an `ApprovedL1PlanArtifact` — the human approval and the path scope;
+2. a `ProjectConfig` — the identity the approval must match;
+3. a **Phase 5D2 workspace-content packet** — JSON a human previously printed
+   with `l2-read-workspace-files`, carrying bounded, redacted original file text
+   as *data*;
+4. a **proposed-content input** (`proposed-content.v1`, mode `proposal-only`) —
+   the final text a human or an external tool wants each file to have.
+
+### 23.1 What it does, and the four things it deliberately cannot do
+
+It generates diff text and **does nothing with it**. In particular:
+
+- **It does not read target workspace files.** Original text arrives inside the
+  packet or the generation for that path fails. The paths the approved plan
+  names are never opened, stat'd, listed, globbed, walked, or resolved, and no
+  path is joined to a workspace root or canonicalized.
+- **It does not apply a diff, and it does not check whether one applies.** No
+  patch tooling is invoked and nothing is staged. `applies_cleanly_checked` is
+  `false` because the question was never asked — asking it means touching the
+  workspace this phase refuses to touch.
+- **It does not edit files, run commands, or call a model.** `httpx`,
+  `requests`, `LLMClient`, `LLMClientConfig`, `load_llm_client_config_from_env`,
+  `GitHubClient`, `typer`, `Path`, `os`, `socket` and `subprocess` are absent
+  from the generator module's globals, so no code path there can reach one.
+  `required_verification` is plan prose that is never executed.
+- **It does not write an artifact file.** stdout only, with no wrapper, so the
+  output parses with `parse_diff_proposal_artifact`. Nothing stamps an approval:
+  the wrapped `ApprovedL1PlanArtifact` travels through unchanged.
+
+`generated_at` is `None` and every assumption and risk is fixed prose, so the
+same inputs always produce a byte-identical artifact. Provenance is
+`engine="deterministic"`, `real_call=false`, `model=null` — facts about the
+function, not claims copied from an input — and `patch_proposal` is always
+`null`: these diffs were drafted from a content packet, not from a Phase 5E0
+prose proposal.
+
+### 23.2 Where it fails closed
+
+Scope narrows and never widens: every proposed path must appear **exactly** in
+`files_likely_to_change`, must **not** appear in `files_forbidden_or_out_of_scope`
+(checked first, so a self-contradicting plan resolves restrictively), and must
+appear in the packet. Identity is matched with exact string equality against
+both the project config and the packet — `project_id`, `repo`, `issue_number`,
+`title` — and the L1 invariants are re-checked rather than assumed.
+
+The interesting refusals are the ones about *source text*:
+
+- **Redacted source is refused.** Phase 5D2 replaces secret-like values with a
+  placeholder, so a diff built from redacted text describes a file that does not
+  exist. A misleading patch is worse than no patch.
+- **A `modify` whose packet item is not a successfully read regular file** —
+  missing, a directory, too large, skipped by the total cap, binary — is refused
+  rather than guessed at, and so is a read item carrying no `content_text`.
+- **A `create` whose path was actually read is refused**: this phase does not
+  overwrite an existing file under the name "create". A `create` with empty
+  content is refused too, because no hunk can express it and silently dropping
+  it would misreport the proposal.
+- **A generated diff matching a secret-like pattern is refused, not redacted.**
+  The Phase 5D2 regexes are reused **detection-only**: redacting a diff would
+  produce text that reads like a patch and could never apply. The error names
+  the category and the path and never echoes the value or the diff.
+
+A `modify` whose proposed text already matches the recorded original produces no
+diff at all: the path goes into `omitted_paths` rather than being emitted as a
+fabricated one. `changes` may therefore be **empty**, which is well-formed.
+Because the artifact is validated through the Phase 5E2 model rather than
+constructed field by field, a generated diff that would not parse — the awkward
+case being a source line beginning `--` or `++`, which prefixes into something
+that reads like a second file header — is discarded rather than emitted.
+
+### 23.3 The command's gate ordering
+
+`generate-diff-proposal` takes `--project-config`, `--approved-plan`,
+`--workspace-content`, `--proposed-content`, the two consent flags
+`--apply-approved-plan` and `--generate-diff`, and `--format`. It fails closed in
+order: **both flags first** (without either, *nothing* is read, not even the
+config), then the config, then a string/path check rejecting **any** of the
+three inputs that sits inside the configured `repo.workspace_path` — checked for
+all three together, **before any of them is opened**, which is why none carries a
+Typer `exists=`/`readable=` check — then the strict Phase 5B parse, then the
+packet, then the proposed content, then generation. Any failure exits non-zero
+with stderr only and nothing on stdout, and never echoes the artifact text, the
+plan prose, the proposed content, any file content, any diff text, or any
+secret-like value.
+
+### 23.4 Acceptance criteria for Phase 5E3 (DONE)
+
+- [x] A valid `modify` and a valid `create` each generate a
+  `DiffProposalArtifact`, and the generated artifact re-parses with
+  `parse_diff_proposal_artifact`. Generation is byte-for-byte deterministic.
+- [x] The wrapped `ApprovedL1PlanArtifact` travels through unchanged, and the
+  input object is not mutated.
+- [x] A no-op `modify` is reported in `omitted_paths`, never emitted as a
+  fabricated diff; an empty proposed-content input yields `changes == []`;
+  multiple changes preserve the input's order.
+- [x] Duplicate proposed paths, paths outside `files_likely_to_change`, paths in
+  `files_forbidden_or_out_of_scope`, and paths absent from the packet are all
+  rejected. Plan prose is never read as a path.
+- [x] A `modify` requires a packet item with status `read`, kind `file`, a
+  non-null `content_text` and `redacted == false`; **a redacted source fails
+  closed**. A `create` requires status `missing`, and a `create` over a read
+  item fails closed. `too_large`, `binary_or_non_utf8`, `directory_no_content`,
+  `other_no_content` and `skipped_total_limit` items cannot be changed.
+- [x] Identity mismatches fail on `project_id`, `repo`, `issue_number` and
+  `title`, against both the config and the packet, by exact string equality, and
+  the message names the field without echoing the values.
+- [x] Provenance is `deterministic` / `diff-proposal` / `real_call=false` /
+  `model=null` / `generated_at=null`; `source_contents_read` reflects whether
+  recorded original content was consulted; `diffs_generated` is true and
+  `files_edited`, `commands_run` and `applies_cleanly_checked` are false.
+- [x] **No apply-cleanliness check is performed**, with `builtins.open`,
+  `subprocess` and the `os` filesystem entry points detonated across a
+  successful generation.
+- [x] A secret-like generated diff fails closed and the message never echoes the
+  value or the diff.
+- [x] Both input parsers reject empty text, invalid JSON, markdown fences, prose
+  around the object, and non-object JSON; the proposed-content models reject
+  unsafe paths, duplicates, oversized or NUL-bearing content, and every
+  forbidden extra (`unified_diff`, `diff`, `command`, `apply`, `workspace_path`,
+  `before_content`/`after_content`, `approval`, `prompt`, `completion`,
+  `api_key`, `base_url`, `command_output`); the packet parser rejects a wrong
+  `mode` or `candidate_source`, a broken identity, duplicates, unknown item
+  statuses, unsafe item paths, and unexpected item fields.
+- [x] **The generator performs no IO**: no file, environment, network, or
+  process access on the success path or on any failure path, and no file is
+  written. The plan's paths are never opened.
+- [x] The command reads **exactly the four files named on its command line**, in
+  order, and fails before reading anything when a flag is missing, before
+  reading any input when one of the three sits inside the workspace, and before
+  reading the next input when an earlier one is invalid.
+- [x] stdout is the artifact with no wrapper and carries no `workspace_path`, no
+  absolute path, no raw input text, no API key or base URL, no command output,
+  and no apply result; source text appears only as diff context inside the
+  generated diffs, and `approval_text` only inside the embedded plan snapshot.
+- [x] **No CLI behavior changed except the added command.**
+  `l2-read-workspace-files`, `generate-patch-proposal`, `l2-inspect-workspace`,
+  `l2-dry-run`, `generate-plan` and `generate-model-plan` keep their exact
+  options, and none gains `--generate-diff` or `--proposed-content`.
+- [x] **Tests use pytest `tmp_path` and literal JSON only** — no real
+  environment, no network, no target workspace read, and no real `C:\dev` path.
+- [x] **Phase 5F and every later sub-phase in §13 remain proposed and not
+  authorized. Phase 5F is the first phase that could edit a file.** Applying a
+  diff, editing a file, executing a command, committing, pushing, opening a PR,
+  and sending source contents to a model all still require their own explicit
+  authorization.

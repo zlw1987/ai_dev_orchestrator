@@ -17,19 +17,77 @@ changes. The eventual design will:
 
 The emphasis is on **control and review**, not autonomous action.
 
-## Current status: Phase 5E2 (unified diff proposal artifact models and parser — library only)
+## Current status: Phase 5E3 (deterministic diff proposal generator — diff text, never applied)
+
+Phase 5E3 adds the producer Phase 5E2 withheld:
+`build_deterministic_diff_proposal`, plus **one** new command,
+`generate-diff-proposal`. It is a pure function over four already-loaded objects
+that runs `difflib` over strings and returns a validated Phase 5E2 artifact, and
+a command that loads those objects from four **local files** and prints the
+result to stdout.
+
+The four inputs are the whole story, and **none of them is a workspace**: the
+project config, a human-approved L1 plan artifact, a Phase 5D2
+`l2-read-workspace-files` packet (which carries bounded, redacted original file
+text as *data*), and a proposed-content JSON object giving each path's final
+text.
+
+- **It generates diff text and does nothing with it.** Nothing is applied,
+  staged, or written, and **whether a diff would apply is never checked** —
+  `applies_cleanly_checked` is false because the question was never asked. No
+  patch tooling is invoked.
+- **It reads no target workspace file directly.** The paths the approved plan
+  names are never opened, stat'd, listed, globbed, walked, or resolved. Original
+  text arrives inside the packet or the generation for that path **fails**.
+- **Redacted source fails closed.** Phase 5D2 replaces secret-like values with a
+  placeholder, so a diff built from redacted text would describe a file that
+  does not exist. A misleading patch is worse than no patch.
+- **A secret-like generated diff is refused, not redacted.** Redacting a diff
+  would produce text that reads like a patch and could never apply, so the whole
+  generation fails instead. The error names the category and the path and never
+  echoes the value or the diff.
+- **A no-op change is omitted, never fabricated.** A `modify` whose proposed text
+  already matches the recorded original goes into `omitted_paths` instead of
+  becoming an invented diff. `changes` may be empty, which is well-formed.
+- **A `modify` needs a real read.** Missing, directory, too-large, binary, and
+  skipped items cannot be modified; a `create` needs a `missing` item and is
+  refused over a file that was actually read.
+- **Scope only narrows.** Every proposed path must appear exactly in the approved
+  plan's `files_likely_to_change`, must not appear in
+  `files_forbidden_or_out_of_scope`, and must appear in the packet. Identity is
+  matched by exact string equality against both the config and the packet.
+- **Deterministic.** `generated_at` is `null`, provenance is
+  `engine: "deterministic"` / `real_call: false` / `model: null`, and the same
+  inputs always produce a byte-identical artifact. stdout is the artifact itself
+  with no wrapper, so it parses with `parse_diff_proposal_artifact`.
+- **No diff applied, no apply-cleanliness check, no file editing, no command
+  execution, no artifact file written, no model call, no network call, no
+  environment read, no GitHub fetch or write, no agent logic or role wiring, and
+  no approval stamping.**
+
+**L2 is not built, and this command is not it.** It writes a diff to stdout for
+a human to read. Phase 5F — the first phase that could edit a file — remains
+proposed and not authorized.
+
+See
+[docs/PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md §23](docs/PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md)
+and the usage section below.
+
+### Phase 5E2 (unified diff proposal artifact models and parser — library only)
 
 Phase 5E2 adds the `ai_dev_orchestrator.diff_proposal` package: typed models for
 a **unified diff proposal artifact** plus a strict JSON parser. It lets a
-diff-shaped artifact **exist as data** and be validated. It adds **no command and
-no option**, and nothing in the shipped code imports it.
+diff-shaped artifact **exist as data** and be validated. It added **no command
+and no option** of its own; Phase 5E3 above later added the producer and the one
+command that prints its output.
 
-- **This is not diff generation, and not diff application.** There is no producer
-  here and no applier. Nothing creates, computes, or modifies a diff, and nothing
-  applies, stages, or writes a patch — a parsed diff was written elsewhere.
-  `applies_cleanly_checked` is `Literal[False]`: whether a diff *would* apply is
-  a question this phase never asks, because asking it means touching a
-  workspace. No patch tooling is invoked and `difflib` is not imported.
+- **This is not diff generation, and not diff application.** The parser half has
+  no producer and no applier. Nothing in `models.py` creates, computes, or
+  modifies a diff, and nothing anywhere applies, stages, or writes a patch — a
+  parsed diff was written elsewhere. `applies_cleanly_checked` is
+  `Literal[False]`: whether a diff *would* apply is a question **no** phase
+  shipped so far asks, because asking it means touching a workspace. No patch
+  tooling is invoked, and `difflib` is not imported by the parser.
 - **A `unified_diff` field now exists, and may contain source lines as diff
   context** — that is what a diff is, and it is allowed **as data** in this
   artifact. It arrived in the text handed to the parser: nothing here opened a
@@ -1053,6 +1111,61 @@ count. Any failure exits non-zero with stderr only and nothing on stdout.
 - print the configured workspace path, any absolute path, any file contents, the
   raw artifact text, an API key, or a base URL.
 
+### Generating a diff proposal (Phase 5E3, offline — diff text, never applied)
+
+```bash
+python -m ai_dev_orchestrator generate-diff-proposal --project-config projects/my_project.yaml --approved-plan path/to/approved_plan.json --workspace-content path/to/workspace_content.json --proposed-content path/to/proposed_content.json --apply-approved-plan --generate-diff
+```
+
+`generate-diff-proposal` turns four **local files** into a **proposal-only**
+unified diff proposal artifact, printed to stdout. `--workspace-content` is JSON
+you previously produced with `l2-read-workspace-files`; it supplies the original
+text to diff against. `--proposed-content` is a `proposed-content.v1` object
+(mode `proposal-only`) giving each path's final text, prepared by a human or an
+external tool. For each proposed path the command runs `difflib` between the two
+and emits one single-file unified diff. The same inputs always produce a
+byte-identical artifact, and stdout is the artifact itself with no wrapper, so it
+parses with `parse_diff_proposal_artifact`.
+
+**L2 is not built, and this command is not it.** It writes a diff for a human to
+read; it applies nothing and implements nothing.
+
+The gate fails closed in order. `--apply-approved-plan` and `--generate-diff`
+are checked **first** — without either, the command exits non-zero having read
+nothing at all, not even the project config. Then the config loads. Then **all
+three** input paths are rejected if any is the configured `repo.workspace_path`
+or sits under it, **before any of them is read or stat'd**. Then the approved
+plan is read and parsed with the Phase 5B strict parser; then the content
+packet; then the proposed content. Then the generator matches identity against
+both the config and the packet for exact equality, re-checks that the plan is an
+unescalated L1 plan, and keeps every proposed path inside the approved scope.
+Generation also fails closed when a proposed path is absent from the packet, when
+a `modify`'s recorded content is missing, redacted, or not a regular file's, when
+a `create` names a path that was actually read or carries no content, and when a
+generated diff matches a secret-like pattern. Any failure exits non-zero with
+stderr only and nothing on stdout.
+
+`generate-diff-proposal` **does not**:
+
+- apply, stage, or write a patch, or check whether any generated diff would
+  apply — `applies_cleanly_checked` is false because the question is never asked,
+- read any file's contents beyond the four files named on the command line — in
+  particular it never opens the paths the approved plan names,
+- read, list, stat, glob, walk, or resolve any target workspace,
+- propose anything outside `files_likely_to_change`, or treat `proposed_steps`,
+  `required_verification`, `risks`, or `open_questions` as paths,
+- run any `required_verification` entry or any other command,
+- edit or write any file — including the proposal itself, which is printed and
+  never saved,
+- create a branch, commit, or PR, or fetch anything from or write anything to
+  GitHub,
+- call a model, open a socket, construct an `LLMClient`, or read
+  `AIDO_LITELLM_*` or any other environment variable,
+- stamp an approval — the approval must already have been written by a human and
+  travels through unchanged inside the embedded plan snapshot,
+- print the configured workspace path, any absolute path, the raw text of any
+  input, any command output, any apply result, an API key, or a base URL.
+
 ## Tests
 
 ```bash
@@ -1202,9 +1315,19 @@ nothing — no command, no option, no workspace access, no file content reads, n
 file editing, no command execution, no model/network/environment access, no
 GitHub fetch or write, and no approval stamping.
 
+**Phase 5E3** added the producer and the `generate-diff-proposal` command
+described in the status and usage sections above. It generates unified diff text
+deterministically and offline, from a Phase 5D2 content packet and a
+proposed-content input supplied as local files, and prints it. It **reads no
+target workspace file directly**, and it **generates diff text and does nothing
+with it**: no diff applied, no apply-cleanliness check, no file editing, no
+command execution, no artifact file writing, no model call, no network call, no
+environment read, no GitHub fetch or write, no agent logic or role wiring, and
+no approval stamping. It changed none of the ten commands that came before it.
+
 **L2 is proposed, not built.** No command can invoke it, and every later Phase 5
-sub-phase remains unauthorized — including a **producer** for the Phase 5E2 diff
-artifact, which nothing in the repository ships. Until one is explicitly
-authorized, the project continues to avoid agent automation, diff generation,
-patch application, file editing, command execution, GitHub writes, GitHub issue
-fetching inside a real model command, and target project workspace writes.
+sub-phase remains unauthorized — including **Phase 5F, the first phase that could
+edit a file**, which nothing in the repository ships. Until one is explicitly
+authorized, the project continues to avoid agent automation, patch application,
+file editing, command execution, GitHub writes, GitHub issue fetching inside a
+real model command, and target project workspace writes.

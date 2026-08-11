@@ -1316,6 +1316,9 @@ EXPECTED_COMMANDS = [
     # Phase 5D2 later added one more read-only command; it still produces no
     # diff, edits nothing, and runs nothing.
     "l2-read-workspace-files",
+    # Phase 5E3 added a diff *proposal* producer. It writes diff text to stdout
+    # and applies nothing, edits nothing, and runs nothing.
+    "generate-diff-proposal",
 ]
 
 
@@ -1451,11 +1454,18 @@ def test_cli_imports_the_patch_proposal_package_lazily_and_only_to_generate():
     assert "parse_patch_proposal_artifact" not in vars(cli)
     assert "PatchProposalArtifact" not in vars(cli)
 
-    # And the only thing it reaches for is the generator — never an applier, a
-    # writer, or a diff.
+    # And the only thing it reaches for is the generator — never an applier or a
+    # writer. (Phase 5E3 later added a *separate* command that generates diff
+    # text, so `generate_diff` now appears in the CLI as that command's own
+    # consent flag. It applies nothing either.)
     source = inspect.getsource(cli)
     assert "build_deterministic_patch_proposal" in source
-    for absent in ("apply_patch_proposal", "write_patch_proposal", "generate_diff"):
+    for absent in (
+        "apply_patch_proposal",
+        "write_patch_proposal",
+        "apply_diff_proposal",
+        "write_diff_proposal",
+    ):
         assert absent not in source
 
 
