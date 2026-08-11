@@ -131,10 +131,18 @@ Model roles must be configurable. Each role specifies:
   counts, with **no diff text, no source contents, no workspace read/list/stat/
   resolve/canonicalization, no diff applied, no apply-cleanliness check, no file
   editing, no command execution, no model call, no branch/commit/push/PR, no
-  artifact file written, and no approval stamping**).
+  artifact file written, and no approval stamping**; Phase 5F2A wrote the
+  **first-workspace-write safety contract as design only** — the dirty-tree
+  requirement met **without** command execution, canonicalization immediately
+  before each write with `create` and `modify` handled differently, the exact
+  authorized path set, transaction semantics and backup/rollback, and the
+  stdout/stderr/exit-code contract — **implementing nothing**: no module, no
+  function, no config field, no CLI command or option, no file edit, no diff
+  applied, no apply-cleanliness check, no subprocess, no workspace touch, no
+  model or network call, no branch/commit/push/PR, and no approval stamping).
   **L2 is proposed, not built**, and no command can invoke it. Nothing shipped
-  so far edits a file; Phase 5F2 and the file-editing phase beyond it remain
-  proposed and not authorized.
+  so far edits a file; Phase 5F2B, 5F2C, 5F2D, 5F2E, 5F2F and the file-editing
+  phase beyond them remain proposed and not authorized.
 - **Phase 6 — qwen reviewer.**
 - **Phase 7 — fix loop.**
 - **Phase 8 — local commit.**

@@ -23,8 +23,10 @@
 > **unified diff proposal artifact models and a parser only** — §22, Phase
 > 5E3 as a **deterministic, offline diff proposal producer and one CLI command**
 > — §23, Phase 5F0 as **file-edit write gate models and a parser only** — §24,
-> and Phase 5F1 as a **dry-run file-edit preview command only** — §25. Phase 5F2
-> onward remain proposals, nothing edits a file, and L2 is still not built.)
+> Phase 5F1 as a **dry-run file-edit preview command only** — §25, and Phase
+> 5F2A as a **design-only first-workspace-write safety contract** — §26. Phase
+> 5F2B onward remain proposals, nothing edits a file, and L2 is still not
+> built.)
 >
 > **L2 may not be invoked by any existing command after this phase.** After
 > Phase 5A the shipped CLI surface is exactly what Phase 4L left behind —
@@ -150,8 +152,23 @@
 > push or PR, writes no artifact file, and stamps no approval.** A preview
 > describes a hypothetical; it authorizes nothing.
 >
-> **Phase 5F2 / Phase 5F and every later sub-phase in §13 remain proposed and not
-> authorized. Nothing shipped so far edits a file.**
+> **Phase 5F2A has since been authorized and completed as a design-only phase**
+> (§26). It refines the contract the **first** workspace-write phase would have
+> to satisfy — the dirty-tree check versus the no-command-execution promise, the
+> input artifact path guard, canonicalization immediately before each write with
+> create-vs-modify handled separately, the exact authorized path set,
+> `max_changed_files`, protected and forbidden paths, transaction semantics,
+> backup and rollback, where the apply-cleanliness check belongs, the
+> stdout/stderr/exit-code contract, the capabilities still excluded, and the
+> phase decomposition that follows. **It implements nothing.** No module, no
+> function, no model, no config field, no CLI command, no CLI option, no file
+> edit, no diff application, no apply-cleanliness check, no subprocess, no
+> verification, no workspace read/list/stat/resolve/canonicalization, no model
+> call, no network call, no environment read, no GitHub access, no
+> branch/commit/push/PR, no artifact file written, and no approval stamped.
+>
+> **Phase 5F2B, 5F2C, 5F2D, 5F2E, 5F2F / Phase 5F and every later sub-phase in
+> §13 remain proposed and not authorized. Nothing shipped so far edits a file.**
 
 ## 1. Goal
 
@@ -526,6 +543,11 @@ single largest step-change in this project's risk profile, and it should not
 share a phase with anything else. It needs the write-path policy of §6, the
 `max_changed_files` cap, a dirty-tree check, and its own authorization.
 
+*Phase 5F2A has since written the full safety contract for that first write*
+(§26) — including how the dirty-tree requirement is met **without** command
+execution (§26.1) — **as design only**. Nothing was implemented, and every
+phase that would write remains unauthorized.
+
 **4. Command execution — deferred, and deferred *after* file editing.** Running
 a process is the only capability whose blast radius is not bounded by the path
 policy at all. See §7.
@@ -589,6 +611,11 @@ Within that root, the existing Phase 1 precedence applies —
   application.
 - **Honor `workspace_policy.deny_outside_workspace`** and
   `workspace_policy.allow_symlinks` (§6.4).
+
+Each of these bullets is carried forward and made precise for the first write
+phase in §26 — the exact authorized path set in §26.4, `max_changed_files` in
+§26.5, and the forbidden/protected rules (including why there is deliberately
+**no** standing config switch for protected writes) in §26.6.
 
 ### 6.3 Centralize the checks
 
@@ -780,7 +807,7 @@ Design only. Every case fails **closed**: stop, report, change nothing.
 | Verification failure | No commit, no push, no PR. Report the failure in the packet. |
 | Model parser failure (Phase 4F error types) | No edits. Report the failure category by name; do not echo the raw reply (Phase 4L precedent). |
 | Command timeout | Stop, report the command and that it timed out. No retry, no continuation of later steps. |
-| Dirty working tree | Stop, unless explicitly authorized for that invocation. A dirty tree makes "what did the AI change?" unanswerable, which defeats review. |
+| Dirty working tree | Stop. A dirty tree makes "what did the AI change?" unanswerable, which defeats review. **§26.1 refines this**: the verdict is tri-state, `undetermined` is treated as dirty, it is computed **without** running `git` or any other command, and a human attestation may not replace it. |
 | Git divergence (local behind/ahead/diverged from remote) | Stop. Do not fetch, rebase, merge, or reset to fix it. |
 
 Two cross-cutting rules:
@@ -958,9 +985,45 @@ abandoned.
   no diff application, no apply-cleanliness check, no workspace read, list, stat,
   resolve, or canonicalization, no commands, no model, no branch/commit/push/PR,
   no artifact file written, no approval stamped.** See §25.
-- **Phase 5F2 / Phase 5F — controlled file editing under `allowed_paths`.
-  Proposed, not authorized.** The first write.
-  `max_changed_files` enforced, dirty-tree check enforced. **No command
+- **Phase 5F2A — first workspace write safety design (DONE).** Design only, and
+  the reason the single "Phase 5F2" slot below became five. It writes the
+  contract the first write phase must satisfy — the dirty-tree requirement met
+  **without** command execution, the input artifact path guard, canonicalization
+  immediately before each write with `create` and `modify` handled differently,
+  the exact authorized path set, `max_changed_files`, forbidden and protected
+  paths, transaction semantics, backup/rollback, where the apply-cleanliness
+  check belongs, the stdout/stderr/exit-code contract, and the excluded
+  capabilities. **It implements nothing**: no module, no function, no model, no
+  config field, no CLI command or option, no file edit, no diff applied, no
+  apply-cleanliness check, no subprocess, no workspace touch, no model or
+  network call, no branch/commit/push/PR, no approval stamped. See §26.
+- **Phase 5F2B — create-aware canonical write-target guard. Library only.
+  Proposed, not authorized.** The gap §26.3 identifies: the shipped Phase 5D0
+  guard resolves with `strict=True` and cannot validate a destination that does
+  not exist yet, so a `create` target has no guard at all today. **No config
+  field, no CLI command, no option, no caller, no write.** The recommended
+  immediate next phase (§26.12).
+- **Phase 5F2C — typed workspace-write gate models. Library only. Proposed, not
+  authorized.** The per-invocation protected-path authorization of §26.6 and
+  whatever `workspace_write` opt-in the writer needs, as models plus a strict
+  parser — with **no** standing protected-write switch. **Wired into nothing, no
+  write, no approval stamped.**
+- **Phase 5F2D — read-only Git-state probe. Proposed, not authorized.** §26.1's
+  mechanism, behind its own project opt-in: a tri-state `clean` / `dirty` /
+  `undetermined` verdict computed by reading `.git` in-process. **No `git`
+  binary, no subprocess, no shell, no repository content in the output, no
+  write.**
+- **Phase 5F2E — read-only write preflight command. Proposed, not authorized.**
+  Composes 5F2B/5F2C/5F2D with the Phase 5F1 preview and the Phase 5D2 content
+  read to answer "would this write be permitted right now, and would each diff
+  apply?", including the **advisory** apply-cleanliness check of §26.9. It is
+  the first thing that canonicalizes a write destination. **Writes nothing,
+  stages nothing, creates no journal, and its verdict is never consumed by the
+  writer.**
+- **Phase 5F2F / Phase 5F — the first controlled workspace write under
+  `allowed_paths`. Proposed, not authorized.** The first write.
+  `max_changed_files` enforced, dirty-tree verdict enforced, staged and
+  journalled with all-or-nothing rollback per §26.7 and §26.8. **No command
   execution.**
 - **Phase 5G — allowlisted verification commands.** §7 in full. **No commit, no
   push.**
@@ -2887,4 +2950,868 @@ echoes the artifact text, the approval text, any diff, or any file content.
   The first real workspace write may be added only under its own explicit
   authorization, as may applying a diff, checking whether one applies, executing
   a command, committing, pushing, opening a PR, and sending source contents to a
-  model.
+  model. *(Phase 5F2A — the first-workspace-write safety design — has since been
+  authorized and completed as a **design-only** phase; see §26. It implemented
+  nothing, and the write phases it describes, now split as 5F2B through 5F2F,
+  are still proposed and not authorized.)*
+
+## 26. Phase 5F2A — first workspace write safety design (DONE)
+
+Phase 5F1 prints what a future write phase *would be allowed to attempt*. It
+answers three questions and deliberately leaves every filesystem question
+unanswered. Phase 5F2A is the phase that answers them **on paper**, so that the
+first phase which actually writes a byte into a target workspace arrives with a
+contract that was reviewed before it was coded.
+
+**Phase 5F2A is design only.** It implements **nothing**. It adds no module, no
+function, no model, no config field, no test of runtime behavior, no CLI command
+and no CLI option. It does not edit a file, apply a diff, check whether a diff
+applies, execute a subprocess, run `git`, read, list, stat, resolve, or
+canonicalize a target workspace, call a model, open a socket, read an
+environment variable, fetch from or write to GitHub, create a branch, commit,
+push, or PR, write an artifact file, or stamp an approval. **Nothing shipped in
+this repository edits a target file, and L2 is still not built.**
+
+Everything below describes phases that are **PROPOSED and NOT AUTHORIZED**. The
+word "the writer" throughout means *a hypothetical future first-write phase*,
+not code that exists. Where this section uses "must", it is stating a
+requirement that a future phase would have to satisfy in order to be
+authorizable — not a description of present behavior.
+
+### 26.1 The dirty-tree / no-command-execution conflict, and its resolution
+
+**The conflict, stated plainly.** Two commitments in this document contradict
+each other as written:
+
+- §6.2, §10 and the §13 roadmap entry all require the first write phase to
+  **enforce a dirty working tree check**. The stated reason (§10) is that a
+  dirty tree makes "what did the AI change?" unanswerable, which defeats the
+  human review the whole project is built around.
+- The same §13 entry, and §7 in full, state that the first write phase performs
+  **no command execution**, and §7 defers command execution to a *later* phase
+  than file editing on purpose.
+
+`git status` is a command. Running it would be command execution, performed by
+the very phase that promised not to execute commands, against a target
+workspace, with a working directory inside that workspace, using an executable
+resolved from `PATH`. That is not a small carve-out: `git` is a program that
+reads repository configuration (`core.fsmonitor`, `core.hooksPath`, `core.pager`,
+alias definitions) which is itself content inside the workspace, and which a
+sufficiently unlucky or hostile repository can use to run further programs. A
+"just one command" exception is the exact shape of escalation §7 exists to
+prevent, and §12 names under "command execution escalation".
+
+The conflict is therefore **real**, and it is resolved here rather than papered
+over. In particular this document does **not** quietly assume `git status` is
+allowed, and it does not delete the dirty-tree requirement to make the
+no-execution promise easier to keep.
+
+**The three candidate directions were:**
+
+- **(a) A non-subprocess Git-state mechanism.** Determine cleanliness by reading
+  the repository's own on-disk state — `.git/HEAD`, `.git/index`, and the
+  working tree — in-process, with no child process and no `git` binary. Either a
+  purpose-built minimal reader or an existing pure-Python Git library
+  (`dulwich` is the obvious candidate).
+- **(b) Move enforcement into a separately authorized prerequisite phase.** The
+  write phase does not implement any Git-state mechanism; it *consumes* one that
+  a prior, separately reviewed, read-only phase already shipped.
+- **(c) Something else equally fail-closed** — for example, refusing to write
+  unless the operator supplies an out-of-band attestation.
+
+**Decision: (a) implemented inside (b).** The mechanism is a non-subprocess
+Git-state probe, and it ships as its **own separately authorized, read-only
+prerequisite phase** (5F2D in §26.12) rather than as a side effect of the phase
+that writes. Two independent reasons:
+
+1. The no-command-execution promise is preserved **verbatim**. No subprocess, no
+   `git` executable, no shell, no `PATH` lookup, no repository-controlled
+   configuration deciding what runs. §7 remains intact and command execution
+   remains deferred to a later, separate authorization.
+2. A Git-state reader is a non-trivial piece of code whose failure mode is
+   *fail-open* — a subtly wrong index comparison reports "clean" for a dirty
+   tree, and the write proceeds when it should not. Code with that failure mode
+   must be reviewable **on its own**, with its own tests, before anything
+   depends on it. Bundling it into the first-write phase would mean reviewing
+   the riskiest new capability and the subtlest new correctness problem in one
+   sitting.
+
+**The verdict is tri-state and fails closed.** The probe reports exactly one of
+`clean`, `dirty`, or `undetermined`. `undetermined` is treated **identically to
+`dirty`**: the write is refused. Every condition the probe cannot decide
+correctly resolves to `undetermined` — an unparseable or unknown-version index,
+a `.git` file rather than a directory (worktrees and submodules), a sparse
+checkout, a split index, an unmerged/conflicted stage, an unresolved
+`core.autocrlf` or clean/smudge filter that changes what "unchanged" means, an
+unreadable path, a symlink where a regular file was expected, a missing `.git`
+entirely, or anything the reader has not been explicitly written to handle. The
+probe never guesses in the permissive direction, and there is no flag that
+converts `undetermined` into permission.
+
+**A non-git workspace is not a special case.** If the configured workspace is
+not a Git repository, the verdict is `undetermined` and the write is refused.
+Writing into a directory with no version control is precisely the situation in
+which "what did the AI change?" is least answerable. This document does not
+authorize and does not design an exception; see §26.13.
+
+**Human attestation is explicitly rejected as a substitute.** A flag such as
+`--i-attest-the-tree-is-clean` would be a fail-open control: it converts a
+verifiable fact into an unverifiable claim, it is the single easiest thing for a
+hurried operator to pass habitually, and unlike the §3.6 and §24.1 approval
+sentences it asserts a property of the *world* rather than a *decision by the
+human*. An approval sentence is unforgeable-by-accident because only a human can
+mean it; an attestation about a working tree is simply an assertion that may be
+false, and the writer has no way to tell. So:
+
+- Attestation **may not** replace the check, and this document declines to
+  justify a security tradeoff in which it does.
+- Attestation **may** be required *in addition*: a future phase may decide that
+  a `clean` verdict is necessary but not sufficient. Adding a human confirmation
+  on top of a machine check is a tightening; replacing the machine check with a
+  human claim is a loosening, and only the first is available here.
+
+**What the writer does with the verdict.** The writer computes the verdict
+**itself, immediately before staging**, using the 5F2D mechanism. It does not
+read a verdict from an artifact, does not accept one on the command line, and
+does not reuse one produced earlier by the read-only preflight (§26.9, §26.12):
+a verdict is a statement about a filesystem at an instant, and a cached one is a
+time-of-check/time-of-use bug of exactly the kind §6.4 already warns about. A
+verdict other than `clean` ends the invocation before any staging occurs, with
+nothing touched.
+
+**One boundary note on reading `.git`.** The probe reads inside `.git`, which
+the example project config lists under `forbidden_paths` — and must continue to
+list there. There is no contradiction, because the two rules govern different
+things: `allowed_paths` / `protected_paths` / `forbidden_paths` classify
+**members of the approved change set**, and `.git` being forbidden is exactly
+the property that guarantees `.git` can never be a write destination. The probe
+is not a change-set path. Its access is therefore scoped by construction rather
+than by the path lists: a **fixed** relative location (`.git`) under the
+canonicalized workspace root, **read-only**, opened only for the specific
+metadata the verdict needs, behind its **own** project-level opt-in (separate
+from Phase 5D1's and Phase 5D2's), and emitting **no** repository content — the
+output is the tri-state verdict plus counts, never a path list of dirty files,
+never a diff, never a blob, never a commit message, never a branch name.
+
+### 26.2 Where the approved diff may be read from
+
+Unchanged from the pattern Phase 4D, Phase 4L, Phase 5C, Phase 5D1, Phase 5D2
+and Phase 5F1 already use, and restated here because the write phase is the one
+where getting it wrong matters most:
+
+- The approved-diff artifact named by `--approved-diff-proposal` **must never be
+  read from inside the configured target workspace.** If it is
+  `repo.workspace_path` itself, or sits anywhere beneath it, the invocation
+  exits non-zero.
+- The check is **lexical, and it runs before the read.** `_is_same_or_under` in
+  [cli.py](../src/ai_dev_orchestrator/cli.py) joins and normalizes two strings
+  with `os.path.abspath` / `os.path.normcase` and touches no disk. The artifact
+  path is therefore **rejected before it is opened, stat'd, or resolved**, and
+  the workspace path is never touched in order to perform the rejection. This
+  rejection-before-read ordering is preserved exactly; it must not be "improved"
+  into a canonicalizing check that resolves the workspace root, because doing so
+  would make the guard itself touch the thing it is guarding.
+- The reason is not tidiness. An artifact living inside the workspace is an
+  artifact the write itself could modify, an artifact a target repository's
+  contributors can edit, and an artifact whose approval block travels with the
+  code it authorizes changes to. Approval must arrive from outside the blast
+  radius.
+- The same rule applies to **every** file path the writer accepts on the command
+  line — the project config, the approved diff, and the journal/backup directory
+  of §26.8. Each is lexically rejected if it is or is under the workspace root,
+  before it is opened.
+
+### 26.3 Canonicalization immediately before each write
+
+The order is fixed, and each step is a precondition of the next.
+
+**Step 1 — lexical Phase 1 write policy, for every declared destination, before
+any disk contact.** `PathPolicy.check_write` (§6.2) is the same check Phase 5F1
+already performs: normalization, `.`/`..` resolution, containment against the
+workspace root **as a string**, and classification with precedence
+forbidden > protected > allowed > unlisted. It reads nothing. A refusal here
+means the invocation ends having touched no filesystem at all. Every destination
+in the set must pass before *any* destination is canonicalized, so a run that
+would be refused is refused before the workspace is touched even once.
+
+**Step 2 — canonicalize the configured workspace root, once.** The root comes
+from `repo.workspace_path` in the project config and from nowhere else (§6.1) —
+never from a plan field, a diff header, an artifact, a model, or a command-line
+override. It is canonicalized with the Phase 5D0 rules: the fail-closed lexical
+precheck (UNC, `\\?\`, `\\.\`, trailing dot or space, 8.3-looking components),
+`lstat`, a reparse-point check honoring `workspace_policy.allow_symlinks`,
+strict resolution, and a directory-kind check. A root that is itself a symlink
+or reparse point with `allow_symlinks` false is refused; a root that cannot be
+resolved is refused. The resolved root is the only root used for every
+subsequent containment comparison.
+
+**Step 3 — canonicalize and revalidate each destination immediately before that
+destination is written.** Not once for all paths at the start, not at staging
+time, not from a preflight artifact. Immediately before the individual write, in
+the commit phase of §26.7 — because a check performed at time T and used at time
+T+n is a time-of-check/time-of-use bug, which §6.4 already commits this project
+to avoiding, and which the Phase 5D0 module docstring restates.
+
+**Create versus modify.** These need different handling, and the difference is
+not cosmetic: the shipped Phase 5D0 guard,
+`canonicalize_existing_path_under_workspace`, `lstat`s the candidate and
+resolves it with `strict=True`. **A destination that does not yet exist cannot
+be passed to it at all** — it raises `CanonicalPathInputError`. This is correct
+for a read-only inspector and useless for a writer, so a future phase needs a
+second, create-aware entry point (5F2B in §26.12). Its contract:
+
+- **modify** — the destination must exist and must be a **regular file**. The
+  existing guard applies unchanged: containment of the resolved destination
+  inside the resolved root, no reparse point on the root, none on any component
+  between root and destination, and no link as the final component. A
+  destination that does not exist is **not** silently upgraded to a create; the
+  approved artifact said `modify`, and the world disagreeing with the approval
+  is a reason to stop, not to reinterpret.
+- **create** — the destination must **not** exist. Because it does not exist, it
+  cannot be canonicalized; what is canonicalized instead is its **parent
+  directory**, which must already exist. Concretely: apply the same lexical
+  ambiguity rejections to the full destination string; require the final
+  component to be a plain file name (no separator, not `.`, not `..`, no
+  trailing dot or space, not 8.3-shaped); canonicalize the parent directory with
+  the existing guard and verify it is a directory genuinely inside the resolved
+  root; then `lstat` the destination and require `ENOENT`. Anything else —
+  a regular file, a directory, or a **dangling symlink** — refuses the write. A
+  dangling link deserves the explicit mention: `os.path.exists` would call it
+  absent while an `open(...,"x")` would follow it out of the workspace, so
+  existence is tested with `lstat`, which does not follow.
+- **No directory is ever created.** If a `create` destination's parent directory
+  does not exist, the invocation fails. `mkdir` would bring its own containment,
+  symlink, cleanup and rollback questions (what removes a directory the writer
+  created if a later path fails?), and the first write phase does not need it:
+  a human can create the directory. This also usefully bounds the set of
+  derived paths in §26.8 to directories that already existed.
+- **Empty-set case** — nothing to canonicalize, nothing to write; see §26.5.
+
+**Symlinks honor `workspace_policy.allow_symlinks`, plus one writer-specific
+rule.** With `allow_symlinks` false (the default, and what the example config
+ships) the Phase 5D0 behavior applies as written: a link at the root, a link on
+any intermediate component, or a candidate not *lexically* under the root is
+refused, so link-mediated entry is impossible. With `allow_symlinks` true, links
+are followed and containment is then re-verified against the resolved root, so a
+link resolving outside is still refused. **The writer adds a further rule that
+`allow_symlinks` does not relax: the final component of a write destination may
+never be a symlink or reparse point, in either setting.** Writing through a link
+writes bytes to a path the human did not read and did not approve, even when
+that path is inside the workspace; `allow_symlinks` is a policy about
+*traversal*, and this is a rule about *destinations*.
+
+**No path may escape the workspace, at any step.** Containment is established
+twice — lexically in step 1 and against resolved paths in step 3 — with the
+resolved comparison using the Phase 5D0 `commonpath`-based check rather than a
+string prefix test, so that a sibling sharing a prefix (`repo_evil` next to
+`repo`) is not treated as contained. An incomparable pair (different drive, a
+path form that cannot be compared) is ambiguity, and ambiguity refuses.
+
+### 26.4 The exact authorized path set
+
+The set of paths a future writer may write is **exactly**:
+
+```
+{ change.path for change in approved_diff.diff_proposal.changes }
+```
+
+taken from the concrete, human-approved Phase 5F0
+`ApprovedDiffProposalArtifact` handed to that invocation, and from nowhere else.
+It is computed once, frozen before any disk contact, and never recomputed,
+extended, or re-derived.
+
+Nothing may add to it. Named explicitly, because each of these is a plausible
+"reasonable" widening:
+
+- **Not** `approved_plan.plan.files_likely_to_change` — Phase 4B/4C prose
+  derived from *issue text*, which §2.2 and §12 classify as untrusted.
+- **Not** the wrapped Phase 5E0 patch proposal's prose, and not any
+  `rationale`, `risks`, `assumptions`, `open_questions`, or
+  `next_authorization_required` string.
+- **Not** `omitted_paths`. The proposal recorded those as considered and *not*
+  diffed. They carry no diff, so there is nothing to apply, and naming a path is
+  not proposing a change to it.
+- **Not** paths read out of the unified diff's own `--- ` / `+++ ` headers. The
+  headers are re-checked to name exactly the declared `path` (Phase 5E2 already
+  requires this at validation time, and the writer re-checks it rather than
+  inheriting it), and on any disagreement the invocation fails. A header is
+  attacker-influenceable text inside a payload; it is a thing to verify, never a
+  source of destinations.
+- **Not** anything discovered on the filesystem — no directory listing, no glob,
+  no tree walk, no "the diff mentions a neighbouring file", no rename target, no
+  companion file.
+- **Not** anything a model said, in any field, at any nesting level.
+- **Not** the journal, staging, backup, or temporary paths of §26.8. Those are
+  *derived* paths with their own rules; they are never destinations, and their
+  existence must not be readable as an authorization to write anywhere new.
+
+**Duplicates remain invalid.** Two changes naming one path have no defined
+precedence, and silently keeping one would apply less than the human approved
+while reporting success. Both upstream models already reject duplicates during
+validation; the writer re-checks anyway, for the reason Phase 5F1 already
+records — pydantic does not re-validate an instance it is handed, so a mutated
+or hand-built object arrives with duplicates intact.
+
+**One invalid path fails the entire invocation.** Not that path, the whole run.
+This is the same rule Phase 5F1 states for previews and it matters more here:
+"apply the paths that passed" is partial application, which §6.2 already calls a
+worse outcome than no application, and it hands the operator a workspace whose
+state matches no artifact anyone approved. There is no `--skip-refused`, no
+`--best-effort`, and no report row with a `denied` result.
+
+### 26.5 `max_changed_files`
+
+`workspace_policy.max_changed_files` (`int`, `ge=0`, default 20) is checked
+against the **cardinality of the frozen set from §26.4**, before anything is
+canonicalized, before anything is staged, and before the first byte is written.
+Phase 5F1 already performs exactly this check for previews; the writer performs
+it again on its own inputs.
+
+- **Over the cap fails the whole invocation.** The writer never applies the
+  first N changes and stops. A cap is a statement about how large a change set
+  may be, not an instruction to truncate one — and a truncated application is
+  the partial state §26.4 and §26.7 exist to prevent.
+- **The cap is not the only bound.** It bounds the number of destinations, not
+  the number of bytes; a future phase may add byte bounds in the Phase 5D2
+  style, and this document does not.
+- **An empty change set is a valid no-op input.** A human may approve a proposal
+  that proposes nothing (Phase 5F0 §24.2 permits it explicitly). The writer
+  accepts it, writes nothing, stages nothing, backs up nothing, creates no
+  journal, exits 0, and reports zero paths written. Note the interaction with
+  `ge=0`: a project configuring `max_changed_files: 0` permits **only** the
+  empty change set, which is a coherent way to say "this project may be
+  previewed but never written to".
+
+### 26.6 Protected and forbidden paths
+
+**Forbidden paths have no override.** No flag, no config key, no escalation, no
+per-invocation authorization, no "authorized forbidden" analogue of the
+protected mechanism. `forbidden_paths` beats everything (§6.2, and the
+precedence implemented in `PathPolicy.classify`), and the example config uses it
+for exactly the things that must never be writable: `.git`, `.env`, `.venv`,
+the database file, media, caches. A future phase that adds a forbidden override
+would be reversing this project's central safety decision and is not
+authorizable as an increment.
+
+**Protected paths require explicit per-invocation authorization**, and Phase
+5F1 currently refuses them outright because it ships no mechanism for that
+authorization. The first write phase would need one. Its **shape**, defined here
+and implemented by nothing:
+
+- **Two independent human acts, both required, matched exactly.**
+  1. *In the approval artifact*: the Phase 5F0 approval would carry an optional
+     `protected_path_authorizations` block — a list of entries, each naming one
+     **exact** path string that also appears in `changes[].path`, alongside its
+     own separately worded exact sentence (the §24.1 pattern: a distinct
+     constant, compared with `==`, so approving a diff is not accidentally
+     approving a protected write within it). Absent block ≡ empty list ≡ no
+     protected write authorized.
+  2. *At the invocation*: a repeatable `--allow-protected-path <path>` option
+     naming each protected destination explicitly. No `--allow-protected`
+     blanket flag, no wildcard, no `--all`.
+- **Set equality, not subset.** The set named on the command line must equal the
+  set named in the artifact must equal the set of destinations the policy
+  actually classified `PROTECTED`. Any asymmetry fails: a flag for a path the
+  human never approved, an approval for a path the operator did not name, an
+  approval for a path that turns out not to be protected, or a protected
+  destination covered by neither. This makes an over-broad approval as loud as a
+  missing one.
+- **Per path, never per run and never per project.** Authorizing
+  `config/settings.py` authorizes that one path in that one invocation.
+- **No standing project-config switch.** This document explicitly declines to
+  design a `workspace_write.allow_protected_paths: true` key, even though
+  Phase 5D1's and Phase 5D2's *read* opt-ins each have one. The asymmetry is
+  deliberate and worth stating: a standing read permission discloses; a standing
+  write permission modifies, permanently, every future invocation, silently,
+  including invocations nobody was thinking about when the key was set. §6.2 and
+  §10 already require this approval to be "per-run and per-path, never a
+  standing config grant", and §26.6 keeps that promise rather than eroding it
+  with a convenience key.
+- **Nothing here stamps that approval.** As in §3.6 and §24.1, writing the block
+  is the approval act and it is a human's.
+
+### 26.7 Transaction semantics: what "no partial writes" means precisely
+
+**The claim this document makes.** *No destination is ever left in a state that
+is neither its exact pre-image nor its exact approved post-image, and if any
+destination fails, every destination ends at its pre-image.*
+
+**The claim this document does not make.** Filesystems are not transactional.
+There is no multi-file atomic commit on NTFS available to this design (the
+Windows transactional-NTFS APIs are deprecated and are not a foundation to build
+on), `os.replace` is atomic for **one** path on **one** volume and says nothing
+about a set, a crash or a power loss can interrupt any sequence at any point,
+and a concurrent process or editor can touch a destination between two of the
+writer's own operations. Any design claiming "the write set is atomic" would be
+lying. What is achievable is a **journalled, staged, best-effort-reversible
+sequence with a precisely stated recovery contract**, and that is what is
+specified here.
+
+**Four ordered phases.**
+
+1. **Preflight — no workspace mutation whatsoever.** The §4 gate, Phase 5F0
+   artifact validation, §26.2 input-path guard, identity matching, §26.4 set
+   freezing and duplicate re-check, §26.5 cap check, §26.6 protected
+   authorization matching, §26.3 step 1 lexical policy, and the §26.1 Git-state
+   verdict. Every failure here is an ordinary fail-closed rejection: exit 1,
+   stderr only, nothing on stdout, nothing touched.
+2. **Stage — everything expensive and everything fallible, still with zero
+   destination mutation.** For each destination, in the artifact's order:
+   canonicalize per §26.3; read the current bytes (for `modify`); record a
+   digest of those bytes as the **pre-image identity**; verify the approved diff
+   applies exactly to them (§26.9); compute the full post-image **in memory**;
+   write the post-image, and for `modify` a byte-exact backup of the pre-image,
+   into the journal directory; append a journal entry. Any failure aborts the
+   whole invocation with **no destination modified** — the run is
+   indistinguishable from a preflight rejection except in its exit message. This
+   ordering is the core of the design: nearly every way a write can go wrong
+   (a missing file, a link, a non-UTF-8 file, a diff that does not apply, a
+   canonicalization refusal, a full disk on the journal volume) is discovered
+   here, where the cost of discovery is zero.
+3. **Commit — the only phase that mutates a destination.** For each destination,
+   in the same order: **re-canonicalize immediately** (§26.3 step 3); re-read
+   the current bytes and require their digest to still equal the pre-image
+   identity recorded in staging — if the file changed underneath the writer,
+   stop and roll back, because the approved post-image was computed from bytes
+   that no longer exist; write the staged post-image to a **temporary sibling in
+   the destination's own directory**; flush and `fsync` it; `os.replace` it onto
+   the destination; mark the journal entry committed. The sibling is required
+   for atomicity: `os.replace` is atomic only within a volume, and the journal
+   directory lives outside the workspace and may be on another one (§26.8).
+4. **Cleanup** — §26.8.
+
+**Failures during each phase.**
+
+- *During staging*: abort, delete the partial journal contents or leave them per
+  the §26.8 retention rule, report the failing path and category. Zero
+  destinations were modified, so there is nothing to roll back.
+- *During replacement*: destinations `1..N-1` are already committed and
+  destination `N` is not. This is precisely the state §26.7's claim forbids, so
+  the writer immediately enters rollback. It does **not** continue to `N+1`, and
+  it does **not** retry `N`.
+- *During rollback*: see §26.8.
+
+**What is deliberately not attempted.** No lock file, no cross-process mutual
+exclusion, no crash-recovery `--resume` mode, no automatic re-run, no journal
+replay tool. Each is a real gap and each is recorded in §26.13 rather than
+half-designed here. A crash mid-commit leaves a workspace whose recovery is a
+**human** operation informed by the journal, and the design says so instead of
+implying otherwise.
+
+### 26.8 Backup, staging, rollback, and cleanup
+
+**Where staged content lives.** In a **journal directory** named on the command
+line (`--write-journal-dir`), which must satisfy the §26.2 rule — it may not be,
+and may not sit under, the configured workspace root — and inside which the
+writer creates one fresh, uniquely named run directory per invocation. If that
+run directory already exists, the invocation fails rather than reusing it. It
+holds, per destination: the pre-image backup (`modify` only), the computed
+post-image, and a journal entry recording the relative destination path, the
+change type, the pre-image and post-image digests, and the entry's state
+(`staged` → `committed` → `rolled_back` / `rollback_failed`). It holds **no**
+approval text, no unified diff copy, and no project config copy.
+
+**Why outside the workspace.** A staging area inside the workspace would create
+files at paths that are not in the §26.4 authorized set, inside the very tree
+whose contents the review is about, possibly matching a pattern in
+`allowed_paths` and thereby becoming indistinguishable from an approved change,
+and certainly polluting the Git-state verdict of §26.1 for the next run. The
+journal directory therefore lives outside, and **its existence broadens no
+destination set**: nothing in the journal is ever a write destination, journal
+paths are never derived from artifact content, and the writer refuses to treat
+a journal path as a workspace path or vice versa.
+
+**The one derived path inside the workspace, and its rules.** Atomic
+replacement requires a temporary file on the same volume as the destination,
+which in practice means the destination's own directory. This is the single
+place where the writer touches a workspace path that is not in the authorized
+set, and it is bounded tightly:
+
+- the same directory as an authorized destination, and that directory already
+  existed (§26.3 creates none);
+- a fixed, recognizable name derived only from the destination's file name, the
+  run id, and a constant suffix — never from artifact content;
+- it must not already exist; if it does, the invocation fails rather than
+  overwriting;
+- it is never a directory, never followed as a link, and never itself a
+  destination;
+- it is removed on **every** exit path, success or failure;
+- it is transient by construction: after `os.replace` it no longer exists,
+  because it *became* the destination.
+
+The residual is stated rather than hidden: for the interval between creating the
+sibling and replacing with it, one extra file exists in the workspace at a path
+no human approved. The alternative — copying from a journal on another volume
+directly onto the destination — replaces a bounded, self-deleting temporary with
+a non-atomic write that can leave a destination **truncated or half-written**,
+which is a far worse violation of §26.7. The tradeoff is taken deliberately in
+favour of atomicity.
+
+**Rollback, per change type.**
+
+- **modify** — restore the pre-image from its backup, using the same
+  temp-sibling + `os.replace` mechanism, so the restore is itself atomic.
+  Verify afterwards that the destination's digest equals the pre-image digest.
+- **create** — remove the file the writer created. **Guarded**: it is removed
+  only if the journal records that this invocation created it *and* its current
+  digest still equals the post-image the writer wrote. If either fails, the file
+  is left in place and the entry is reported as `rollback_failed`; deleting a
+  file whose content the writer does not recognize would risk destroying
+  something another process created in the interval.
+- Rollback proceeds in **reverse commit order**, over committed entries only.
+
+**If rollback itself fails.** This is the one place where "never continue after
+a failure" is deliberately relaxed, and the justification is that continuing
+*reduces* damage rather than extending authority: if restoring destination K
+fails, the writer **continues attempting rollback for the remaining committed
+destinations**, records `rollback_failed` for each that could not be restored,
+and then reports every failure together. Stopping at K would leave
+`K-1 … 1` modified as well, for no benefit. Then:
+
+- the run ends with the **catastrophic** exit code and stderr category of
+  §26.10, distinct from every ordinary fail-closed rejection;
+- stderr names **which** destinations are in an indeterminate state, by
+  workspace-relative path, and where the journal directory is, because a human
+  needs both to recover;
+- **nothing is retried, nothing is repaired, and no further write is attempted.**
+- the journal is **retained unconditionally**, whatever the retention setting
+  says.
+
+**Cleanup.**
+
+- *Full success*: temp siblings are already gone; the journal run directory is
+  **retained by default** as the audit record of what was written (a future
+  phase may add an explicit opt-in to delete it, never a default). Backups
+  contain pre-image source, so retention is a disclosure decision the operator
+  makes by choosing where the journal lives, and the writer prints its path
+  category, not its contents.
+- *Staging failure*: no destination was touched; the run directory is retained
+  by default for the same reason.
+- *Successful rollback*: retained, and marked `rolled_back`.
+- *Rollback failure*: retained unconditionally, as above.
+- No cleanup step ever deletes anything inside the target workspace other than
+  a temp sibling this invocation created and recorded, and the guarded `create`
+  rollback above.
+
+**Loud by category, quiet about content.** Every failure message names the
+failure category and the workspace-relative path. None of them prints file
+contents, backup contents, post-image contents, diff text, approval text, or a
+secret-shaped value — the Phase 4L precedent (§10), applied to a phase that now
+has backups and post-images to leak as well.
+
+### 26.9 Where the apply-cleanliness check belongs
+
+**Today nothing in this repository checks whether a diff applies.** Phase 5E2
+fixes `applies_cleanly_checked` to `Literal[False]` precisely because answering
+the question means touching a workspace, Phase 5E3 generates diffs without
+asking, and Phase 5F1 lists it under `checks_not_performed`. Phase 5F2A
+implements no such check.
+
+**Decision: both, with only one of them authoritative.**
+
+- **An advisory check belongs in a separately authorized, read-only preflight
+  phase** (5F2E in §26.12) — not before it in some ad-hoc form, and not as a
+  standalone capability. Answering "would this apply?" requires reading current
+  file contents, which is the Phase 5D2 disclosure and needs the surrounding
+  gate, caps, and opt-in that a read-only phase already knows how to provide.
+  Getting the answer *before* the write phase exists is valuable: it is the
+  single most likely reason a write would fail, and discovering it without a
+  writer in the room is strictly better.
+- **The authoritative check is intrinsic to the writer's staging phase**
+  (§26.7 step 2) and is not a separate capability at all. The writer must
+  compute a post-image from the current bytes plus the approved diff; if the
+  diff does not apply exactly to those bytes, there is no post-image, and
+  staging fails with nothing written. That is not "the writer also checks
+  applicability" — it is the writer being unable to proceed.
+- **The writer never relies on the preflight's answer.** A preflight verdict is
+  a statement about the workspace at an earlier instant; consuming it would be
+  the same time-of-check/time-of-use error as caching a canonicalization or a
+  Git-state verdict. The preflight is for humans, not for the writer.
+- **Exact application only.** No fuzz factor, no offset search, no
+  whitespace-insensitive matching, no three-way merge, no "apply what applies".
+  A diff that does not apply exactly to the bytes on disk is a diff whose
+  post-image the human did not review.
+
+### 26.10 stdout / stderr / exit-code contract
+
+**Success (exit 0).** One JSON report on stdout, no wrapper — the Phase 5F1
+convention. It carries: schema version and mode; project identity
+(`project_id`, `repo`) and the workspace-policy switches, but **not**
+`repo.workspace_path`; the approval's `approved_by` / `approved_at` / `source`,
+issue number and title, but **not** the approval text; per destination the
+**workspace-relative** path, change type, whether it was protected-authorized,
+and byte counts; the Git-state verdict as the bare word `clean`; the journal
+directory's presence as a boolean or a path *category*, not necessarily its
+value; and explicit `false` flags for everything still not done (commands run,
+verification run, model called, branch, commit, push, PR).
+
+It carries **no** unified diff text, no source contents, no pre- or post-image,
+no backup contents, no approval text, no raw artifact text, no absolute paths,
+no `repo.workspace_path`, no temp-sibling names, no secret-shaped values, no
+prompt, no completion, no API key, no base URL, and no content digests (a digest
+of a short file is a confirmation oracle for its contents — digests belong in
+the journal, which is a file on the operator's own disk, not in printed output).
+
+**Ordinary fail-closed rejection (exit 1, preserving this repo's existing
+convention).** Everything in preflight, and everything in staging: a missing
+flag, a config that will not load, an artifact inside the workspace, an invalid
+or mismatched artifact, a duplicate path, a cap breach, a policy refusal, a
+protected-authorization asymmetry, a canonicalization or symlink refusal, a
+non-`clean` Git verdict, a diff that does not apply. **stderr only, naming the
+category and the failing workspace-relative path; nothing at all on stdout.** No
+partial report, no report with a `denied` row, and above all **no success JSON**
+— a consumer must never be able to parse a rejection as a success.
+
+**Write failure with successful rollback (a distinct non-zero code, e.g. 3).**
+Some destination was committed and then everything was restored. Every
+destination is back at its pre-image, so nothing persists — but this is *not*
+the same event as a preflight rejection and must not be reported as one, because
+the workspace was mutated and un-mutated, timestamps moved, and any watcher saw
+it. stderr carries the category, the failing path, the rolled-back paths, and
+the journal location. stdout stays empty.
+
+**Catastrophic rollback failure (a distinct, higher non-zero code, e.g. 4).**
+The category above, plus at least one destination the writer could not restore.
+This is the loudest outcome the design has, and it is deliberately separate from
+every other exit:
+
+- a non-suppressible stderr banner naming the category explicitly (something
+  like `CATASTROPHIC_ROLLBACK_FAILURE`), so it is greppable and cannot be
+  mistaken for an ordinary refusal;
+- the workspace-relative path of **every** destination in an indeterminate
+  state, and for each, which state it is believed to be in;
+- the journal directory path, because it holds the backups a human needs;
+- an explicit statement that the workspace is inconsistent and that recovery is
+  a human action;
+- **no** automatic retry, **no** repair, **no** suggestion that re-running will
+  fix it;
+- still **no** file contents, backup contents, or diff text;
+- and still **nothing on stdout**.
+
+**One rule across all four.** The presence of JSON on stdout means, and may only
+ever mean, that every approved destination was written exactly as approved.
+
+### 26.11 Capabilities the first write phase still excludes
+
+Even with the entire design above implemented, the first write phase would
+still exclude, each requiring its own separate authorization:
+
+- **Arbitrary command execution.** No subprocess, no shell, no `PATH` lookup, no
+  `git` binary — including for the dirty-tree check (§26.1). §7 is unchanged.
+- **`required_verification` execution.** The plan's verification string is prose
+  the writer reads as prose and never as a command. §7's two-allowlist rule
+  stands: permission to write files is not permission to run tests.
+- **Model calls** of any kind, for any purpose — not to resolve a conflict, not
+  to repair a diff, not to summarize a failure.
+- **Network calls.** No socket is opened.
+- **GitHub reads and writes.** Nothing is fetched; nothing is posted.
+- **Branch creation, commits, pushes, and PR creation.** §8 stands: the human
+  commits. The writer leaves modified files in the working tree and says so.
+- **Automatic repair and retry.** No fuzzy application, no re-run, no
+  "continuing with warnings", no partial application, no self-healing rollback
+  loop. §10's "never repair, never continue" applies to every input.
+- **Source transmission to a model.** §9 stands, and the writer now holds
+  pre-images, post-images and backups — more source than any prior phase — which
+  makes the exclusion more important, not less.
+- **Directory creation, deletion, rename, mode/ownership change**, and any
+  binary or non-UTF-8 write. The Phase 5E2 artifact carries no
+  rename/delete/mode/binary payload; the writer must not invent one.
+- **Writing outside the frozen §26.4 set**, other than the single bounded
+  temp sibling of §26.8.
+
+### 26.12 Recommended phase decomposition after 5F2A
+
+The repository's own history is the argument for fine granularity: 5D0/5D1/5D2
+and 5E0/5E1/5E2/5E3 each separated "the shape of a thing" from "the thing that
+produces it" from "the thing that consumes it", and each was reviewable in one
+sitting. The same split applies here, and it matters more, because this is the
+sequence that ends in a write.
+
+The prerequisites are deliberately separated from the write itself. Each of the
+following is **PROPOSED and NOT AUTHORIZED**, and each needs its own prompt.
+
+- **5F2B — create-aware canonical write-target guard. Library only.** Extends
+  the Phase 5D0 module with the entry point §26.3 shows is missing: the shipped
+  guard resolves with `strict=True` and cannot accept a destination that does
+  not exist, so a `create` target cannot be validated at all today. Adds parent
+  canonicalization, the final-component rules, the `ENOENT`-via-`lstat`
+  requirement, the dangling-link refusal, and the destination-is-never-a-link
+  rule. **No config field, no CLI command, no option, no caller, no write.**
+  Testable entirely with pytest `tmp_path`, exactly as Phase 5D0 was. *This is
+  the recommended immediate next phase*: it is the smallest piece, it is a pure
+  function of two paths, and everything later depends on it.
+- **5F2C — typed workspace-write gate models. Library only.** The
+  `protected_path_authorizations` block of §26.6 and its exact-sentence
+  constant, plus whatever project-level `workspace_write` opt-in the writer
+  needs — carrying an `enabled` flag and caps, and **no** standing
+  protected-write switch. Models and a strict parser in the 5B/5E0/5E2/5F0
+  style. **Wired into nothing; nothing stamps an approval.**
+- **5F2D — read-only Git-state probe. Its own opt-in, no subprocess.** §26.1's
+  mechanism: the tri-state verdict, the fail-closed `undetermined` handling, the
+  `.git`-scoped read, and a command that reports the verdict and nothing else.
+  **No `git` binary, no subprocess, no shell, no repository content in the
+  output, no write.** Shipping it here rather than inside the writer is the
+  whole point of the §26.1 resolution.
+- **5F2E — read-only write preflight command.** Composes 5F2B + 5F2C + 5F2D with
+  the Phase 5F1 preview and the Phase 5D2 content read, and answers the full
+  question "would this write be permitted right now, and would each diff apply?"
+  — including the **advisory** apply-cleanliness check of §26.9. It
+  canonicalizes write destinations for the first time and reads current file
+  contents; it **writes nothing, stages nothing, creates no journal, and its
+  verdict is never consumed by the writer.**
+- **5F2F — the first controlled workspace write.** Only §26.7's four phases and
+  §26.8's journal/backup/rollback machinery, over the frozen §26.4 set, with
+  every exclusion in §26.11 intact. By the time it is proposed, every check it
+  performs already exists and has been reviewed on its own, so the new code
+  under review is the staging/commit/rollback sequence and nothing else.
+
+Two notes on the ordering. First, 5F2B through 5F2E together touch a workspace
+only to **read** it, so the entire pre-write contract becomes testable and
+reviewable before anything can write — the same shape as building the §4 gate
+across 5B/5C before it guarded anything. Second, the sequence deliberately does
+**not** end at "L2 is done": branch creation, commits, pushes, PRs, verification
+execution and model-backed implementation all remain later, separate phases per
+§7, §8 and §9.
+
+If a smaller starting point than 5F2B is wanted, there isn't one — it is already
+a single function over two path strings.
+
+### 26.13 Unresolved questions
+
+Recorded explicitly rather than settled by omission. None of these blocks 5F2B;
+several block 5F2D and 5F2F.
+
+1. **Which non-subprocess Git-state implementation.** A vendored minimal reader
+   (`HEAD`, `index`, working-tree comparison) keeps the dependency surface at
+   zero but reimplements subtle logic; `dulwich` is mature and pure-Python but
+   is a third-party runtime dependency this project does not currently have, and
+   the repository has no stated policy on adding one. **Undecided.** Either way
+   the `undetermined`-is-dirty rule (§26.1) is what makes an imperfect
+   implementation safe.
+2. **Whether the `.git` read needs a path-policy concept of its own.** §26.1
+   scopes it structurally and by a dedicated opt-in rather than through
+   `allowed_paths`, and requires `.git` to stay in `forbidden_paths` so it can
+   never be a destination. Whether that structural exemption should instead be
+   expressed as an explicit "policy-exempt read locations" list is open.
+3. **Writing into a non-Git workspace.** Currently refused (`undetermined`).
+   Whether a project should ever be able to opt out of the Git-state
+   requirement, and what would replace the review property it provides, is
+   **open and not authorized**.
+4. **Line endings, encoding, and the trailing newline.** The Phase 5E3 pipeline
+   is UTF-8 text and `difflib`-derived. A destination that is not valid UTF-8,
+   uses CRLF, mixes line endings, or lacks a final newline must round-trip
+   **byte-exactly** through pre-image → post-image. The requirement is settled;
+   the mechanism (and whether non-UTF-8 destinations are simply refused) is not.
+5. **Same-volume assumptions.** The temp sibling is on the destination's volume
+   by construction, but a workspace spanning a mount point, or a filesystem
+   without atomic replace semantics, is undesigned. Probably a fail-closed
+   detection, probably `undetermined`-shaped.
+6. **Where the journal directory may live.** §26.2 requires only "outside the
+   workspace". Whether it should be further constrained to this orchestrator
+   repository, and how long retained backups (which contain target source)
+   should live, is a disclosure decision left open.
+7. **File mode, permissions, ACL and ownership across `os.replace`.** Replacing
+   a file can change inherited ACLs on Windows and mode bits on POSIX. Whether
+   the writer must preserve and restore them, or refuse when it cannot, is
+   undecided.
+8. **Concurrency.** Two orchestrator runs, or a run and a human editor, against
+   one workspace. The pre-image digest re-check in §26.7 step 3 detects
+   interference at the last moment for a single destination; there is no lock
+   and no cross-invocation mutual exclusion. **Open.**
+9. **Crash recovery.** A power loss mid-commit leaves a journal with `committed`
+   and `staged` entries and no process to finish. §26.7 declares recovery a
+   human operation informed by the journal; whether a read-only journal
+   *inspection* command should exist is open, and any replay/resume capability
+   would be its own authorization.
+10. **Whether the preflight (5F2E) should be mandatory before the writer runs.**
+    Currently no: the writer re-establishes everything itself, and requiring a
+    preflight artifact would create a second thing that looks like an
+    authorization. Whether the operator should nonetheless be *required* to have
+    run one is open.
+
+### 26.14 Acceptance criteria for Phase 5F2A (DONE)
+
+- [x] The design resolves the **dirty-tree vs. no-command-execution conflict**
+  explicitly (§26.1): the conflict is named, `git status` is **not** assumed
+  allowed, three directions are weighed, and the chosen one is a non-subprocess
+  Git-state probe shipped as its **own separately authorized read-only
+  prerequisite phase** with a fail-closed tri-state verdict. **Human attestation
+  is explicitly rejected as a replacement**, with the reason stated, and is
+  permitted only as an additional requirement on top of a machine check.
+- [x] The **input artifact path guard** is restated (§26.2): the approved diff
+  may never be read from inside the configured workspace, and the existing
+  **lexical rejection-before-read** pattern is preserved rather than replaced by
+  a resolving check.
+- [x] **Canonicalization immediately before write** is specified (§26.3) in a
+  fixed order — Phase 1 lexical write policy for every destination first, then
+  the workspace root, then per-destination canonicalization immediately before
+  that destination's write — with **create-vs-modify** handled explicitly,
+  including the finding that the shipped Phase 5D0 guard cannot accept a
+  non-existent path, the parent-directory rule, the no-`mkdir` rule, the
+  dangling-symlink refusal, and a symlink policy honoring
+  `workspace_policy.allow_symlinks` plus a destination-is-never-a-link rule. No
+  path may escape the workspace at any step.
+- [x] The **exact authorized path set** is defined (§26.4) as the paths in the
+  concrete human-approved Phase 5F0 proposal and nothing else, with every
+  plausible widening named and refused, duplicates invalid, and **one invalid
+  path failing the entire invocation**.
+- [x] **`max_changed_files`** is enforced before the first write against the
+  frozen set (§26.5); truncation to the first N is forbidden; an empty change
+  set is a valid no-op.
+- [x] **Forbidden paths have no override**; **protected writes require explicit
+  per-invocation authorization** represented as two matching human acts with set
+  equality; **no standing project-config switch** for protected writes is
+  designed, and the asymmetry with the Phase 5D1/5D2 read opt-ins is justified
+  (§26.6).
+- [x] **Transaction semantics** are stated precisely (§26.7): the all-or-nothing
+  claim, the explicit disclaimer that filesystem operations are **not**
+  transactional, four ordered phases that push every fallible operation into
+  staging, and defined behavior for failures during staging, replacement, and
+  rollback.
+- [x] A concrete **backup/rollback strategy** covers both `modify` and `create`
+  (§26.8); staging lives in a controlled journal directory outside the workspace
+  and **broadens no destination set**; the single in-workspace temp sibling is
+  bounded, justified, and self-deleting; cleanup is defined per outcome; and
+  **rollback failure** is defined, including best-effort continuation, mandatory
+  journal retention, and a distinct loud report that names categories and paths
+  without dumping source.
+- [x] **Diff applicability** is placed (§26.9): an **advisory** check in the
+  separately authorized read-only preflight, an **authoritative** one intrinsic
+  to the writer's staging step, never consumed from a cached verdict, exact
+  application only — and **none of it implemented in 5F2A**, with
+  `applies_cleanly_checked` still false everywhere it appears.
+- [x] The **stdout/stderr/exit-code contract** is specified (§26.10): success
+  JSON leaks no source, diff, approval text, backup content, digest, or absolute
+  path; every gate or safety failure is stderr-only, non-zero, with **no
+  misleading success JSON**; and catastrophic rollback failure has its own exit
+  code, its own banner, and its own report shape, distinct from an ordinary
+  fail-closed pre-write rejection.
+- [x] The **excluded capabilities** are listed in full (§26.11): arbitrary
+  command execution, `required_verification` execution, model calls, network
+  calls, GitHub reads/writes, branch creation, commits, pushes, PR creation,
+  automatic repair or retry, and source transmission to a model.
+- [x] A **phase decomposition** is recommended (§26.12) that splits the
+  prerequisites (5F2B create-aware guard, 5F2C typed gate models, 5F2D Git-state
+  probe, 5F2E read-only preflight) from the first write (5F2F), chosen from this
+  repository's actual architecture — the Phase 5D0 guard's strict-existence
+  limitation, the existing per-phase opt-in pattern, and the shipped Phase 5F1
+  preview — with 5F2B named as the recommended immediate next phase.
+- [x] **Unresolved questions are recorded explicitly** (§26.13) rather than
+  hidden: the Git-state implementation choice, `.git` policy expression,
+  non-Git workspaces, encoding/line-ending fidelity, volume assumptions, journal
+  location and retention, permissions across replacement, concurrency, crash
+  recovery, and whether preflight should be mandatory.
+- [x] **Documentation only.** This phase changed Markdown files only. No `src/`
+  change, no runtime behavior change, no new or changed CLI command or option,
+  no test of new behavior.
+- [x] **Nothing was implemented.** No file edit engine, no apply function, no
+  apply-cleanliness check, no subprocess, no verification, no branch, commit,
+  push or PR, no model call, no network call, no environment read, no GitHub
+  access, and no approval stamping.
+- [x] **No target project workspace was touched.** Nothing under any project's
+  `repo.workspace_path` was read, listed, stat'd, resolved, or modified, no
+  `git` command was run against one, and `C:\dev\mis_project`, `C:\dev\a8_oa`,
+  `C:\dev\bible_reading_v2` and the `C:\dev` parent were not touched.
+- [x] **Phase 5F2B, 5F2C, 5F2D, 5F2E, 5F2F and every later sub-phase in §13
+  remain PROPOSED and NOT AUTHORIZED.** L2 is still not built, no command can
+  invoke it, and **nothing shipped in this repository edits a target file.**

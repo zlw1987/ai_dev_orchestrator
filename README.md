@@ -17,7 +17,12 @@ changes. The eventual design will:
 
 The emphasis is on **control and review**, not autonomous action.
 
-## Current status: Phase 5F1 (dry-run file-edit preview — nothing is written)
+## Current status: Phase 5F2A (design only) — latest shipped capability is still Phase 5F1, and nothing writes a target file
+
+**Phase 5F2A is the latest completed phase, and it is design only**: it added
+documentation and no code (see §26 of the design doc, and the note further down
+this section). **Phase 5F1 remains the latest shipped runtime capability**, and
+nothing in this repository can write a file into a target workspace.
 
 Phase 5F0 typed the human approval a future file-editing phase would have to be
 handed, and shipped nothing that consumes it. Phase 5F1 is the first consumer:
@@ -63,12 +68,24 @@ description of a hypothetical, produced without touching the thing it describes.
   no network call, no environment read, no GitHub fetch or write, no branch,
   commit, push or PR, no artifact file written, and no approval stamping.**
 
-**L2 is still not built.** A preview authorizes nothing. Phase 5F2 remains
-proposed and not authorized; it may add the first real workspace write, but only
-under its own explicit authorization.
+**L2 is still not built.** A preview authorizes nothing.
+
+**Phase 5F2A has since been completed as a design-only phase** — the safety
+contract the first workspace-write phase would have to satisfy, written before
+any writer exists. It **implements nothing**: no module, no function, no config
+field, no CLI command, no CLI option, and no change to any shipped behavior. It
+resolves the dirty-tree-check versus no-command-execution conflict (a
+non-subprocess Git-state probe in its own prerequisite phase, with a fail-closed
+tri-state verdict and no human attestation substitute), pins canonicalization
+immediately before each write with `create` and `modify` handled differently,
+freezes the authorized path set to the approved diff's own paths, defines
+transaction semantics and backup/rollback, and splits the old single "Phase 5F2"
+slot into 5F2B–5F2F. **Phase 5F2B, 5F2C, 5F2D, 5F2E and 5F2F all remain proposed
+and not authorized**, and **nothing shipped in this repository edits a target
+file.**
 
 See
-[docs/PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md §25](docs/PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md)
+[docs/PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md §25 and §26](docs/PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md)
 and the usage section below.
 
 ### Phase 5F0 (file-edit write gate models and parser — library only)
@@ -1529,9 +1546,17 @@ written, no model call, no network call, no environment read, no GitHub fetch or
 write, no branch/commit/push/PR, and no approval stamping.** It changed none of
 the eleven commands that came before it.
 
+**Phase 5F2A** then wrote the safety contract a first workspace-write phase would
+have to satisfy, **as design only** — documentation, no code — and split the old
+single "Phase 5F2" slot into five smaller phases.
+
 **L2 is proposed, not built.** No command can invoke it, and every later Phase 5
-sub-phase remains unauthorized — including **Phase 5F2, the first phase that
-could edit a file**, which nothing in the repository ships. Until one is
-explicitly authorized, the project continues to avoid agent automation, patch
-application, file editing, command execution, GitHub writes, GitHub issue
-fetching inside a real model command, and target project workspace writes.
+sub-phase remains unauthorized — **Phase 5F2B** (create-aware canonical
+write-target guard, library only), **Phase 5F2C** (typed workspace-write gate
+models, library only), **Phase 5F2D** (read-only Git-state probe), **Phase 5F2E**
+(read-only write preflight), and **Phase 5F2F** (the first controlled workspace
+write). Nothing in the repository ships any of them, and **nothing shipped edits
+a target file**. Until one is explicitly authorized, the project continues to
+avoid agent automation, patch application, file editing, command execution,
+GitHub writes, GitHub issue fetching inside a real model command, and target
+project workspace writes.
