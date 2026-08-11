@@ -17,7 +17,66 @@ changes. The eventual design will:
 
 The emphasis is on **control and review**, not autonomous action.
 
-## Current status: Phase 5D2 (bounded read-only file-content inspection)
+## Current status: Phase 5E2 (unified diff proposal artifact models and parser — library only)
+
+Phase 5E2 adds the `ai_dev_orchestrator.diff_proposal` package: typed models for
+a **unified diff proposal artifact** plus a strict JSON parser. It lets a
+diff-shaped artifact **exist as data** and be validated. It adds **no command and
+no option**, and nothing in the shipped code imports it.
+
+- **This is not diff generation, and not diff application.** There is no producer
+  here and no applier. Nothing creates, computes, or modifies a diff, and nothing
+  applies, stages, or writes a patch — a parsed diff was written elsewhere.
+  `applies_cleanly_checked` is `Literal[False]`: whether a diff *would* apply is
+  a question this phase never asks, because asking it means touching a
+  workspace. No patch tooling is invoked and `difflib` is not imported.
+- **A `unified_diff` field now exists, and may contain source lines as diff
+  context** — that is what a diff is, and it is allowed **as data** in this
+  artifact. It arrived in the text handed to the parser: nothing here opened a
+  file to obtain it, and nothing here sends it anywhere. There is deliberately
+  no separate `before_content`, `after_content`, `file_contents` or
+  `source_contents` field — source text lives inside the diff or nowhere.
+- **The accepted diff shape is deliberately narrow.** One single-file textual
+  diff per change: exactly `--- a/<path>` and `+++ b/<path>` for a `modify`,
+  exactly `--- /dev/null` and `+++ b/<path>` for a `create`, headers naming the
+  change's own path exactly, and at least one `@@` hunk. Multi-file patches,
+  `diff --git` envelopes, binary patches, renames, deletions, mode changes, NUL
+  bytes, and payloads over 200 000 characters are all **rejected**. Line endings
+  are never normalized, and the diff is carried through byte for byte.
+- **It reads no file contents and touches no workspace.** Paths are validated as
+  *strings*, lexically — relative only, no traversal, no absolute or UNC or
+  device form, no trailing dot or space, no 8.3-like component. Nothing is
+  joined to a workspace root, canonicalized, stat'd, or opened.
+- **A proposal may narrow the approved scope, never widen it.** Every proposed
+  path must appear exactly in the approved plan's `files_likely_to_change` and
+  must not appear in `files_forbidden_or_out_of_scope`. Duplicate paths are
+  rejected rather than merged.
+- **A proposal cannot authorize itself.** It wraps an untouched approved-plan
+  artifact, re-validated on every parse, and its provenance must match that plan
+  exactly on `project_id`, `repo`, `issue_number` and `title`. It may optionally
+  wrap the Phase 5E0 prose proposal the diffs were drafted from — which must then
+  agree on the approved plan and on identity, and must already have named every
+  path a diff touches.
+- **`files_edited`, `commands_run` and `applies_cleanly_checked` must all be
+  false**, `diffs_generated` must be true, and `requires_human_review` must be
+  true. These are the *shape* of a legal artifact, not observations.
+  `source_contents_read` is a recorded **claim** by whatever produced the
+  artifact — the parser reads nothing either way.
+- **`engine: "model"` is a recorded claim, not an instruction.** Parsing it calls
+  nothing. A `deterministic` or `manual` engine must carry no model name and
+  `real_call: false`.
+- **Strict, never repairing.** Markdown fences (including a ```` ```diff ````
+  block), prose around the JSON, arrays, numbers, booleans and `null` are
+  rejected; unknown fields are never stripped and missing fields are never
+  inferred. Error messages name fields, never the diff.
+- **No model call, no network call, no environment read, no GitHub fetch or
+  write, no command execution, no file editing, no file loading, no branch,
+  commit, push or PR, no agent logic or role wiring, and no approval stamping.**
+
+See
+[docs/PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md §22](docs/PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md).
+
+### Phase 5D2 (bounded read-only file-content inspection)
 
 Phase 5D2 adds **one** command, `l2-read-workspace-files`. Phase 5D1 answered
 *does this path exist and how big is it*; this answers the strictly larger
@@ -1134,10 +1193,18 @@ network call, no environment read, no GitHub fetch or write, no agent logic or
 role wiring, and no approval stamping**, and it changed none of the nine
 commands that came before it.
 
+**Phase 5E2** then typed the **unified diff proposal artifact** — the
+`ai_dev_orchestrator.diff_proposal` package described in the status section
+above. It is the inert half of "carrying a real diff": a diff may now be carried
+and validated **as data**, but nothing generates one, modifies one, or applies
+one, and whether a diff would apply is never checked. Library only, wired into
+nothing — no command, no option, no workspace access, no file content reads, no
+file editing, no command execution, no model/network/environment access, no
+GitHub fetch or write, and no approval stamping.
+
 **L2 is proposed, not built.** No command can invoke it, and every later Phase 5
-sub-phase remains unauthorized — including carrying a real **diff** in a
-proposal, which Phase 5E1 deliberately stopped short of and which needs more
-than the file-content reads Phase 5D2 has since supplied. Until one
-is explicitly authorized, the project continues to avoid agent automation, patch
-application, file editing, command execution, GitHub writes, GitHub issue
+sub-phase remains unauthorized — including a **producer** for the Phase 5E2 diff
+artifact, which nothing in the repository ships. Until one is explicitly
+authorized, the project continues to avoid agent automation, diff generation,
+patch application, file editing, command execution, GitHub writes, GitHub issue
 fetching inside a real model command, and target project workspace writes.

@@ -106,7 +106,11 @@ Model roles must be configurable. Each role specifies:
   plan's `files_likely_to_change`, behind a **separate** project-level opt-in
   and file-count/per-file/total byte caps, with **no directory listings, no
   diff generation, no file editing, no command execution, no model call, and
-  no file content sent to a model**).
+  no file content sent to a model**; Phase 5E2 typed the unified diff proposal
+  artifact as models plus a strict parser, library only — a diff may now be
+  carried and validated **as data**, with **no diff generation, no diff
+  application, no apply-cleanliness check, no workspace access, no file content
+  read, and no CLI behavior**).
   **L2 is proposed, not built**, and no command can invoke it.
 - **Phase 6 — qwen reviewer.**
 - **Phase 7 — fix loop.**
