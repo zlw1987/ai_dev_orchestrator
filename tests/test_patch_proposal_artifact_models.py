@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import builtins
 import copy
+import inspect
 import json
 import os
 import socket
@@ -1264,10 +1265,13 @@ def test_implementation_module_imports_no_transport_cli_or_workspace():
         assert forbidden not in text, f"{forbidden!r} must not appear"
 
 
-def test_patch_proposal_package_exports_exactly_the_phase_5e0_surface():
+def test_patch_proposal_package_still_exports_the_phase_5e0_surface():
     from ai_dev_orchestrator import patch_proposal
 
-    assert sorted(patch_proposal.__all__) == [
+    # Phase 5E1 added a deterministic generator alongside these; the nine names
+    # Phase 5E0 shipped are unchanged, and the models and parser below are still
+    # exactly what this file exercises.
+    for name in (
         "PATCH_PROPOSAL_MODE",
         "PATCH_PROPOSAL_SCHEMA_VERSION",
         "PatchProposalArtifact",
@@ -1277,27 +1281,28 @@ def test_patch_proposal_package_exports_exactly_the_phase_5e0_surface():
         "PatchProposalProvenance",
         "PatchProposalValidationError",
         "parse_patch_proposal_artifact",
-    ]
-    for name in patch_proposal.__all__:
+    ):
+        assert name in patch_proposal.__all__
         assert hasattr(patch_proposal, name)
 
-    # No generator, no applier, no loader, no gate, no command. Later phases.
+    # No applier, no loader, no writer, no diff generator. Later phases.
     for absent in (
-        "generate_patch_proposal",
-        "build_patch_proposal",
         "load_patch_proposal_artifact",
         "apply_patch_proposal",
         "write_patch_proposal",
+        "generate_diff",
         "PatchApplier",
         "L2Implementer",
     ):
         assert not hasattr(patch_proposal, absent)
 
 
-# -- 14. No CLI behavior was added --------------------------------------------
+# -- 14. The CLI surface -------------------------------------------------------
 
 
-# Phase 5E0 added no command. This is exactly the Phase 5D1 surface.
+# Phase 5E0 added no command. Phase 5E1 then added exactly one —
+# `generate-patch-proposal`, which generates a proposal offline and prints it —
+# and changed nothing else.
 EXPECTED_COMMANDS = [
     "version",
     "inspect-issue",
@@ -1307,6 +1312,7 @@ EXPECTED_COMMANDS = [
     "generate-model-plan",
     "l2-dry-run",
     "l2-inspect-workspace",
+    "generate-patch-proposal",
 ]
 
 
@@ -1324,14 +1330,15 @@ def test_root_help_lists_exactly_the_shipped_commands():
     assert registered == EXPECTED_COMMANDS
 
 
-def test_no_patch_proposal_or_apply_command_exists():
+def test_no_apply_or_implement_command_exists():
     result = runner.invoke(app, ["--help"])
 
     assert result.exit_code == 0
+    # `generate-patch-proposal` (Phase 5E1) produces prose and prints it. No
+    # command applies a patch, edits a file, implements a plan, or stamps an
+    # approval.
     for absent in (
         "propose-patch",
-        "patch-proposal",
-        "generate-patch",
         "apply-patch",
         "apply-approved-plan",
         "approve-plan",
@@ -1343,6 +1350,7 @@ def test_no_patch_proposal_or_apply_command_exists():
         "propose-patch",
         "generate-patch",
         "apply-patch",
+        "apply-patch-proposal",
         "implement-plan",
     ):
         assert runner.invoke(app, [absent, "--help"]).exit_code != 0
@@ -1431,12 +1439,21 @@ def test_generate_model_plan_options_unchanged():
         assert absent not in result.output
 
 
-def test_cli_does_not_import_the_patch_proposal_package():
+def test_cli_imports_the_patch_proposal_package_lazily_and_only_to_generate():
     from ai_dev_orchestrator import cli
 
+    # Phase 5E1's command imports the generator *inside* its own body, matching
+    # every other command here, so importing the CLI still pulls in nothing.
     assert "patch_proposal" not in vars(cli)
     assert "parse_patch_proposal_artifact" not in vars(cli)
     assert "PatchProposalArtifact" not in vars(cli)
+
+    # And the only thing it reaches for is the generator — never an applier, a
+    # writer, or a diff.
+    source = inspect.getsource(cli)
+    assert "build_deterministic_patch_proposal" in source
+    for absent in ("apply_patch_proposal", "write_patch_proposal", "generate_diff"):
+        assert absent not in source
 
 
 def test_importing_patch_proposal_adds_no_command():

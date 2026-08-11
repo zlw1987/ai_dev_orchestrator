@@ -36,6 +36,14 @@ and the Phase 5D0 canonical guard — reports whether each path the plan names
 exists, whether it is a file or a directory, and how big it is. **It reads no
 file contents and lists no directory**, and it edits nothing, runs nothing, and
 proposes nothing.
+
+`generate-patch-proposal` (Phase 5E1) is the one command that produces a patch
+**proposal** artifact. It reads the same two local files, generates the artifact
+deterministically and offline from them, and prints it to stdout. **It is not a
+diff and it is not file editing**: the artifact carries no unified diff, no
+patch, no edit script, no file content, no command, and no command output — only
+prose about paths the approved plan already named. It touches no workspace,
+reads no file contents, calls no model, writes no file, and stamps no approval.
 """
 
 from __future__ import annotations
@@ -1780,6 +1788,248 @@ def l2_inspect_workspace(
         approved_plan=approved_plan,
         apply_approved_plan=apply_approved_plan,
         inspect_workspace=inspect_workspace,
+    )
+
+
+# -- deterministic patch proposal (Phase 5E1) ----------------------------------
+
+# Human-readable category for the Phase 5E1 generator error, following the Phase
+# 4L/5C precedent: name *what kind* of thing failed. The exception message is
+# safe to show — Phase 5E1 guarantees it names the failed field and category and
+# never echoes the artifact text, the plan prose, or any supplied value.
+_PATCH_PROPOSAL_FAILURE_CATEGORY = (
+    "generation failure — the approved plan did not match this project config, "
+    "was not an unescalated L1 plan, contradicted itself, exceeded the changed-"
+    "file cap, or produced an artifact that failed validation"
+)
+
+
+def _run_generate_patch_proposal(
+    *,
+    project_config: Path,
+    approved_plan: Path,
+    apply_approved_plan: bool,
+    generate_proposal: bool,
+) -> None:
+    """Generate a patch proposal artifact and print it. Extracted for tests.
+
+    Ordering is the safety property, and it is the same shape as `l2-dry-run`'s
+    with one more explicit consent in front of it. In sequence: both
+    ``--apply-approved-plan`` and ``--generate-proposal`` must be present — with
+    **no file read at all** if either is missing — then the project config
+    loads, then a string/path check rejects an ``--approved-plan`` inside the
+    configured workspace **before** the artifact is opened, then the artifact is
+    read and strictly parsed, then the deterministic generator runs, and only
+    then is anything printed.
+
+    The generator is pure and offline, so this command reads exactly two local
+    files and touches nothing else. Nothing here reads file contents from a
+    workspace, lists a directory, generates a diff, edits a file, executes a
+    command, reads an environment variable, opens a socket, builds a client,
+    contacts GitHub, writes an artifact file, or stamps an approval.
+    """
+    from ai_dev_orchestrator.config_loader import ConfigError, load_project_config
+    from ai_dev_orchestrator.handoff import (
+        ApprovedPlanError,
+        parse_approved_l1_plan_artifact,
+    )
+    from ai_dev_orchestrator.patch_proposal import (
+        PatchProposalGenerationError,
+        build_deterministic_patch_proposal,
+    )
+
+    # 1. Explicit confirmation that an approved plan may be acted on. Checked
+    #    first, so a plain invocation reads no file at all.
+    if not apply_approved_plan:
+        typer.echo(
+            "Error: generate-patch-proposal acts on a human-approved plan "
+            "artifact and requires the explicit --apply-approved-plan flag. "
+            "Nothing was read.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # 2. Explicit confirmation that a proposal may be produced. A second,
+    #    separate consent: approving a plan is not the same act as asking for
+    #    work to be proposed against it.
+    if not generate_proposal:
+        typer.echo(
+            "Error: generate-patch-proposal produces a patch proposal artifact "
+            "and requires the explicit --generate-proposal flag. Nothing was "
+            "read.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # 3. Project config: the first file read. The configured repo.workspace_path
+    #    is never read, listed, stat'd, or resolved.
+    try:
+        project = load_project_config(project_config)
+    except ConfigError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        typer.echo(
+            "The approved plan artifact was not read and no proposal was "
+            "generated.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # 4. Refuse an artifact that lives inside the configured target workspace,
+    #    BEFORE it is read or stat'd — which is also why --approved-plan carries
+    #    no Typer exists=/readable= check: those would touch the path before this
+    #    guard could run. String/path normalization only; the workspace path
+    #    itself is never read, listed, stat'd, or resolved.
+    if _is_same_or_under(approved_plan, project.repo.workspace_path):
+        typer.echo(
+            "Error: --approved-plan is inside the project's configured "
+            f"repo.workspace_path ({project.repo.workspace_path}). The approved "
+            "plan must live outside the workspace it authorizes; move it "
+            "outside that path and retry.",
+            err=True,
+        )
+        typer.echo(
+            "The approved plan artifact was not read and no proposal was "
+            "generated.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # 5. The guard has passed, so the artifact may be read. It is the second and
+    #    final file this command reads.
+    try:
+        artifact_text = approved_plan.read_text(encoding="utf-8")
+    except OSError as exc:
+        typer.echo(f"Error: could not read --approved-plan: {exc}", err=True)
+        typer.echo("No proposal was generated.", err=True)
+        raise typer.Exit(code=1)
+
+    # 6. Parse strictly (Phase 5B). Rejected, never repaired.
+    try:
+        artifact = parse_approved_l1_plan_artifact(artifact_text)
+    except ApprovedPlanError as exc:
+        name = type(exc).__name__
+        category = _APPROVED_PLAN_FAILURE_CATEGORIES.get(name, "artifact failure")
+        typer.echo(f"Error: {name}: {category}. {exc}", err=True)
+        typer.echo(
+            "The artifact text and the plan prose are not echoed. No proposal "
+            "was generated.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # 7. Generate deterministically and offline. The generator performs the
+    #    exact identity matching against the config, re-checks the L1
+    #    invariants, and fails closed on a self-contradicting plan or a
+    #    candidate count above workspace_policy.max_changed_files.
+    try:
+        proposal = build_deterministic_patch_proposal(
+            approved_plan=artifact, project=project
+        )
+    except PatchProposalGenerationError as exc:
+        typer.echo(
+            "Error: PatchProposalGenerationError: "
+            f"{_PATCH_PROPOSAL_FAILURE_CATEGORY}. {exc}",
+            err=True,
+        )
+        typer.echo(
+            "The artifact text and the plan prose are not echoed. No proposal "
+            "was printed and no file was written.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # 8. Print the artifact itself — nothing wrapped around it, so stdout parses
+    #    with parse_patch_proposal_artifact. Deliberately absent, because the
+    #    artifact has no field for any of them: the configured workspace_path,
+    #    any resolved absolute path, any file content, any diff, any command or
+    #    command output, the raw artifact text, any prompt or completion, and any
+    #    API key or base URL. The approval travels only inside the embedded
+    #    approved-plan snapshot, exactly as it was given.
+    typer.echo(proposal.model_dump_json(indent=2))
+
+
+@app.command("generate-patch-proposal")
+def generate_patch_proposal(
+    project_config: Path = typer.Option(
+        ...,
+        "--project-config",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Path to the project config YAML the approved plan must match.",
+    ),
+    approved_plan: Path = typer.Option(
+        ...,
+        "--approved-plan",
+        # Deliberately no exists=/readable= check: Typer would stat the path
+        # before the command body could reject one inside the configured
+        # workspace. The guard runs first; the file is opened only afterwards.
+        help="Path to a human-approved L1 plan artifact (Phase 5B shape). Must "
+        "not be inside the project's configured workspace path.",
+    ),
+    apply_approved_plan: bool = typer.Option(
+        False,
+        "--apply-approved-plan",
+        help="Required explicit confirmation that an approved plan may be "
+        "acted on. Without it this command fails without reading anything.",
+    ),
+    generate_proposal: bool = typer.Option(
+        False,
+        "--generate-proposal",
+        help="Required explicit confirmation that a patch proposal artifact "
+        "may be produced. Without it this command fails without reading "
+        "anything.",
+    ),
+    output_format: GeneratePlanFormat = typer.Option(
+        GeneratePlanFormat.json,
+        "--format",
+        help="Output format. Only 'json' is currently supported.",
+    ),
+) -> None:
+    """Turn an approved L1 plan into a **proposal-only** patch proposal artifact.
+
+    The proposal is generated **deterministically and offline** from two local
+    files — the ``--project-config`` YAML and the ``--approved-plan`` artifact,
+    in that order — and nothing else. For each path the approved plan lists
+    under ``files_likely_to_change`` it emits one ``modify`` change carrying a
+    rationale, prose review steps, and risks. The same inputs always produce a
+    byte-identical artifact.
+
+    **It is not a diff and it is not file editing.** The artifact has no field
+    for a unified diff, a patch, a hunk, an edit script, before/after content,
+    source file content, a command, or command output, so there is nothing in it
+    that can be applied.
+
+    It does **not**: read, list, stat, resolve, or glob the project's configured
+    ``repo.workspace_path`` or any target workspace; read any file's contents
+    beyond the two files named on the command line; check whether any path the
+    plan names exists; generate or apply a patch; edit or write any file; write
+    the proposal to a file (stdout only); run any ``required_verification`` entry
+    or any other command; create a branch, commit, or PR; fetch from or write to
+    GitHub; call a model; open a socket; or read ``AIDO_LITELLM_*`` or any other
+    environment variable. It never writes or stamps an approval — the approval
+    must already have been written by a human, and it is carried through
+    unchanged inside the embedded plan snapshot.
+
+    The gate fails closed in order: ``--apply-approved-plan`` and
+    ``--generate-proposal`` first (without either, nothing is read at all), then
+    the config, then a string/path check rejecting an ``--approved-plan`` inside
+    the configured workspace **before** it is read or stat'd, then the strict
+    Phase 5B parse, then the generator's own exact ``project_id``/``repo``
+    matching, its L1 re-check, its refusal of a path listed as both likely and
+    forbidden, and the ``workspace_policy.max_changed_files`` cap. Any failure
+    exits non-zero with stderr only and nothing on stdout, and never echoes the
+    artifact text or the plan prose.
+
+    Stdout is the proposal artifact itself, with no wrapper, so it parses with
+    ``parse_patch_proposal_artifact``.
+    """
+    _run_generate_patch_proposal(
+        project_config=project_config,
+        approved_plan=approved_plan,
+        apply_approved_plan=apply_approved_plan,
+        generate_proposal=generate_proposal,
     )
 
 

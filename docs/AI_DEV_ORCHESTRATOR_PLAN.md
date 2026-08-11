@@ -96,7 +96,11 @@ Model roles must be configurable. Each role specifies:
   patch proposal, no file editing, and no command execution**; Phase 5E0 typed
   the patch proposal artifact as models plus a strict parser, library only —
   **not** patch generation, with **no diff, no file content, no workspace
-  access, and no CLI behavior**).
+  access, and no CLI behavior**; Phase 5E1 added the deterministic, offline
+  generator and the `generate-patch-proposal` command, which turns an approved
+  plan into a prose-only proposal artifact printed to stdout — still **no diff,
+  no file content, no workspace access, no artifact file written, no file
+  editing, and no command execution**).
   **L2 is proposed, not built**, and no command can invoke it.
 - **Phase 6 — qwen reviewer.**
 - **Phase 7 — fix loop.**

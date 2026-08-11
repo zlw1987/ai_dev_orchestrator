@@ -895,6 +895,9 @@ EXPECTED_COMMANDS = [
     "l2-dry-run",
     # Phase 5D1. Read-only path metadata inspection; still not an implementer.
     "l2-inspect-workspace",
+    # Phase 5E1. Deterministic, offline patch *proposal* generation: prose only,
+    # no diff, no file contents, no edits, no commands. Still not an implementer.
+    "generate-patch-proposal",
 ]
 
 

@@ -17,15 +17,61 @@ changes. The eventual design will:
 
 The emphasis is on **control and review**, not autonomous action.
 
-## Current status: Phase 5E0 (patch proposal artifact models and parser — library only)
+## Current status: Phase 5E1 (deterministic patch proposal generator — prose only, no diff)
 
-Phase 5E0 adds the `ai_dev_orchestrator.patch_proposal` package: typed models
-for a **patch proposal artifact** plus a strict JSON parser. It adds **no
-command and no option**, and nothing in the shipped code imports it.
+Phase 5E1 adds the one thing Phase 5E0 deliberately withheld: a **deterministic,
+offline generator** that turns an approved L1 plan into a patch **proposal**
+artifact, plus **one** command, `generate-patch-proposal`, that prints it.
 
-- **This is not patch generation.** There is no generator here. Nothing produces
-  a proposal — a parsed one was written elsewhere. Producing one is a later,
-  separately authorized phase.
+```bash
+python -m ai_dev_orchestrator generate-patch-proposal --project-config projects/my_project.yaml --approved-plan path/to/approved_plan.json --apply-approved-plan --generate-proposal
+```
+
+- **This is not a diff and not file editing.** The artifact carries no unified
+  diff, no patch, no hunk, no edit script, no command, no command output, and no
+  file content or before/after text. Each change is a path, a rationale, and
+  prose steps for a **human**. There is nothing applyable in it.
+- **It reads no file contents and touches no workspace.** No target workspace is
+  read, listed, stat'd, globbed, walked, or resolved. Paths stay strings and are
+  never joined to a workspace root or canonicalized.
+- **It writes no file.** The proposal goes to **stdout only**, with no wrapper
+  around it, so the output parses with `parse_patch_proposal_artifact`. There is
+  no `--output` option.
+- **It calls no model.** The generator is a pure function over two already-loaded
+  objects. Its provenance records `engine: "deterministic"`, `real_call: false`,
+  `model: null`, and `generated_at: null` — the same inputs always produce a
+  byte-identical artifact.
+- **It proposes less than the plan allowed, never more.** Candidates come from
+  the approved plan's `files_likely_to_change` and nowhere else, deduplicated
+  preserving order. `files_forbidden_or_out_of_scope` is never a candidate, and
+  `proposed_steps`, `required_verification`, `risks` and `open_questions` are
+  prose that is never read as a path. Every path is `change_type: "modify"`,
+  because nothing was stat'd or opened to establish otherwise — recorded as an
+  assumption in the artifact rather than guessed at.
+- **It fails closed**: on a `project_id`/`repo` mismatch against the project
+  config (exact string equality, no case folding), on a plan that is not an
+  unescalated L1 plan, on a plan naming a path as both likely-to-change and
+  forbidden, on more distinct paths than `workspace_policy.max_changed_files`
+  allows, and on any unsafe path. Failures exit non-zero with stderr only,
+  nothing on stdout, and never echo the artifact text or the plan prose.
+- **It cannot authorize itself.** The proposal wraps the untouched approved-plan
+  artifact, so the human approval travels with the thing it approved and is
+  re-validated, never authored.
+- **No GitHub fetch or write, no environment read, no socket, no command
+  execution, no file editing, no branch, commit, push or PR, no agent logic or
+  role wiring, and no approval stamping.**
+- **No other command changed.** `version`, `inspect-issue`, `llm-smoke-test`,
+  `generate-plan`, `real-llm-smoke-test`, `generate-model-plan`, `l2-dry-run`
+  and `l2-inspect-workspace` are exactly as they were.
+
+See
+[docs/PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md §20](docs/PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md).
+
+### Phase 5E0 (patch proposal artifact models and parser — library only)
+
+Phase 5E0 added the `ai_dev_orchestrator.patch_proposal` package: typed models
+for a **patch proposal artifact** plus a strict JSON parser, and no producer.
+
 - **The artifact carries no diff.** No unified diff, no patch, no hunk, no edit
   script, no command, and no file content or before/after text. A change is a
   path, a rationale, and prose steps for a **human**. There is nothing applyable
@@ -53,9 +99,6 @@ command and no option**, and nothing in the shipped code imports it.
 - **No model call, no network call, no environment read, no GitHub fetch or
   write, no command execution, no file editing, no file loading, no branch,
   commit, push or PR, no agent logic or role wiring, and no approval stamping.**
-- **No other command changed.** `version`, `inspect-issue`, `llm-smoke-test`,
-  `generate-plan`, `real-llm-smoke-test`, `generate-model-plan`, `l2-dry-run`
-  and `l2-inspect-workspace` are exactly as they were.
 
 See
 [docs/PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md §19](docs/PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md).
@@ -777,6 +820,56 @@ ambiguity, or resolution failure stops the whole run with nothing on stdout.
 - print the configured workspace path, any resolved absolute path, any file
   contents, the raw artifact text, `approval_text`, an API key, or a base URL.
 
+### Generating a patch proposal (Phase 5E1, offline — prose only, no diff)
+
+```bash
+python -m ai_dev_orchestrator generate-patch-proposal --project-config projects/my_project.yaml --approved-plan path/to/approved_plan.json --apply-approved-plan --generate-proposal
+```
+
+`generate-patch-proposal` turns a human-approved L1 plan into a **proposal-only**
+patch proposal artifact, generated deterministically from two local files and
+printed to stdout. For each path the approved plan lists under
+`files_likely_to_change` it emits one `modify` change carrying a rationale,
+prose review steps, and risks. The same inputs always produce a byte-identical
+artifact, and stdout is the artifact itself with no wrapper, so it parses with
+`parse_patch_proposal_artifact`.
+
+**L2 is not built, and this command is not it.** It proposes in prose; it
+implements nothing.
+
+The gate fails closed in order. `--apply-approved-plan` and
+`--generate-proposal` are checked **first** — without either, the command exits
+non-zero having read nothing at all, not even the project config. Then the
+config loads. Then `--approved-plan` is rejected if it is the configured
+`repo.workspace_path` or sits under it, **before it is read or stat'd**. Then
+the artifact is read and parsed with the Phase 5B strict parser. Then the
+generator matches `project_id` / `repo` / `plan.repo` / `plan_provenance.repo`
+against the config for exact equality, re-checks that the plan is an unescalated
+L1 plan, refuses a plan naming a path as both likely-to-change and forbidden,
+and enforces `workspace_policy.max_changed_files` on the deduplicated candidate
+count. Any failure exits non-zero with stderr only and nothing on stdout.
+
+`generate-patch-proposal` **does not**:
+
+- generate a diff, a patch, a hunk, or an edit script — the artifact has no
+  field for one,
+- read any file's contents beyond the two files named on the command line,
+- read, list, stat, glob, walk, or resolve any target workspace, or check
+  whether any path the plan names exists,
+- propose anything outside `files_likely_to_change`, or treat `proposed_steps`,
+  `required_verification`, `risks`, or `open_questions` as paths,
+- run any `required_verification` entry or any other command,
+- edit or write any file — including the proposal itself, which is printed and
+  never saved,
+- create a branch, commit, or PR, or fetch anything from or write anything to
+  GitHub,
+- call a model, open a socket, construct an `LLMClient`, or read
+  `AIDO_LITELLM_*` or any other environment variable,
+- stamp an approval — the approval must already have been written by a human and
+  travels through unchanged inside the embedded plan snapshot,
+- print the configured workspace path, any absolute path, any file contents, the
+  raw artifact text, an API key, or a base URL.
+
 ## Tests
 
 ```bash
@@ -895,10 +988,20 @@ carries no unified diff and no file content. Library only, wired into nothing �
 no command, no option, no workspace access, no model/network/environment access,
 and no approval stamping.
 
+**Phase 5E1** added the generator and the `generate-patch-proposal` command
+described in the status and usage sections above. It turns an approved plan into
+a prose-only proposal artifact, deterministically and offline, and prints it. It
+is still **not a diff and not file editing**: no unified diff, no file content,
+no command, and no command output. It adds **no workspace access, no file
+content reads, no artifact file writing, no file editing, no command execution,
+no model call, no network call, no environment read, no GitHub fetch or write,
+no agent logic or role wiring, and no approval stamping**, and it changed none
+of the eight commands that came before it.
+
 **L2 is proposed, not built.** No command can invoke it, and every later Phase 5
 sub-phase remains unauthorized — including reading file **contents** from a
-workspace, which Phase 5D1 deliberately stopped short of, and *generating* a
-patch proposal, which Phase 5E0 deliberately stopped short of. Until one is
-explicitly authorized, the project continues to avoid agent automation, patch
-proposals, file editing, command execution, GitHub writes, GitHub issue fetching
-inside a real model command, and target project workspace writes.
+workspace, which Phase 5D1 deliberately stopped short of, and carrying a real
+**diff** in a proposal, which Phase 5E1 deliberately stopped short of. Until one
+is explicitly authorized, the project continues to avoid agent automation, patch
+application, file editing, command execution, GitHub writes, GitHub issue
+fetching inside a real model command, and target project workspace writes.
