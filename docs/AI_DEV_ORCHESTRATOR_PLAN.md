@@ -100,7 +100,13 @@ Model roles must be configurable. Each role specifies:
   generator and the `generate-patch-proposal` command, which turns an approved
   plan into a prose-only proposal artifact printed to stdout — still **no diff,
   no file content, no workspace access, no artifact file written, no file
-  editing, and no command execution**).
+  editing, and no command execution**; Phase 5D2 added the
+  `l2-read-workspace-files` command, the first code here whose output may
+  contain target workspace source — bounded, redacted contents of an approved
+  plan's `files_likely_to_change`, behind a **separate** project-level opt-in
+  and file-count/per-file/total byte caps, with **no directory listings, no
+  diff generation, no file editing, no command execution, no model call, and
+  no file content sent to a model**).
   **L2 is proposed, not built**, and no command can invoke it.
 - **Phase 6 — qwen reviewer.**
 - **Phase 7 — fix loop.**

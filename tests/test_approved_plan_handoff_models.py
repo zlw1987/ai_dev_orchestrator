@@ -898,6 +898,9 @@ EXPECTED_COMMANDS = [
     # Phase 5E1. Deterministic, offline patch *proposal* generation: prose only,
     # no diff, no file contents, no edits, no commands. Still not an implementer.
     "generate-patch-proposal",
+    # Phase 5D2. Bounded, redacted read-only file-content inspection; no diff,
+    # no edits, no commands. Still not an implementer.
+    "l2-read-workspace-files",
 ]
 
 

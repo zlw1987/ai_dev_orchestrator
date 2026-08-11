@@ -716,11 +716,14 @@ def test_this_suite_names_no_real_target_workspace():
 
 
 def test_root_help_lists_the_shipped_commands_and_no_canonicalization_command():
-    """Phase 5D1 later added ``l2-inspect-workspace``, the guard's first caller.
+    """The guard has callers now, but is still not a command in its own right.
 
-    That command is *read-only metadata inspection*, not a canonicalization
-    command: the guard is still not exposed directly, and nothing here reads a
-    workspace on its own.
+    Phase 5D1 added ``l2-inspect-workspace``, the guard's first caller, and
+    Phase 5D2 added ``l2-read-workspace-files``, its second. Both are read-only
+    — metadata in the first case, bounded redacted contents in the second — and
+    neither exposes canonicalization directly: the guard remains a library that
+    those commands call, with no command of its own and no option that reaches
+    it.
     """
     result = runner.invoke(app, ["--help"])
 
@@ -734,14 +737,10 @@ def test_root_help_lists_the_shipped_commands_and_no_canonicalization_command():
         "generate-model-plan",
         "l2-dry-run",
         "l2-inspect-workspace",
+        "l2-read-workspace-files",
     ):
         assert command in result.output
-    for absent in (
-        "canonical",
-        "canonicalize",
-        "workspace-inspect",
-        "read-workspace",
-    ):
+    for absent in ("canonical", "canonicalize", "workspace-inspect"):
         assert absent not in result.output
 
 

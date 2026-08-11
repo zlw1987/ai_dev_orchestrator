@@ -167,6 +167,62 @@ class ReadOnlyWorkspaceInspectionConfig(_Strict):
     )
 
 
+class ReadOnlyWorkspaceContentConfig(_Strict):
+    """Per-project opt-in for **bounded read-only file-content reads** (Phase 5D2).
+
+    Phase 5D1's :class:`ReadOnlyWorkspaceInspectionConfig` permits asking
+    whether a path exists and how big it is. This block permits the strictly
+    larger disclosure of asking *what the file says*, and it is deliberately a
+    **separate** opt-in: a project that is willing to have its file names
+    stat'd has not thereby agreed to have its source printed.
+
+    Every field here is a ceiling, not a target. The caps bound how many files
+    one invocation may open, how large any single file may be, and how many
+    bytes may be emitted in total; redaction of obvious secret-like text is
+    mandatory and has deliberately **no** off switch.
+
+    It fails closed by construction — an absent block is identical to an
+    explicitly disabled one — and it holds **no credentials**: no API key, no
+    base URL, no endpoint, no model name, and no environment-variable name.
+    Unknown fields are rejected.
+    """
+
+    enabled: bool = Field(
+        default=False,
+        description="Whether this project's workspace file contents may be "
+        "read at all. Absent or false means no content read and no workspace "
+        "touch.",
+    )
+    max_files: int = Field(
+        default=10,
+        gt=0,
+        le=50,
+        description="Hard cap on how many approved-plan paths one invocation "
+        "may consider. Exceeding it fails the whole run before the workspace "
+        "is touched.",
+    )
+    max_file_bytes: int = Field(
+        default=50_000,
+        gt=0,
+        le=1_000_000,
+        description="Hard cap on the size of any single file that may be "
+        "read. A larger file is reported as too_large and never opened.",
+    )
+    max_total_bytes: int = Field(
+        default=200_000,
+        gt=0,
+        le=5_000_000,
+        description="Hard cap on the total bytes one invocation may read "
+        "across all files. Once reaching it, later files are skipped unread.",
+    )
+    allow_protected_paths: bool = Field(
+        default=False,
+        description="Whether a path classified PROTECTED by the Phase 1 path "
+        "policy may have its contents read. Forbidden and unlisted paths are "
+        "refused regardless.",
+    )
+
+
 class ProjectConfig(_Strict):
     """Top-level typed project configuration."""
 
@@ -192,6 +248,9 @@ class ProjectConfig(_Strict):
     )
     read_only_workspace_inspection: ReadOnlyWorkspaceInspectionConfig = Field(
         default_factory=ReadOnlyWorkspaceInspectionConfig
+    )
+    read_only_workspace_content: ReadOnlyWorkspaceContentConfig = Field(
+        default_factory=ReadOnlyWorkspaceContentConfig
     )
 
     @property

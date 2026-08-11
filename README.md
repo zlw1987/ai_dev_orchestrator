@@ -17,9 +17,74 @@ changes. The eventual design will:
 
 The emphasis is on **control and review**, not autonomous action.
 
-## Current status: Phase 5E1 (deterministic patch proposal generator — prose only, no diff)
+## Current status: Phase 5D2 (bounded read-only file-content inspection)
 
-Phase 5E1 adds the one thing Phase 5E0 deliberately withheld: a **deterministic,
+Phase 5D2 adds **one** command, `l2-read-workspace-files`. Phase 5D1 answered
+*does this path exist and how big is it*; this answers the strictly larger
+question *what does it say*, and is the **first command whose output may
+contain target workspace source**.
+
+```bash
+python -m ai_dev_orchestrator l2-read-workspace-files --project-config projects/my_project.yaml --approved-plan path/to/approved_plan.json --apply-approved-plan --read-contents
+```
+
+- **L2 is still not built.** This command diffs nothing, patches nothing, edits
+  nothing, runs nothing, and commits nothing. It reads and prints.
+- **It needs its own project opt-in**, `read_only_workspace_content.enabled`,
+  which ships **disabled** and is **separate** from Phase 5D1's metadata
+  opt-in: agreeing that a project's path names may be stat'd is not agreeing
+  that its source may be printed. While disabled, the command refuses to touch
+  the workspace at all — it fails before the approved-plan artifact is opened.
+- **The read is bounded three ways**: `max_files` distinct candidates (default
+  10, checked before the workspace is touched), `max_file_bytes` per file
+  (default 50 000), and `max_total_bytes` across the run (default 200 000). The
+  per-file cap is enforced at the read itself, so a file that grows between the
+  `stat` and the open is still refused.
+- **Redaction is mandatory and cannot be turned off.** Every byte printed
+  passes through basic secret-like redaction — `Bearer <token>`,
+  `api_key`/`token`/`secret`/`password`/`passwd`/`pwd` assignment values, and
+  `sk-…` keys — and the output reports `redacted`, `redaction_count` and
+  `redaction_kinds`. There is no config field and no flag that disables it.
+  It is a deterministic backstop, **not** reliable secret detection.
+- **It reads only what the plan named.** Candidates come from the approved
+  plan's `files_likely_to_change` and nowhere else, deduplicated preserving
+  order. `files_forbidden_or_out_of_scope` is never read, and `proposed_steps`,
+  `required_verification`, `risks` and `open_questions` are prose that is never
+  treated as a path.
+- **It lists no directory.** No `listdir`, no `scandir`, no `walk`, no glob, no
+  tree walk. A candidate that *is* a directory is reported as
+  `directory_no_content` and its entries are neither enumerated nor named.
+- **It generates no diff and edits nothing.** No unified diff, no hunk, no
+  patch, no before/after pair, and no write to any target workspace.
+- **It calls no model, and sends no content to one.** What it reads goes to
+  stdout, redacted, and nowhere else. No socket, no environment read, no GitHub
+  fetch or write, no command execution, no branch/commit/push/PR, no agent
+  logic or role wiring, and no approval stamping.
+- **It fails closed in order**, all before the workspace is touched:
+  `--apply-approved-plan`, then `--read-contents` (missing either reads no file
+  at all — not even the config), then the config, then the content opt-in, then
+  a string check rejecting an `--approved-plan` inside the workspace *before* it
+  is read, then the strict artifact parse, then exact `project_id`/`repo`
+  matching, then the candidate caps, then the lexical path policy for **every**
+  candidate. One refused path abandons the whole run. Only then does the Phase
+  5D0 canonical guard run. Missing, oversize, over-budget, directory and
+  binary/non-UTF-8 candidates are reported with a null `content_text` and the
+  run continues; a containment, symlink, ambiguity or resolution failure stops
+  everything with empty stdout.
+- **Output omits** the configured `workspace_path`, every resolved absolute
+  path, the raw artifact text, `approval_text`, `required_verification`, any
+  diff, any command output and any credential. File content appears in exactly
+  one place: `workspace_content.items[].content_text`.
+- **No other command changed.** `version`, `inspect-issue`, `llm-smoke-test`,
+  `generate-plan`, `real-llm-smoke-test`, `generate-model-plan`, `l2-dry-run`,
+  `l2-inspect-workspace` and `generate-patch-proposal` are exactly as they were.
+
+See
+[docs/PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md §21](docs/PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md).
+
+### Phase 5E1 (deterministic patch proposal generator — prose only, no diff)
+
+Phase 5E1 added the one thing Phase 5E0 deliberately withheld: a **deterministic,
 offline generator** that turns an approved L1 plan into a patch **proposal**
 artifact, plus **one** command, `generate-patch-proposal`, that prints it.
 
@@ -497,11 +562,13 @@ The following are intentionally **not** implemented yet:
   requires human approval, and nothing acts on it.
 - No agent logic.
 - No file editing or command execution.
-- No **writes** of any kind to a configured **target project workspace**, and no
-  reads of any file's **contents** in one. `l2-inspect-workspace` (Phase 5D1) is
-  the one command that may touch a target workspace, and it only canonicalizes
-  and `stat`s paths an approved plan named — it opens no file, lists no
-  directory, globs nothing, and walks no tree.
+- No **writes** of any kind to a configured **target project workspace**. Two
+  commands may *read* one, both read-only and both only for paths an approved
+  plan already named: `l2-inspect-workspace` (Phase 5D1) canonicalizes and
+  `stat`s them, and `l2-read-workspace-files` (Phase 5D2) additionally opens
+  regular files, within per-file/total byte caps and behind its own project
+  opt-in, and prints their contents redacted. Neither lists a directory, globs,
+  or walks a tree.
 - No **patch proposal**. Nothing produces a diff or an edit list.
 - No agent framework (LangGraph / CrewAI / AutoGen / n8n).
 
@@ -820,6 +887,63 @@ ambiguity, or resolution failure stops the whole run with nothing on stdout.
 - print the configured workspace path, any resolved absolute path, any file
   contents, the raw artifact text, `approval_text`, an API key, or a base URL.
 
+### L2 file-content inspection (Phase 5D2, read-only — bounded and redacted)
+
+```bash
+python -m ai_dev_orchestrator l2-read-workspace-files --project-config projects/my_project.yaml --approved-plan path/to/approved_plan.json --apply-approved-plan --read-contents
+```
+
+`l2-read-workspace-files` is the **only** command whose output may contain a
+target project's source. For each path the approved plan lists under
+`files_likely_to_change` it runs everything `l2-inspect-workspace` runs — the
+lexical path policy, the Phase 5D0 canonical guard, a `stat` — and then, only
+for a regular file inside the configured byte caps, opens it, decodes it as
+UTF-8, redacts obvious secret-like text, and prints it.
+
+It requires **both** `--apply-approved-plan` and `--read-contents`, and it
+requires this block in the project config — shipped **disabled**, and separate
+from Phase 5D1's `read_only_workspace_inspection`:
+
+```yaml
+read_only_workspace_content:
+  enabled: false
+  max_files: 10
+  max_file_bytes: 50000
+  max_total_bytes: 200000
+  allow_protected_paths: false
+```
+
+Each candidate ends in exactly one status: `read` (with `content_text`),
+`missing`, `directory_no_content`, `other_no_content`, `too_large`,
+`skipped_total_limit`, or `binary_or_non_utf8`. Every status but the first
+carries a null `content_text` and `bytes_read: 0`, and the run continues. A
+containment, symlink, ambiguity, or resolution failure stops the whole run with
+nothing on stdout.
+
+**Redaction is mandatory.** `Bearer <token>`, assignment values for
+`api_key`/`apikey`/`token`/`secret`/`password`/`passwd`/`pwd`, and OpenAI-style
+`sk-…` strings are replaced before anything is printed, and the output reports
+`redacted`, `redaction_count` and `redaction_kinds`. No config field and no flag
+disables it. It is a small deterministic backstop, **not** a guarantee that the
+output is secret-free — treat printed contents accordingly.
+
+`l2-read-workspace-files` **does not**:
+
+- list, glob, or walk any directory — a candidate that *is* a directory is
+  reported as `directory_no_content` and its entries are never enumerated,
+- read anything outside `files_likely_to_change`, including
+  `files_forbidden_or_out_of_scope`, or treat `proposed_steps`,
+  `required_verification`, `risks`, or `open_questions` as paths,
+- run any `required_verification` entry or any other command,
+- generate a diff or a patch, apply anything, or edit or write any file,
+- write an artifact file (stdout only) or stamp an approval,
+- create a branch, commit, or PR, or fetch from or write to GitHub,
+- call a model, **send any file content to a model**, open a socket, construct
+  an `LLMClient`, or read `AIDO_LITELLM_*` or any other environment variable,
+- print the configured workspace path, any resolved absolute path, the raw
+  artifact text, `approval_text`, `required_verification`, any diff, any command
+  output, an API key, or a base URL.
+
 ### Generating a patch proposal (Phase 5E1, offline — prose only, no diff)
 
 ```bash
@@ -998,10 +1122,22 @@ no model call, no network call, no environment read, no GitHub fetch or write,
 no agent logic or role wiring, and no approval stamping**, and it changed none
 of the eight commands that came before it.
 
+**Phase 5D2** added the `l2-read-workspace-files` command described in the
+status and usage sections above — the content half of the capability Phase 5D1
+split in two, shipped as its own command behind its own project opt-in rather
+than as a flag on the metadata one. It re-runs every Phase 5D1 gate, adds a
+second consent flag and a separate opt-in in front of them, bounds the read by
+file count and by per-file and total bytes, and redacts every byte it prints.
+It adds **no directory listings, no diff generation, no patch, no file editing,
+no command execution, no model call, no file content sent to a model, no
+network call, no environment read, no GitHub fetch or write, no agent logic or
+role wiring, and no approval stamping**, and it changed none of the nine
+commands that came before it.
+
 **L2 is proposed, not built.** No command can invoke it, and every later Phase 5
-sub-phase remains unauthorized — including reading file **contents** from a
-workspace, which Phase 5D1 deliberately stopped short of, and carrying a real
-**diff** in a proposal, which Phase 5E1 deliberately stopped short of. Until one
+sub-phase remains unauthorized — including carrying a real **diff** in a
+proposal, which Phase 5E1 deliberately stopped short of and which needs more
+than the file-content reads Phase 5D2 has since supplied. Until one
 is explicitly authorized, the project continues to avoid agent automation, patch
 application, file editing, command execution, GitHub writes, GitHub issue
 fetching inside a real model command, and target project workspace writes.

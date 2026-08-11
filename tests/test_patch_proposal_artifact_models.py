@@ -1313,6 +1313,9 @@ EXPECTED_COMMANDS = [
     "l2-dry-run",
     "l2-inspect-workspace",
     "generate-patch-proposal",
+    # Phase 5D2 later added one more read-only command; it still produces no
+    # diff, edits nothing, and runs nothing.
+    "l2-read-workspace-files",
 ]
 
 

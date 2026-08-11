@@ -51,6 +51,7 @@ from __future__ import annotations
 import enum
 import json
 import os
+import re
 from pathlib import Path
 
 import typer
@@ -2030,6 +2031,706 @@ def generate_patch_proposal(
         approved_plan=approved_plan,
         apply_approved_plan=apply_approved_plan,
         generate_proposal=generate_proposal,
+    )
+
+
+# -- L2 bounded read-only file-content inspection (Phase 5D2) ------------------
+
+_L2_READ_NOTICE = (
+    "L2 READ-ONLY FILE-CONTENT INSPECTION ONLY — bounded workspace file "
+    "contents may have been read and redacted, but no files were edited, no "
+    "diffs were generated, no commands were run, no model was called, and no "
+    "implementation occurred."
+)
+
+_L2_READ_NEXT_AUTHORIZATION = (
+    "Phase 5E2 or later must be explicitly authorized before generating diffs, "
+    "editing files, running commands, committing, pushing, opening PRs, or "
+    "sending source contents to a model."
+)
+
+# Printed inside the content block so a reader knows exactly how far the command
+# went: it proved paths exist, bounded what it opened, redacted what it printed,
+# and stopped there.
+_L2_READ_ITEMS_NOTE = (
+    "Bounded content only. Each path was checked against the lexical path "
+    "policy, canonicalized against the configured workspace root, and stat'd; "
+    "it was opened only if it is a regular file within the configured byte "
+    "caps. Any text shown has been passed through basic secret-like "
+    "redaction, which is best-effort and not a guarantee. No directory was "
+    "listed, no diff was produced, no file was written, nothing was executed, "
+    "and no content was sent to a model."
+)
+
+_L2_READ_EMPTY_NOTE = (
+    "The approved plan named no files_likely_to_change, so there was nothing "
+    "to read and the configured workspace was not touched at all."
+)
+
+_REDACTION_PLACEHOLDER = "[REDACTED]"
+_API_KEY_PLACEHOLDER = "[REDACTED_API_KEY]"
+
+# The redaction rules are deliberately three simple, deterministic patterns
+# rather than an attempt at real secret detection. They catch the shapes that
+# show up in config-ish source often enough to be worth catching; they will miss
+# others, and the output says so rather than claiming to be clean.
+#
+# Word boundaries are hand-rolled as `(?<![A-Za-z0-9])` / `(?![A-Za-z0-9])`
+# instead of `\b` so that an underscore-prefixed name like `MY_API_KEY` still
+# matches — `_` is a word character, so `\b` would not fire there.
+_SECRET_ASSIGNMENT_RE = re.compile(
+    r"(?<![A-Za-z0-9])(api[_-]?key|token|secret|password|passwd|pwd)"
+    r"(?![A-Za-z0-9])(\s*[:=]\s*)"
+    r"(\"[^\"\n]*\"|'[^'\n]*'|[^\s,;]+)",
+    re.IGNORECASE,
+)
+
+_BEARER_TOKEN_RE = re.compile(r"\bBearer\s+[A-Za-z0-9._~+/-]+=*", re.IGNORECASE)
+
+_OPENAI_STYLE_KEY_RE = re.compile(r"(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{8,}")
+
+
+def _replace_assignment_value(match: re.Match) -> str:
+    """Redact only the value half of a ``key = value`` pair, keeping any quotes."""
+    key, separator, value = match.group(1), match.group(2), match.group(3)
+    if len(value) >= 2 and value[0] in "\"'" and value[-1] == value[0]:
+        redacted = f"{value[0]}{_REDACTION_PLACEHOLDER}{value[0]}"
+    else:
+        redacted = _REDACTION_PLACEHOLDER
+    return f"{key}{separator}{redacted}"
+
+
+def _redact_secret_like_text(text: str) -> tuple[str, list[str]]:
+    """Blank out obvious secret-like substrings before any text reaches stdout.
+
+    Returns the redacted text and one kind label **per redaction made**, so the
+    caller can report both a count and the distinct kinds. Redaction is
+    mandatory — there is no configuration option that turns it off — and it is
+    applied to every byte of content this command prints.
+
+    This is not, and does not claim to be, reliable secret detection. It is a
+    small deterministic backstop for the three shapes below, applied
+    assignment-first so that a key like ``API_KEY=sk-...`` is counted once
+    rather than twice.
+    """
+    kinds: list[str] = []
+    redacted = text
+    for kind, pattern, replacement in (
+        ("secret_assignment", _SECRET_ASSIGNMENT_RE, _replace_assignment_value),
+        ("bearer_token", _BEARER_TOKEN_RE, f"Bearer {_REDACTION_PLACEHOLDER}"),
+        ("openai_style_key", _OPENAI_STYLE_KEY_RE, _API_KEY_PLACEHOLDER),
+    ):
+        redacted, count = pattern.subn(replacement, redacted)
+        kinds.extend([kind] * count)
+    return redacted, kinds
+
+
+def _read_bounded_bytes(resolved_candidate: str, *, limit: int) -> bytes | None:
+    """Read at most ``limit`` bytes from an already-canonicalized regular file.
+
+    Returns ``None`` when the file holds more than ``limit`` bytes. The cap is
+    enforced at the read itself rather than only against the size a previous
+    ``stat`` reported, so a file that grew in between is still refused instead
+    of being slurped whole.
+    """
+    with open(resolved_candidate, "rb") as handle:
+        chunk = handle.read(limit + 1)
+    return None if len(chunk) > limit else chunk
+
+
+def _decode_utf8_text(chunk: bytes) -> str | None:
+    """Decode strictly as UTF-8, or return ``None`` for anything else.
+
+    An embedded NUL is rejected up front: such a file is binary in every sense
+    that matters here even in the cases where its bytes happen to decode.
+    """
+    if b"\x00" in chunk:
+        return None
+    try:
+        return chunk.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def _empty_content_item(original: str, status: str, **overrides) -> dict:
+    """One result row for a candidate whose contents were deliberately not read.
+
+    Every status shares one shape, so a consumer never has to branch on which
+    keys are present — the not-read cases simply carry a null ``content_text``
+    and a zero ``bytes_read``.
+    """
+    item = {
+        "original_plan_path": original,
+        "canonical_relative_path": None,
+        "status": status,
+        "kind": None,
+        "size_bytes": None,
+        "bytes_read": 0,
+        "encoding": None,
+        "redacted": False,
+        "redaction_count": 0,
+        "redaction_kinds": [],
+        "content_text": None,
+    }
+    item.update(overrides)
+    return item
+
+
+def _run_l2_read_workspace_files(
+    *,
+    project_config: Path,
+    approved_plan: Path,
+    apply_approved_plan: bool,
+    read_contents: bool,
+) -> None:
+    """Print bounded, redacted contents of an approved plan's files. For tests.
+
+    This is the **first shipped code that may print target workspace file
+    contents**, and the ordering below is the whole safety argument. It is
+    Phase 5D1's ordering with one more consent flag and one more project opt-in
+    in front of it: every cheap, local, disk-free check runs first, the
+    workspace is touched only after all of them pass, and a file is opened only
+    after the Phase 5D0 canonical guard and a ``stat`` have both agreed it is a
+    regular file inside the configured byte caps.
+
+    In sequence: ``--apply-approved-plan``, then ``--read-contents`` (both
+    before any file is read), then the project config, then the project-level
+    ``read_only_workspace_content`` opt-in, then a string/path check rejecting
+    an ``--approved-plan`` inside the configured workspace, then the artifact
+    read, the strict Phase 5B parse, exact identity matching, the
+    candidate-count caps, and the lexical Phase 1 path policy for **every**
+    candidate. Only after all of that does any path get canonicalized, stat'd,
+    or opened.
+
+    Nothing here lists a directory, globs, walks a tree, generates a diff,
+    executes a command, edits a file, writes any file, runs a
+    ``required_verification`` entry, reads an environment variable, opens a
+    socket, calls a model, or contacts GitHub. No content read here is sent
+    anywhere: it goes to stdout, redacted, and nowhere else.
+    """
+    from ai_dev_orchestrator.config_loader import ConfigError, load_project_config
+    from ai_dev_orchestrator.handoff import (
+        ApprovedPlanError,
+        parse_approved_l1_plan_artifact,
+    )
+    from ai_dev_orchestrator.workspace import (
+        CanonicalPathError,
+        CanonicalPathInputError,
+        PathClassification,
+        PathPolicy,
+        canonicalize_existing_path_under_workspace,
+    )
+
+    # 1. Explicit confirmation that an approved plan may be acted on. Checked
+    #    first, so a plain invocation reads no file at all.
+    if not apply_approved_plan:
+        typer.echo(
+            "Error: l2-read-workspace-files acts on a human-approved plan "
+            "artifact and requires the explicit --apply-approved-plan flag. "
+            "Nothing was read and no workspace was touched.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # 2. Explicit confirmation that file *contents* may be read. A third,
+    #    separate consent: approving a plan is not permission to examine a
+    #    workspace, and permission to examine one is not permission to print
+    #    what its files say.
+    if not read_contents:
+        typer.echo(
+            "Error: l2-read-workspace-files reads and prints bounded file "
+            "contents from the project's configured workspace and requires the "
+            "explicit --read-contents flag. Nothing was read and no workspace "
+            "was touched.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # 3. Project config: the first file read. repo.workspace_path is still only
+    #    a string at this point — it is not read, listed, stat'd, or resolved.
+    try:
+        project = load_project_config(project_config)
+    except ConfigError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        typer.echo(
+            "The approved plan artifact was not read and no workspace was "
+            "touched.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # 4. Project-level opt-in, and a different one from Phase 5D1's: a project
+    #    that permits path metadata inspection has not thereby permitted its
+    #    source to be printed. An absent block is identical to a disabled one,
+    #    and either fails before the artifact is opened.
+    content_policy = project.read_only_workspace_content
+    if not content_policy.enabled:
+        typer.echo(
+            "Error: this project does not enable read-only workspace content "
+            "reads. Set read_only_workspace_content.enabled to true in the "
+            "project config to permit bounded file-content inspection.",
+            err=True,
+        )
+        typer.echo(
+            "The approved plan artifact was not read and no workspace was "
+            "touched.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # 5. Refuse an artifact that lives inside the configured target workspace,
+    #    BEFORE it is read or stat'd — which is why --approved-plan carries no
+    #    Typer exists=/readable= check. String/path normalization only.
+    if _is_same_or_under(approved_plan, project.repo.workspace_path):
+        typer.echo(
+            "Error: --approved-plan is inside the project's configured "
+            f"repo.workspace_path ({project.repo.workspace_path}). The approved "
+            "plan must live outside the workspace it authorizes; move it "
+            "outside that path and retry.",
+            err=True,
+        )
+        typer.echo(
+            "The approved plan artifact was not read and no workspace was "
+            "touched.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # 6. The guard has passed, so the artifact may be read. It is the second
+    #    file this command reads, and the last one outside the workspace.
+    try:
+        artifact_text = approved_plan.read_text(encoding="utf-8")
+    except OSError as exc:
+        typer.echo(f"Error: could not read --approved-plan: {exc}", err=True)
+        typer.echo("No workspace was touched.", err=True)
+        raise typer.Exit(code=1)
+
+    # 7. Parse strictly (Phase 5B). Rejected, never repaired.
+    try:
+        artifact = parse_approved_l1_plan_artifact(artifact_text)
+    except ApprovedPlanError as exc:
+        name = type(exc).__name__
+        category = _APPROVED_PLAN_FAILURE_CATEGORIES.get(name, "artifact failure")
+        typer.echo(f"Error: {name}: {category}. {exc}", err=True)
+        typer.echo(
+            "The artifact text and the plan prose are not echoed. No workspace "
+            "was touched and no file was read.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # 8. Exact identity matching against the config (design §3.5). A plan
+    #    approved for one project/repo grants nothing for another — and here
+    #    that mistake would mean printing another project's source.
+    mismatches = [
+        f"{label}: artifact has {artifact_value!r}, project config has "
+        f"{config_value!r}"
+        for label, artifact_value, config_value in (
+            ("project_id", artifact.project_id, project.project_id),
+            ("repo", artifact.repo, project.repo.github_repo),
+            ("plan.repo", artifact.plan.repo, project.repo.github_repo),
+            (
+                "plan_provenance.repo",
+                artifact.plan_provenance.repo,
+                project.repo.github_repo,
+            ),
+        )
+        if artifact_value != config_value
+    ]
+    if mismatches:
+        typer.echo(
+            "Error: the approved plan does not match this project config "
+            "exactly. A plan approved for one project/repo grants nothing for "
+            "another.",
+            err=True,
+        )
+        for mismatch in mismatches:
+            typer.echo(f"  Mismatch in {mismatch}", err=True)
+        typer.echo("No workspace was touched.", err=True)
+        raise typer.Exit(code=1)
+
+    plan = artifact.plan
+
+    # 9. Candidates come from files_likely_to_change and nowhere else.
+    #    files_forbidden_or_out_of_scope is never read — naming a path as out of
+    #    scope must not become a way to have it printed — and proposed_steps /
+    #    required_verification / risks / open_questions are prose that is never
+    #    treated as a path.
+    candidates = _dedupe_preserving_order(list(plan.files_likely_to_change))
+
+    if len(candidates) > content_policy.max_files:
+        typer.echo(
+            f"Error: the approved plan names {len(candidates)} distinct paths, "
+            "which exceeds read_only_workspace_content.max_files "
+            f"({content_policy.max_files}). No workspace was touched.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    if len(candidates) > project.workspace_policy.max_changed_files:
+        typer.echo(
+            f"Error: the approved plan names {len(candidates)} distinct paths, "
+            "which exceeds workspace_policy.max_changed_files "
+            f"({project.workspace_policy.max_changed_files}). No workspace was "
+            "touched.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # 10. The lexical Phase 1 policy runs for EVERY candidate before any of them
+    #     is canonicalized, stat'd, or opened. A single failure stops the whole
+    #     run: a plan that names one forbidden path does not get the contents of
+    #     its other paths printed.
+    policy = PathPolicy.from_project_config(project)
+    normalized: list[tuple[str, str]] = []
+    refusals: list[str] = []
+    for original in candidates:
+        decision = policy.check_read(original)
+        if decision.classification is PathClassification.PROTECTED:
+            if not content_policy.allow_protected_paths:
+                refusals.append(
+                    f"{original!r}: classified protected, and "
+                    "read_only_workspace_content.allow_protected_paths is false"
+                )
+                continue
+        elif not decision.permitted:
+            refusals.append(
+                f"{original!r}: classified {decision.classification.value} "
+                f"({decision.reason})"
+            )
+            continue
+        normalized.append((original, decision.path))
+
+    if refusals:
+        typer.echo(
+            "Error: the approved plan names paths the project's path policy "
+            "refuses to read. The whole run is abandoned; no path was "
+            "canonicalized, stat'd, opened, or otherwise touched.",
+            err=True,
+        )
+        for refusal in refusals:
+            typer.echo(f"  Refused {refusal}", err=True)
+        raise typer.Exit(code=1)
+
+    # 11. Every candidate passed the lexical gate, so — and only so — the
+    #     configured workspace may be touched. The root is canonicalized first,
+    #     which proves it exists, is a directory, and satisfies the symlink
+    #     policy before any candidate is resolved against it. With no candidates
+    #     there is nothing to read and the workspace stays untouched.
+    items: list[dict] = []
+    total_bytes_read = 0
+    allow_symlinks = project.workspace_policy.allow_symlinks
+
+    if normalized:
+        try:
+            canonicalize_existing_path_under_workspace(
+                project.repo.workspace_path,
+                project.repo.workspace_path,
+                allow_symlinks=allow_symlinks,
+            )
+        except CanonicalPathError as exc:
+            typer.echo(
+                "Error: the configured repo.workspace_path could not be "
+                f"canonicalized. {type(exc).__name__}: {exc}",
+                err=True,
+            )
+            typer.echo("No candidate path was read.", err=True)
+            raise typer.Exit(code=1)
+
+    for original, candidate in normalized:
+        try:
+            resolved = canonicalize_existing_path_under_workspace(
+                project.repo.workspace_path,
+                candidate,
+                allow_symlinks=allow_symlinks,
+            )
+        except CanonicalPathInputError:
+            # The root was proven good above and the candidate is a non-blank
+            # string that passed the lexical gate, so the only remaining input
+            # failure is "this path does not exist". That is an ordinary,
+            # reportable answer, not a boundary violation.
+            items.append(_empty_content_item(original, "missing"))
+            continue
+        except CanonicalPathError as exc:
+            # Containment, symlink, ambiguity, and resolution failures are
+            # boundary violations. They stop the whole run.
+            typer.echo(
+                f"Error: {original!r} failed the canonical workspace path "
+                f"guard. {type(exc).__name__}: {exc}",
+                err=True,
+            )
+            typer.echo("The run is abandoned; no result is printed.", err=True)
+            raise typer.Exit(code=1)
+
+        relative = resolved.relative_path.replace("\\", "/")
+
+        try:
+            kind, size_bytes = _stat_kind_and_size(resolved.resolved_candidate)
+        except FileNotFoundError:
+            # Time-of-check/time-of-use: the path existed a moment ago and does
+            # not now. Reported as missing rather than as a violation.
+            items.append(_empty_content_item(original, "missing"))
+            continue
+        except OSError as exc:
+            typer.echo(
+                f"Error: metadata for {original!r} could not be read after "
+                f"canonicalization. {type(exc).__name__}: {exc}",
+                err=True,
+            )
+            typer.echo("The run is abandoned; no result is printed.", err=True)
+            raise typer.Exit(code=1)
+
+        # A directory is reported as one and its entries are never enumerated;
+        # anything that is neither a regular file nor a directory is reported
+        # and left alone rather than guessed at.
+        if kind != "file":
+            items.append(
+                _empty_content_item(
+                    original,
+                    "directory_no_content" if kind == "directory" else "other_no_content",
+                    canonical_relative_path=relative,
+                    kind=kind,
+                )
+            )
+            continue
+
+        if size_bytes > content_policy.max_file_bytes:
+            items.append(
+                _empty_content_item(
+                    original,
+                    "too_large",
+                    canonical_relative_path=relative,
+                    kind=kind,
+                    size_bytes=size_bytes,
+                )
+            )
+            continue
+
+        if total_bytes_read + size_bytes > content_policy.max_total_bytes:
+            items.append(
+                _empty_content_item(
+                    original,
+                    "skipped_total_limit",
+                    canonical_relative_path=relative,
+                    kind=kind,
+                    size_bytes=size_bytes,
+                )
+            )
+            continue
+
+        # 12. Only now is a file opened, and only up to the per-file cap.
+        try:
+            chunk = _read_bounded_bytes(
+                resolved.resolved_candidate, limit=content_policy.max_file_bytes
+            )
+        except FileNotFoundError:
+            items.append(_empty_content_item(original, "missing"))
+            continue
+        except OSError as exc:
+            typer.echo(
+                f"Error: {original!r} could not be read after it was stat'd. "
+                f"{type(exc).__name__}: {exc}",
+                err=True,
+            )
+            typer.echo("The run is abandoned; no result is printed.", err=True)
+            raise typer.Exit(code=1)
+
+        if chunk is None:
+            # The file grew past the per-file cap between the stat and the read.
+            items.append(
+                _empty_content_item(
+                    original,
+                    "too_large",
+                    canonical_relative_path=relative,
+                    kind=kind,
+                    size_bytes=size_bytes,
+                )
+            )
+            continue
+
+        text = _decode_utf8_text(chunk)
+        if text is None:
+            items.append(
+                _empty_content_item(
+                    original,
+                    "binary_or_non_utf8",
+                    canonical_relative_path=relative,
+                    kind=kind,
+                    size_bytes=size_bytes,
+                )
+            )
+            continue
+
+        content_text, redaction_kinds = _redact_secret_like_text(text)
+        total_bytes_read += len(chunk)
+        items.append(
+            {
+                "original_plan_path": original,
+                "canonical_relative_path": relative,
+                "status": "read",
+                "kind": kind,
+                "size_bytes": size_bytes,
+                "bytes_read": len(chunk),
+                "encoding": "utf-8",
+                "redacted": bool(redaction_kinds),
+                "redaction_count": len(redaction_kinds),
+                "redaction_kinds": _dedupe_preserving_order(redaction_kinds),
+                "content_text": content_text,
+            }
+        )
+
+    approval = artifact.approval
+    provenance = artifact.plan_provenance
+
+    # 13. Report. File content appears in exactly one place — items[].content_text,
+    #     after the byte caps and after redaction. Deliberately absent: the
+    #     configured workspace_path, any resolved absolute path, any directory
+    #     listing, any diff or before/after pair, any command or command output,
+    #     the raw artifact text, `approval_text`, any prompt or completion, and
+    #     any API key or base URL. `required_verification` is absent too — this
+    #     command did not run it, and reprinting it here would only invite
+    #     someone to.
+    output = {
+        "notice": _L2_READ_NOTICE,
+        "mode": "l2-read-workspace-files",
+        "project": {
+            "project_id": project.project_id,
+            "repo": project.repo.github_repo,
+            "workspace_policy": {
+                "deny_outside_workspace": (
+                    project.workspace_policy.deny_outside_workspace
+                ),
+                "allow_symlinks": project.workspace_policy.allow_symlinks,
+                "max_changed_files": project.workspace_policy.max_changed_files,
+            },
+            "content_policy": {
+                "enabled": content_policy.enabled,
+                "max_files": content_policy.max_files,
+                "max_file_bytes": content_policy.max_file_bytes,
+                "max_total_bytes": content_policy.max_total_bytes,
+                "allow_protected_paths": content_policy.allow_protected_paths,
+                "redaction": "mandatory_basic_secret_like_redaction",
+            },
+        },
+        "approved_plan": {
+            "approved_by": approval.approved_by,
+            "approved_at": approval.approved_at.isoformat(),
+            "source": approval.source,
+            "plan_engine": provenance.engine,
+            "real_call": provenance.real_call,
+            "model": provenance.model,
+            "issue_number": artifact.issue_number,
+            "title": plan.title,
+        },
+        "workspace_content": {
+            "note": _L2_READ_ITEMS_NOTE if items else _L2_READ_EMPTY_NOTE,
+            "candidate_source": "approved_plan.files_likely_to_change",
+            "file_contents_read": True,
+            "directories_listed": False,
+            "commands_run": False,
+            "model_called": False,
+            "diffs_generated": False,
+            "files_edited": False,
+            "total_bytes_read": total_bytes_read,
+            "items": items,
+        },
+        "next_authorization_required": _L2_READ_NEXT_AUTHORIZATION,
+    }
+    typer.echo(json.dumps(output, indent=2))
+
+
+@app.command("l2-read-workspace-files")
+def l2_read_workspace_files(
+    project_config: Path = typer.Option(
+        ...,
+        "--project-config",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Path to the project config YAML the approved plan must match. "
+        "Its read_only_workspace_content block must enable content reads.",
+    ),
+    approved_plan: Path = typer.Option(
+        ...,
+        "--approved-plan",
+        # Deliberately no exists=/readable= check: Typer would stat the path
+        # before the command body could reject one inside the configured
+        # workspace. The guard runs first; the file is opened only afterwards.
+        help="Path to a human-approved L1 plan artifact (Phase 5B shape). Must "
+        "not be inside the project's configured workspace path.",
+    ),
+    apply_approved_plan: bool = typer.Option(
+        False,
+        "--apply-approved-plan",
+        help="Required explicit confirmation that an approved plan may be "
+        "acted on. Without it this command fails without reading anything.",
+    ),
+    read_contents: bool = typer.Option(
+        False,
+        "--read-contents",
+        help="Required explicit confirmation that bounded file contents from "
+        "the project's configured workspace may be read and printed. Without "
+        "it this command fails without reading anything.",
+    ),
+    output_format: GeneratePlanFormat = typer.Option(
+        GeneratePlanFormat.json,
+        "--format",
+        help="Output format. Only 'json' is currently supported.",
+    ),
+) -> None:
+    """Print bounded, redacted contents of an approved plan's files. **Read-only.**
+
+    Phase 5D1's ``l2-inspect-workspace`` answers "does this path exist and how
+    big is it". This command answers the strictly larger question "what does it
+    say", and is the first shipped command whose output may contain target
+    workspace source. For each path the approved plan lists under
+    ``files_likely_to_change`` it canonicalizes the path against the workspace
+    root, stats it, and — only for a regular file within the configured byte
+    caps — reads it, decodes it as UTF-8, redacts obvious secret-like text, and
+    prints the result.
+
+    It does **not**: list, glob, or walk any directory (a candidate that *is* a
+    directory is reported as ``directory_no_content`` and its entries are not
+    enumerated); read any path outside ``files_likely_to_change``, including
+    ``files_forbidden_or_out_of_scope``; treat ``proposed_steps``,
+    ``required_verification``, ``risks``, or ``open_questions`` as paths; run
+    any ``required_verification`` entry or any other command; generate a diff
+    or a patch; apply anything; edit or write any file; write an artifact file
+    (stdout only); create a branch, commit, or PR; fetch from or write to
+    GitHub; call a model or send any file content to one; open a socket; or
+    read ``AIDO_LITELLM_*`` or any other environment variable. It never writes
+    or stamps an approval.
+
+    Four things must all be true before the workspace is touched: both
+    ``--apply-approved-plan`` and ``--read-contents`` must be given, the
+    project config's ``read_only_workspace_content.enabled`` must be true, and
+    the approved plan must validate and match the config exactly. The gate then
+    fails closed in order: the two flags first (without either, nothing is read
+    at all), then the config, then the project opt-in, then a string/path check
+    rejecting an ``--approved-plan`` inside the configured workspace **before**
+    it is read or stat'd, then the strict Phase 5B parse, then exact
+    ``project_id``/``repo`` matching, then the candidate-count caps from
+    ``max_files`` and ``max_changed_files``, then the lexical Phase 1 path
+    policy for **every** candidate — forbidden, outside, and unlisted paths
+    always refused, and protected paths refused unless ``allow_protected_paths``
+    is true.
+
+    Only after all of that is any path canonicalized, through the Phase 5D0
+    guard honoring ``workspace_policy.allow_symlinks``. A missing path, a
+    directory, a file over ``max_file_bytes``, a file that would breach
+    ``max_total_bytes``, and a binary or non-UTF-8 file are each reported with
+    a null ``content_text`` and the run continues; a containment, symlink,
+    ambiguity, or resolution failure stops the whole run. Redaction is
+    mandatory, best-effort, and has no off switch. Any failure exits non-zero
+    with stderr only and nothing on stdout, and never echoes the artifact text,
+    the plan prose, or any file content.
+    """
+    _run_l2_read_workspace_files(
+        project_config=project_config,
+        approved_plan=approved_plan,
+        apply_approved_plan=apply_approved_plan,
+        read_contents=read_contents,
     )
 
 
