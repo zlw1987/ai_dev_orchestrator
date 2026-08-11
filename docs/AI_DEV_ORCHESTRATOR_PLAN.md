@@ -116,9 +116,17 @@ Model roles must be configurable. Each role specifies:
   **local files** — into unified diff text printed to stdout, with **no target
   workspace file read directly, no diff applied, no apply-cleanliness check, no
   file editing, no command execution, no artifact file written, and no model
-  call**).
-  **L2 is proposed, not built**, and no command can invoke it. Phase 5F — the
-  first phase that could edit a file — remains proposed and not authorized.
+  call**; Phase 5F0 typed the **file-edit write gate** as models plus a strict
+  parser, library only — the second, separately worded human approval of one
+  *concrete diff proposal*, which is never inferred from the L1 plan approval,
+  from a diff proposal existing or parsing, from a file being present, from
+  issue prose, or from model output, with **no file editing, no diff
+  application, no apply-cleanliness check, no workspace access, no command
+  execution, no model call, no branch/commit/push/PR, no artifact file written,
+  no approval stamping, and no CLI behavior**).
+  **L2 is proposed, not built**, and no command can invoke it. Nothing shipped
+  so far edits a file; Phase 5F1 and the file-editing phase beyond it remain
+  proposed and not authorized.
 - **Phase 6 — qwen reviewer.**
 - **Phase 7 — fix loop.**
 - **Phase 8 — local commit.**

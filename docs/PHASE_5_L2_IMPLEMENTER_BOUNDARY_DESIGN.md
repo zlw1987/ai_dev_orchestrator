@@ -20,9 +20,11 @@
 > artifact models and a parser only** — §19, Phase 5E1 as a **deterministic,
 > offline proposal generator and one CLI command** — §20, Phase 5D2 as
 > **bounded read-only file-content inspection only** — §21, Phase 5E2 as
-> **unified diff proposal artifact models and a parser only** — §22, and Phase
+> **unified diff proposal artifact models and a parser only** — §22, Phase
 > 5E3 as a **deterministic, offline diff proposal producer and one CLI command**
-> — §23. Phase 5F onward remain proposals, and L2 is still not built.)
+> — §23, and Phase 5F0 as **file-edit write gate models and a parser only** —
+> §24. Phase 5F1 onward remain proposals, nothing edits a file, and L2 is still
+> not built.)
 >
 > **L2 may not be invoked by any existing command after this phase.** After
 > Phase 5A the shipped CLI surface is exactly what Phase 4L left behind —
@@ -124,8 +126,14 @@
 > edited, no command run, no model / network / environment access, no GitHub
 > fetch or write, no artifact file written, and no approval stamped.
 >
-> **Phase 5F and every later sub-phase in §13 remain proposed and not
-> authorized. Phase 5F is the first phase that could edit a file.**
+> **Phase 5F0 has since been authorized and implemented as file-edit write gate
+> models and a strict parser only** — the second, separate human approval a
+> future file-editing phase would need, typed as data (§24). It edits nothing,
+> applies nothing, checks no apply-cleanliness, runs nothing, adds no command,
+> and stamps no approval.
+>
+> **Phase 5F1 and every later sub-phase in §13 remain proposed and not
+> authorized. Nothing shipped so far edits a file.**
 
 ## 1. Goal
 
@@ -916,6 +924,15 @@ abandoned.
   could never apply. **No diff applied, no apply-cleanliness checked, no
   workspace read, no file edits, no commands, no model, no artifact file
   written.** See §23.
+- **Phase 5F0 — file-edit write gate models and parser (DONE).** The explicit,
+  separately worded human approval of one **concrete diff proposal**, typed as
+  data. It is the gate a write would have to pass, built and reviewable before
+  anything can write. **No file edit, no diff application, no apply-cleanliness
+  check, no workspace read, no commands, no model, no CLI command, no artifact
+  file written, no approval stamped.** See §24.
+- **Phase 5F1 — proposed, not authorized.** May add a separately gated
+  **dry-run apply plan** — what a write *would* touch — but **not file editing**
+  unless explicitly authorized.
 - **Phase 5F — controlled file editing under `allowed_paths`.** The first write.
   `max_changed_files` enforced, dirty-tree check enforced. **No command
   execution.**
@@ -2523,4 +2540,156 @@ secret-like value.
   authorized. Phase 5F is the first phase that could edit a file.** Applying a
   diff, editing a file, executing a command, committing, pushing, opening a PR,
   and sending source contents to a model all still require their own explicit
-  authorization.
+  authorization. *(Phase 5F0 — typing the human approval a write would have to
+  pass — has since been implemented as **models and a parser only**; see §24.
+  Nothing edits a file.)*
+
+## 24. Phase 5F0 — file-edit write gate models and parser (DONE)
+
+Phase 5E3 produces a concrete `DiffProposalArtifact` deterministically and
+offline, and prints it. Nobody has read it. Phase 5F0 types the **explicit human
+approval** that any future file-editing phase would have to be handed before it
+could write a single byte into a target workspace — and ships nothing that
+writes.
+
+**Phase 5F0 is file-edit write gate models and a strict parser only.** It is
+**not** file editing, **not** diff application, **not** apply-cleanliness
+checking, **not** command execution, **not** model-backed L2, and **not** L2. It
+is a library: `src/ai_dev_orchestrator/file_editing/`, wired into no command.
+
+### 24.1 Why a second approval exists
+
+Phase 5B's `REQUIRED_APPROVAL_TEXT` records that a human approved an **L1 plan**
+for L2 implementation. That is an approval of *intent* — a summary, a scope, a
+list of files that may change. It is not an approval of the **concrete diff**
+Phase 5E3 later generated from that plan, which the human had not seen when they
+approved the plan.
+
+So Phase 5F0 introduces a second, differently worded sentence:
+
+```
+REQUIRED_DIFF_EDIT_APPROVAL_TEXT = "I approve this diff proposal for workspace file editing"
+```
+
+It is compared with `==`. A paraphrase, a case variant, padded whitespace,
+trailing punctuation, and the Phase 5B plan sentence are all **not** approval.
+
+The orchestrator must never infer this approval from:
+
+- the approved L1 plan artifact wrapped inside the proposal — a different
+  approval of a different thing, re-validated here and never reused;
+- the diff proposal artifact existing, parsing, or setting
+  `requires_human_review`, which *requests* review and never records that it
+  happened;
+- a file being present on disk;
+- issue prose or an `Automation Authorization` heading, which anyone who can
+  edit an issue can write;
+- model output of any kind.
+
+Nothing in this phase stamps an approval. Writing the block **is** the approval
+act, and it is a human's.
+
+### 24.2 What the artifact carries, and what it refuses to carry
+
+`ApprovedDiffProposalArtifact` is `schema_version`
+(`"approved-diff-proposal.v1"`), `mode` (`"file-edit-approval-only"`),
+`approval` (a `DiffEditApproval`), `diff_proposal` (an **untouched** Phase 5E2
+snapshot), `project_id`, `repo`, `issue_number`, `title`, and
+`next_authorization_required`. Every model is `extra="forbid"`.
+
+Identity is matched **exactly**, in both directions — against
+`diff_proposal.provenance` and against `diff_proposal.approved_plan` (whose
+title lives on `.plan.title`). String equality only; no normalization, no case
+folding. The failure this prevents is an approval given for one issue being
+carried into another.
+
+Every invariant the proposal already guarantees is **re-checked here**: the plan
+is still `automation_level == "L1"` with `requires_human_approval` true; the
+proposal still has `requires_human_review` true and `diffs_generated` true, with
+`files_edited`, `commands_run` and `applies_cleanly_checked` all false; no
+duplicate `changes[].path`; every path exactly inside `files_likely_to_change`
+and none inside `files_forbidden_or_out_of_scope`. A write gate must not inherit
+its safety from a model it does not own, and pydantic does not re-validate a
+model instance it is handed — so an object mutated or hand-built after
+validation reaches the gate, and the gate checks it again. An optional wrapped
+patch proposal keeps Phase 5E2's consistency rules unchanged and unloosened.
+
+`diff_proposal.changes` may be **empty**: a human may approve a proposal that
+proposes nothing, in which case a future apply phase would have nothing to edit.
+That is well-formed, and it authorizes no write.
+
+There is **no field** for raw artifact text, source contents outside a diff,
+`before_content`/`after_content`, a prompt, a completion, an API key, a base
+URL, a workspace path, a command or its output, an apply result, `auto_apply`, a
+branch name, a commit id, or a PR URL. Each is rejected as an extra. Source text
+appears only as diff context inside the wrapped diffs.
+
+**This model does not prove a diff applies** — `applies_cleanly_checked` must
+still be false, because nobody asked. It does not authorize command execution,
+and it does not authorize commits, pushes, or PRs. It records a human approval
+that a future, separately authorized file-editing phase may consider, and no
+such phase exists.
+
+### 24.3 Acceptance criteria for Phase 5F0 (DONE)
+
+- [x] A valid artifact parses into `ApprovedDiffProposalArtifact`, carries a
+  `DiffEditApproval`, and carries the wrapped `DiffProposalArtifact` snapshot
+  unchanged. It may wrap a `modify` diff, a `create` diff, or empty changes.
+  Surrounding whitespace is accepted; the three constants are the exact strings
+  above; the three error types share one base.
+- [x] The approval block is required; `approved_by` must be non-blank,
+  `approved_at` parseable, `source` `"manual"` only, and `approval_text` an
+  exact match. Lowercase variants, a trailing period, padded whitespace,
+  paraphrases, `"I approve this L1 plan for L2 implementation"` and
+  `"Automation Authorization: approved"` are all rejected, as are missing
+  fields, extra fields, and `model`/`automatic`/`github`/`issue` sources.
+- [x] **Approval is never inferred** — not from the wrapped L1 plan approval
+  (which is valid and approves something else), not from
+  `diff_proposal.requires_human_review`, and not from a file being present.
+  There is no loader, no writer, and nothing that stamps an approval.
+- [x] Wrapper `project_id`/`repo`/`issue_number`/`title` must match the
+  proposal's provenance **and** its nested approved plan exactly; case
+  differences are rejected. `repo` must look like `owner/repo`, `issue_number`
+  must be positive, and `project_id`, `title` and `next_authorization_required`
+  must be non-blank. `schema_version` and `mode` are exact.
+- [x] `diff_proposal` is required, a malformed one is rejected through nested
+  validation, and every proposal invariant is re-checked — through JSON **and**
+  on a mutated object handed in directly: the flags, the L1 level and human
+  approval requirement, duplicate paths, out-of-scope paths, and forbidden
+  paths. A positive control proves the direct-construction path itself works.
+- [x] Every forbidden artifact-level extra is rejected (`raw_artifact_text`,
+  `source_contents`, `file_contents`, `before_content`/`after_content`,
+  `command`/`commands`/`command_output`, `prompt`, `completion`, `api_key`,
+  `base_url`, `workspace_path`, `apply`/`auto_apply`, `branch`, `commit`,
+  `push`, `pr_url`), as is every forbidden approval-level extra
+  (`endpoint_host`, `base_url`, `api_key`, `prompt`, `completion`, `messages`,
+  `raw_response`, `workspace_path`). No apply/edit/command/git field exists on
+  either model, and error messages never echo the diff, the approval text, or a
+  secret-like value.
+- [x] The parser accepts surrounding whitespace and rejects empty text, invalid
+  JSON, markdown fences, prose before or after the object, non-object JSON, and
+  non-string input. It wraps `ValidationError`, never repairs, never strips
+  unknown fields, never infers missing ones, prints nothing, and is
+  deterministic.
+- [x] **The parser performs no IO** — no file, environment, network, or process
+  access on the success path or on any failure path, and no file is written. The
+  implementation module's globals contain none of `httpx`, `requests`,
+  `LLMClient`, `LLMClientConfig`, `load_llm_client_config_from_env`,
+  `GitHubClient`, `typer`, `Path`, `os`, `socket`, `subprocess`, `difflib`.
+- [x] The package exports exactly the nine Phase 5F0 names and no editor,
+  applier, loader, writer, runner, or git helper.
+- [x] **No CLI behavior added.** Root help still lists exactly the eleven Phase
+  5E3 commands; importing `file_editing` adds none; `generate-diff-proposal`,
+  `l2-read-workspace-files`, `generate-patch-proposal`, `l2-inspect-workspace`,
+  `l2-dry-run`, `generate-plan` and `generate-model-plan` keep their exact
+  options and none gains an approve/apply/edit flag. No workspace access, no
+  GitHub fetch or write, no command execution, no file editing, no branch,
+  commit, push or PR, no agent logic, no implementer/reviewer/fixer role wiring,
+  no artifact writing, and no approval stamping.
+- [x] **Tests use literal dicts and JSON only** — no real environment, no
+  network, no target workspace read, and no real `C:\dev` path.
+- [x] **Phase 5F1 and every later sub-phase in §13 remain proposed and not
+  authorized.** Phase 5F1 may add a separately gated **dry-run apply plan**, but
+  **not file editing** unless explicitly authorized. Applying a diff, editing a
+  file, executing a command, committing, pushing, opening a PR, and sending
+  source contents to a model all still require their own explicit authorization.
