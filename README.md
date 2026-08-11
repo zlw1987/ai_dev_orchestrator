@@ -17,7 +17,50 @@ changes. The eventual design will:
 
 The emphasis is on **control and review**, not autonomous action.
 
-## Current status: Phase 5D1 (read-only workspace metadata inspection)
+## Current status: Phase 5E0 (patch proposal artifact models and parser — library only)
+
+Phase 5E0 adds the `ai_dev_orchestrator.patch_proposal` package: typed models
+for a **patch proposal artifact** plus a strict JSON parser. It adds **no
+command and no option**, and nothing in the shipped code imports it.
+
+- **This is not patch generation.** There is no generator here. Nothing produces
+  a proposal — a parsed one was written elsewhere. Producing one is a later,
+  separately authorized phase.
+- **The artifact carries no diff.** No unified diff, no patch, no hunk, no edit
+  script, no command, and no file content or before/after text. A change is a
+  path, a rationale, and prose steps for a **human**. There is nothing applyable
+  in it, so it cannot be applied by mistake.
+- **It reads no file contents and touches no workspace.** Paths are validated as
+  *strings*, lexically — relative only, no traversal, no absolute or UNC or
+  device form, no trailing dot or space, no 8.3-like component. Nothing is
+  joined to a workspace root, canonicalized, stat'd, or opened.
+- **A proposal may narrow the approved scope, never widen it.** Every proposed
+  path must appear exactly in the approved plan's `files_likely_to_change` and
+  must not appear in `files_forbidden_or_out_of_scope`. Duplicate paths are
+  rejected rather than merged.
+- **A proposal cannot authorize itself.** It wraps an untouched approved-plan
+  artifact, re-validated on every parse, and its provenance must match that plan
+  exactly on `project_id`, `repo`, `issue_number` and `title`.
+- **`file_contents_read`, `files_edited` and `commands_run` must all be false**,
+  and `requires_human_review` must be true. These are the *shape* of a legal
+  artifact, not observations: a payload claiming otherwise is rejected.
+- **`engine: "model"` is a recorded claim, not an instruction.** Parsing it
+  calls nothing. A `deterministic` or `manual` engine must carry no model name
+  and `real_call: false`.
+- **Strict, never repairing.** Markdown fences, prose around the JSON, arrays,
+  numbers, booleans and `null` are rejected; unknown fields are never stripped
+  and missing fields are never inferred.
+- **No model call, no network call, no environment read, no GitHub fetch or
+  write, no command execution, no file editing, no file loading, no branch,
+  commit, push or PR, no agent logic or role wiring, and no approval stamping.**
+- **No other command changed.** `version`, `inspect-issue`, `llm-smoke-test`,
+  `generate-plan`, `real-llm-smoke-test`, `generate-model-plan`, `l2-dry-run`
+  and `l2-inspect-workspace` are exactly as they were.
+
+See
+[docs/PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md §19](docs/PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md).
+
+### Phase 5D1 (read-only workspace metadata inspection)
 
 Phase 5D1 adds **one** command, `l2-inspect-workspace`. It is the **first
 command here that may touch a configured target workspace**, and the touch it
@@ -845,9 +888,17 @@ call, no network call, no environment read, no GitHub fetch or write, no agent
 logic or role wiring, and no approval stamping**, and it changed none of the
 seven commands that came before it.
 
+**Phase 5E0** then typed the **patch proposal artifact** — the
+`ai_dev_orchestrator.patch_proposal` package described in the status section
+above. It is **not patch generation**: there is no generator, and the artifact
+carries no unified diff and no file content. Library only, wired into nothing —
+no command, no option, no workspace access, no model/network/environment access,
+and no approval stamping.
+
 **L2 is proposed, not built.** No command can invoke it, and every later Phase 5
 sub-phase remains unauthorized — including reading file **contents** from a
-workspace, which Phase 5D1 deliberately stopped short of. Until one is
+workspace, which Phase 5D1 deliberately stopped short of, and *generating* a
+patch proposal, which Phase 5E0 deliberately stopped short of. Until one is
 explicitly authorized, the project continues to avoid agent automation, patch
 proposals, file editing, command execution, GitHub writes, GitHub issue fetching
 inside a real model command, and target project workspace writes.

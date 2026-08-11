@@ -93,7 +93,10 @@ Model roles must be configurable. Each role specifies:
   may touch a configured target workspace and only as `stat` — path existence,
   kind, and size for an approved plan's `files_likely_to_change`, behind a
   project-level opt-in, with **no file content reads, no directory listings, no
-  patch proposal, no file editing, and no command execution**).
+  patch proposal, no file editing, and no command execution**; Phase 5E0 typed
+  the patch proposal artifact as models plus a strict parser, library only —
+  **not** patch generation, with **no diff, no file content, no workspace
+  access, and no CLI behavior**).
   **L2 is proposed, not built**, and no command can invoke it.
 - **Phase 6 — qwen reviewer.**
 - **Phase 7 — fix loop.**

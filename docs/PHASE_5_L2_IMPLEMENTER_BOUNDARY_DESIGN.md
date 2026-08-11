@@ -15,9 +15,10 @@
 > *proposal* and requires its own explicit authorization. (Phase 5B has since
 > been authorized and implemented as **typed models and a parser only** — §15 —
 > Phase 5C as a **dry-run validation command only** — §16, Phase 5D0 as a
-> **canonical path guard library only** — §17, and Phase 5D1 as **read-only
-> workspace metadata inspection only** — §18. Phase 5E onward remain proposals,
-> and L2 is still not built.)
+> **canonical path guard library only** — §17, Phase 5D1 as **read-only
+> workspace metadata inspection only** — §18, and Phase 5E0 as **patch proposal
+> artifact models and a parser only** — §19. Phase 5D2, Phase 5E1 onward remain
+> proposals, and L2 is still not built.)
 >
 > **L2 may not be invoked by any existing command after this phase.** After
 > Phase 5A the shipped CLI surface is exactly what Phase 4L left behind —
@@ -59,8 +60,17 @@
 > matching, candidate-count caps, the lexical Phase 1 path policy, and the Phase
 > 5D0 canonical guard. **It reads no file contents, lists no directory, runs no
 > command, edits no file, proposes no patch, and calls no model.**
-> **Phase 5E and every later sub-phase in §13 remain proposed and not
-> authorized.**
+>
+> **Phase 5E0 is now DONE** (§19). It typed the **patch proposal artifact** as
+> pydantic models plus a strict parser — `ai_dev_orchestrator.patch_proposal` —
+> and nothing else. **It is not patch generation**: there is no generator, and
+> the artifact deliberately carries **no unified diff**, no patch, no edit
+> script, no command, and no file content. Library only — no CLI behavior, no
+> workspace access, no file contents read, no file edited, no command run, no
+> model / network / environment access, and no approval stamped.
+>
+> **Phase 5D2, Phase 5E1, and every later sub-phase in §13 remain proposed and
+> not authorized.**
 
 ## 1. Goal
 
@@ -800,8 +810,24 @@ abandoned.
   how big is it" and "what does `src/foo/bar.py` say" are different disclosures,
   and only the first is shipped. Content reads need their own size caps,
   redaction question, and authorization. **Proposed and not authorized.**
-- **Phase 5E — patch proposal artifact only.** Produce a diff/edit list outside
-  the workspace. **No file edits.**
+- **Phase 5E0 — patch proposal artifact models and parser only. DONE.** The
+  proposal artifact as pydantic models plus a strict parser, `extra="forbid"`,
+  in the Phase 4B/4F/5B style. **Library only, wired into nothing**, and **not a
+  generator**: nothing produces a proposal, and the artifact carries **no
+  unified diff**, no patch, no edit script, no command, and no file content —
+  only prose describing suggested work on paths the approved plan already named.
+  **No workspace access, no file contents read, no CLI behavior, no model call,
+  no network call, no environment read, no file editing, no command execution,
+  and no approval stamping.** See §19.
+- **Phase 5E1 (proposed) — a deterministic patch proposal generator.** Something
+  that actually *produces* a Phase 5E0 artifact from an approved plan. Even a
+  purely deterministic generator is a separate authorization: it decides what to
+  propose, and a generator that also carried a real diff would additionally
+  depend on Phase 5D2's file-content reads. **Proposed and not authorized.**
+- **Phase 5E2 (proposed) — carrying a real diff in a proposal.** Producing an
+  actual unified diff outside the workspace. Requires reading file contents
+  (Phase 5D2) and a decision about what a diff may disclose. **No file edits.**
+  **Proposed and not authorized.**
 - **Phase 5F — controlled file editing under `allowed_paths`.** The first write.
   `max_changed_files` enforced, dirty-tree check enforced. **No command
   execution.**
@@ -1495,4 +1521,195 @@ JSON**.
 - [x] **Phase 5D2, Phase 5E, and every later sub-phase in §13 remain proposed
   and not authorized.** Reading file *contents*, proposing a patch, editing a
   file, executing a command, committing, pushing, and opening a PR all still
-  require their own explicit authorization.
+  require their own explicit authorization. *(Phase 5E has since been split, and
+  only its first slice — Phase 5E0, the proposal artifact's models and parser,
+  with no generator and no diff — has been authorized and implemented. See §19.
+  Nothing above changed.)*
+
+## 19. Phase 5E0 — patch proposal artifact models and parser (DONE)
+
+Phase 5E0 is the **first slice** of §13's "Phase 5E — patch proposal artifact
+only", and it is deliberately the slice with nothing executable in it: the
+artifact's **shape**, as typed models plus a strict parser, and nothing that
+produces one.
+
+It ships `src/ai_dev_orchestrator/patch_proposal/` — `models.py` and
+`__init__.py` — plus `tests/test_patch_proposal_artifact_models.py`. It is
+**library only, wired into nothing**, in the Phase 4B/4F/5B/5D0 tradition.
+
+### 19.1 What it is
+
+- **An error hierarchy.** `PatchProposalError`, and under it
+  `PatchProposalParseError` (the text was not one strict JSON object) and
+  `PatchProposalValidationError` (the object failed the model). Parser and model
+  errors only — there is no apply error, edit error, or command error, because
+  there is no apply, edit, or command.
+- **Two constants.** `PATCH_PROPOSAL_SCHEMA_VERSION = "patch-proposal.v1"` and
+  `PATCH_PROPOSAL_MODE = "proposal-only"`, both enforced as `Literal` on the
+  artifact. A different version is a *different artifact* and is rejected, not
+  upgraded. There is one mode and it is the harmless one; adding an "apply" mode
+  would be a separately authorized phase, not a new enum member.
+- **`PatchProposalChange`** — one file a proposal suggests a **human** change:
+  `path`, `change_type` (`"modify"` or `"create"`), `rationale`,
+  `proposed_steps`, `risks`, and `requires_human_review: Literal[True]` with no
+  default. `path` is validated as a **string**: relative, non-blank, no parent
+  traversal, no absolute or drive-lettered form, no UNC, no extended-length or
+  device prefix, no `:` (so no drive-relative form and no NTFS alternate data
+  stream), no `.` or `..` component (so not `"."` either), no empty component,
+  no component ending in a dot or a space, and nothing that looks like an 8.3
+  short name. The check is **lexical**, mirroring the Phase 5D0 precheck's
+  conservatism without importing it — nothing is joined to a workspace root,
+  canonicalized, stat'd, or read to decide it.
+- **`PatchProposalProvenance`** — `engine` (`"deterministic"`, `"manual"`, or
+  `"model"`), `operation` (fixed to `"patch-proposal"`), `real_call`, optional
+  `model`, optional `generated_at`, and the identity fields `project_id`,
+  `repo`, `issue_number`, `title`. A non-model engine must carry `model: null`
+  and `real_call: false` — an engine that does not call a model has no model
+  name and made no call, and claiming otherwise is a contradiction rather than
+  extra detail. `"model"` must name a model, but that is a **record of a claim**
+  about something that happened elsewhere: parsing it calls nothing.
+- **`PatchProposalArtifact`** — `schema_version`, `mode`, `provenance`, an
+  **untouched `ApprovedL1PlanArtifact` snapshot**, `changes`, `omitted_paths`,
+  `assumptions`, `risks`, `open_questions`, the three `Literal[False]` flags
+  `file_contents_read` / `files_edited` / `commands_run`,
+  `requires_human_review: Literal[True]`, and a non-blank
+  `next_authorization_required`.
+- **`parse_patch_proposal_artifact(text)`** — a pure strict-JSON parser.
+  Surrounding whitespace is tolerated; markdown fences, prose before or after,
+  arrays, strings, numbers, booleans and `null` all fail. It **rejects rather
+  than repairs**: unknown fields are never stripped and missing fields are never
+  inferred. Pydantic's `ValidationError` is wrapped as
+  `PatchProposalValidationError`, summarized to field locations and messages so
+  a failure never echoes plan prose, rationales, or provenance.
+
+Three cross-field rules carry the safety weight:
+
+- **The approval travels with the thing it approved.** The proposal wraps a full
+  `ApprovedL1PlanArtifact`, re-validated on every parse, so a proposal cannot
+  restate its own authorization — it can only carry one a human already gave.
+  `automation_level == "L1"` and `requires_human_approval is True` are
+  re-checked explicitly even though the wrapped model already guarantees both.
+- **Exact identity matching** between `provenance` and the approved plan —
+  `project_id`, `repo`, `issue_number`, and `title` against the plan's title.
+  String equality only, per §3.5.
+- **Scope containment: a proposal may narrow, never widen.** Every
+  `changes[].path` must appear **exactly** in the plan's
+  `files_likely_to_change` and must **not** appear in
+  `files_forbidden_or_out_of_scope` — checked forbidden-first, so a
+  self-contradicting plan is never resolved in the permissive direction.
+  `omitted_paths` carry the same path-safety checks.
+
+**Duplicate paths are rejected, not merged.** This was a deliberate choice: two
+changes for one file have no defined precedence, and silently keeping one would
+discard work a human was meant to read.
+
+### 19.2 Why there is no diff
+
+The central shape decision is that `PatchProposalChange` carries a *rationale*
+and *prose steps* and has **no field for a unified diff**, a hunk, a patch, an
+edit script, a command, before/after content, or any other applyable payload.
+That is not an omission to be filled in later by adding a key — a payload
+carrying one is rejected as an extra field, at every model level.
+
+Two reasons. First, a real diff requires reading file **contents**, which is
+Phase 5D2 and is not authorized; a proposal artifact that could carry one would
+quietly create demand for that read. Second, an artifact with nothing applyable
+in it cannot be applied by mistake: there is no payload for a future bug, a
+future command, or a confused operator to feed to a patch tool.
+
+The three `Literal[False]` flags work the same way. In Phase 5E0 they are not
+*observations* — they are the **shape of a legal artifact**. Nothing in this
+repository can produce a proposal for which any of them would be true, so a
+payload claiming one is describing something this phase does not do, and it is
+rejected.
+
+### 19.3 What it is not
+
+- **Not patch generation.** There is no generator, deterministic or otherwise.
+  Nothing here produces a proposal; a parsed one was written elsewhere.
+- **Not a diff.** See §19.2.
+- **Not file editing, not command execution.** Nothing is applied, run, or
+  written.
+- **No file contents read.** No source text, excerpt, or command output has a
+  field here, and the parser opens nothing.
+- **No workspace access.** No target project workspace is read, listed, stat'd,
+  or resolved. Paths are strings, validated lexically, never canonicalized.
+- **No file loading.** The parser is handed a string; there is no loader.
+- **No CLI behavior.** No command, no option, and nothing in `cli.py` changed or
+  imports the package.
+- **No model, network, or environment access.** `httpx`, `requests`,
+  `LLMClient`, `LLMClientConfig`, `load_llm_client_config_from_env`,
+  `GitHubClient`, `typer`, `os`, `pathlib`, `socket` and `subprocess` are not
+  imported, so no code path can reach any of them.
+- **No clock.** `generated_at` is parsed when supplied and never produced.
+- **No approval stamping.** Nothing writes an approved-plan artifact or creates
+  an approval; the wrapped one is re-validated, never authored.
+- **Not authorization.** A parsed proposal is data describing suggested work.
+  L2 remains unbuilt, and nothing consumes this.
+
+### 19.4 Acceptance criteria for Phase 5E0 (DONE)
+
+- [x] `PatchProposalError` / `PatchProposalParseError` /
+  `PatchProposalValidationError` exist, share one base, and cover parsing and
+  validation only.
+- [x] `PATCH_PROPOSAL_SCHEMA_VERSION` and `PATCH_PROPOSAL_MODE` exist and are
+  enforced exactly — a near-miss version or mode is rejected, and neither has a
+  default.
+- [x] A valid artifact parses, carries an **unchanged** `ApprovedL1PlanArtifact`
+  snapshot, and may have **empty** `changes` (meaning "no patch proposed yet").
+  One `modify` change and one `create` change each parse.
+- [x] `provenance` identity must match the approved plan exactly on
+  `project_id`, `repo`, `issue_number`, and `title`; matching is not normalized.
+- [x] `provenance` rejects `endpoint_host`, `base_url`, `api_key`, `prompt`,
+  `completion`, `messages`, `raw_response` and `workspace_path` as extras, and
+  the rejection never echoes what the field held.
+- [x] `"deterministic"` and `"manual"` require `real_call: false` and
+  `model: null`; `"model"` requires a non-blank model name and still performs no
+  model call — asserted with `socket` and `os.getenv` detonated.
+- [x] Every `changes[].path` must be exactly one of the plan's
+  `files_likely_to_change`; a path in `files_forbidden_or_out_of_scope` is
+  rejected even when the plan also lists it as likely to change.
+- [x] **Duplicate change paths are rejected**, deliberately, and documented.
+- [x] Unsafe paths are rejected for both `changes[].path` and `omitted_paths`:
+  blank, absolute, drive-lettered, parent traversal, UNC, extended-length,
+  device, `:`-bearing, trailing dot, trailing space, 8.3-like, `"."`, `"./x"`,
+  and empty components — refused **lexically**, with `os.stat`,
+  `os.path.realpath` and `builtins.open` detonated.
+- [x] `rationale` non-blank, `proposed_steps` non-empty and non-blank, `risks`
+  entries non-blank, `requires_human_review` true with no default.
+- [x] `file_contents_read`, `files_edited` and `commands_run` are rejected when
+  true and have no defaults; `requires_human_review` false is rejected;
+  `next_authorization_required` is required and non-blank.
+- [x] **Extra fields are rejected at every model level**, including
+  diff/patch/hunk/edit, file-content, before/after, command and command-output,
+  prompt/completion, API-key/base-URL, `workspace_path`, raw-artifact-text, and
+  a top-level `approval`. No such field exists on any model.
+- [x] The parser accepts surrounding whitespace and rejects empty text, invalid
+  JSON, markdown-fenced JSON, prose before or after the object, and JSON arrays,
+  strings, numbers, booleans and `null`.
+- [x] **The parser performs no file, network, process, environment or workspace
+  IO**, on both success and failure paths, verified by detonating
+  `builtins.open`, `os.getenv`, `os.environ.get`, `os.stat`, `os.lstat`,
+  `os.listdir`, `os.scandir`, `os.walk`, `os.path.exists`, `os.path.abspath`,
+  `os.path.realpath`, `socket.socket`, `socket.create_connection`,
+  `socket.getaddrinfo` and `subprocess.Popen`. It prints nothing and writes no
+  file.
+- [x] The implementation module's globals contain none of `httpx`, `requests`,
+  `LLMClient`, `LLMClientConfig`, `load_llm_client_config_from_env`,
+  `GitHubClient`, `typer`, `Path`, `os`, `socket`, `subprocess`.
+- [x] The package exports exactly the nine Phase 5E0 names, and no generator,
+  applier, loader, or implementer.
+- [x] **No CLI behavior added.** Root help still lists exactly `version`,
+  `inspect-issue`, `llm-smoke-test`, `generate-plan`, `real-llm-smoke-test`,
+  `generate-model-plan`, `l2-dry-run`, `l2-inspect-workspace`; `cli.py` is
+  unchanged and does not import the package; and `l2-inspect-workspace`,
+  `l2-dry-run`, `generate-plan` and `generate-model-plan` keep their exact
+  options.
+- [x] **No forbidden behavior**: no workspace access, no file contents read, no
+  patch generated, no file edited, no command executed, no GitHub fetch or
+  write, no model or network or environment access, no agent logic or role
+  wiring, no approved-plan artifact written, and no approval stamped.
+- [x] **Phase 5D2, Phase 5E1, Phase 5E2, and every later sub-phase in §13 remain
+  proposed and not authorized.** Generating a proposal, carrying a real diff,
+  reading file contents, editing a file, executing a command, committing,
+  pushing, and opening a PR all still require their own explicit authorization.
