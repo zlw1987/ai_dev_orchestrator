@@ -1319,6 +1319,7 @@ EXPECTED_COMMANDS = [
     # Phase 5E3 added a diff *proposal* producer. It writes diff text to stdout
     # and applies nothing, edits nothing, and runs nothing.
     "generate-diff-proposal",
+    "l2-preview-file-edits",
 ]
 
 

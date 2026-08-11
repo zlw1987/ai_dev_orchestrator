@@ -1865,6 +1865,7 @@ EXPECTED_COMMANDS = [
     "generate-patch-proposal",
     "l2-read-workspace-files",
     "generate-diff-proposal",
+    "l2-preview-file-edits",
 ]
 
 

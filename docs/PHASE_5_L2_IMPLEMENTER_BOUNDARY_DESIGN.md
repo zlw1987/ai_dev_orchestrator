@@ -22,9 +22,9 @@
 > **bounded read-only file-content inspection only** — §21, Phase 5E2 as
 > **unified diff proposal artifact models and a parser only** — §22, Phase
 > 5E3 as a **deterministic, offline diff proposal producer and one CLI command**
-> — §23, and Phase 5F0 as **file-edit write gate models and a parser only** —
-> §24. Phase 5F1 onward remain proposals, nothing edits a file, and L2 is still
-> not built.)
+> — §23, Phase 5F0 as **file-edit write gate models and a parser only** — §24,
+> and Phase 5F1 as a **dry-run file-edit preview command only** — §25. Phase 5F2
+> onward remain proposals, nothing edits a file, and L2 is still not built.)
 >
 > **L2 may not be invoked by any existing command after this phase.** After
 > Phase 5A the shipped CLI surface is exactly what Phase 4L left behind —
@@ -40,8 +40,11 @@
 > `l2-read-workspace-files`, which prints bounded, redacted file contents and
 > takes no action; Phase 5E3 added a fifth, `generate-diff-proposal`, which
 > generates unified diff text offline from local JSON inputs and prints it,
-> applying nothing. None of them changed any of the others, and none implements
-> anything.)
+> applying nothing; Phase 5F1 added a sixth, `l2-preview-file-edits`, which
+> validates a Phase 5F0 approved diff proposal against a project config and the
+> lexical write policy and prints a **dry-run preview** of what a future write
+> phase would be allowed to attempt, editing nothing. None of them changed any
+> of the others, and none implements anything.)
 >
 > It refines item **"Phase 5 — docs-only L2 implementer"** of
 > [AI_DEV_ORCHESTRATOR_PLAN.md §7](AI_DEV_ORCHESTRATOR_PLAN.md#7-mvp-phase-roadmap)
@@ -132,7 +135,22 @@
 > applies nothing, checks no apply-cleanliness, runs nothing, adds no command,
 > and stamps no approval.
 >
-> **Phase 5F1 and every later sub-phase in §13 remain proposed and not
+> **Phase 5F1 has since been authorized and implemented as a dry-run file-edit
+> preview command only** (§25). It added `build_file_edit_preview` plus the
+> `l2-preview-file-edits` command, which reads two local files — a project config
+> and a human-approved Phase 5F0 diff proposal artifact — validates the artifact
+> against the config by exact identity matching and against the **lexical** Phase
+> 1 write policy, and prints what a future write phase *would be allowed to
+> attempt*: permitted paths, change types, and **counts** summarizing each diff.
+> It carries no diff text and no source contents. **It edits no file, applies no
+> diff, checks no apply-cleanliness, reads/lists/stats/resolves/canonicalizes no
+> target workspace, opens none of the paths the approved diff names, runs no
+> command, calls no model, makes no network call, reads no environment variable,
+> fetches nothing from and writes nothing to GitHub, creates no branch, commit,
+> push or PR, writes no artifact file, and stamps no approval.** A preview
+> describes a hypothetical; it authorizes nothing.
+>
+> **Phase 5F2 / Phase 5F and every later sub-phase in §13 remain proposed and not
 > authorized. Nothing shipped so far edits a file.**
 
 ## 1. Goal
@@ -930,10 +948,18 @@ abandoned.
   anything can write. **No file edit, no diff application, no apply-cleanliness
   check, no workspace read, no commands, no model, no CLI command, no artifact
   file written, no approval stamped.** See §24.
-- **Phase 5F1 — proposed, not authorized.** May add a separately gated
-  **dry-run apply plan** — what a write *would* touch — but **not file editing**
-  unless explicitly authorized.
-- **Phase 5F — controlled file editing under `allowed_paths`.** The first write.
+- **Phase 5F1 — dry-run file-edit preview command (DONE).** The separately gated
+  dry-run plan this slot reserved: what a write *would* touch, and nothing more.
+  It ships `build_file_edit_preview` and the `l2-preview-file-edits` command,
+  which validates a Phase 5F0 approved diff proposal against the project config
+  and the **lexical** Phase 1 write policy and prints the permitted paths, change
+  types, and diff **counts** — no diff text, no source contents. Protected paths
+  are refused outright and one refusal fails the whole preview. **No file edit,
+  no diff application, no apply-cleanliness check, no workspace read, list, stat,
+  resolve, or canonicalization, no commands, no model, no branch/commit/push/PR,
+  no artifact file written, no approval stamped.** See §25.
+- **Phase 5F2 / Phase 5F — controlled file editing under `allowed_paths`.
+  Proposed, not authorized.** The first write.
   `max_changed_files` enforced, dirty-tree check enforced. **No command
   execution.**
 - **Phase 5G — allowlisted verification commands.** §7 in full. **No commit, no
@@ -2693,3 +2719,172 @@ such phase exists.
   **not file editing** unless explicitly authorized. Applying a diff, editing a
   file, executing a command, committing, pushing, opening a PR, and sending
   source contents to a model all still require their own explicit authorization.
+  *(Phase 5F1 — the dry-run file-edit preview — has since been authorized and
+  shipped; see §25. It is a preview and still edits nothing.)*
+
+## 25. Phase 5F1 — dry-run file-edit preview command (DONE)
+
+Phase 5F0 typed the human approval a future file-editing phase would have to be
+handed, and shipped nothing that consumes it. Phase 5F1 is the first consumer:
+it validates one Phase 5F0 approved diff proposal against a project config and
+the **lexical** Phase 1 write policy, and prints what a future write phase
+*would be allowed to attempt*.
+
+**Phase 5F1 is a dry-run preview only.** It is **not** file editing, **not**
+diff application, **not** apply-cleanliness checking, **not** command execution,
+**not** model-backed L2, and **not** L2. It adds one library helper —
+`build_file_edit_preview` in `src/ai_dev_orchestrator/file_editing/preview.py` —
+and **one** command, `l2-preview-file-edits`.
+
+```
+python -m ai_dev_orchestrator l2-preview-file-edits ^
+  --project-config projects\my_project.yaml ^
+  --approved-diff-proposal path\to\approved_diff_proposal.json ^
+  --apply-approved-plan ^
+  --preview-file-edits
+```
+
+### 25.1 What it establishes, and what it deliberately leaves unknown
+
+Three things, and no more:
+
+1. the Phase 5F0 approval is a **real, exactly-worded file-edit approval** of one
+   concrete diff proposal — established by `ApprovedDiffProposalArtifact`
+   validation, **never inferred** from the wrapped L1 plan approval, from the
+   diff proposal existing or parsing, from `requires_human_review`, from a file
+   being present, from issue prose, or from model output;
+2. the artifact is **this project's**, matched by exact string equality in all
+   six places it records identity — `project_id` and `repo` on the wrapper, on
+   `diff_proposal.provenance`, and on `diff_proposal.approved_plan`;
+3. every path the approved diff names passes the **lexical** Phase 1
+   `PathPolicy.check_write` check, no path is duplicated, and the change count
+   fits inside `workspace_policy.max_changed_files`.
+
+What it leaves unknown is everything that would require looking at the
+workspace: whether any of those paths exists, what it currently contains,
+whether its canonical form resolves back inside the workspace root, and whether
+the diff would apply. Those questions are unanswered **because answering them
+means touching a target workspace**, and this phase does not. The report says so
+in `checks_not_performed`, `canonicalization_checked` included — a path that
+passes the lexical policy could still resolve, on a real filesystem, somewhere
+the policy would refuse.
+
+### 25.2 Fail-closed rules
+
+- **Protected paths are refused outright.** Phase 5F1 ships no
+  `--allow-protected` flag: permitting a protected write is a decision for a
+  phase that actually writes, made with its own authorization.
+- **One refused path fails the whole preview.** A forbidden, unlisted,
+  traversal-escaping, or protected path produces stderr and a non-zero exit,
+  never a report with a `"denied"` row. `policy_result` is
+  `Literal["allowed"]` with no other member, so a report either describes a
+  fully permitted change set or does not exist — a partially permitted preview
+  would be an invitation to apply the permitted part.
+- **Duplicate paths are re-checked** even though both upstream models reject
+  them, because pydantic does not re-validate an instance it is handed.
+- **Empty changes are valid.** `paths_count` is 0 and a future phase would
+  attempt no write. That is a well-formed statement, not a defect and not a
+  loophole.
+
+### 25.3 What the report carries, and what it refuses to carry
+
+`FileEditPreviewReport` is `schema_version` (`"file-edit-preview.v1"`), `mode`
+(`"dry-run-preview-only"`), `project`, `approved_diff`, `preview`,
+`checks_performed`, `checks_not_performed`, the four `Literal[False]` flags
+`files_edited` / `commands_run` / `applies_cleanly_checked` /
+`workspace_touched`, `requires_future_authorization` (`Literal[True]`), and
+`next_authorization_required`. Every model is `extra="forbid"`.
+
+A diff is summarized as **counts** — `diff_bytes_utf8`, `diff_lines`,
+`hunk_count`, `added_lines`, `removed_lines`, `context_lines` — computed by
+scanning the string the artifact already carried. `difflib` is not imported: no
+diff is generated, modified, normalized, or checked for applicability, and the
+`--- ` / `+++ ` file headers are excluded from the added and removed counts.
+
+There is **no field** for unified diff text, source contents, an approval text,
+raw artifact text, a workspace path, a resolved absolute path, a command or its
+output, an apply result, an API key, a base URL, a prompt, a completion, a
+branch, a commit, or a PR URL. Each is rejected as an extra. The only
+branch/commit/push/PR mentions anywhere in the output are the `false` flags in
+`checks_not_performed` recording that none of them happened.
+
+### 25.4 Gate ordering (fail closed, cheapest first)
+
+1. `--apply-approved-plan` — missing, and **nothing is read at all**, not even
+   the config.
+2. `--preview-file-edits` — a second, separate consent, also before any read.
+3. The project config loads. **First file read.**
+4. `--approved-diff-proposal` is rejected if it is, or sits under, the
+   configured `repo.workspace_path` — by the existing `_is_same_or_under`
+   string/path guard, **before** the artifact is read or stat'd.
+5. The artifact is read. **Second and final file read.**
+6. `parse_approved_diff_proposal_artifact` parses it strictly.
+7. `build_file_edit_preview` runs: identity, count, uniqueness, path policy.
+8. The report is printed to stdout, with no wrapper.
+
+Any failure exits non-zero with stderr only and nothing on stdout, and never
+echoes the artifact text, the approval text, any diff, or any file content.
+
+### 25.5 Acceptance criteria for Phase 5F1 (DONE)
+
+- [x] `build_file_edit_preview` is a **pure function over two already-loaded
+  objects**: no file IO, no workspace access, no environment read, no model, no
+  network, no GitHub, no subprocess, no clock, no command execution, no file
+  editing, no patch application, no apply-cleanliness check, and no artifact
+  file writing. It is deterministic.
+- [x] A valid approved diff with a `modify` change, one with a `create` change,
+  and one with **empty** changes all produce a valid `FileEditPreviewReport`;
+  multiple changes preserve input order; `omitted_paths` is carried through.
+- [x] Identity is matched against the project config with **exact string
+  equality** in all six places, in both directions, and case differences are
+  rejected. A mutated provenance or nested-plan identity is caught.
+- [x] Duplicate paths are rejected even when the nested object was mutated after
+  validation; a change count above `workspace_policy.max_changed_files` is
+  rejected; a count of zero succeeds, including under a cap of zero.
+- [x] The Phase 1 `PathPolicy` **write** check is the one that runs, with
+  `allow_protected` left at its fail-closed default. Forbidden, unlisted and
+  **protected** paths are refused, one refusal fails the whole preview, and an
+  allowed path yields `policy_result: "allowed"` with `protected_path: false`.
+- [x] Diff statistics are computed correctly, headers are excluded from the
+  added/removed counts, hunks are counted, bytes are UTF-8 bytes, and nothing is
+  normalized. No `unified_diff` text and no source content appears in the report.
+- [x] `files_edited`, `commands_run`, `applies_cleanly_checked` and
+  `workspace_touched` are false; `requires_future_authorization` is true; and
+  `checks_performed` / `checks_not_performed` are accurate and complete.
+- [x] **No canonicalization, stat, open, listdir, scandir, walk, realpath, or
+  abspath touches a workspace** on the success path or on any failure path, and
+  no file is written.
+- [x] The command appears in root help, exposes exactly `--project-config`,
+  `--approved-diff-proposal`, `--apply-approved-plan`, `--preview-file-edits`,
+  `--format` and `--help`, and exposes none of the forbidden options
+  (`--output`, `--model`, `--real-model`, `--body-file`, `--issue`, `--title`,
+  `--github`, `--fetch`, `--workspace`, `--file`, `--context-file`,
+  `--command`, `--edit`, `--audit-dir`, `--inspect-workspace`,
+  `--read-contents`, `--generate-proposal`, `--generate-diff`, `--apply-patch`,
+  `--apply-diff`, `--write-files`, `--run`, `--verify`, `--branch`, `--commit`,
+  `--push`, `--pr`, `--open-pr`).
+- [x] Missing `--apply-approved-plan` or `--preview-file-edits` fails before any
+  file read; an artifact inside the configured workspace is rejected before it
+  is read; an invalid artifact fails after the config read and before the
+  preview; identity and policy failures fail with stderr only and no stdout.
+- [x] stdout is the report itself with no wrapper, and omits the unified diff,
+  source contents, raw artifact text, approval text, workspace path, absolute
+  resolved paths, command output, apply results, and any branch/commit/push/PR
+  claim or executable command instruction.
+- [x] **No CLI behavior changed except adding `l2-preview-file-edits`.**
+  `generate-diff-proposal`, `l2-read-workspace-files`,
+  `generate-patch-proposal`, `l2-inspect-workspace`, `l2-dry-run`,
+  `generate-plan` and `generate-model-plan` keep their exact options. No
+  workspace access, no GitHub fetch or write, no command execution, no file
+  editing, no branch, commit, push or PR, no agent logic, no
+  implementer/reviewer/fixer role wiring, no artifact writing, and no approval
+  stamping.
+- [x] **Tests use literal dicts, literal JSON, and pytest `tmp_path` only** — no
+  real environment, no network, no target workspace read, and no real `C:\dev`
+  path.
+- [x] **Phase 5F2 / Phase 5F and every later sub-phase in §13 remain proposed and
+  not authorized.** A preview describes a hypothetical; it authorizes nothing.
+  The first real workspace write may be added only under its own explicit
+  authorization, as may applying a diff, checking whether one applies, executing
+  a command, committing, pushing, opening a PR, and sending source contents to a
+  model.

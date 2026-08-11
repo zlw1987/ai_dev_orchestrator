@@ -123,9 +123,17 @@ Model roles must be configurable. Each role specifies:
   issue prose, or from model output, with **no file editing, no diff
   application, no apply-cleanliness check, no workspace access, no command
   execution, no model call, no branch/commit/push/PR, no artifact file written,
-  no approval stamping, and no CLI behavior**).
+  no approval stamping, and no CLI behavior**; Phase 5F1 added the first
+  consumer of that approval and the `l2-preview-file-edits` command, a **dry-run
+  preview** that validates an approved diff proposal against the project config
+  and the **lexical** Phase 1 write policy and prints what a future write phase
+  *would be allowed to attempt* — permitted paths, change types, and diff
+  counts, with **no diff text, no source contents, no workspace read/list/stat/
+  resolve/canonicalization, no diff applied, no apply-cleanliness check, no file
+  editing, no command execution, no model call, no branch/commit/push/PR, no
+  artifact file written, and no approval stamping**).
   **L2 is proposed, not built**, and no command can invoke it. Nothing shipped
-  so far edits a file; Phase 5F1 and the file-editing phase beyond it remain
+  so far edits a file; Phase 5F2 and the file-editing phase beyond it remain
   proposed and not authorized.
 - **Phase 6 — qwen reviewer.**
 - **Phase 7 — fix loop.**

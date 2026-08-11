@@ -1364,8 +1364,28 @@ def test_file_editing_package_exports_exactly_the_phase_5f0_surface():
         "FileEditingApprovalValidationError",
         "parse_approved_diff_proposal_artifact",
     ]
-    assert sorted(file_editing.__all__) == sorted(expected)
-    for name in expected:
+    # Phase 5F1 added the dry-run preview surface alongside these — models and a
+    # pure builder that describe a hypothetical write without performing one.
+    # It is listed separately so the Phase 5F0 gate surface stays visible on its
+    # own, and so an editor or applier appearing here would still be obvious.
+    expected_5f1 = [
+        "FILE_EDIT_PREVIEW_CANDIDATE_SOURCE",
+        "FILE_EDIT_PREVIEW_MODE",
+        "FILE_EDIT_PREVIEW_SCHEMA_VERSION",
+        "FileEditPreviewApprovedDiff",
+        "FileEditPreviewBlock",
+        "FileEditPreviewChange",
+        "FileEditPreviewChecksNotPerformed",
+        "FileEditPreviewChecksPerformed",
+        "FileEditPreviewDiffStats",
+        "FileEditPreviewError",
+        "FileEditPreviewProject",
+        "FileEditPreviewReport",
+        "FileEditPreviewWorkspacePolicy",
+        "build_file_edit_preview",
+    ]
+    assert sorted(file_editing.__all__) == sorted(expected + expected_5f1)
+    for name in expected + expected_5f1:
         assert hasattr(file_editing, name)
 
     # No editor, no applier, no loader, no writer, no runner. Later phases, if
@@ -1425,6 +1445,7 @@ EXPECTED_COMMANDS = [
     "generate-patch-proposal",
     "l2-read-workspace-files",
     "generate-diff-proposal",
+    "l2-preview-file-edits",
 ]
 
 

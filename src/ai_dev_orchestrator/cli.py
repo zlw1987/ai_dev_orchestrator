@@ -44,6 +44,16 @@ diff and it is not file editing**: the artifact carries no unified diff, no
 patch, no edit script, no file content, no command, and no command output — only
 prose about paths the approved plan already named. It touches no workspace,
 reads no file contents, calls no model, writes no file, and stamps no approval.
+
+`l2-preview-file-edits` (Phase 5F1) is the first command that reads a Phase 5F0
+**file-edit approval**, and it reads one only to describe a hypothetical. It
+reads the same two local files, validates the approved diff proposal against the
+project config and the lexical Phase 1 write policy, and prints what a future,
+separately authorized write phase *would* be permitted to attempt — each
+permitted path, its change type, and counts summarizing its diff. **It is not
+file editing**: no diff is applied, whether a diff applies is never checked, no
+command is run, and the configured target workspace is never read, listed,
+stat'd, resolved, or canonicalized.
 """
 
 from __future__ import annotations
@@ -3057,6 +3067,271 @@ def generate_diff_proposal(
         proposed_content=proposed_content,
         apply_approved_plan=apply_approved_plan,
         generate_diff=generate_diff,
+    )
+
+
+# -- L2 dry-run file-edit preview (Phase 5F1) ----------------------------------
+
+# Human-readable categories for the Phase 5F0 approval errors, following the
+# Phase 4L/5C/5E3 precedent: name *what kind* of thing failed. The exception
+# messages are safe to show — Phase 5F0 guarantees they name the failed field
+# and category and never echo the artifact text, the diff, or the approval text.
+_APPROVED_DIFF_FAILURE_CATEGORIES: dict[str, str] = {
+    "FileEditingApprovalParseError": (
+        "parse failure — the artifact text was not exactly one strict JSON object"
+    ),
+    "FileEditingApprovalValidationError": (
+        "validation failure — the artifact had missing, extra, or wrong-typed "
+        "fields, an absent, paraphrased, or non-manual file-edit approval, an "
+        "identity mismatch, a duplicate or out-of-scope path, or a malformed "
+        "diff proposal"
+    ),
+}
+
+_FILE_EDIT_PREVIEW_FAILURE_CATEGORY = (
+    "preview failure — the approved diff proposal and the project config did "
+    "not match exactly, a path was duplicated or refused by the lexical write "
+    "policy, or the change count exceeded workspace_policy.max_changed_files"
+)
+
+
+def _run_l2_preview_file_edits(
+    *,
+    project_config: Path,
+    approved_diff_proposal: Path,
+    apply_approved_plan: bool,
+    preview_file_edits: bool,
+) -> None:
+    """Print a dry-run preview of the writes a future phase would be allowed.
+
+    Extracted from the command body so tests can call it directly and track
+    exactly which files are read, in which order.
+
+    Ordering is the safety property, and it is `l2-dry-run`'s with a second
+    consent flag in front. In sequence: both ``--apply-approved-plan`` and
+    ``--preview-file-edits`` must be present — with **no file read at all** if
+    either is missing — then the project config loads, then a string/path check
+    rejects an ``--approved-diff-proposal`` that sits inside the configured
+    workspace *before* it is opened or stat'd, then the artifact is read and
+    strictly parsed with the Phase 5F0 parser, then the pure builder runs, and
+    only then is anything printed.
+
+    This command reads exactly two local files and touches nothing else. Nothing
+    here reads, lists, stat's, globs, walks, resolves, or canonicalizes the
+    configured target workspace; opens any path the approved diff names; applies
+    a diff; checks whether a diff applies; edits a file; executes a command;
+    reads an environment variable; opens a socket; builds a client; contacts
+    GitHub; creates a branch, commit, or PR; writes an artifact file; or stamps
+    an approval.
+    """
+    from ai_dev_orchestrator.config_loader import ConfigError, load_project_config
+    from ai_dev_orchestrator.file_editing import (
+        FileEditingApprovalError,
+        FileEditPreviewError,
+        build_file_edit_preview,
+        parse_approved_diff_proposal_artifact,
+    )
+
+    # 1. Explicit confirmation that an approved plan may be acted on. Checked
+    #    first, so a plain invocation reads no file at all.
+    if not apply_approved_plan:
+        typer.echo(
+            "Error: l2-preview-file-edits acts on a human-approved artifact "
+            "and requires the explicit --apply-approved-plan flag. Nothing was "
+            "read.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # 2. Explicit confirmation that a file-edit preview may be produced. A
+    #    second, separate consent: approving a plan is not the same act as
+    #    asking what a future write phase would be allowed to attempt.
+    if not preview_file_edits:
+        typer.echo(
+            "Error: l2-preview-file-edits describes writes a future phase "
+            "would attempt and requires the explicit --preview-file-edits "
+            "flag. Nothing was read.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # 3. Project config: the first file read. The configured repo.workspace_path
+    #    is never read, listed, stat'd, resolved, or canonicalized.
+    try:
+        project = load_project_config(project_config)
+    except ConfigError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        typer.echo(
+            "The approved diff proposal artifact was not read and no preview "
+            "was printed.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # 4. Refuse an artifact that lives inside the configured target workspace,
+    #    BEFORE it is read or stat'd — which is also why
+    #    --approved-diff-proposal carries no Typer exists=/readable= check:
+    #    those would touch the path before this guard could run. String/path
+    #    normalization only; the workspace path itself is never read, listed,
+    #    stat'd, or resolved.
+    if _is_same_or_under(approved_diff_proposal, project.repo.workspace_path):
+        typer.echo(
+            "Error: --approved-diff-proposal is inside the project's configured "
+            f"repo.workspace_path ({project.repo.workspace_path}). "
+            "l2-preview-file-edits never reads target project workspaces; move "
+            "the artifact outside that path and retry.",
+            err=True,
+        )
+        typer.echo(
+            "The approved diff proposal artifact was not read and no preview "
+            "was printed.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # 5. The guard has passed, so the artifact may be read. It is the second and
+    #    final file read by this command.
+    try:
+        artifact_text = approved_diff_proposal.read_text(encoding="utf-8")
+    except OSError as exc:
+        typer.echo(
+            f"Error: could not read --approved-diff-proposal: {exc}", err=True
+        )
+        typer.echo("No preview was printed.", err=True)
+        raise typer.Exit(code=1)
+
+    # 6. Parse strictly (Phase 5F0). Rejected, never repaired. This is the only
+    #    place the file-edit approval comes from: it is never inferred from the
+    #    wrapped L1 plan approval, from the proposal parsing, from
+    #    requires_human_review, or from this file simply existing.
+    try:
+        artifact = parse_approved_diff_proposal_artifact(artifact_text)
+    except FileEditingApprovalError as exc:
+        name = type(exc).__name__
+        category = _APPROVED_DIFF_FAILURE_CATEGORIES.get(name, "artifact failure")
+        typer.echo(f"Error: {name}: {category}. {exc}", err=True)
+        typer.echo(
+            "The artifact text, the approval text, and the diffs are not "
+            "echoed. No preview was printed and no file was touched.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # 7. Build the preview. The builder is pure: it performs the exact identity
+    #    matching against the config, re-checks path uniqueness, enforces
+    #    workspace_policy.max_changed_files, and runs the lexical Phase 1 write
+    #    policy over every path — failing the whole preview on any refusal.
+    try:
+        report = build_file_edit_preview(approved_diff=artifact, project=project)
+    except FileEditPreviewError as exc:
+        typer.echo(
+            f"Error: FileEditPreviewError: {_FILE_EDIT_PREVIEW_FAILURE_CATEGORY}. "
+            f"{exc}",
+            err=True,
+        )
+        typer.echo(
+            "No preview was printed, no file was edited, and no workspace was "
+            "touched.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # 8. Print the report itself — nothing wrapped around it. Deliberately
+    #    absent, because the report has no field for any of them: any unified
+    #    diff, any source contents, the raw artifact text, the approval text,
+    #    the configured workspace_path, any resolved absolute path, any command
+    #    or command output, any apply result, any branch/commit/push/PR claim,
+    #    and any API key or base URL.
+    typer.echo(report.model_dump_json(indent=2))
+
+
+@app.command("l2-preview-file-edits")
+def l2_preview_file_edits(
+    project_config: Path = typer.Option(
+        ...,
+        "--project-config",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Path to the project config YAML the approved diff must match.",
+    ),
+    approved_diff_proposal: Path = typer.Option(
+        ...,
+        "--approved-diff-proposal",
+        # Deliberately no exists=/readable= check: Typer would stat the path
+        # before the command body could reject one inside the configured
+        # workspace. The guard runs first; the file is opened only afterwards.
+        help="Path to a human-approved diff proposal artifact (Phase 5F0 "
+        "shape). Must not be inside the project's configured workspace path.",
+    ),
+    apply_approved_plan: bool = typer.Option(
+        False,
+        "--apply-approved-plan",
+        help="Required explicit confirmation that a human-approved artifact "
+        "may be acted on. Without it this command fails without reading "
+        "anything.",
+    ),
+    preview_file_edits: bool = typer.Option(
+        False,
+        "--preview-file-edits",
+        help="Required explicit confirmation that a dry-run file-edit preview "
+        "may be produced. Without it this command fails without reading "
+        "anything.",
+    ),
+    output_format: GeneratePlanFormat = typer.Option(
+        GeneratePlanFormat.json,
+        "--format",
+        help="Output format. Only 'json' is currently supported.",
+    ),
+) -> None:
+    """Print what a future file-editing phase would be allowed to attempt.
+
+    **Dry-run preview only, and nothing here edits a file.** This command reads
+    exactly two local files — the ``--project-config`` YAML and the
+    ``--approved-diff-proposal`` artifact, in that order — validates the
+    artifact with the Phase 5F0 parser, checks it against the config and the
+    lexical Phase 1 write policy, and prints a JSON report describing the writes
+    a future, separately authorized phase *would* be permitted to try.
+
+    The report names each permitted path, its change type, and **counts** of its
+    diff — bytes, lines, hunks, added, removed, context. It carries no unified
+    diff text and no source contents.
+
+    It does **not**: read, list, stat, glob, walk, resolve, or canonicalize the
+    project's configured ``repo.workspace_path`` or any target workspace; open
+    any path the approved diff names; check whether any of those paths exists or
+    what it currently contains; apply a diff or check whether one would apply;
+    edit or write any file; write the report to a file (stdout only); run any
+    ``required_verification`` entry or any other command; create a branch,
+    commit, or PR; fetch from or write to GitHub; call a model; open a socket;
+    or read ``AIDO_LITELLM_*`` or any other environment variable.
+
+    It also never writes or stamps an approval. The file-edit approval must
+    already have been written by a human, in the exact Phase 5F0 wording, and it
+    is never inferred from the wrapped L1 plan approval, from the diff proposal
+    existing or parsing, from ``requires_human_review``, or from this file being
+    present.
+
+    The gate fails closed in order: ``--apply-approved-plan`` and
+    ``--preview-file-edits`` first (without either, nothing is read at all),
+    then the config, then a string/path check rejecting an
+    ``--approved-diff-proposal`` inside the configured workspace **before** it
+    is read or stat'd, then the strict Phase 5F0 parse, then exact identity
+    matching against the config in all six places the artifact records it, then
+    path uniqueness, the ``max_changed_files`` cap, and the lexical write policy
+    — where a forbidden, unlisted, traversal-escaping, or **protected** path
+    fails the whole preview rather than being reported as denied. Any failure
+    exits non-zero with stderr only and nothing on stdout, and never echoes the
+    artifact text, the approval text, any diff, or any file content.
+
+    Stdout is the preview report itself, with no wrapper.
+    """
+    _run_l2_preview_file_edits(
+        project_config=project_config,
+        approved_diff_proposal=approved_diff_proposal,
+        apply_approved_plan=apply_approved_plan,
+        preview_file_edits=preview_file_edits,
     )
 
 

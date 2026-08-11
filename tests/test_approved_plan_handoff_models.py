@@ -905,6 +905,7 @@ EXPECTED_COMMANDS = [
     # local JSON inputs: diff text is produced and printed, nothing is applied,
     # nothing is edited, nothing is run. Still not an implementer.
     "generate-diff-proposal",
+    "l2-preview-file-edits",
 ]
 
 
