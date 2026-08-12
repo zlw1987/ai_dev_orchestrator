@@ -17,12 +17,14 @@ changes. The eventual design will:
 
 The emphasis is on **control and review**, not autonomous action.
 
-## Current status: Phase 5F2A (design only) — latest shipped capability is still Phase 5F1, and nothing writes a target file
+## Current status: Phase 5F2B (library only) — latest shipped *command* is still Phase 5F1, and nothing writes a target file
 
-**Phase 5F2A is the latest completed phase, and it is design only**: it added
-documentation and no code (see §26 of the design doc, and the note further down
-this section). **Phase 5F1 remains the latest shipped runtime capability**, and
-nothing in this repository can write a file into a target workspace.
+**Phase 5F2B is the latest completed phase, and it is library only**: one new
+function, one new result type, and one new error, wired into nothing (see the
+note further down this section). Phase 5F2A before it was **design only** —
+documentation and no code (see §26 of the design doc). **Phase 5F1 remains the
+latest shipped runtime capability**, and nothing in this repository can write a
+file into a target workspace.
 
 Phase 5F0 typed the human approval a future file-editing phase would have to be
 handed, and shipped nothing that consumes it. Phase 5F1 is the first consumer:
@@ -80,9 +82,61 @@ tri-state verdict and no human attestation substitute), pins canonicalization
 immediately before each write with `create` and `modify` handled differently,
 freezes the authorized path set to the approved diff's own paths, defines
 transaction semantics and backup/rollback, and splits the old single "Phase 5F2"
-slot into 5F2B–5F2F. **Phase 5F2B, 5F2C, 5F2D, 5F2E and 5F2F all remain proposed
-and not authorized**, and **nothing shipped in this repository edits a target
-file.**
+slot into 5F2B–5F2F.
+
+**Phase 5F2B has since been completed as a library-only phase** — the
+create-aware canonical write-target guard §26.3 showed was missing. The shipped
+Phase 5D0 guard, `canonicalize_existing_path_under_workspace`, resolves with
+`strict=True` and therefore cannot be handed a destination that does not exist
+yet, so a `create` target had no guard at all.
+`canonicalize_write_target_under_workspace` is the second entry point in
+`ai_dev_orchestrator.workspace.canonical`:
+
+- **The change type is declared, never inferred.** Exactly `"modify"` or
+  `"create"`; delete, rename, mkdir, chmod and ownership changes are refused as
+  inputs. `modify` against a path that has since vanished fails, and `create`
+  against a path that already exists fails — the world disagreeing with an
+  approval is a reason to stop, not to reinterpret.
+- **`modify`** requires an existing **regular file** and runs the whole Phase
+  5D0 machinery on it: the fail-closed lexical precheck before any filesystem
+  use, root and intermediate reparse-point policy, strict resolution, and
+  `commonpath`-based containment.
+- **Win32 namespace aliases are refused on the string, before any filesystem
+  call** (added by the 5F2B-FU1 follow-up, and applied to write targets only so
+  Phase 5D0 read behavior is untouched): NTFS alternate data streams
+  (`file.py:stream`, `file.py::$DATA`, never normalized to the base file),
+  drive-relative `C:file.py` forms, reserved device names (`CON`, `NUL`,
+  `COM1`–`COM9`, `LPT1`–`LPT9` and friends, case-insensitively and including
+  with an extension), and the reserved characters `< > " | ? *` plus control
+  characters. A fully-qualified `C:\repo\...` destination is unaffected —
+  exactly one colon, the drive designator, is legitimate. Nothing is repaired,
+  stripped, or probed.
+- **`create`** canonicalizes the **parent directory** instead, which must
+  already exist — **no directory is ever created** — requires the final
+  component to be one plain file name, and establishes absence with `lstat`,
+  requiring a genuine `ENOENT`. `os.path.exists` is deliberately not the
+  decision: it calls a **dangling** symlink absent, and writing through one
+  would leave the workspace.
+- **The final component of a destination may never be a symlink or reparse
+  point, in either `allow_symlinks` mode.** `allow_symlinks` is a policy about
+  *traversal*; this is a rule about *destinations*.
+- **The result is not authorization.** `CanonicalWriteTarget` is frozen and
+  data-only — canonical root, canonical parent, destination, relative
+  destination, change type, and whether the target existed. It describes the
+  filesystem at the moment of the call; §26.3 requires a future writer to
+  re-canonicalize immediately before each individual write. Phase 5F2B does not
+  solve time-of-check/time-of-use and does not claim to.
+- **No config field, no CLI command, no CLI option, no caller, no file created,
+  no directory created, no temp file, no backup, no journal, no diff applied,
+  no apply-cleanliness check, no file content read, no directory listing, no
+  glob or tree walk, no subprocess, no Git invocation or Git-state inspection,
+  no model call, no network call, no environment read, no GitHub access, and no
+  approval stamping.** The Phase 5D0 entry point is unchanged, and its one
+  caller behaves exactly as before.
+
+**Phase 5F2C, 5F2D, 5F2E and 5F2F all remain proposed and not authorized**,
+5F2F remains the first controlled workspace write, **L2 is still not built**,
+and **nothing shipped in this repository edits a target file.**
 
 See
 [docs/PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md §25 and §26](docs/PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md)
@@ -1550,9 +1604,15 @@ the eleven commands that came before it.
 have to satisfy, **as design only** — documentation, no code — and split the old
 single "Phase 5F2" slot into five smaller phases.
 
+**Phase 5F2B** then added the first of those five, **library only**: the
+create-aware canonical write-target guard described in the status section above.
+It extends the Phase 5D0 module with `canonicalize_write_target_under_workspace`
+so a `create` destination can be validated at all, and it is wired into nothing
+— no command, no option, no config field, no caller, **no file or directory
+created, and no write**.
+
 **L2 is proposed, not built.** No command can invoke it, and every later Phase 5
-sub-phase remains unauthorized — **Phase 5F2B** (create-aware canonical
-write-target guard, library only), **Phase 5F2C** (typed workspace-write gate
+sub-phase remains unauthorized — **Phase 5F2C** (typed workspace-write gate
 models, library only), **Phase 5F2D** (read-only Git-state probe), **Phase 5F2E**
 (read-only write preflight), and **Phase 5F2F** (the first controlled workspace
 write). Nothing in the repository ships any of them, and **nothing shipped edits

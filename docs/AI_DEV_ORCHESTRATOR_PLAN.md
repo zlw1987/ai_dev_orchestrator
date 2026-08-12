@@ -139,10 +139,27 @@ Model roles must be configurable. Each role specifies:
   stdout/stderr/exit-code contract — **implementing nothing**: no module, no
   function, no config field, no CLI command or option, no file edit, no diff
   applied, no apply-cleanliness check, no subprocess, no workspace touch, no
-  model or network call, no branch/commit/push/PR, and no approval stamping).
+  model or network call, no branch/commit/push/PR, and no approval stamping);
+  Phase 5F2B added the **create-aware canonical write-target guard, library
+  only** — `canonicalize_write_target_under_workspace`, which validates one
+  declared `modify` or `create` destination (the change type is never inferred
+  from the filesystem), canonicalizes an existing destination with the Phase 5D0
+  machinery or a `create` destination's **already-existing parent**, requires a
+  genuine `ENOENT` established with `lstat` rather than `os.path.exists`,
+  refuses a dangling link, and never permits the final component to be a symlink
+  or reparse point in either `allow_symlinks` mode, with a follow-up (5F2B-FU1)
+  adding write-target-only lexical rejection of NTFS alternate data streams,
+  drive-relative `C:file` forms, reserved Windows device names and reserved
+  characters — with **no config field, no
+  CLI command or option, no caller, no directory or file created, no temp file,
+  backup or journal, no diff applied, no file content read, no directory
+  listing, no subprocess, no Git invocation, no model or network call, no
+  environment read, and no approval stamping**, and with the result explicitly
+  **not** a durable authorization to write.
   **L2 is proposed, not built**, and no command can invoke it. Nothing shipped
-  so far edits a file; Phase 5F2B, 5F2C, 5F2D, 5F2E, 5F2F and the file-editing
-  phase beyond them remain proposed and not authorized.
+  so far edits a file; Phase 5F2C, 5F2D, 5F2E, 5F2F and the file-editing
+  phase beyond them remain proposed and not authorized, and Phase 5F2F remains
+  the first controlled workspace write.
 - **Phase 6 — qwen reviewer.**
 - **Phase 7 — fix loop.**
 - **Phase 8 — local commit.**

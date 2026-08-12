@@ -24,9 +24,10 @@
 > 5E3 as a **deterministic, offline diff proposal producer and one CLI command**
 > — §23, Phase 5F0 as **file-edit write gate models and a parser only** — §24,
 > Phase 5F1 as a **dry-run file-edit preview command only** — §25, and Phase
-> 5F2A as a **design-only first-workspace-write safety contract** — §26. Phase
-> 5F2B onward remain proposals, nothing edits a file, and L2 is still not
-> built.)
+> 5F2A as a **design-only first-workspace-write safety contract** — §26, and
+> Phase 5F2B as a **create-aware canonical write-target guard library only** —
+> §26.3 and §26.12. Phase 5F2C onward remain proposals, nothing edits a file,
+> and L2 is still not built.)
 >
 > **L2 may not be invoked by any existing command after this phase.** After
 > Phase 5A the shipped CLI surface is exactly what Phase 4L left behind —
@@ -167,8 +168,13 @@
 > call, no network call, no environment read, no GitHub access, no
 > branch/commit/push/PR, no artifact file written, and no approval stamped.
 >
-> **Phase 5F2B, 5F2C, 5F2D, 5F2E, 5F2F / Phase 5F and every later sub-phase in
-> §13 remain proposed and not authorized. Nothing shipped so far edits a file.**
+> **Phase 5F2B has since been authorized and completed as a library-only phase**
+> — the create-aware canonical write-target guard of §26.3, hardened by
+> 5F2B-FU1 against the remaining Win32 namespace aliases — with no config field,
+> no CLI command, no CLI option, no caller, and no write. **Phase 5F2C, 5F2D,
+> 5F2E, 5F2F / Phase 5F and every later sub-phase in §13 remain proposed and not
+> authorized**, 5F2F remains the first controlled workspace write, **L2 is still
+> not built, and nothing shipped so far edits a target workspace file.**
 
 ## 1. Goal
 
@@ -997,12 +1003,30 @@ abandoned.
   config field, no CLI command or option, no file edit, no diff applied, no
   apply-cleanliness check, no subprocess, no workspace touch, no model or
   network call, no branch/commit/push/PR, no approval stamped. See §26.
-- **Phase 5F2B — create-aware canonical write-target guard. Library only.
-  Proposed, not authorized.** The gap §26.3 identifies: the shipped Phase 5D0
-  guard resolves with `strict=True` and cannot validate a destination that does
-  not exist yet, so a `create` target has no guard at all today. **No config
-  field, no CLI command, no option, no caller, no write.** The recommended
-  immediate next phase (§26.12).
+- **Phase 5F2B — create-aware canonical write-target guard (DONE). Library
+  only.** Closes the gap §26.3 identifies: the Phase 5D0 guard resolves with
+  `strict=True` and cannot validate a destination that does not exist yet, so a
+  `create` target had no guard at all. `canonicalize_write_target_under_workspace`
+  is the second entry point in `workspace/canonical.py` — a caller-declared
+  `change_type` of exactly `modify` or `create` (never inferred from disk), the
+  same fail-closed lexical precheck before any filesystem use, the Phase 5D0
+  containment/symlink machinery for `modify`, parent canonicalization plus
+  final-component rules plus `ENOENT`-via-`lstat` for `create`, the
+  dangling-link refusal, and the destination-is-never-a-link rule in both
+  `allow_symlinks` modes. It returns a frozen `CanonicalWriteTarget` describing
+  the filesystem **at the time of the call**, which is not a durable
+  authorization: §26.3 still requires re-canonicalization immediately before an
+  actual write, and 5F2B does not solve TOCTOU. **No config field, no CLI
+  command, no option, no caller, no directory created, no file created, no
+  write.**
+  - **Phase 5F2B-FU1 (DONE)** then hardened that guard's own lexical gate
+    against the remaining Win32 namespace aliases — alternate data streams and
+    stray colons, drive-relative `C:file` forms, reserved device names, and
+    reserved/control characters (§26.3) — layered as a **write-target-only**
+    helper so Phase 5D0 read semantics and its caller are untouched. Still
+    library only: no config field, no CLI command, no option, no caller, and no
+    write. It also recorded the **hard-link** question as unresolved (§26.13
+    item 11) rather than implementing any hard-link behavior.
 - **Phase 5F2C — typed workspace-write gate models. Library only. Proposed, not
   authorized.** The per-invocation protected-path authorization of §26.6 and
   whatever `workspace_write` opt-in the writer needs, as models plus a strict
@@ -2952,8 +2976,10 @@ echoes the artifact text, the approval text, any diff, or any file content.
   a command, committing, pushing, opening a PR, and sending source contents to a
   model. *(Phase 5F2A — the first-workspace-write safety design — has since been
   authorized and completed as a **design-only** phase; see §26. It implemented
-  nothing, and the write phases it describes, now split as 5F2B through 5F2F,
-  are still proposed and not authorized.)*
+  nothing. Of the write phases it describes, now split as 5F2B through 5F2F,
+  only **5F2B** has since been authorized and completed, as a **library-only**
+  path guard that writes nothing; 5F2C through 5F2F are still proposed and not
+  authorized.)*
 
 ## 26. Phase 5F2A — first workspace write safety design (DONE)
 
@@ -3158,7 +3184,9 @@ not cosmetic: the shipped Phase 5D0 guard,
 resolves it with `strict=True`. **A destination that does not yet exist cannot
 be passed to it at all** — it raises `CanonicalPathInputError`. This is correct
 for a read-only inspector and useless for a writer, so a future phase needs a
-second, create-aware entry point (5F2B in §26.12). Its contract:
+second, create-aware entry point (5F2B in §26.12). Its contract — **now
+implemented, library only, by `canonicalize_write_target_under_workspace` in
+`workspace/canonical.py`, which has no caller and performs no write**:
 
 - **modify** — the destination must exist and must be a **regular file**. The
   existing guard applies unchanged: containment of the resolved destination
@@ -3179,6 +3207,23 @@ second, create-aware entry point (5F2B in §26.12). Its contract:
   dangling link deserves the explicit mention: `os.path.exists` would call it
   absent while an `open(...,"x")` would follow it out of the workspace, so
   existence is tested with `lstat`, which does not follow.
+- **Win32 namespace aliases are refused lexically, for write destinations
+  only** (added by Phase 5F2B-FU1, on top of the Phase 5D0 precheck above).
+  Each of these stats and resolves like an ordinary file, so the decision is
+  made on the string, before any filesystem call, and nothing is normalized,
+  stripped, or probed: NTFS **alternate data streams** (`file.py:stream`,
+  `file.py::$DATA`) — a colon is permitted only as a fully-qualified drive
+  designator, and an ADS path is never reduced to its base file; **drive-relative**
+  forms (`C:file.py`), which depend on ambient per-drive current-directory
+  state, while `C:\...` continues through the normal machinery; **reserved
+  device names** (`CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, `LPT1`–`LPT9`,
+  their superscript-digit spellings, and `CONIN$`/`CONOUT$`), case-insensitively
+  and including when carrying an extension, since `NUL.txt` is still the device;
+  and the **reserved characters** `< > " | ? *` plus control characters. Phase
+  5E2 rejects colon-bearing paths upstream, and the write-target guard
+  deliberately does not rely on that invariant holding at its own boundary. The
+  rules apply on every platform, so an approval naming a Windows destination
+  cannot validate as safe merely because the check ran elsewhere.
 - **No directory is ever created.** If a `create` destination's parent directory
   does not exist, the invocation fails. `mkdir` would bring its own containment,
   symlink, cleanup and rollback questions (what removes a directory the writer
@@ -3627,19 +3672,27 @@ produces it" from "the thing that consumes it", and each was reviewable in one
 sitting. The same split applies here, and it matters more, because this is the
 sequence that ends in a write.
 
-The prerequisites are deliberately separated from the write itself. Each of the
-following is **PROPOSED and NOT AUTHORIZED**, and each needs its own prompt.
+The prerequisites are deliberately separated from the write itself. Each needs
+its own prompt. **5F2B has since been authorized and completed as a library-only
+phase; 5F2C, 5F2D, 5F2E and 5F2F remain PROPOSED and NOT AUTHORIZED**, and
+5F2F remains the first controlled workspace write.
 
-- **5F2B — create-aware canonical write-target guard. Library only.** Extends
-  the Phase 5D0 module with the entry point §26.3 shows is missing: the shipped
-  guard resolves with `strict=True` and cannot accept a destination that does
-  not exist, so a `create` target cannot be validated at all today. Adds parent
-  canonicalization, the final-component rules, the `ENOENT`-via-`lstat`
-  requirement, the dangling-link refusal, and the destination-is-never-a-link
-  rule. **No config field, no CLI command, no option, no caller, no write.**
-  Testable entirely with pytest `tmp_path`, exactly as Phase 5D0 was. *This is
-  the recommended immediate next phase*: it is the smallest piece, it is a pure
-  function of two paths, and everything later depends on it.
+- **5F2B — create-aware canonical write-target guard. Library only. DONE.**
+  Extended the Phase 5D0 module with the entry point §26.3 showed was missing:
+  the shipped guard resolves with `strict=True` and cannot accept a destination
+  that does not exist, so a `create` target could not be validated at all. Added
+  `canonicalize_write_target_under_workspace`, the frozen `CanonicalWriteTarget`
+  result, and one new typed error (`CanonicalPathWriteTargetError`) for the one
+  failure the existing hierarchy could not express — the destination's on-disk
+  state contradicting the declared `change_type` — plus parent canonicalization,
+  the final-component rules, the `ENOENT`-via-`lstat` requirement, the
+  dangling-link refusal, and the destination-is-never-a-link rule.
+  `canonicalize_existing_path_under_workspace` is unchanged, and its callers
+  behave exactly as before. **No config field, no CLI command, no option, no
+  caller, no write** — tested entirely with pytest `tmp_path`, exactly as Phase
+  5D0 was. Follow-up **5F2B-FU1** added the write-target-only Win32 namespace
+  rules of §26.3 (streams, drive-relative forms, device names, reserved
+  characters), again without touching the Phase 5D0 read guard.
 - **5F2C — typed workspace-write gate models. Library only.** The
   `protected_path_authorizations` block of §26.6 and its exact-sentence
   constant, plus whatever project-level `workspace_write` opt-in the writer
@@ -3678,8 +3731,8 @@ a single function over two path strings.
 
 ### 26.13 Unresolved questions
 
-Recorded explicitly rather than settled by omission. None of these blocks 5F2B;
-several block 5F2D and 5F2F.
+Recorded explicitly rather than settled by omission. None of these blocked 5F2B,
+which shipped as a library-only path guard; several block 5F2D and 5F2F.
 
 1. **Which non-subprocess Git-state implementation.** A vendored minimal reader
    (`HEAD`, `index`, working-tree comparison) keeps the dependency surface at
@@ -3728,6 +3781,22 @@ several block 5F2D and 5F2F.
     preflight artifact would create a second thing that looks like an
     authorization. Whether the operator should nonetheless be *required* to have
     run one is open.
+11. **Hard links to a `modify` destination.** A regular file may carry several
+    hard links, and none of the checks this document specifies reveals the other
+    names: canonical containment answers "where is this path", and the
+    symlink/reparse rules answer "is this path an indirection" — neither
+    enumerates the alternate names pointing at the same inode, which may sit
+    anywhere on the volume, including outside the workspace. This interacts
+    badly with the temp-sibling-plus-`os.replace` strategy of §26.7/§26.8:
+    replacement rebinds *the approved name* to a new file, so the other links
+    keep the old content and the approved path silently leaves the link set,
+    rather than the in-place mutation a reviewer would expect. That changes what
+    the pre-image means and what rollback restores. A policy must be chosen
+    **before Phase 5F2F** — for example, refusing a `modify` destination whose
+    link count is reliably greater than one (fail closed when the count cannot
+    be determined), or designing a mechanism that provably preserves the
+    intended semantics. **Open, and not addressed by Phase 5F2B or 5F2B-FU1**,
+    which validate a path and never open, replace, or write anything.
 
 ### 26.14 Acceptance criteria for Phase 5F2A (DONE)
 
@@ -3815,3 +3884,8 @@ several block 5F2D and 5F2F.
 - [x] **Phase 5F2B, 5F2C, 5F2D, 5F2E, 5F2F and every later sub-phase in §13
   remain PROPOSED and NOT AUTHORIZED.** L2 is still not built, no command can
   invoke it, and **nothing shipped in this repository edits a target file.**
+  *(This criterion records the state at the end of Phase 5F2A. **Phase 5F2B has
+  since been authorized and completed as a library-only path guard** — see
+  §26.3 and §26.12 — with no command, no option, no config field, no caller and
+  no write. 5F2C through 5F2F remain proposed and not authorized, L2 is still
+  not built, and nothing shipped edits a target file.)*
