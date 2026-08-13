@@ -77,6 +77,7 @@ proposed and not authorized.
 from __future__ import annotations
 
 import difflib
+import hashlib
 import json
 import re
 from typing import Literal
@@ -457,6 +458,11 @@ _ASSUMPTIONS = (
     "no workspace was touched, and no verification was executed.",
     "Line structure was derived with str.splitlines(), so a difference that "
     "exists only in a file's trailing newline is not represented.",
+    "pre_image_sha256 and post_image_sha256 are SHA-256 over the exact UTF-8 "
+    "bytes of the recorded original and the proposed final text, with no "
+    "normalization. They bind the transformation the human approves; the diff "
+    "describes it. A proposal whose diff and whose digests disagree is refused "
+    "by a writer rather than reconciled.",
 )
 
 _NO_CHANGES_ASSUMPTION = (
@@ -680,6 +686,23 @@ def _unified_diff_text(
             lineterm="",
         )
     )
+
+
+def _sha256_of_utf8(text: str) -> str:
+    """Return the lowercase hex SHA-256 of ``text``'s exact UTF-8 bytes.
+
+    Phase 5F2C. The digest is taken over the bytes the string *is*, with **no
+    normalization of any kind** first: no line-ending translation, no trailing
+    newline added or removed, no Unicode normalization, no stripping. The whole
+    point of the value is that a writer can recompute it from real file bytes
+    and compare with ``==``; anything this function tidied up would be a
+    difference the comparison could no longer see.
+
+    ``errors`` is deliberately left at its strict default. A string that cannot
+    be encoded is a surrogate-bearing string that never came from a real UTF-8
+    file, and it fails here rather than being encoded lossily.
+    """
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _check_no_secret_like_text(unified_diff: str, path: str) -> None:
@@ -908,6 +931,16 @@ def build_deterministic_diff_proposal(
                 "path": path,
                 "change_type": change.change_type,
                 "unified_diff": unified_diff,
+                # Phase 5F2C: both ends of the transformation, bound to the
+                # artifact. Computed from the exact UTF-8 bytes of the two
+                # strings this generator already holds — the packet's recorded
+                # original and the input's proposed final text — and never from
+                # a normalized copy of either. A ``create`` has no original, so
+                # its pre-image digest is null rather than a digest of "".
+                "pre_image_sha256": (
+                    None if original is None else _sha256_of_utf8(original)
+                ),
+                "post_image_sha256": _sha256_of_utf8(change.content_text),
                 "rationale": change.rationale,
                 "risks": list(change.risks),
                 "requires_human_review": True,

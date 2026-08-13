@@ -86,7 +86,10 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
 
-from ai_dev_orchestrator.diff_proposal.models import DiffProposalArtifact
+from ai_dev_orchestrator.diff_proposal.models import (
+    DiffProposalArtifact,
+    _require_image_digests_match_change_type,
+)
 
 
 class FileEditingApprovalError(Exception):
@@ -124,7 +127,15 @@ REQUIRED_DIFF_EDIT_APPROVAL_TEXT = (
 
 # The artifact's schema identity. Compared with ``==`` through a ``Literal``: a
 # different version is a different artifact and is rejected, not upgraded.
-APPROVED_DIFF_PROPOSAL_SCHEMA_VERSION = "approved-diff-proposal.v1"
+#
+# Phase 5F2C raised this from ``approved-diff-proposal.v1`` to
+# ``approved-diff-proposal.v2``, in step with ``diff-proposal.v2``. The wrapper
+# records **what a human approved**, and what they approve now includes the
+# exact pre-image and post-image identities each change binds. A v1 wrapper
+# wraps a v1 proposal that carries neither, so it is a different artifact and is
+# rejected rather than upgraded — approving a transformation whose endpoints
+# were never written down is not the approval this phase's writer requires.
+APPROVED_DIFF_PROPOSAL_SCHEMA_VERSION = "approved-diff-proposal.v2"
 
 # What this artifact *is*. There is one mode and it records an approval and
 # nothing else. There is no "apply" mode and no "edit" mode; adding one would be
@@ -243,6 +254,12 @@ class ApprovedDiffProposalArtifact(_Strict):
       ``approved_plan.plan.files_likely_to_change``, and no path present in
       ``files_forbidden_or_out_of_scope``. Same reasoning: already true
       upstream, re-established here.
+    - **Re-checked image identity** (Phase 5F2C). Every ``modify`` carries a
+      ``pre_image_sha256``; every ``create`` carries ``null`` for it. This is
+      the invariant that makes the approval mean *"this human approved turning
+      these exact bytes into those exact bytes"* rather than the much weaker
+      *"this human approved a diff for this path"*, so it is re-established
+      here rather than inherited.
     - **An optional wrapped patch proposal is left to
       :class:`DiffProposalArtifact`.** Its consistency rules are not relaxed,
       duplicated, or overridden here.
@@ -378,11 +395,21 @@ class ApprovedDiffProposalArtifact(_Strict):
                 "diff applies is never checked, and approving it does not check it."
             )
 
-        # Path discipline, re-established rather than inherited.
+        # Path discipline **and image identity**, re-established rather than
+        # inherited. The digest rule is checked here for the same reason every
+        # other invariant is: pydantic does not re-validate an instance it is
+        # handed, so a mutated or hand-built proposal reaches this wrapper with
+        # a missing pre-image digest intact — and a missing pre-image digest is
+        # precisely the thing that would let a writer transform bytes nobody
+        # approved.
         allowed = plan.files_likely_to_change
         forbidden = plan.files_forbidden_or_out_of_scope
         seen: set[str] = set()
         for change in proposal.changes:
+            _require_image_digests_match_change_type(
+                change_type=change.change_type,
+                pre_image_sha256=change.pre_image_sha256,
+            )
             if change.path in forbidden:
                 raise ValueError(
                     "diff_proposal.changes.path is listed in "

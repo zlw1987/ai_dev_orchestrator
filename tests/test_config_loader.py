@@ -283,3 +283,116 @@ def test_generate_plan_still_has_no_real_or_model_option():
     assert result.exit_code == 0
     for absent in ("--live", "--real", "--model", "--use-env", "--github", "--fetch"):
         assert absent not in result.stdout
+
+
+# -- Phase 5F2C: the controlled single-file write opt-in -----------------------
+
+
+def test_workspace_write_defaults_to_disabled():
+    from ai_dev_orchestrator.models import WorkspaceWriteConfig
+
+    config = WorkspaceWriteConfig()
+
+    assert config.enabled is False
+    assert config.max_file_bytes == 200_000
+
+
+def test_an_absent_workspace_write_block_is_identical_to_a_disabled_one(tmp_path):
+    path = tmp_path / "project.yaml"
+    path.write_text(
+        "project_id: p\n"
+        "display_name: P\n"
+        "repo:\n"
+        '  workspace_path: "C:/nowhere/never/read"\n'
+        '  github_repo: "owner/repo"\n'
+        '  branch_prefix: "ai/p"\n',
+        encoding="utf-8",
+    )
+
+    config = load_project_config(path)
+
+    assert config.workspace_write.enabled is False
+
+
+def test_workspace_write_can_be_enabled_with_a_cap(tmp_path):
+    path = tmp_path / "project.yaml"
+    path.write_text(
+        "project_id: p\n"
+        "display_name: P\n"
+        "repo:\n"
+        '  workspace_path: "C:/nowhere/never/read"\n'
+        '  github_repo: "owner/repo"\n'
+        '  branch_prefix: "ai/p"\n'
+        "workspace_write:\n"
+        "  enabled: true\n"
+        "  max_file_bytes: 50000\n",
+        encoding="utf-8",
+    )
+
+    config = load_project_config(path)
+
+    assert config.workspace_write.enabled is True
+    assert config.workspace_write.max_file_bytes == 50_000
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        "  allow_protected_paths: true\n",
+        "  allow_create: true\n",
+        "  max_changed_files: 5\n",
+        "  rollback: true\n",
+        "  write_journal: /tmp/journal\n",
+        "  api_key: sk-not-allowed\n",
+        "  command: pytest -q\n",
+        "  model: minimax-m2.7\n",
+    ],
+)
+def test_workspace_write_rejects_every_widening_key(tmp_path, block):
+    """The block carries an enable switch and a size ceiling. Nothing else."""
+    path = tmp_path / "project.yaml"
+    path.write_text(
+        "project_id: p\n"
+        "display_name: P\n"
+        "repo:\n"
+        '  workspace_path: "C:/nowhere/never/read"\n'
+        '  github_repo: "owner/repo"\n'
+        '  branch_prefix: "ai/p"\n'
+        "workspace_write:\n"
+        "  enabled: true\n" + block,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError):
+        load_project_config(path)
+
+
+@pytest.mark.parametrize("value", [0, -1, 1_000_001])
+def test_max_file_bytes_is_bounded(tmp_path, value):
+    path = tmp_path / "project.yaml"
+    path.write_text(
+        "project_id: p\n"
+        "display_name: P\n"
+        "repo:\n"
+        '  workspace_path: "C:/nowhere/never/read"\n'
+        '  github_repo: "owner/repo"\n'
+        '  branch_prefix: "ai/p"\n'
+        "workspace_write:\n"
+        "  enabled: true\n"
+        f"  max_file_bytes: {value}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError):
+        load_project_config(path)
+
+
+def test_the_example_config_ships_workspace_write_disabled():
+    raw = Path("projects/mis_project.yaml.example").read_text(encoding="utf-8")
+
+    import yaml
+
+    from ai_dev_orchestrator.models import ProjectConfig
+
+    parsed = ProjectConfig.model_validate(yaml.safe_load(raw))
+    assert parsed.workspace_write.enabled is False

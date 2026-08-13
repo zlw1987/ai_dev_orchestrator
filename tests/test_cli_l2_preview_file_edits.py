@@ -201,12 +201,23 @@ def _create_diff(path: str) -> str:
     )
 
 
+# Phase 5F2C image identities. These fixtures exercise artifact *shape*, so
+# the digests only have to be well-formed lowercase 64-hex values; the writer
+# is what compares them against real bytes.
+PRE_IMAGE_SHA256 = "3f79bb7b435b05321651daefd374cdc681dc06faa65e374e38337b88ca046dea"
+POST_IMAGE_SHA256 = "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae"
+
+
 def _change(path: str = PLAN_FILE_A, change_type: str = "modify", **overrides) -> dict:
     diff = _create_diff(path) if change_type == "create" else _modify_diff(path)
     change = {
         "path": path,
         "change_type": change_type,
         "unified_diff": diff,
+        # Phase 5F2C: diff-proposal.v2 binds both ends of the transformation.
+        # A create has no original, so its pre-image digest is null.
+        "pre_image_sha256": None if change_type == "create" else PRE_IMAGE_SHA256,
+        "post_image_sha256": POST_IMAGE_SHA256,
         "rationale": "Round invoice totals to two decimal places.",
         "risks": ["Reissued invoices may differ by a cent."],
         "requires_human_review": True,

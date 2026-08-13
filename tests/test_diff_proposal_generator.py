@@ -1294,3 +1294,81 @@ def test_the_error_hierarchy_is_the_declared_one():
     assert issubclass(DiffProposalInputParseError, DiffProposalGenerationError)
     assert issubclass(DiffProposalInputValidationError, DiffProposalGenerationError)
     assert issubclass(DiffProposalGenerationError, Exception)
+
+
+# -- Phase 5F2C: the generator computes exact image identities -----------------
+
+
+def _sha256_of(text: str) -> str:
+    import hashlib
+
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def test_a_modify_binds_the_exact_recorded_original_and_proposed_bytes():
+    proposal = _build()
+    change = proposal.changes[0]
+
+    assert change.pre_image_sha256 == _sha256_of(ORIGINAL_A)
+    assert change.post_image_sha256 == _sha256_of(PROPOSED_A)
+
+
+def test_a_create_binds_a_null_pre_image_and_a_real_post_image():
+    proposal = _build(
+        proposed_content=_proposed(
+            [_change(PLAN_FILE_NEW, CREATED_TEXT, change_type="create")]
+        )
+    )
+    change = proposal.changes[0]
+
+    assert change.pre_image_sha256 is None
+    assert change.post_image_sha256 == _sha256_of(CREATED_TEXT)
+
+
+def test_the_digests_are_over_unnormalized_bytes():
+    """A trailing-newline-only difference is invisible in the diff, not in the digest.
+
+    ``difflib`` works on ``splitlines()`` output, so a change that exists only in
+    the file's terminal newline produces no diff at all. The post-image digest,
+    computed over the exact bytes, still records it — which is exactly why a
+    writer that applies the diff and re-hashes the result catches the
+    disagreement instead of writing something nobody approved.
+    """
+    without_newline = PROPOSED_A.rstrip("\n")
+
+    assert _sha256_of(PROPOSED_A) != _sha256_of(without_newline)
+
+    proposal = _build(
+        proposed_content=_proposed([_change(PLAN_FILE_A, without_newline)])
+    )
+    change = proposal.changes[0]
+
+    assert change.post_image_sha256 == _sha256_of(without_newline)
+    assert change.pre_image_sha256 == _sha256_of(ORIGINAL_A)
+
+
+def test_crlf_content_is_hashed_as_written():
+    crlf_original = "a\r\nb\r\n"
+    crlf_proposed = "a\r\nB\r\n"
+    packet = _packet(
+        [
+            _read_item(PLAN_FILE_A, crlf_original),
+            _read_item(PLAN_FILE_B, ORIGINAL_B),
+            _empty_item(PLAN_FILE_NEW, "missing"),
+        ]
+    )
+    proposal = _build(
+        workspace_content=packet,
+        proposed_content=_proposed([_change(PLAN_FILE_A, crlf_proposed)]),
+    )
+    change = proposal.changes[0]
+
+    assert change.pre_image_sha256 == _sha256_of(crlf_original)
+    assert change.post_image_sha256 == _sha256_of(crlf_proposed)
+
+
+def test_the_digests_are_deterministic():
+    first = _build()
+    second = _build()
+
+    assert first.model_dump_json() == second.model_dump_json()

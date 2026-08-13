@@ -17,14 +17,204 @@ changes. The eventual design will:
 
 The emphasis is on **control and review**, not autonomous action.
 
-## Current status: Phase 5F2B (library only) — latest shipped *command* is still Phase 5F1, and nothing writes a target file
+## Current status: Phase 5F2C — AIDO can now write **one** approved file, and that is all
 
-**Phase 5F2B is the latest completed phase, and it is library only**: one new
-function, one new result type, and one new error, wired into nothing (see the
-note further down this section). Phase 5F2A before it was **design only** —
-documentation and no code (see §26 of the design doc). **Phase 5F1 remains the
-latest shipped runtime capability**, and nothing in this repository can write a
-file into a target workspace.
+**Phase 5F2C is the latest completed phase, and it is the first one that writes
+a byte into a target project workspace.** One new command,
+`l2-apply-approved-file-edit`, applies **one** explicitly human-approved
+modification to **one** existing, Git-tracked, ordinary UTF-8 file inside **one**
+wholly clean Windows Git repository — transforming an exact approved pre-image
+into an exact approved post-image, proving the postcondition, and leaving the
+change **uncommitted** for a human to review.
+
+Everything outside that sentence fails closed. There is no file creation, no
+delete, no rename, no second file, no protected or forbidden path, no fuzzy
+patching, no non-Windows support, no dirty repository, no project verification
+command, no model call, no network call, no GitHub access, no branch, no commit,
+no push, no PR, no rollback and no journal.
+
+**Why the roadmap changed.** The plan after Phase 5F2A was 5F2C typed gate
+models → 5F2D custom Git-state reader → 5F2E standalone preflight → 5F2F
+generalized transactional writer. After 5F2B shipped, the project was
+independently reviewed and concluded that the safety philosophy remained
+correct but the sequencing had become imbalanced: by then the repository held
+twelve commands, four artifact schemas, two path guards, two human approvals and
+a dry-run preview — and could not change a single character of a single file.
+Generalized mutation-engine machinery (transactions, journals, rollback, crash
+recovery, concurrency) was scheduled ahead of the first useful mutation, and
+that machinery is itself reliability and security surface. The new rules are:
+
+> If a difficult case can safely be excluded from the currently supported input
+> domain, prefer **fail-closed refusal** over building a generalized solution
+> before the first useful vertical slice.
+
+> Once the supported domain is safe enough to prove a useful positive
+> capability, **consume the existing safety primitives** before creating
+> additional generalized ones.
+
+The near-term sequence is now **5F2C controlled single-file writer → 5F2D
+controlled verification → 5F2E reviewer integration → the first complete
+controlled implement → verify → review → human loop**. Generalized writer
+expansion resumes only after that. See
+[§27 and §28 of the design doc](docs/PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md);
+§26.12 is preserved as history and marked superseded prospectively.
+
+### What Phase 5F2C actually ships
+
+- **A project opt-in that ships disabled**, `workspace_write`, with exactly two
+  fields — `enabled` and `max_file_bytes`. There is deliberately **no**
+  `allow_protected_paths`, no create flag, no multi-file switch, no
+  rollback/journal setting, no credential, no model and no command.
+  `workspace_policy.max_changed_files` is not duplicated; the writer enforces it
+  **and** its own hard rule of exactly one change, and a cap of `0` permits no
+  write at all. While disabled, the command refuses before the workspace is
+  touched.
+- **A schema evolution that binds both ends of the transformation.**
+  `diff-proposal.v1` became **`diff-proposal.v2`** and
+  `approved-diff-proposal.v1` became **`approved-diff-proposal.v2`**: every
+  change now carries `pre_image_sha256` (the whole original file's exact UTF-8
+  bytes; `null` for a `create`) and `post_image_sha256`. A diff describes a
+  transformation without saying which bytes it starts from — once a writer
+  exists, that gap is the whole security question. The version was **raised
+  rather than v1's meaning quietly changed**, so a v1 artifact is rejected, not
+  upgraded. The human approval sentence is **unchanged** and there is no second
+  approval artifact.
+- **A strict, no-fuzz diff applier.** No `patch`, no `git apply`, no fuzzy
+  engine. Headers must name the approved path exactly; hunk locations are exact;
+  every context and deleted line must match byte for byte; there is no offset
+  search, no fuzz, no nearest-match, no three-way merge and no repair; malformed,
+  overlapping or self-inconsistent hunks fail closed. If the result does not hash
+  to the approved post-image, that is an internal inconsistency and the write is
+  refused.
+- **A fixed Git adapter, which is not command execution.** The executable is the
+  literal `"git"`; every argv comes from a closed set of six read-only
+  operations; no model, user, config file or artifact supplies an executable, a
+  subcommand, a flag or a shell fragment; `shell=False` always; the environment
+  is a **minimal allowlist** so no `AIDO_LITELLM_*` value, `GITHUB_TOKEN` or
+  inherited `GIT_DIR` reaches the child; pager, prompting, askpass, external
+  diff, textconv, fsmonitor and optional locking are all disabled; output and
+  time are bounded. There is no `add`, `commit`, `checkout`, `restore`, `reset`,
+  `branch`, `apply`, `fetch` or `push`, and no network operation at all. Fixed
+  AIDO-owned Git plumbing is part of the **writer's own correctness contract**;
+  repository-configured verification is a **separate capability this phase does
+  not have**.
+- **A clean-baseline requirement with no exceptions.** The Git top level must be
+  exactly the configured workspace root, `HEAD` must exist, and `git status`
+  must report **nothing** — staged, unstaged, untracked, deleted, renamed,
+  unmerged and dirty-submodule state all refuse the run. Any assume-unchanged or
+  skip-worktree entry, any unmerged entry, and any gitlink refuse the **whole
+  repository**: if the simple contract cannot be proved, this is not a
+  repository the writer supports. **No custom Git index parser was built.**
+- **A narrow target contract.** Lexical write policy (protected, forbidden and
+  unlisted all refused, with no override anywhere), then the Phase 5F2B
+  canonical write-target guard, then an existing regular file, supported Windows
+  attributes only (an allowlist — read-only, hidden, system, reparse, sparse,
+  encrypted, compressed, offline and temporary all refuse), and a hard-link
+  count of exactly **one**, read via `GetFileInformationByHandle` and refused
+  when it cannot be established.
+- **A narrow text domain.** Strict UTF-8, no NUL bytes, one uniform line-ending
+  style preserved as found, and a required terminal newline — which is what makes
+  the split/rejoin round trip byte-exact. Mixed endings, bare CR, missing
+  terminal newline, non-UTF-8 and oversize files are all **refused**, with no
+  detection, conversion, normalization or repair.
+- **Full revalidation immediately before the write.** Nothing established
+  earlier is reused as durable authority: the canonical guard, the file kind,
+  the reparse state, the link count, the attribute mask, the bytes, the
+  pre-image digest and the Git baseline are **all** re-established immediately
+  before the mutation.
+- **A metadata-preserving replacement.** `os.replace` is deliberately not used —
+  it would give the destination the *new* file's ACLs and attributes, turning an
+  approved content-only edit into an uncontrolled metadata change. The writer
+  uses `ReplaceFileW` with `REPLACEFILE_WRITE_THROUGH`, **no** "ignore merge
+  errors" or "ignore ACL errors" flag, and **no backup file**, after staging the
+  bytes into one exclusively-created sibling temp file that is flushed and
+  `fsync`ed. No directory is ever created.
+- **Machine verification after the write.** A successful API call is not proof:
+  the bytes are re-read and must hash to the approved post-image, the attribute
+  mask must be unchanged, and Git must report **exactly** the approved path as
+  dirty and nothing else. Git's own diff text is *not* required to match the
+  approved `difflib` text — those are two renderings of one change, and the
+  digest is the correctness invariant.
+- **Two distinct failure kinds.** Exit **1** means refused before any write and
+  the target is unchanged. Exit **3** means a replacement was attempted and its
+  final state could not be proved — which is **never** reported as "nothing
+  changed". On exit 3 nothing is retried, nothing is rolled back, no
+  `git restore` is run, and the human is told that repository inspection is
+  required against the clean baseline the run proved beforehand.
+- **A quiescent single-writer contract, stated rather than solved.** Phase 5F2C
+  supports one AIDO writer against a workspace nobody else is editing. There is
+  no lock, no watcher and no concurrency protocol; interference is detected by
+  revalidation and means failing closed. **Concurrency is not solved.**
+
+### Phase 5F2C-FU1 — corrections found in review
+
+Phase 5F2C was reviewed before acceptance and six findings were returned. All
+six are fixed. **Nothing was widened to fix them** — every one was closed by
+refusing an unsupported case, which is exactly what §27's rules ask for.
+
+- **`ReplaceFileW` was passing an unsupported flag.** The code set
+  `REPLACEFILE_WRITE_THROUGH`, which Microsoft documents as **not supported** by
+  `ReplaceFileW`, so the call claimed a durability guarantee the API does not
+  offer. `dwReplaceFlags` is now **exactly `0`**, and durability is described
+  accurately: it comes from the `fsync` on the temp file *before* the
+  replacement, and from nothing else. `os.replace` did **not** replace
+  `ReplaceFileW` — the metadata-preserving design is deliberate and remains.
+- **Cleanup after a failed replacement was unsafe.** The old code deleted the
+  temp file even after `ReplaceFileW` had been invoked and failed — a moment
+  when filename state may already have changed, so deleting could discard the
+  only intact copy of the new content. Cleanup is now **asymmetric**: safe
+  before the replacement call, and **forbidden after it**. A failed replacement
+  deletes nothing, renames nothing, restores nothing, retries nothing, and runs
+  no Git mutation; it reports the exit-3 indeterminate outcome and names the
+  leftover temp file so a human can find it.
+- **The fixed argv did not prevent repository-controlled execution.** This was
+  the serious one, and the original reasoning was simply wrong. Git runs clean,
+  smudge and process **filters** — commands configured by the repository through
+  `filter.<driver>.*` and selected by `.gitattributes` — from inside a perfectly
+  fixed argv. Reproduced against a real `git` binary in a temporary repository,
+  a configured `filter.evil.clean` executes during `git diff`, **and during
+  `git status` on a wholly clean tree** whenever a tracked file's cached stat
+  data is stale (a bare `touch` is enough, because Git must re-hash the file to
+  prove it is unchanged). That fires during the writer's very first preflight.
+  The fix is a **fail-closed configuration gate**, not a Git reimplementation
+  and not a generic executor: a repository whose effective Git configuration can
+  execute a program or indirect to configuration that could is **refused**
+  before anything reads working-tree content. Only key *names* are read
+  (`--name-only`), so no configuration value ever enters the process and a
+  refusal cannot leak one. The local scan runs with `--no-includes`, so the
+  decision about whether indirection is permitted is not itself made by
+  following it. The gate is deliberately over-broad in one direction: a machine
+  with git-lfs configured globally will have its repositories refused.
+- **Gate ordering let `status` run too early.** `git status
+  --ignore-submodules=none` ran before the index was known to be gitlink-free,
+  so the walk could descend into a submodule the writer was about to refuse. The
+  order is now data (`ordered_preflight_operations()`) and asserted by test:
+  safe metadata → configuration gate → index gate → *only then* working-tree
+  cleanliness.
+- **Executable selection was ambient.** `GIT_EXECUTABLE = "git"` let the OS pick
+  the program. Git is now resolved to an **absolute path once, before any
+  target-workspace use**, refused if it lives **inside the target workspace**,
+  and pinned for every invocation in the run. The executable argument is
+  required with no default, so there is no silent fallback to `"git"`.
+- **Output was measured after capture, not bounded during it.** The adapter now
+  reads stdout in chunks and **kills the child the moment the cap is passed**,
+  with a watchdog enforcing the timeout; stderr goes to `DEVNULL` (it was never
+  used for a decision, and Git's stderr can carry paths and content). The bound
+  is real. The **residual limitation is stated rather than hidden**: it bounds
+  output volume and wall time, not everything a hostile local repository could
+  make Git do — this is a single-writer tool for a locally trusted repository,
+  not a sandbox.
+- **The report claimed no file was created.** A successful write always creates
+  one ephemeral sibling temp file. `files_created: false` became target-scoped
+  `target_files_created: false`, and a new `operational_files` block states the
+  truth: one temp sibling used, consumed by the replacement, none left behind,
+  no directory created, no backup or journal. **No journal and no backup were
+  added.**
+
+**L2 is still not complete.** Phase 5F2D (controlled verification) and Phase
+5F2E (reviewer integration) remain **unauthorized**, so the complete
+implement → verify → review → human loop does not exist. There is still no
+model-backed implementer, no commit, no push and no PR.
 
 Phase 5F0 typed the human approval a future file-editing phase would have to be
 handed, and shipped nothing that consumes it. Phase 5F1 is the first consumer:
@@ -134,9 +324,13 @@ yet, so a `create` target had no guard at all.
   approval stamping.** The Phase 5D0 entry point is unchanged, and its one
   caller behaves exactly as before.
 
-**Phase 5F2C, 5F2D, 5F2E and 5F2F all remain proposed and not authorized**,
-5F2F remains the first controlled workspace write, **L2 is still not built**,
-and **nothing shipped in this repository edits a target file.**
+**Phase 5F2C has since shipped the first controlled workspace write**, described
+at the top of this section — so the old statement that "5F2F remains the first
+controlled workspace write" is history, not current status. **Phase 5F2D
+(controlled verification) and Phase 5F2E (reviewer integration) remain proposed
+and not authorized**, and **L2 is still not complete**: nothing here runs a
+project's own checks, calls a model to implement, commits, pushes, or opens a
+PR.
 
 See
 [docs/PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md §25 and §26](docs/PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md)
@@ -253,7 +447,9 @@ text.
   no approval stamping.**
 
 **L2 is not built, and this command is not it.** It writes a diff to stdout for
-a human to read. Nothing shipped so far edits a file.
+a human to read; applying one is a separate act, behind a separate human
+approval and the separate Phase 5F2C command described in the status section
+above.
 
 See
 [docs/PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md §23](docs/PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md)
@@ -864,27 +1060,39 @@ The following are intentionally **not** implemented yet:
 - No **L2/L3 automation**. The real-model planner produces an L1 plan that
   requires human approval, and nothing acts on it.
 - No agent logic.
-- No **file editing or command execution**. Nothing writes a file, applies a
-  diff, runs `required_verification`, creates a branch, commits, pushes, or
-  opens a PR.
-- No **writes** of any kind to a configured **target project workspace**. Two
-  commands may *read* one, both read-only and both only for paths an approved
-  plan already named: `l2-inspect-workspace` (Phase 5D1) canonicalizes and
-  `stat`s them, and `l2-read-workspace-files` (Phase 5D2) additionally opens
-  regular files, within per-file/total byte caps and behind its own project
-  opt-in, and prints their contents redacted. Neither lists a directory, globs,
-  or walks a tree.
-- No **patch or diff application**. Proposals themselves *do* exist now:
-  `generate-patch-proposal` (Phase 5E1) prints a prose-only patch proposal, and
-  `generate-diff-proposal` (Phase 5E3) prints real unified diff text. Both are
-  **deterministic, offline, and stdout only** — the output is **data describing
-  suggested work, never permission to do it**. Nothing applies, stages, or
-  writes a diff; **whether a diff would even apply is never checked**
-  (`applies_cleanly_checked` is always false, because asking means touching a
-  workspace); no artifact file is written; and no approval is stamped. Phase 5F0
-  types the separate human approval a future file-editing phase would need, as
-  library-only models and a parser with no command — recording that approval
-  still edits nothing.
+- No **command execution**. Nothing runs `required_verification`, pytest, npm,
+  make, a build script, or any model-proposed command; nothing creates a branch,
+  commits, pushes, or opens a PR. The one subprocess capability that exists is
+  the Phase 5F2C writer's **fixed, read-only** Git inspection set, which is part
+  of that writer's own correctness contract and cannot be pointed at another
+  program.
+- No **general file editing**. Exactly one command writes into a configured
+  target workspace — `l2-apply-approved-file-edit` (Phase 5F2C) — and it applies
+  **one** approved modification to **one** tracked UTF-8 file in **one** clean
+  Windows Git repository, behind its own project opt-in, with no create, no
+  delete, no rename, no second file, no protected path and no fuzzy patching.
+  Two other commands may *read* a workspace, both read-only and both only for
+  paths an approved plan already named: `l2-inspect-workspace` (Phase 5D1)
+  canonicalizes and `stat`s them, and `l2-read-workspace-files` (Phase 5D2)
+  additionally opens regular files, within per-file/total byte caps and behind
+  its own project opt-in, and prints their contents redacted. None of the three
+  lists a directory, globs, or walks a tree.
+- No **general patch or diff application**, and no fuzzy patch engine anywhere.
+  Exactly one command applies a diff: `l2-apply-approved-file-edit` (Phase
+  5F2C), which applies **one** human-approved `modify` diff to **one** tracked
+  UTF-8 file **exactly** — no fuzz, no offset search, no nearest-match, no
+  three-way merge, no repair — and refuses if the result does not hash to the
+  approved post-image. `patch`, `git apply` and every other fuzzy applier are
+  absent by design.
+  **The proposal-generating commands still never apply their own output.**
+  `generate-patch-proposal` (Phase 5E1) prints a prose-only patch proposal and
+  `generate-diff-proposal` (Phase 5E3) prints real unified diff text; both are
+  **deterministic, offline, and stdout only**, both leave
+  `applies_cleanly_checked` false because they never ask, neither writes an
+  artifact file, and neither stamps an approval. Their output is **data
+  describing suggested work, never permission to do it** — turning it into a
+  write takes a separate human approval in the exact Phase 5F0 wording, a
+  project that has opted in via `workspace_write`, and a separate command.
 - No agent framework (LangGraph / CrewAI / AutoGen / n8n).
 
 ## Provider policy
@@ -1422,6 +1630,98 @@ non-zero with stderr only and nothing on stdout.
   the approval text, any diff, any source line, any command output, any apply
   result, an API key, or a base URL.
 
+### Applying one approved file edit (Phase 5F2C — the only command that writes)
+
+```bash
+python -m ai_dev_orchestrator l2-apply-approved-file-edit --project-config projects/my_project.yaml --approved-diff-proposal path/to/approved_diff_proposal.json --apply-approved-plan --write-approved-file
+```
+
+`l2-apply-approved-file-edit` is the **only** command in this repository that
+modifies a file in a target project workspace. It reads two **local files** — the
+project config and a human-approved `approved-diff-proposal.v2` artifact — and
+applies **one** approved modification to **one** file.
+
+It requires this block in the project config, shipped **disabled** and separate
+from the two read-only opt-ins:
+
+```yaml
+workspace_write:
+  enabled: false      # must be true; absent is identical to false
+  max_file_bytes: 200000
+```
+
+There is deliberately no `allow_protected_paths`, no create flag, no multi-file
+switch, and no rollback or journal setting — none of those capabilities exists
+here to be turned on.
+
+**The supported domain is exactly this.** Windows; a local Git working tree whose
+top level *is* the configured `repo.workspace_path`; a valid `HEAD`; a **wholly
+clean** repository; exactly one change; `change_type: "modify"`; a target that is
+already tracked as one ordinary stage-0 blob; an existing regular file with no
+reparse point, no unsupported Windows attribute and a hard-link count of exactly
+one; a project with `allow_symlinks: false` and `deny_outside_workspace: true`; a
+non-protected, non-forbidden, policy-allowed path; ordinary UTF-8 text with one
+uniform line-ending style and a terminal newline, inside `max_file_bytes`; the
+on-disk bytes hashing to the approved `pre_image_sha256`; and the strictly
+applied diff hashing to the approved `post_image_sha256`. **Everything else fails
+closed.**
+
+The gate fails closed in order. `--apply-approved-plan` and
+`--write-approved-file` are checked **first** — without either, the command exits
+non-zero having read nothing at all. Then the config loads. Then
+`workspace_write.enabled`. Then the Windows-only platform check (all three before
+any workspace touch). Then `--approved-diff-proposal` is rejected if it is the
+configured `repo.workspace_path` or sits under it, **before it is read or
+stat'd**. Then the strict parse. Then identity matching in all six places the
+artifact records it, the exactly-one-`modify` rule, the lexical write policy, the
+canonical write-target guard, the file's kind/attributes/link count, the clean
+Git baseline, the simple-index contract, the tracked-target proof, the pre-image
+digest, the strict diff application, and the post-image digest — and then all of
+the filesystem and Git facts are **re-established from scratch immediately before
+the write**.
+
+**The diff is applied exactly.** No `patch`, no `git apply`, no fuzzy engine.
+Hunk locations are exact, every context and deleted line must match byte for
+byte, and there is no offset search, no fuzz, no nearest-match, no three-way
+merge and no repair. If the result does not hash to the approved post-image, the
+write is refused as an internal inconsistency.
+
+**After the write**, the bytes are re-read and must hash to the approved
+post-image, the file's Windows attributes must be unchanged, and Git must report
+**exactly** the approved path as an unstaged modification and nothing else.
+
+`l2-apply-approved-file-edit` **does not**:
+
+- create, delete, rename, or move any file, or create any directory,
+- write more than one file, whatever `workspace_policy.max_changed_files` allows,
+- write a protected or forbidden path — there is no flag and no config field that
+  permits one,
+- apply a diff with fuzz, offset, or repair,
+- run `required_verification`, pytest, npm, make, a build script, or any other
+  project-configured or model-proposed command — the only subprocess it can cause
+  is its own closed set of fixed, read-only Git inspection commands,
+- invoke a shell, or run any program other than `git`,
+- call a model, send source to a model, open a socket, or contact GitHub,
+- create a branch, commit, push, or open a PR — the change is left
+  **uncommitted** for human review,
+- roll back, retry, write a backup or a journal, or run `git restore`,
+- print the configured workspace path, any absolute path, the raw artifact text,
+  the approval text, the approved diff, any unrelated source file, any digest,
+  an API key, or a base URL.
+
+**Exit codes are distinct on purpose:**
+
+| Code | Meaning |
+| --- | --- |
+| `0` | The write happened **and** every postcondition was proved. stdout is the result report. |
+| `1` | **Refused before any write.** The target is unchanged. stderr names the category; stdout is empty. |
+| `3` | **A write was attempted and its final state could not be proved.** This is *not* a claim that nothing changed. Nothing was retried or rolled back — a human must inspect the repository against the clean baseline the run proved beforehand. |
+
+**Concurrency is not solved.** Phase 5F2C supports one AIDO writer against a
+quiescent workspace. There is no lock, no watcher and no cross-process protocol;
+a concurrent edit is *detected* by revalidation and causes a failure, which is
+not the same as being safe against one.
+
 ## Tests
 
 ```bash
@@ -1611,12 +1911,23 @@ so a `create` destination can be validated at all, and it is wired into nothing
 — no command, no option, no config field, no caller, **no file or directory
 created, and no write**.
 
-**L2 is proposed, not built.** No command can invoke it, and every later Phase 5
-sub-phase remains unauthorized — **Phase 5F2C** (typed workspace-write gate
-models, library only), **Phase 5F2D** (read-only Git-state probe), **Phase 5F2E**
-(read-only write preflight), and **Phase 5F2F** (the first controlled workspace
-write). Nothing in the repository ships any of them, and **nothing shipped edits
-a target file**. Until one is explicitly authorized, the project continues to
-avoid agent automation, patch application, file editing, command execution,
-GitHub writes, GitHub issue fetching inside a real model command, and target
-project workspace writes.
+**Phase 5F2C** then superseded that roadmap and shipped the **first controlled
+workspace write**, `l2-apply-approved-file-edit`, described in the status and
+usage sections above. The old plan — 5F2C typed gate models, 5F2D custom
+Git-state reader, 5F2E standalone preflight, 5F2F generalized transactional
+writer — was replaced by a minimum safe vertical slice after an independent
+roadmap review (design doc §27, which supersedes §26.12 while preserving it as
+history). Phase 5F2C evolved the concrete diff artifact to bind exact pre-image
+and post-image identities, added a strict no-fuzz applier and a fixed read-only
+Git adapter, gated the whole thing behind a `workspace_write` opt-in that ships
+disabled, and refuses every case outside its narrow domain.
+
+**L2 is not complete.** The near-term sequence is now **Phase 5F2D** (controlled
+verification) and **Phase 5F2E** (reviewer integration), and both remain
+**unauthorized** — so the complete implement → verify → review → human loop does
+not exist. Until they are explicitly authorized, the project continues to avoid
+agent automation, project verification execution, arbitrary command execution,
+model-backed implementation, GitHub writes, GitHub issue fetching inside a real
+model command, branches, commits, pushes, and PRs. Generalized writer expansion
+— multi-file, `create`, protected-path writes, transactions, journals, rollback,
+crash recovery and concurrency — resumes only after that loop exists.

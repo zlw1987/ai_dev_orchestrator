@@ -764,15 +764,17 @@ def test_command_help_gains_no_canonical_option(command):
 
 
 def test_the_canonical_guard_has_exactly_one_caller():
-    """Phase 5D1 gave the guard its first and only caller, ``cli.py``.
+    """The Phase 5D0 read guard still has exactly one caller, ``cli.py``.
 
-    Phase 5D0 shipped it with none. The assertion is kept rather than deleted
-    because "how many things can reach a workspace?" is the number worth
-    watching: it went from zero to one, deliberately, and a second entry would
-    be a change someone should have to make on purpose.
+    Phase 5D0 shipped it with none and Phase 5D1 gave it its first. The
+    assertion is kept rather than deleted because "how many things can reach a
+    workspace?" is the number worth watching, and it should only move when
+    somebody means it to.
 
-    Nobody imports the private module path either — the guard is reached only
-    through the ``workspace`` package's public export.
+    Phase 5F2C did **not** move it. The writer reaches the workspace through
+    :func:`canonicalize_write_target_under_workspace` — the create-aware Phase
+    5F2B entry point — which is a separate function with its own separate test
+    below. The read guard's caller count is unchanged at one.
     """
     package_root = Path(canonical.__file__).resolve().parents[1]
     exporter = Path(canonical.__file__).resolve().parent / "__init__.py"

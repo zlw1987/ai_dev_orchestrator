@@ -223,6 +223,54 @@ class ReadOnlyWorkspaceContentConfig(_Strict):
     )
 
 
+class WorkspaceWriteConfig(_Strict):
+    """Per-project opt-in for the **controlled single-file writer** (Phase 5F2C).
+
+    Phase 5D1's and 5D2's blocks permit *reading* a target workspace. This is the
+    first block that can permit **writing** one, and it is deliberately the
+    smallest opt-in that could carry that meaning: a switch and a size ceiling.
+
+    It fails closed by construction — an absent block is identical to an
+    explicitly disabled one — and while it is disabled the Phase 5F2C command
+    refuses before the target workspace is touched at all.
+
+    What it deliberately has **no field for**, each because granting it here
+    would turn a per-invocation human decision into standing configuration, or
+    would widen a capability this phase does not have:
+
+    - no credential, API key, base URL, endpoint, or environment-variable name;
+    - no model name and no model role;
+    - no command, command allowlist, or verification entry;
+    - no ``allow_protected_paths`` and no standing protected-write override —
+      §26.6 rejects a project-config switch for protected writes, and Phase 5F2C
+      refuses a protected destination outright;
+    - no ``allow_create`` flag — Phase 5F2C refuses every ``create``;
+    - no multi-file switch — Phase 5F2C requires exactly one change regardless
+      of a larger configured ``workspace_policy.max_changed_files``;
+    - no rollback, journal, backup, or retry setting — none of that machinery
+      exists in this phase.
+
+    ``workspace_policy.max_changed_files`` already exists and is **not**
+    duplicated here. Phase 5F2C enforces both: the configured cap, and its own
+    hard requirement of exactly one change. A ``max_changed_files`` of ``0``
+    permits no write at all and is refused.
+    """
+
+    enabled: bool = Field(
+        default=False,
+        description="Whether this project's workspace may be written at all. "
+        "Absent or false means no workspace touch and no write.",
+    )
+    max_file_bytes: int = Field(
+        default=200_000,
+        gt=0,
+        le=1_000_000,
+        description="Hard ceiling on the size of the file being edited, applied "
+        "to both the pre-image read from disk and the post-image about to be "
+        "written. A file outside it is refused, never truncated.",
+    )
+
+
 class ProjectConfig(_Strict):
     """Top-level typed project configuration."""
 
@@ -251,6 +299,9 @@ class ProjectConfig(_Strict):
     )
     read_only_workspace_content: ReadOnlyWorkspaceContentConfig = Field(
         default_factory=ReadOnlyWorkspaceContentConfig
+    )
+    workspace_write: WorkspaceWriteConfig = Field(
+        default_factory=WorkspaceWriteConfig
     )
 
     @property

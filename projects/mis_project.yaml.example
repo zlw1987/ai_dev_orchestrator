@@ -136,6 +136,29 @@ read_only_workspace_content:
   max_total_bytes: 200000
   allow_protected_paths: false
 
+# Controlled single-file WRITES into this project's workspace (Phase 5F2C).
+# DISABLED, and a third separate opt-in: agreeing that source may be read is not
+# agreeing that it may be modified. While disabled, `l2-apply-approved-file-edit`
+# refuses before the approved-diff artifact is even opened.
+#
+# When enabled, the writer can do exactly one thing: apply ONE explicitly
+# human-approved modification to ONE existing, Git-tracked, ordinary UTF-8 file
+# inside ONE wholly clean Windows Git repository whose top level is exactly
+# workspace_path — transforming an exact approved pre-image into an exact
+# approved post-image, and leaving the change uncommitted for human review.
+#
+# It cannot create, delete, or rename a file; cannot write more than one file
+# (whatever workspace_policy.max_changed_files allows); cannot write a protected
+# or forbidden path; cannot apply a diff with fuzz; cannot run this project's
+# verification commands or any other command; and cannot call a model, open a
+# socket, contact GitHub, create a branch, commit, push, or open a PR.
+#
+# There is deliberately NO allow_protected_paths here, no create flag, no
+# multi-file switch, and no rollback/journal setting. Never put credentials here.
+workspace_write:
+  enabled: false
+  max_file_bytes: 200000
+
 run_limits:
   max_model_calls_per_issue: 20
   max_review_loops: 3

@@ -62,6 +62,29 @@ exactly the declared path, at least one hunk, no binary payload, and no
 rename/mode/delete metadata. Whether it would *apply* is not checked, line
 endings are not normalized, and nothing is repaired.
 
+Phase 5F2C — schema ``v2`` and exact image identity
+---------------------------------------------------
+
+Once a real writer exists, "here is a diff for this path" stops being enough.
+A unified diff describes a transformation without pinning down which exact
+bytes it starts from or ends at, and a writer that applied it to whatever
+happened to be on disk would be performing a transformation no human ever
+looked at. So ``diff-proposal.v2`` binds both ends of the transformation
+explicitly, per change: ``pre_image_sha256`` (the whole original file's exact
+UTF-8 bytes; ``null`` for a ``create``) and ``post_image_sha256`` (the whole
+resulting file's exact UTF-8 bytes).
+
+The **schema version was raised rather than v1's meaning changed**. A v1
+artifact does not carry those identities and there is no honest way to invent
+them, so it is rejected as a different artifact — the same rule this project
+applies everywhere else. The repository is pre-production, so no compatibility
+subsystem exists to keep hand-written v1 artifacts parsing.
+
+Nothing in this module hashes anything, opens a file, or compares a digest
+against reality. It validates that two well-formed identities are *carried*;
+the Phase 5F2C writer is what proves them true, immediately before and
+immediately after it writes.
+
 Every model is ``extra="forbid"``, and validation **rejects rather than
 repairs**.
 """
@@ -102,7 +125,23 @@ class DiffProposalValidationError(DiffProposalError):
 
 # The artifact's schema identity. Compared with ``==`` through a ``Literal``: a
 # different version is a different artifact and is rejected, not upgraded.
-DIFF_PROPOSAL_SCHEMA_VERSION = "diff-proposal.v1"
+#
+# Phase 5F2C raised this from ``diff-proposal.v1`` to ``diff-proposal.v2``. v1
+# carried a path, a change type, and a diff — enough for a human to read, and
+# **not** enough for a writer to act on, because a diff alone does not say which
+# exact bytes the human approved transforming, nor which exact bytes they
+# approved producing. v2 adds ``pre_image_sha256`` and ``post_image_sha256`` to
+# every change, and the version was raised rather than the meaning of v1
+# quietly changed: a v1 artifact is a *different* artifact and is rejected, not
+# upgraded, because there is no honest way to invent the identities it never
+# carried.
+DIFF_PROPOSAL_SCHEMA_VERSION = "diff-proposal.v2"
+
+# The length and alphabet of a SHA-256 digest as this project records it: 64
+# lowercase hex characters. Uppercase and mixed case are **rejected rather than
+# folded**, so that a digest is compared with ``==`` everywhere and there is
+# exactly one spelling of any given identity.
+_SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 
 # What this artifact *is*. There is one mode and it is the harmless one: a
 # proposal a human reads. There is no "apply" mode, and adding one would be a
@@ -257,6 +296,24 @@ def _require_safe_relative_repo_path(value: str, field_name: str) -> str:
     return value
 
 
+def _require_sha256_hex(value: str, field_name: str) -> str:
+    """Reject anything but a lowercase 64-hex SHA-256 digest string.
+
+    Phase 5F2C. The digest is an **identity**, not a checksum to be tidied up:
+    it is compared with ``==`` against a digest recomputed from real bytes, so a
+    case variant, a truncation, a ``sha256:`` prefix, or surrounding whitespace
+    is refused rather than normalized. Nothing here hashes anything — this
+    validates the *shape* of a value the producer computed.
+    """
+    value = _require_non_blank(value, field_name)
+    if not _SHA256_HEX_RE.match(value):
+        raise ValueError(
+            f"{field_name} must be exactly 64 lowercase hexadecimal characters "
+            "(a SHA-256 digest); it is refused rather than normalized."
+        )
+    return value
+
+
 def _require_textual_diff_payload(value: str) -> str:
     """Reject blank, oversized, NUL-bearing, and non-content diff payloads.
 
@@ -364,6 +421,34 @@ def _require_single_file_unified_diff(
     return value
 
 
+def _require_image_digests_match_change_type(
+    *, change_type: str, pre_image_sha256: str | None
+) -> None:
+    """Require the pre-image digest to be present exactly when there is a file.
+
+    Phase 5F2C. A ``modify`` transforms an existing file, so the bytes it starts
+    from are part of what the human approved and the digest is mandatory. A
+    ``create`` has no original, so a digest for one would be a claim about a
+    file that does not exist — ``null`` is the only honest value, and supplying
+    anything else is rejected rather than ignored.
+
+    Shared by :class:`DiffProposalFileChange` and re-run by the Phase 5F0
+    approval wrapper, which re-establishes this rather than inheriting it.
+    """
+    if change_type == "modify" and pre_image_sha256 is None:
+        raise ValueError(
+            "pre_image_sha256 is required when change_type is 'modify': a "
+            "writer must be told which exact bytes the human approved "
+            "transforming, and a diff alone does not say."
+        )
+    if change_type == "create" and pre_image_sha256 is not None:
+        raise ValueError(
+            "pre_image_sha256 must be null when change_type is 'create': there "
+            "is no original file, so a digest for one is a claim about "
+            "something that does not exist."
+        )
+
+
 class _Strict(BaseModel):
     """Base model that rejects unknown fields, so forged extras fail loudly."""
 
@@ -394,11 +479,30 @@ class DiffProposalFileChange(_Strict):
     It is never joined to a workspace root, canonicalized, stat'd, or read. The
     diff headers must then name that same string exactly, so the diff cannot
     claim one file while the artifact declares another.
+
+    Phase 5F2C added the two digest fields, and they are the reason the schema
+    version moved to ``v2``. A unified diff describes a transformation; it does
+    not pin down **which exact bytes** the transformation starts from or ends
+    at. Once a real writer exists, that gap is the whole security question, so
+    the artifact now binds both ends explicitly:
+
+    - ``pre_image_sha256`` — the SHA-256 of the **entire** original file's exact
+      UTF-8 bytes. Required for a ``modify``; **must be ``null``** for a
+      ``create``, where there is deliberately no original.
+    - ``post_image_sha256`` — the SHA-256 of the **entire** resulting file's
+      exact UTF-8 bytes. Always required.
+
+    Both are lowercase 64-hex and are compared with ``==``. Nothing here hashes
+    anything, opens a file, or checks a digest against reality: this model
+    validates that the artifact *carries* two well-formed identities, and a
+    writer is what proves them true.
     """
 
     path: str
     change_type: Literal["modify", "create"]
     unified_diff: str
+    pre_image_sha256: str | None
+    post_image_sha256: str
     rationale: str
     risks: list[str] = Field(default_factory=list)
     requires_human_review: Literal[True]
@@ -407,6 +511,18 @@ class DiffProposalFileChange(_Strict):
     @classmethod
     def _path_is_safe_relative(cls, value: str) -> str:
         return _require_safe_relative_repo_path(value, "path")
+
+    @field_validator("pre_image_sha256")
+    @classmethod
+    def _pre_image_digest_shape(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _require_sha256_hex(value, "pre_image_sha256")
+
+    @field_validator("post_image_sha256")
+    @classmethod
+    def _post_image_digest_shape(cls, value: str) -> str:
+        return _require_sha256_hex(value, "post_image_sha256")
 
     @field_validator("unified_diff")
     @classmethod
@@ -427,6 +543,10 @@ class DiffProposalFileChange(_Strict):
     def _diff_headers_name_this_path(self) -> DiffProposalFileChange:
         _require_single_file_unified_diff(
             self.unified_diff, self.change_type, self.path
+        )
+        _require_image_digests_match_change_type(
+            change_type=self.change_type,
+            pre_image_sha256=self.pre_image_sha256,
         )
         return self
 

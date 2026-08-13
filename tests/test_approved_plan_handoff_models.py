@@ -906,6 +906,12 @@ EXPECTED_COMMANDS = [
     # nothing is edited, nothing is run. Still not an implementer.
     "generate-diff-proposal",
     "l2-preview-file-edits",
+    # Phase 5F2C. The FIRST command that writes a file into a target
+    # workspace: one exact approved modification of one tracked UTF-8 file in
+    # one clean Windows Git repository. It runs no project verification
+    # command, calls no model, opens no socket, and creates no
+    # branch/commit/push/PR.
+    "l2-apply-approved-file-edit",
 ]
 
 

@@ -82,7 +82,8 @@ Model roles must be configurable. Each role specifies:
 - **Phase 4 — L1 plan generator.** Complete through Phase 4L —
   [PHASE_4_L1_PLAN_GENERATOR_PLAN.md](PHASE_4_L1_PLAN_GENERATOR_PLAN.md)
   (4A docs-only, through the gated real model `generate-model-plan` command).
-- **Phase 5 — docs-only L2 implementer.** Design started —
+- **Phase 5 — L2 implementer boundary.** Design plus, since Phase 5F2C, the
+  first controlled single-file workspace write —
   [PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md](PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md)
   (Phase 5A docs-only; Phase 5B typed the §3 approved-plan handoff models and
   strict parser, library only; Phase 5C added the `l2-dry-run` command, which
@@ -156,10 +157,72 @@ Model roles must be configurable. Each role specifies:
   listing, no subprocess, no Git invocation, no model or network call, no
   environment read, and no approval stamping**, and with the result explicitly
   **not** a durable authorization to write.
-  **L2 is proposed, not built**, and no command can invoke it. Nothing shipped
-  so far edits a file; Phase 5F2C, 5F2D, 5F2E, 5F2F and the file-editing
-  phase beyond them remain proposed and not authorized, and Phase 5F2F remains
-  the first controlled workspace write.
+
+  **The roadmap then changed.** After 5F2B the plan was independently reviewed
+  and the project concluded that the safety philosophy was right but the
+  sequencing had become imbalanced: too much generalized writer machinery was
+  scheduled ahead of the first useful mutation. The old 5F2C–5F2F sequence
+  (typed gate models → custom Git reader → standalone preflight → generalized
+  transactional writer) was **superseded prospectively** by a minimum safe
+  vertical slice — see §27 of the design doc, which supersedes §26.12 while
+  preserving it as history. The rule now is: if a difficult case can safely be
+  excluded from the supported input domain, prefer fail-closed refusal over
+  building a generalized solution before the first useful vertical slice; and
+  consume the existing safety primitives to prove the next useful capability
+  before creating additional generalized ones.
+
+  **Phase 5F2C then shipped the first controlled target-workspace write** —
+  `l2-apply-approved-file-edit` (design doc §28). It applies **one** explicitly
+  human-approved modification to **one** existing, Git-tracked, ordinary UTF-8
+  file inside **one** wholly clean Windows Git repository whose top level is
+  exactly the configured workspace root, transforming an exact approved
+  pre-image into an exact approved post-image and leaving the change
+  **uncommitted** for human review. To make that possible the concrete diff
+  artifact was evolved to `diff-proposal.v2` / `approved-diff-proposal.v2`,
+  binding `pre_image_sha256` and `post_image_sha256` per change; a **strict,
+  no-fuzz** diff applier was added; a **fixed, read-only, shell-free** Git
+  inspection adapter was added; and a `workspace_write` project opt-in
+  (`enabled` + `max_file_bytes`, shipped disabled) gates the whole thing.
+  Everything outside that narrow domain **fails closed**: no `create`, no
+  delete, no rename, no second file, no protected or forbidden path, no fuzzy
+  patching, no non-Windows platform, no dirty repository, no assume-unchanged or
+  skip-worktree index entry, no submodule, no hard-linked or reparse-point or
+  special-attribute target, no non-UTF-8 or mixed-line-ending or
+  terminal-newline-less file. It runs **no project verification command** and no
+  model-proposed command; the only subprocess it can cause is its own fixed Git
+  plumbing. **No model call, no network call, no GitHub access, no branch, no
+  commit, no push, no PR, no rollback and no journal**, and pre-write refusal
+  (exit 1) is never conflated with a write whose final state could not be proved
+  (exit 3).
+
+  **Phase 5F2C-FU1** then corrected six findings from the pre-acceptance review
+  of that writer, **without widening its supported domain**: `ReplaceFileW` is
+  called with `dwReplaceFlags == 0` (the previously passed
+  `REPLACEFILE_WRITE_THROUGH` is documented by Microsoft as *not supported*);
+  temp-file cleanup is now **forbidden once the replacement call has been
+  invoked**, because filename state may already have changed, so a failed
+  replacement deletes, renames, restores and retries nothing and reports the
+  indeterminate outcome instead; a **fail-closed Git configuration gate** now
+  refuses any repository whose effective configuration could cause filter or
+  helper execution or configuration indirection — the original "fixed argv plus
+  `shell=False`" reasoning was **wrong**, since Git runs repository-configured
+  clean/smudge/process filters from inside a fixed argv, including during
+  `git status` on a clean tree, as reproduced against a real `git` binary in a
+  synthetic repository; the Git gate order was changed so that nothing reading
+  working-tree content runs before the configuration and index gates, and so
+  gitlinks are refused **before** `status` could descend into one; the Git
+  executable is resolved to an **absolute path once**, refused if inside the
+  target workspace, and pinned for the run; stdout is now **bounded during
+  capture** with the child killed on overflow and a watchdog on the timeout,
+  with the residual resource-exhaustion limitation recorded explicitly; and the
+  result schema no longer claims no file was created, since a successful write
+  uses one ephemeral operational sibling temp file. **No journal, no backup, no
+  rollback, and no generalized writer feature were added.**
+
+  **L2 is still not complete.** Phase 5F2D (controlled verification) and Phase
+  5F2E (reviewer integration) remain proposed and not authorized, so the
+  complete implement → verify → review → human loop does not exist, and there is
+  still no model-backed implementer, no commit, no push, and no PR.
 - **Phase 6 — qwen reviewer.**
 - **Phase 7 — fix loop.**
 - **Phase 8 — local commit.**

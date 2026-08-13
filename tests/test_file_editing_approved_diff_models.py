@@ -167,12 +167,23 @@ def _create_diff(path: str = ALLOWED_TEST_PATH) -> str:
     )
 
 
+# Phase 5F2C image identities. These fixtures exercise artifact *shape*, so
+# the digests only have to be well-formed lowercase 64-hex values; the writer
+# is what compares them against real bytes.
+PRE_IMAGE_SHA256 = "3f79bb7b435b05321651daefd374cdc681dc06faa65e374e38337b88ca046dea"
+POST_IMAGE_SHA256 = "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae"
+
+
 def _change(path: str = ALLOWED_PATH, change_type: str = "modify") -> dict:
     diff = _create_diff(path) if change_type == "create" else _modify_diff(path)
     return {
         "path": path,
         "change_type": change_type,
         "unified_diff": diff,
+        # Phase 5F2C: diff-proposal.v2 binds both ends of the transformation.
+        # A create has no original, so its pre-image digest is null.
+        "pre_image_sha256": None if change_type == "create" else PRE_IMAGE_SHA256,
+        "post_image_sha256": POST_IMAGE_SHA256,
         "rationale": "The shared helper belongs here, next to the existing totals code.",
         "risks": ["Existing call sites may round differently today."],
         "requires_human_review": True,
@@ -373,7 +384,7 @@ def test_constants_are_the_phase_5f0_values():
         REQUIRED_DIFF_EDIT_APPROVAL_TEXT
         == "I approve this diff proposal for workspace file editing"
     )
-    assert APPROVED_DIFF_PROPOSAL_SCHEMA_VERSION == "approved-diff-proposal.v1"
+    assert APPROVED_DIFF_PROPOSAL_SCHEMA_VERSION == "approved-diff-proposal.v2"
     assert APPROVED_DIFF_PROPOSAL_MODE == "file-edit-approval-only"
 
 
@@ -745,7 +756,13 @@ def test_next_authorization_required_must_not_be_blank(value):
 
 @pytest.mark.parametrize(
     "value",
-    ["approved-diff-proposal.v2", "diff-proposal.v1", "APPROVED-DIFF-PROPOSAL.V1", ""],
+    [
+        "approved-diff-proposal.v1",
+        "approved-diff-proposal.v3",
+        "diff-proposal.v2",
+        "APPROVED-DIFF-PROPOSAL.V2",
+        "",
+    ],
 )
 def test_schema_version_must_be_exact(value):
     artifact = _artifact()
@@ -887,6 +904,8 @@ def test_duplicate_change_paths_rechecked_on_a_mutated_object():
             path=ALLOWED_PATH,
             change_type="modify",
             unified_diff=_modify_diff(ALLOWED_PATH),
+            pre_image_sha256=PRE_IMAGE_SHA256,
+            post_image_sha256=POST_IMAGE_SHA256,
             rationale="A second, contradictory diff for the same file.",
             requires_human_review=True,
         )
@@ -910,6 +929,8 @@ def test_out_of_scope_change_path_rechecked_on_a_mutated_object():
             path="src/billing/other.py",
             change_type="modify",
             unified_diff=_modify_diff("src/billing/other.py"),
+            pre_image_sha256=PRE_IMAGE_SHA256,
+            post_image_sha256=POST_IMAGE_SHA256,
             rationale="A path the approved plan never listed.",
             requires_human_review=True,
         )
@@ -933,6 +954,8 @@ def test_forbidden_change_path_rechecked_on_a_mutated_object():
             path=FORBIDDEN_PATH,
             change_type="modify",
             unified_diff=_modify_diff(FORBIDDEN_PATH),
+            pre_image_sha256=PRE_IMAGE_SHA256,
+            post_image_sha256=POST_IMAGE_SHA256,
             rationale="A path the approved plan explicitly forbade.",
             requires_human_review=True,
         )
@@ -1384,22 +1407,53 @@ def test_file_editing_package_exports_exactly_the_phase_5f0_surface():
         "FileEditPreviewWorkspacePolicy",
         "build_file_edit_preview",
     ]
-    assert sorted(file_editing.__all__) == sorted(expected + expected_5f1)
-    for name in expected + expected_5f1:
+    # Phase 5F2C added the controlled single-file writer and the strict, no-fuzz
+    # diff applier it consumes. Listed separately again, so the Phase 5F0 gate
+    # surface and the Phase 5F1 preview surface each stay visible on their own,
+    # and so the exact shape of the write capability is one readable list.
+    expected_5f2c = [
+        "NEXT_STEP_REQUIRES_HUMAN_REVIEW",
+        "SINGLE_WRITER_CONTRACT",
+        "WORKSPACE_WRITE_MODE",
+        "WORKSPACE_WRITE_SCHEMA_VERSION",
+        "StrictDiffApplyError",
+        "WorkspaceWriteChecks",
+        "WorkspaceWriteError",
+        "WorkspaceWriteExclusions",
+        "WorkspaceWriteGitBlock",
+        "WorkspaceWriteIndeterminateError",
+        "WorkspaceWriteOperationalFiles",
+        "WorkspaceWriteRefusedError",
+        "WorkspaceWriteReport",
+        "WorkspaceWriteTarget",
+        "apply_approved_file_edit",
+        "apply_strict_unified_diff",
+    ]
+    assert sorted(file_editing.__all__) == sorted(
+        expected + expected_5f1 + expected_5f2c
+    )
+    for name in expected + expected_5f1 + expected_5f2c:
         assert hasattr(file_editing, name)
 
-    # No editor, no applier, no loader, no writer, no runner. Later phases, if
-    # ever — and each needs its own explicit authorization.
+    # Phase 5F2C's writer is one exact single-file modify and nothing else. None
+    # of the following exists, and each would need its own authorization: a
+    # create/delete/rename capability, a fuzzy applier, a verification runner, a
+    # rollback or journal framework, or any git write.
     for absent in (
-        "apply_approved_diff_proposal",
-        "apply_diff",
         "apply_patch",
+        "apply_fuzzy_diff",
+        "create_file",
+        "delete_file",
+        "rename_file",
         "edit_files",
         "write_files",
         "check_applies_cleanly",
         "load_approved_diff_proposal_artifact",
         "write_approved_diff_proposal_artifact",
         "run_required_verification",
+        "run_verification_commands",
+        "rollback",
+        "write_journal",
         "create_branch",
         "commit_changes",
         "push_branch",
@@ -1446,6 +1500,12 @@ EXPECTED_COMMANDS = [
     "l2-read-workspace-files",
     "generate-diff-proposal",
     "l2-preview-file-edits",
+    # Phase 5F2C. The FIRST command that writes a file into a target
+    # workspace: one exact approved modification of one tracked UTF-8 file in
+    # one clean Windows Git repository. It runs no project verification
+    # command, calls no model, opens no socket, and creates no
+    # branch/commit/push/PR.
+    "l2-apply-approved-file-edit",
 ]
 
 

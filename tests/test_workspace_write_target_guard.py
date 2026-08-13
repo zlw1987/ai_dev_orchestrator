@@ -1383,11 +1383,21 @@ def test_this_suite_names_no_real_target_workspace():
 # -- 8. Phase 5F2B is library only --------------------------------------------
 
 
-def test_the_write_target_guard_has_no_caller_at_all():
-    """Phase 5D0's guard has exactly one caller; the write-target guard has none."""
-    package_root = Path(canonical.__file__).resolve().parents[1]
+def test_the_write_target_guard_has_exactly_one_caller():
+    """Phase 5F2B shipped this guard with no caller. Phase 5F2C is the caller.
+
+    The assertion is kept and updated rather than deleted, because the number
+    worth watching is "how many things can write into a workspace?". It went
+    from zero to exactly one, deliberately, and a second entry would be a change
+    someone should have to make on purpose.
+
+    The one caller is the Phase 5F2C writer, and it reaches the guard through
+    the ``workspace`` package's public export rather than the private module
+    path.
+    """
+    package_root = Path(canonical.__file__).resolve().parents[2]
     exporter = Path(canonical.__file__).resolve().parent / "__init__.py"
-    callers = []
+    callers = set()
     for module_path in sorted(package_root.rglob("*.py")):
         resolved = module_path.resolve()
         if resolved in (Path(canonical.__file__).resolve(), exporter):
@@ -1399,11 +1409,13 @@ def test_the_write_target_guard_has_no_caller_at_all():
             "CanonicalPathWriteTargetError",
         ):
             if name in source:
-                callers.append((module_path.name, name))
-    assert callers == []
+                callers.add(module_path.name)
+        assert "workspace.canonical" not in source, module_path.name
+    assert callers == {"writer.py"}
 
 
-def test_no_command_and_no_option_was_added(tmp_path):
+def test_exactly_one_write_command_exists_and_no_other_command_gained_one(tmp_path):
+    """Phase 5F2C added one write command. No earlier command gained a write path."""
     result = runner.invoke(app, ["--help"])
 
     assert result.exit_code == 0
@@ -1420,39 +1432,150 @@ def test_no_command_and_no_option_was_added(tmp_path):
         "generate-patch-proposal",
         "generate-diff-proposal",
         "l2-preview-file-edits",
+        "l2-apply-approved-file-edit",
     ):
         assert command in result.output
-    for absent in (
-        "write-target",
-        "canonicalize-write",
-        "l2-write",
-        "apply",
-        "workspace-write",
-    ):
-        assert absent not in result.output
 
-    for command in ("l2-preview-file-edits", "l2-dry-run"):
+    registered = [
+        info.name or info.callback.__name__.replace("_", "-")
+        for info in app.registered_commands
+    ]
+    writers = [name for name in registered if "apply" in name or "write" in name]
+    assert writers == ["l2-apply-approved-file-edit"]
+
+    # Every earlier command is untouched: none of them gained a way to write,
+    # to create, to force, to permit a protected path, or to roll back.
+    for command in (
+        "l2-preview-file-edits",
+        "l2-dry-run",
+        "l2-inspect-workspace",
+        "l2-read-workspace-files",
+        "generate-diff-proposal",
+        "generate-patch-proposal",
+        "generate-plan",
+        "generate-model-plan",
+    ):
         command_help = runner.invoke(app, [command, "--help"])
         assert command_help.exit_code == 0
         for absent in (
-            "--change-type",
-            "--create",
             "--write",
-            "--allow-symlinks",
+            "--write-approved-file",
+            "--apply-diff",
+            "--create",
+            "--force",
+            "--allow-protected",
+            "--rollback",
+            "--change-type",
             "--canonicalize",
             "--write-target",
         ):
             assert absent not in command_help.output
 
 
-def test_no_config_field_was_added_for_workspace_writes():
+def test_the_write_command_ships_no_widening_option():
+    """The one write command's option set is exactly five, and no more.
+
+    Asserted against the command's declared parameters rather than against
+    rendered help text: help text wraps, and a prefix like ``--pr`` matches
+    ``--project-config`` by accident. The parameter list cannot be matched by
+    accident.
+    """
+    command_help = runner.invoke(app, ["l2-apply-approved-file-edit", "--help"])
+    assert command_help.exit_code == 0
+
+    import inspect
+
+    from ai_dev_orchestrator.cli import l2_apply_approved_file_edit
+
+    parameters = set(inspect.signature(l2_apply_approved_file_edit).parameters)
+    assert parameters == {
+        "project_config",
+        "approved_diff_proposal",
+        "apply_approved_plan",
+        "write_approved_file",
+        "output_format",
+    }
+    for absent in (
+        "workspace",
+        "workspace_path",
+        "file",
+        "command",
+        "model",
+        "real_model",
+        "allow_protected",
+        "allow_protected_paths",
+        "create",
+        "force",
+        "fuzzy",
+        "rollback",
+        "commit",
+        "push",
+        "pr",
+        "open_pr",
+        "verify",
+        "run_verification",
+    ):
+        assert absent not in parameters
+
+
+def test_the_write_config_block_is_the_smallest_one_that_could_work():
+    """Phase 5F2C added ``workspace_write`` and deliberately nothing more.
+
+    Phase 5F2B added no config field at all. This assertion is updated rather
+    than deleted: what matters is that the write opt-in carries an enable switch
+    and a size ceiling, and specifically **not** a standing protected-path
+    override, a create flag, a multi-file switch, a rollback/journal setting, a
+    credential, a model, or a command.
+    """
     from ai_dev_orchestrator import models
 
     source = Path(models.__file__).read_text(encoding="utf-8")
+    assert "class WorkspaceWriteConfig" in source
+    assert "workspace_write: WorkspaceWriteConfig" in source
+
+    config = models.WorkspaceWriteConfig()
+    assert config.enabled is False
+    assert set(models.WorkspaceWriteConfig.model_fields) == {
+        "enabled",
+        "max_file_bytes",
+    }
+
+    # An absent block is identical to a disabled one.
+    project = models.ProjectConfig(
+        project_id="p",
+        display_name="P",
+        repo={
+            "workspace_path": str(Path("C:/nowhere/does/not/exist")),
+            "github_repo": "owner/repo",
+            "branch_prefix": "ai/p",
+        },
+    )
+    assert project.workspace_write.enabled is False
+
+    # Asserted against the block's declared fields rather than against the
+    # module text, so that prose explaining why a field is absent cannot be
+    # mistaken for the field existing.
     for absent in (
-        "workspace_write",
+        "allow_protected_paths",
         "protected_path_authorizations",
         "allow_workspace_writes",
         "write_journal",
+        "allow_create",
+        "max_written_files",
+        "max_changed_files",
+        "rollback",
+        "api_key",
+        "base_url",
+        "command",
+        "model",
     ):
-        assert absent not in source, absent
+        assert absent not in models.WorkspaceWriteConfig.model_fields, absent
+
+    # `max_changed_files` is not duplicated: it already lives on the workspace
+    # policy, and the writer enforces both it and its own hard one-file rule.
+    assert "max_changed_files" in models.WorkspacePolicyConfig.model_fields
+
+    # Unknown keys are rejected, so a forged `allow_protected_paths` in YAML
+    # fails loudly instead of being stored and ignored.
+    with pytest.raises(Exception):
+        models.WorkspaceWriteConfig(enabled=True, allow_protected_paths=True)

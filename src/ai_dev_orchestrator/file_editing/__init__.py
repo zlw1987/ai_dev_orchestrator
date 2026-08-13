@@ -24,18 +24,28 @@ it is **not file editing**: nothing is applied, no apply-cleanliness is checked,
 no command is run, and the target workspace is never read, listed, stat'd,
 resolved, or canonicalized.
 
-**No writer, no applier, no runner, no git helper.** Importing this package
-performs no file read, no workspace access, no file edit, no diff application,
-no apply-cleanliness check, no command execution, no GitHub fetch or write, and
-no model, network, or environment access. There is no artifact loader and no
-artifact writer, and nothing here stamps an approval.
+Phase 5F2C adds the **controlled single-file writer** — the first code in this
+repository that writes a byte into a target project workspace.
+:func:`apply_approved_file_edit` transforms one existing tracked ordinary UTF-8
+file from one exact approved pre-image into one exact approved post-image inside
+one clean supported Windows Git repository, proves the postcondition, and leaves
+the change uncommitted for human review. Everything outside that narrow domain
+fails closed: no ``create``, no delete, no rename, no multi-file write, no
+protected path, no fuzzy patching, no project verification command, no model
+call, no network call, no GitHub access, no branch, no commit, no push, no PR,
+and no rollback or journal framework. :mod:`~ai_dev_orchestrator.file_editing.
+diff_apply` applies the approved diff **exactly or not at all**.
 
-**L2 is still not built**, and nothing here can invoke it. A parsed artifact is
-data describing an approval, and a preview is data describing a hypothetical —
-never permission to do anything, and specifically never proof that a diff
-applies or authorization to commit, push, or open a PR.
+**Importing this package still performs no file read, no workspace access, and
+no write**, and nothing here stamps an approval. Phase 5F2D (controlled
+verification) and Phase 5F2E (reviewer integration) remain unauthorized, so the
+complete L2 loop is still not built.
 """
 
+from ai_dev_orchestrator.file_editing.diff_apply import (
+    StrictDiffApplyError,
+    apply_strict_unified_diff,
+)
 from ai_dev_orchestrator.file_editing.models import (
     APPROVED_DIFF_PROPOSAL_MODE,
     APPROVED_DIFF_PROPOSAL_SCHEMA_VERSION,
@@ -63,10 +73,30 @@ from ai_dev_orchestrator.file_editing.preview import (
     FileEditPreviewWorkspacePolicy,
     build_file_edit_preview,
 )
+from ai_dev_orchestrator.file_editing.writer import (
+    NEXT_STEP_REQUIRES_HUMAN_REVIEW,
+    SINGLE_WRITER_CONTRACT,
+    WORKSPACE_WRITE_MODE,
+    WORKSPACE_WRITE_SCHEMA_VERSION,
+    WorkspaceWriteChecks,
+    WorkspaceWriteError,
+    WorkspaceWriteExclusions,
+    WorkspaceWriteGitBlock,
+    WorkspaceWriteIndeterminateError,
+    WorkspaceWriteOperationalFiles,
+    WorkspaceWriteRefusedError,
+    WorkspaceWriteReport,
+    WorkspaceWriteTarget,
+    apply_approved_file_edit,
+)
 
 __all__ = [
     "APPROVED_DIFF_PROPOSAL_MODE",
     "APPROVED_DIFF_PROPOSAL_SCHEMA_VERSION",
+    "NEXT_STEP_REQUIRES_HUMAN_REVIEW",
+    "SINGLE_WRITER_CONTRACT",
+    "WORKSPACE_WRITE_MODE",
+    "WORKSPACE_WRITE_SCHEMA_VERSION",
     "FILE_EDIT_PREVIEW_CANDIDATE_SOURCE",
     "FILE_EDIT_PREVIEW_MODE",
     "FILE_EDIT_PREVIEW_SCHEMA_VERSION",
@@ -86,6 +116,18 @@ __all__ = [
     "FileEditingApprovalError",
     "FileEditingApprovalParseError",
     "FileEditingApprovalValidationError",
+    "StrictDiffApplyError",
+    "WorkspaceWriteChecks",
+    "WorkspaceWriteError",
+    "WorkspaceWriteExclusions",
+    "WorkspaceWriteGitBlock",
+    "WorkspaceWriteIndeterminateError",
+    "WorkspaceWriteOperationalFiles",
+    "WorkspaceWriteRefusedError",
+    "WorkspaceWriteReport",
+    "WorkspaceWriteTarget",
+    "apply_approved_file_edit",
+    "apply_strict_unified_diff",
     "build_file_edit_preview",
     "parse_approved_diff_proposal_artifact",
 ]

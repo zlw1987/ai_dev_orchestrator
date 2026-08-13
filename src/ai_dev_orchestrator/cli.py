@@ -62,6 +62,7 @@ import enum
 import json
 import os
 import re
+import sys
 from pathlib import Path
 
 import typer
@@ -3332,6 +3333,297 @@ def l2_preview_file_edits(
         approved_diff_proposal=approved_diff_proposal,
         apply_approved_plan=apply_approved_plan,
         preview_file_edits=preview_file_edits,
+    )
+
+
+# -- L2 controlled single-file write (Phase 5F2C) ------------------------------
+
+# Exit codes, kept distinct because conflating them is the failure mode §13 of
+# the phase scope exists to prevent. 1 means "refused, and the target is
+# unchanged"; 3 means "a write was attempted and its final state could not be
+# proved" — never the same claim.
+_WRITE_EXIT_REFUSED = 1
+_WRITE_EXIT_INDETERMINATE = 3
+
+
+def _run_l2_apply_approved_file_edit(
+    *,
+    project_config: Path,
+    approved_diff_proposal: Path,
+    apply_approved_plan: bool,
+    write_approved_file: bool,
+) -> None:
+    """Apply one approved single-file modification, or refuse having done nothing.
+
+    Extracted from the command body so tests can call it directly and track
+    exactly which files are read, in which order.
+
+    Ordering is the safety property. In sequence: both ``--apply-approved-plan``
+    and ``--write-approved-file`` must be present — with **no file read at all**
+    if either is missing — then the project config loads, then
+    ``workspace_write.enabled`` must be true, then the platform must be Windows
+    (all three before any target workspace is touched), then a string/path check
+    rejects an ``--approved-diff-proposal`` that sits inside the configured
+    workspace *before* it is opened or stat'd, then the artifact is read and
+    strictly parsed, and only then does the writer begin its workspace and Git
+    checks.
+
+    This command runs **no** project verification command, no model-proposed
+    command, and no shell. The only subprocess it can cause is the closed set of
+    fixed Git inspection commands the writer's own correctness contract needs.
+    """
+    from ai_dev_orchestrator.config_loader import ConfigError, load_project_config
+    from ai_dev_orchestrator.file_editing import (
+        FileEditingApprovalError,
+        WorkspaceWriteIndeterminateError,
+        WorkspaceWriteRefusedError,
+        apply_approved_file_edit,
+        parse_approved_diff_proposal_artifact,
+    )
+
+    # 1. Explicit confirmation that an approved plan may be acted on.
+    if not apply_approved_plan:
+        typer.echo(
+            "Error: l2-apply-approved-file-edit acts on a human-approved "
+            "artifact and requires the explicit --apply-approved-plan flag. "
+            "Nothing was read and nothing was written.",
+            err=True,
+        )
+        raise typer.Exit(code=_WRITE_EXIT_REFUSED)
+
+    # 2. Explicit confirmation that a file may actually be written. A second,
+    #    separate consent: approving a diff is not the same act as telling this
+    #    tool to modify a real file on disk right now.
+    if not write_approved_file:
+        typer.echo(
+            "Error: l2-apply-approved-file-edit writes one real file into a "
+            "target workspace and requires the explicit --write-approved-file "
+            "flag. Nothing was read and nothing was written.",
+            err=True,
+        )
+        raise typer.Exit(code=_WRITE_EXIT_REFUSED)
+
+    # 3. Project config: the first file read.
+    try:
+        project = load_project_config(project_config)
+    except ConfigError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        typer.echo(
+            "The approved diff proposal artifact was not read and nothing was "
+            "written.",
+            err=True,
+        )
+        raise typer.Exit(code=_WRITE_EXIT_REFUSED)
+
+    # 4. The project-level write opt-in. Checked before the artifact is opened
+    #    and long before the workspace is touched: a project that has not opted
+    #    in is not one this command may look at, let alone write.
+    if not project.workspace_write.enabled:
+        typer.echo(
+            "Error: this project's workspace_write block is absent or disabled, "
+            "so no file may be written for it. Set workspace_write.enabled to "
+            "true in the project config to permit it.",
+            err=True,
+        )
+        typer.echo(
+            "The approved diff proposal artifact was not read and no target "
+            "workspace was touched.",
+            err=True,
+        )
+        raise typer.Exit(code=_WRITE_EXIT_REFUSED)
+
+    # 5. Platform. The Phase 5F2C writer is explicitly Windows-only, and it
+    #    refuses here — before any target workspace touch — rather than
+    #    pretending to be portable.
+    if sys.platform != "win32":
+        typer.echo(
+            "Error: the Phase 5F2C writer is Windows-only. It refuses on this "
+            "platform rather than applying write and metadata semantics it has "
+            "not reasoned about here.",
+            err=True,
+        )
+        typer.echo(
+            "The approved diff proposal artifact was not read and no target "
+            "workspace was touched.",
+            err=True,
+        )
+        raise typer.Exit(code=_WRITE_EXIT_REFUSED)
+
+    # 6. Refuse an artifact that lives inside the configured target workspace,
+    #    BEFORE it is read or stat'd — the same lexical guard every earlier
+    #    phase uses, and the reason --approved-diff-proposal carries no Typer
+    #    exists=/readable= check.
+    if _is_same_or_under(approved_diff_proposal, project.repo.workspace_path):
+        typer.echo(
+            "Error: --approved-diff-proposal is inside the project's configured "
+            f"repo.workspace_path ({project.repo.workspace_path}). The approval "
+            "must live outside the workspace it authorizes writing to; move the "
+            "artifact and retry.",
+            err=True,
+        )
+        typer.echo(
+            "The approved diff proposal artifact was not read and nothing was "
+            "written.",
+            err=True,
+        )
+        raise typer.Exit(code=_WRITE_EXIT_REFUSED)
+
+    # 7. The artifact: the second and final file read by this command.
+    try:
+        artifact_text = approved_diff_proposal.read_text(encoding="utf-8")
+    except OSError as exc:
+        typer.echo(
+            f"Error: could not read --approved-diff-proposal: {exc}", err=True
+        )
+        typer.echo("Nothing was written.", err=True)
+        raise typer.Exit(code=_WRITE_EXIT_REFUSED)
+
+    # 8. Parse strictly. Rejected, never repaired. This is the only place the
+    #    file-edit approval comes from, and it is never inferred from anything
+    #    else.
+    try:
+        artifact = parse_approved_diff_proposal_artifact(artifact_text)
+    except FileEditingApprovalError as exc:
+        name = type(exc).__name__
+        category = _APPROVED_DIFF_FAILURE_CATEGORIES.get(name, "artifact failure")
+        typer.echo(f"Error: {name}: {category}. {exc}", err=True)
+        typer.echo(
+            "The artifact text, the approval text, and the diffs are not "
+            "echoed. Nothing was written and no target workspace was touched.",
+            err=True,
+        )
+        raise typer.Exit(code=_WRITE_EXIT_REFUSED)
+
+    # 9. The writer. Every remaining gate — identity, single-change, modify-only,
+    #    lexical write policy, canonical write target, regular file, hard-link
+    #    count, Windows attributes, clean Git baseline, simple index, tracked
+    #    target, pre-image identity, strict diff application, post-image
+    #    identity, final revalidation, the replacement, and post-write
+    #    verification — lives there.
+    try:
+        report = apply_approved_file_edit(approved_diff=artifact, project=project)
+    except WorkspaceWriteRefusedError as exc:
+        typer.echo(f"Error: refused-before-write: {exc}", err=True)
+        typer.echo(
+            "The target file was NOT modified. No source, diff, approval text, "
+            "or absolute path is echoed.",
+            err=True,
+        )
+        raise typer.Exit(code=_WRITE_EXIT_REFUSED)
+    except WorkspaceWriteIndeterminateError as exc:
+        typer.echo(
+            "Error: write-attempted-state-indeterminate: " + str(exc), err=True
+        )
+        typer.echo(
+            "A file replacement was ATTEMPTED. This is not a claim that nothing "
+            "changed. Nothing was retried, nothing was rolled back, and no git "
+            "restore was run. HUMAN REPOSITORY INSPECTION IS REQUIRED: compare "
+            "the working tree against the clean baseline this run proved before "
+            "writing.",
+            err=True,
+        )
+        raise typer.Exit(code=_WRITE_EXIT_INDETERMINATE)
+
+    # 10. Print the report itself — nothing wrapped around it. Deliberately
+    #     absent, because the report has no field for any of them: the
+    #     configured workspace path, any absolute path, the raw artifact text,
+    #     the approval text, the approved unified diff, any unrelated source
+    #     file, any arbitrary command output, and any API key or base URL.
+    typer.echo(report.model_dump_json(indent=2))
+
+
+@app.command("l2-apply-approved-file-edit")
+def l2_apply_approved_file_edit(
+    project_config: Path = typer.Option(
+        ...,
+        "--project-config",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Path to the project config YAML the approved diff must match. Its "
+        "workspace_write block must be enabled.",
+    ),
+    approved_diff_proposal: Path = typer.Option(
+        ...,
+        "--approved-diff-proposal",
+        # Deliberately no exists=/readable= check: Typer would stat the path
+        # before the command body could reject one inside the configured
+        # workspace. The guard runs first; the file is opened only afterwards.
+        help="Path to a human-approved diff proposal artifact "
+        "(approved-diff-proposal.v2). Must not be inside the project's "
+        "configured workspace path.",
+    ),
+    apply_approved_plan: bool = typer.Option(
+        False,
+        "--apply-approved-plan",
+        help="Required explicit confirmation that a human-approved artifact may "
+        "be acted on. Without it this command fails without reading anything.",
+    ),
+    write_approved_file: bool = typer.Option(
+        False,
+        "--write-approved-file",
+        help="Required explicit confirmation that one real file may be written "
+        "into the target workspace. Without it this command fails without "
+        "reading anything.",
+    ),
+    output_format: GeneratePlanFormat = typer.Option(
+        GeneratePlanFormat.json,
+        "--format",
+        help="Output format. Only 'json' is currently supported.",
+    ),
+) -> None:
+    """Apply ONE approved single-file modification to a target workspace.
+
+    **This command writes a real file.** It is the first and only one in this
+    repository that does. What it can write is deliberately one thing: an exact
+    approved modification of one existing, Git-tracked, ordinary UTF-8 file
+    inside one wholly clean Windows Git repository whose top level is exactly
+    the configured workspace root.
+
+    Everything else fails closed. There is no file creation, no delete, no
+    rename, no second file, no protected path, no fuzzy patching, no force
+    override, no protected-path override, and no rollback switch — because none
+    of those capabilities exists here to be turned on.
+
+    The transformation is bound at **both ends**: the approved artifact carries
+    the pre-image and post-image SHA-256 of the whole file, the destination's
+    current bytes must hash to the approved pre-image, the diff is applied
+    **exactly** (no fuzz, no offset search, no nearest-match, no three-way
+    merge, no repair), and the result must hash to the approved post-image
+    before anything is written. Immediately before the replacement, the
+    canonical target, the file's attributes, its hard-link count, its bytes and
+    the clean Git baseline are all re-established from scratch.
+
+    It does **not**: run ``required_verification``, pytest, npm, make, a build
+    script, or any other project-configured or model-proposed command; invoke a
+    shell; call a model; open a socket; contact GitHub; create a branch;
+    commit; push; open a PR; or read ``AIDO_LITELLM_*`` or any other
+    environment variable for credentials. The only subprocess it can cause is a
+    closed set of fixed, read-only Git inspection commands that the writer's own
+    correctness contract requires.
+
+    The gate fails closed in order: ``--apply-approved-plan`` and
+    ``--write-approved-file`` first (without either, nothing is read at all),
+    then the config, then ``workspace_write.enabled``, then the Windows-only
+    platform check, then a string/path check rejecting an
+    ``--approved-diff-proposal`` inside the configured workspace **before** it
+    is read or stat'd, then the strict parse, then every writer gate.
+
+    Exit codes are distinct on purpose. **1** means refused before any write —
+    the target is unchanged. **3** means a replacement was attempted and its
+    final state could not be proved; that is never reported as "nothing
+    changed", nothing is retried or rolled back, and a human must inspect the
+    repository against the clean baseline.
+
+    On success stdout is the result report itself, with no wrapper. The change
+    is left **uncommitted** in the working tree for human review.
+    """
+    _run_l2_apply_approved_file_edit(
+        project_config=project_config,
+        approved_diff_proposal=approved_diff_proposal,
+        apply_approved_plan=apply_approved_plan,
+        write_approved_file=write_approved_file,
     )
 
 

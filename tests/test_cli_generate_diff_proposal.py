@@ -1013,10 +1013,21 @@ def test_stdout_is_the_artifact_with_no_wrapper(tmp_path, capsys):
             "path",
             "change_type",
             "unified_diff",
+            # Phase 5F2C (diff-proposal.v2): both ends of the transformation,
+            # bound to the artifact so an approval means "these exact bytes
+            # become those exact bytes" rather than "here is a diff".
+            "pre_image_sha256",
+            "post_image_sha256",
             "rationale",
             "risks",
             "requires_human_review",
         }
+        # A modify carries a real pre-image digest; a create carries null.
+        if change["change_type"] == "modify":
+            assert len(change["pre_image_sha256"]) == 64
+        else:
+            assert change["pre_image_sha256"] is None
+        assert len(change["post_image_sha256"]) == 64
 
 
 def test_output_carries_no_workspace_path_absolute_path_or_credential(

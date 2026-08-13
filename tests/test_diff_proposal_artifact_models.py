@@ -155,12 +155,23 @@ def _create_diff(path: str = ALLOWED_TEST_PATH) -> str:
     )
 
 
+# Phase 5F2C image identities. These fixtures exercise artifact *shape*, so
+# the digests only have to be well-formed lowercase 64-hex values; the writer
+# is what compares them against real bytes.
+PRE_IMAGE_SHA256 = "3f79bb7b435b05321651daefd374cdc681dc06faa65e374e38337b88ca046dea"
+POST_IMAGE_SHA256 = "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae"
+
+
 def _change(path: str = ALLOWED_PATH, change_type: str = "modify") -> dict:
     diff = _create_diff(path) if change_type == "create" else _modify_diff(path)
     return {
         "path": path,
         "change_type": change_type,
         "unified_diff": diff,
+        # Phase 5F2C: diff-proposal.v2 binds both ends of the transformation.
+        # A create has no original, so its pre-image digest is null.
+        "pre_image_sha256": None if change_type == "create" else PRE_IMAGE_SHA256,
+        "post_image_sha256": POST_IMAGE_SHA256,
         "rationale": "The shared helper belongs here, next to the existing totals code.",
         "risks": ["Existing call sites may round differently today."],
         "requires_human_review": True,
@@ -395,7 +406,10 @@ def test_error_types_share_one_base():
 
 
 def test_constants_are_the_phase_5e2_values():
-    assert DIFF_PROPOSAL_SCHEMA_VERSION == "diff-proposal.v1"
+    # Phase 5F2C raised the version to v2 when the change model gained the
+    # exact pre-image and post-image identities a writer needs. v1 is a
+    # different artifact and is rejected, never upgraded.
+    assert DIFF_PROPOSAL_SCHEMA_VERSION == "diff-proposal.v2"
     assert DIFF_PROPOSAL_MODE == "proposal-only"
 
 
@@ -405,8 +419,9 @@ def test_constants_are_the_phase_5e2_values():
 @pytest.mark.parametrize(
     "schema_version",
     [
-        "diff-proposal.v2",
-        "diff-proposal.v1 ",
+        "diff-proposal.v1",
+        "diff-proposal.v3",
+        "diff-proposal.v2 ",
         "DIFF-PROPOSAL.V1",
         "diff-proposal",
         "patch-proposal.v1",
@@ -1866,6 +1881,12 @@ EXPECTED_COMMANDS = [
     "l2-read-workspace-files",
     "generate-diff-proposal",
     "l2-preview-file-edits",
+    # Phase 5F2C. The FIRST command that writes a file into a target
+    # workspace: one exact approved modification of one tracked UTF-8 file in
+    # one clean Windows Git repository. It runs no project verification
+    # command, calls no model, opens no socket, and creates no
+    # branch/commit/push/PR.
+    "l2-apply-approved-file-edit",
 ]
 
 
@@ -2005,3 +2026,87 @@ def test_plan_commands_gain_no_diff_option(command):
     assert result.exit_code == 0
     for absent in ("--diff", "--diff-proposal", "--apply-patch", "--implement"):
         assert absent not in result.output
+
+
+# -- Phase 5F2C: exact pre-image and post-image identity -----------------------
+
+
+def test_a_modify_carries_both_image_digests():
+    parsed = parse_diff_proposal_artifact(_text(_artifact(changes=[_change()])))
+    change = parsed.changes[0]
+
+    assert change.pre_image_sha256 == PRE_IMAGE_SHA256
+    assert change.post_image_sha256 == POST_IMAGE_SHA256
+
+
+def test_a_create_carries_a_null_pre_image_digest():
+    parsed = parse_diff_proposal_artifact(
+        _text(_artifact(changes=[_change(ALLOWED_TEST_PATH, "create")]))
+    )
+    change = parsed.changes[0]
+
+    assert change.pre_image_sha256 is None
+    assert change.post_image_sha256 == POST_IMAGE_SHA256
+
+
+def test_a_modify_without_a_pre_image_digest_is_rejected():
+    change = _change()
+    change["pre_image_sha256"] = None
+    artifact = _artifact(changes=[change])
+
+    with pytest.raises(DiffProposalValidationError) as excinfo:
+        parse_diff_proposal_artifact(_text(artifact))
+    assert "pre_image_sha256" in str(excinfo.value)
+
+
+def test_a_create_with_a_pre_image_digest_is_rejected():
+    change = _change(ALLOWED_TEST_PATH, "create")
+    change["pre_image_sha256"] = PRE_IMAGE_SHA256
+    artifact = _artifact(changes=[change])
+
+    with pytest.raises(DiffProposalValidationError):
+        parse_diff_proposal_artifact(_text(artifact))
+
+
+@pytest.mark.parametrize("field", ["pre_image_sha256", "post_image_sha256"])
+def test_the_image_digests_have_no_defaults(field):
+    change = _change()
+    del change[field]
+    artifact = _artifact(changes=[change])
+
+    with pytest.raises(DiffProposalValidationError):
+        parse_diff_proposal_artifact(_text(artifact))
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        PRE_IMAGE_SHA256.upper(),
+        PRE_IMAGE_SHA256[:63],
+        PRE_IMAGE_SHA256 + "a",
+        "sha256:" + PRE_IMAGE_SHA256,
+        " " + PRE_IMAGE_SHA256,
+        PRE_IMAGE_SHA256[:-1] + "z",
+        "",
+        "   ",
+    ],
+)
+def test_a_malformed_digest_is_rejected_not_normalized(value):
+    change = _change()
+    change["post_image_sha256"] = value
+    artifact = _artifact(changes=[change])
+
+    with pytest.raises(DiffProposalValidationError):
+        parse_diff_proposal_artifact(_text(artifact))
+
+
+def test_the_parser_hashes_nothing_and_opens_nothing(monkeypatch):
+    import hashlib as hashlib_module
+
+    def boom(*args, **kwargs):
+        raise AssertionError("the parser computed a digest")
+
+    monkeypatch.setattr(hashlib_module, "sha256", boom)
+
+    parsed = parse_diff_proposal_artifact(_text(_artifact(changes=[_change()])))
+    assert parsed.changes[0].post_image_sha256 == POST_IMAGE_SHA256
