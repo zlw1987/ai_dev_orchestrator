@@ -440,7 +440,22 @@ def _is_inside(candidate: str, root: str) -> bool:
 
 
 def resolve_git_executable(*, workspace_root: str) -> str:
-    """Resolve ``git`` to one absolute path, once, before any workspace use.
+    """Resolve ``git`` to one absolute path, once, and pin it for the run.
+
+    The invariant this upholds, stated precisely::
+
+        Git is resolved to one absolute executable path before any Git
+        invocation or child process is launched, it is refused if it lives
+        inside the target workspace, and the same resolved path is reused
+        throughout the run.
+
+    An earlier version of this docstring said "before any workspace use", which
+    is not what callers do: the Phase 5F2C writer canonicalizes the approved
+    target and probes its filesystem metadata first, and only then resolves Git.
+    Those probes are ``lstat``/``GetFileInformationByHandle`` calls made by this
+    process — they launch nothing, so they cannot be influenced by which ``git``
+    binary would later be chosen. The documentation was corrected rather than the
+    code moved; there is no independent runtime reason to resolve earlier.
 
     Python's own documentation recommends passing a fully-qualified executable
     path for maximum reliability, and the original Phase 5F2C code passed the

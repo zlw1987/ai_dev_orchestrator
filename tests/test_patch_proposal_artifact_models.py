@@ -1326,6 +1326,12 @@ EXPECTED_COMMANDS = [
     # command, calls no model, opens no socket, and creates no
     # branch/commit/push/PR.
     "l2-apply-approved-file-edit",
+    # Phase 5F2D. The FIRST command that executes repository-controlled
+    # code: one project-configured verification process, once, bound to
+    # one already-applied approved modification. Controlled invocation,
+    # NOT a sandbox. It calls no model, contacts no GitHub, and creates no
+    # branch/commit/push/PR.
+    "l2-verify-approved-file-edit",
 ]
 
 

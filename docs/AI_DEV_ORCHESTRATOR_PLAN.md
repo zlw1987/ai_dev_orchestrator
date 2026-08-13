@@ -83,7 +83,8 @@ Model roles must be configurable. Each role specifies:
   [PHASE_4_L1_PLAN_GENERATOR_PLAN.md](PHASE_4_L1_PLAN_GENERATOR_PLAN.md)
   (4A docs-only, through the gated real model `generate-model-plan` command).
 - **Phase 5 — L2 implementer boundary.** Design plus, since Phase 5F2C, the
-  first controlled single-file workspace write —
+  first controlled single-file workspace write, and since Phase 5F2D the first
+  controlled verification execution —
   [PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md](PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md)
   (Phase 5A docs-only; Phase 5B typed the §3 approved-plan handoff models and
   strict parser, library only; Phase 5C added the `l2-dry-run` command, which
@@ -219,10 +220,124 @@ Model roles must be configurable. Each role specifies:
   uses one ephemeral operational sibling temp file. **No journal, no backup, no
   rollback, and no generalized writer feature were added.**
 
-  **L2 is still not complete.** Phase 5F2D (controlled verification) and Phase
-  5F2E (reviewer integration) remain proposed and not authorized, so the
+  **Phase 5F2D then shipped the first controlled verification execution** —
+  `l2-verify-approved-file-edit` (design doc §29). It is the first separately
+  authorized capability in this repository to execute **repository-controlled
+  code**, and the distinction from the writer's Git adapter is deliberate and
+  load-bearing: the adapter runs a fixed, AIDO-owned, read-only inspection set
+  that is part of the writer's own correctness contract, while this command
+  launches a program the *project* chose. Given one already-applied Phase 5F2C
+  approved modification, it proves the workspace still represents exactly the
+  approved post-image with exactly one Git-visible dirty path, executes exactly
+  the configured verification process **once** under a wall-clock bound and an
+  output bound enforced during capture, redacts the captured output through the
+  same helper Phase 5D2 uses, and then re-proves the Git-visible workspace state.
+
+  Command authority is a new `controlled_verification` project opt-in (`enabled`,
+  `executable`, `args`, `timeout_seconds`, `max_output_bytes`, shipped disabled)
+  and nothing else. The executable must be an absolute path to an existing
+  regular file **outside** the target workspace; the argv is exactly
+  `[executable, *args]`; there is no shell, no command string, no PATH lookup, no
+  executable default, no interpolation or templating, no working-directory
+  override, no environment or secret forwarding field, no second command profile,
+  and no CLI option through which a command could be supplied. The L1 plan's
+  `required_verification` is **never** command authority: it is planner prose,
+  possibly model-written, and is never split, parsed, run, or turned into argv.
+  The child environment is a fixed minimal allowlist — no `AIDO_LITELLM_*`, no
+  `GITHUB_TOKEN`, no API key or other credential.
+
+  **Controlled invocation is not sandboxed execution.** The launched process may
+  import project modules, run `conftest.py`, create files, open network
+  connections and spawn children; AIDO does not confine it, and the report
+  states that rather than claiming inertness. Three exit codes are kept distinct:
+  **1** refused before anything was launched, **2** a process ran and
+  verification did not pass with the workspace still exactly the approved change,
+  and **3** a process ran and the repository is no longer provably the approved
+  state — which is never reported as merely "failed", and which triggers no
+  repair, no restore, no `git restore`, and no retry. **No writer capability was
+  generalized**, and no create/delete/rename/multi-file/protected write,
+  transaction, journal, rollback, crash recovery, concurrency framework, or
+  generalized Git executor was added.
+
+  **Phase 5F2D-FU1** then corrected five findings from the pre-acceptance review
+  of that verifier, **without broadening the verification capability**:
+
+  - **the claimed hard wall-clock bound was not a bound.** The runner read the
+    output pipe on the main thread with a `threading.Timer` killing the direct
+    child at the deadline, but a descendant launched with inherited standard
+    handles holds the write end of the same pipe, so killing or exiting the
+    direct parent left the reader blocked. Reproduced here: a 1.0s configured
+    timeout returned after **60.30s**. The blocking read moved to a daemon
+    thread and the main thread now waits on an event with a monotonic deadline,
+    kills the direct child at expiry, and **returns without waiting for the
+    reader** — 1.03s for the same scenario. The bound is on AIDO's wait; **no
+    process-tree management was added** and descendants are explicitly not
+    claimed to be terminated;
+  - **HEAD identity is now pinned across the run.** The old proof required only
+    that *a* HEAD existed on each side, so a verification running `git commit
+    --allow-empty` moved the baseline commit while the approved target stayed an
+    unstaged modification and every other postcondition still passed. The exact
+    HEAD object id is captured before launching, held in memory only, and
+    required to be exactly equal afterwards; a moved HEAD is exit 3, the id is
+    never reported, and nothing is reset, checked out, or restored;
+  - **all AIDO-owned negative claims are explicitly scoped.** Unscoped
+    `committed`, `pushed`, `branch_created` and `git_mutation_performed` fields
+    read as claims about the whole invocation, which is exactly what this phase
+    cannot make about an unsandboxed child; every such field now carries an
+    `orchestrator_` prefix;
+  - **`next_step` no longer makes unprovable global claims** about commits,
+    pushes, branches or PRs, and states instead that the child was not sandboxed
+    and that effects outside the post-execution Git-visible state are not
+    comprehensively observed;
+  - **the environment-forwarding claim was narrowed to what is proved.**
+    `project_configured_secret_forwarding: false` also read as a claim about
+    argv; it became `environment_forwarding_configurable: false` plus an explicit
+    note that configured args are trusted configuration data whose contents AIDO
+    does not inspect, does not prove secret-free, and never echoes. **No argv
+    secret scanner was added.**
+
+  **Phase 5F2D-FU2** then closed the last runtime defect in the same runner and
+  made two timing/lifetime claims exact, again **without broadening the
+  capability**:
+
+  - **the output cap was not enforced when it was passed.** The reader used a
+    fixed `read(64 * 1024)` and tested the cap only after that call returned, so
+    a child that emitted more than the cap and then stopped writing was
+    discovered only when the timeout fired. Measured on a real Windows pipe:
+    `read(65536)` returned after 30.1s versus `read1(5001)` after 0.078s; end to
+    end with a 5,000-byte cap and a 20s timeout the old strategy never detected
+    the overflow and the run would have ended as a *timeout*, while the fixed
+    runner returns in **0.09s** with `output_limit_exceeded: true`. Each read now
+    requests `min(remaining + 1, 64 KiB)` via `read1`, so the sentinel byte is
+    itself the proof of overflow, and the over-limit bytes are dropped so the
+    reported output is at most the cap exactly. No asyncio, selectors, polling,
+    or non-blocking mode was introduced;
+  - **the timing contract is now exact.** The configured timeout bounds the
+    execution/capture wait; after it AIDO sends one kill and may spend at most a
+    fixed direct-child reap grace on that one process handle, and never waits for
+    descendants or for the abandoned reader. The report carries
+    `configured_timeout_seconds`, `direct_child_reap_grace_seconds` and the
+    policy text; no measured timing and no process id is exposed;
+  - **the abandoned reader's lifetime is not bounded**, and is no longer
+    described as "a bounded, known cost". Abandoning it stops it extending the
+    AIDO invocation, but the thread and pipe handle may live as long as a
+    descendant retains the inherited write handle. That is recorded as a
+    documented residual limitation. **No process-tree management was added** — no
+    job object, `taskkill`, process group, `psutil`, or descendant enumeration.
+
+  **L2 is still not complete.** The near-term sequence is now:
+
+  ```text
+  5F2C  Controlled Single-File Writer      DONE
+  5F2D  Controlled Verification            DONE
+  5F2E  Reviewer Integration               NEXT
+  → first controlled implement → verify → review → human loop
+  ```
+
+  Phase 5F2E (reviewer integration) remains proposed and not authorized, so the
   complete implement → verify → review → human loop does not exist, and there is
-  still no model-backed implementer, no commit, no push, and no PR.
+  still no model-backed implementer, no reviewer, no commit, no push, and no PR.
+  No generalized writer work is inserted between 5F2D and 5F2E.
 - **Phase 6 — qwen reviewer.**
 - **Phase 7 — fix loop.**
 - **Phase 8 — local commit.**

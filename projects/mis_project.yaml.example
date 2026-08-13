@@ -159,6 +159,61 @@ workspace_write:
   enabled: false
   max_file_bytes: 200000
 
+# Controlled VERIFICATION of an already-applied approved edit (Phase 5F2D).
+# DISABLED, and a fourth separate opt-in — and the most consequential one, because
+# it is the only block in this file that can authorize AIDO to execute
+# REPOSITORY-CONTROLLED CODE. While disabled, `l2-verify-approved-file-edit`
+# refuses before the approved-diff artifact is even opened.
+#
+# When enabled, the command can do exactly one thing: prove the workspace still
+# holds exactly the one approved modification, launch the configured process ONCE
+# in workspace_path with the exact argv [executable, *args], capture and redact
+# its output under the bounds below, and prove the Git-visible workspace state
+# again afterwards.
+#
+#   CONTROLLED INVOCATION IS NOT SANDBOXED EXECUTION.
+#
+# The launched process is NOT confined. A test runner can import arbitrary
+# project modules, execute conftest.py, create files, open network connections,
+# and spawn children — and those children are not tracked and may still be
+# running after the command returns. AIDO controls which program runs, with which
+# arguments, where, with which minimal environment, how long AIDO WAITS, and how
+# much output it may produce — and nothing beyond that. The timeout below bounds
+# AIDO's wait; it does not guarantee the verification stopped. The result report
+# says all of this explicitly rather than claiming the run touched nothing.
+#
+# `executable` must be an ABSOLUTE path to an existing regular file that lives
+# OUTSIDE workspace_path: the repository being verified may not supply the
+# program that launches its own verification. There is no default and no PATH
+# lookup. `args` is an exact ordered argv tail used verbatim — nothing is split,
+# expanded, templated, or read as shell syntax.
+#
+# The L1 plan's `required_verification` is NEVER command authority. It is planner
+# prose, possibly model-written, and is never split, parsed, run, or turned into
+# argv. Only this block plus two explicit CLI flags can cause a process to run.
+#
+# The child environment is a fixed minimal allowlist of OS/runtime variables.
+# AIDO_LITELLM_*, GITHUB_TOKEN and every other credential are NOT forwarded, and
+# there is deliberately NO field here that could forward one. A project whose
+# tests require credentials is outside this first supported domain and may fail.
+# That is a claim about the ENVIRONMENT only: `args` are trusted configuration
+# data passed verbatim, and AIDO does not inspect them or prove that an argument
+# string contains no sensitive literal. Keep secrets out of them, as everywhere.
+#
+# There is deliberately NO shell command string, no working-directory override,
+# no interpolation or {path} template, no second command profile, no command id,
+# no before/after hook, and no retry setting. Never put credentials here.
+controlled_verification:
+  enabled: false
+  # executable: "C:/tools/python/python.exe"
+  # args:
+  #   - "-m"
+  #   - "pytest"
+  #   - "tests/test_targeted.py"
+  #   - "-q"
+  timeout_seconds: 120
+  max_output_bytes: 200000
+
 run_limits:
   max_model_calls_per_issue: 20
   max_review_loops: 3

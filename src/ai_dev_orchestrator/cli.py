@@ -17,17 +17,25 @@ no source files, no workspace contents, no directory listings, no git history.
 Both require an explicit `--real-model` flag plus a project config that opts in
 and allowlists the model.
 
-Every other command remains offline. No GitHub fetch happens in either gated
-command, and no agent logic, role wiring, file editing, command execution, or
-GitHub writes are wired up anywhere.
+Every other command remains offline in the sense that matters here: no GitHub
+fetch happens in either gated command, and no agent logic, role wiring, GitHub
+write, branch, commit, push or PR is wired up anywhere.
 
-`l2-dry-run` is the one command that reads an approved-plan artifact, and it
+**Two commands do act on explicitly approved artifacts**, and the older prose
+claiming that nothing here edits a file or runs a command is history, not current
+status. `l2-apply-approved-file-edit` (Phase 5F2C) writes one approved
+modification to one tracked file, and `l2-verify-approved-file-edit` (Phase 5F2D)
+executes one project-configured verification process. Both are described below.
+**L2 is still not complete**: there is no reviewer, no model-backed implementer,
+and no commit, push or PR.
+
+`l2-dry-run` is the first command that reads an approved-plan artifact, and it
 does exactly two file reads — the `--project-config` YAML and the
-`--approved-plan` artifact, in that order — before printing the scope a future
-L2 *would* be bounded by. **L2 itself is still not built**: nothing is
-inspected, proposed, edited, run, committed, or pushed.
+`--approved-plan` artifact, in that order — before printing the scope L2 *would*
+be bounded by. `l2-dry-run` itself still takes **no** action: it inspects
+nothing, proposes nothing, edits nothing, runs nothing, commits nothing.
 
-`l2-inspect-workspace` (Phase 5D1) is the one command that may touch a
+`l2-inspect-workspace` (Phase 5D1) is the first command that may touch a
 configured target workspace, and it touches it only as `stat`. It reads the
 same two files, and then — behind `--apply-approved-plan`, `--inspect-workspace`,
 a project-level `read_only_workspace_inspection` opt-in, artifact validation,
@@ -54,6 +62,22 @@ permitted path, its change type, and counts summarizing its diff. **It is not
 file editing**: no diff is applied, whether a diff applies is never checked, no
 command is run, and the configured target workspace is never read, listed,
 stat'd, resolved, or canonicalized.
+
+`l2-apply-approved-file-edit` (Phase 5F2C) is the one command that **writes** a
+file, under the narrow contract of its own module.
+
+`l2-verify-approved-file-edit` (Phase 5F2D) is the one command that **executes
+repository-controlled code**. It launches the project's own configured
+verification process — once, with an exact configured argv, in the canonical
+workspace root, under an output bound and a bound on **AIDO's own wait** — but
+only after proving the workspace still holds exactly the one approved
+modification on a pinned HEAD commit, and it re-proves all of that afterwards.
+Controlled invocation is **not** sandboxing: the project's own process is not
+confined, its descendants are not tracked and may outlive the run, and the report
+says so rather than claiming otherwise. Every AIDO-owned negative claim in that
+report is scoped with an `orchestrator_` prefix, so no field can be misread as a
+statement about the child. The command is separate from the writer on purpose,
+and the L1 plan's `required_verification` is never command authority.
 """
 
 from __future__ import annotations
@@ -61,13 +85,21 @@ from __future__ import annotations
 import enum
 import json
 import os
-import re
 import sys
 from pathlib import Path
 
 import typer
 
 from ai_dev_orchestrator import __version__
+from ai_dev_orchestrator.redaction import (
+    API_KEY_PLACEHOLDER,
+    BEARER_TOKEN_RE,
+    OPENAI_STYLE_KEY_RE,
+    REDACTION_PLACEHOLDER,
+    SECRET_ASSIGNMENT_RE,
+    _replace_assignment_value as _shared_replace_assignment_value,
+    redact_secret_like_text,
+)
 
 app = typer.Typer(
     name="ai-dev-orchestrator",
@@ -2078,62 +2110,18 @@ _L2_READ_EMPTY_NOTE = (
     "to read and the configured workspace was not touched at all."
 )
 
-_REDACTION_PLACEHOLDER = "[REDACTED]"
-_API_KEY_PLACEHOLDER = "[REDACTED_API_KEY]"
-
-# The redaction rules are deliberately three simple, deterministic patterns
-# rather than an attempt at real secret detection. They catch the shapes that
-# show up in config-ish source often enough to be worth catching; they will miss
-# others, and the output says so rather than claiming to be clean.
-#
-# Word boundaries are hand-rolled as `(?<![A-Za-z0-9])` / `(?![A-Za-z0-9])`
-# instead of `\b` so that an underscore-prefixed name like `MY_API_KEY` still
-# matches — `_` is a word character, so `\b` would not fire there.
-_SECRET_ASSIGNMENT_RE = re.compile(
-    r"(?<![A-Za-z0-9])(api[_-]?key|token|secret|password|passwd|pwd)"
-    r"(?![A-Za-z0-9])(\s*[:=]\s*)"
-    r"(\"[^\"\n]*\"|'[^'\n]*'|[^\s,;]+)",
-    re.IGNORECASE,
-)
-
-_BEARER_TOKEN_RE = re.compile(r"\bBearer\s+[A-Za-z0-9._~+/-]+=*", re.IGNORECASE)
-
-_OPENAI_STYLE_KEY_RE = re.compile(r"(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{8,}")
-
-
-def _replace_assignment_value(match: re.Match) -> str:
-    """Redact only the value half of a ``key = value`` pair, keeping any quotes."""
-    key, separator, value = match.group(1), match.group(2), match.group(3)
-    if len(value) >= 2 and value[0] in "\"'" and value[-1] == value[0]:
-        redacted = f"{value[0]}{_REDACTION_PLACEHOLDER}{value[0]}"
-    else:
-        redacted = _REDACTION_PLACEHOLDER
-    return f"{key}{separator}{redacted}"
-
-
-def _redact_secret_like_text(text: str) -> tuple[str, list[str]]:
-    """Blank out obvious secret-like substrings before any text reaches stdout.
-
-    Returns the redacted text and one kind label **per redaction made**, so the
-    caller can report both a count and the distinct kinds. Redaction is
-    mandatory — there is no configuration option that turns it off — and it is
-    applied to every byte of content this command prints.
-
-    This is not, and does not claim to be, reliable secret detection. It is a
-    small deterministic backstop for the three shapes below, applied
-    assignment-first so that a key like ``API_KEY=sk-...`` is counted once
-    rather than twice.
-    """
-    kinds: list[str] = []
-    redacted = text
-    for kind, pattern, replacement in (
-        ("secret_assignment", _SECRET_ASSIGNMENT_RE, _replace_assignment_value),
-        ("bearer_token", _BEARER_TOKEN_RE, f"Bearer {_REDACTION_PLACEHOLDER}"),
-        ("openai_style_key", _OPENAI_STYLE_KEY_RE, _API_KEY_PLACEHOLDER),
-    ):
-        redacted, count = pattern.subn(replacement, redacted)
-        kinds.extend([kind] * count)
-    return redacted, kinds
+# The redaction rules moved to `ai_dev_orchestrator.redaction` in Phase 5F2D,
+# unchanged. Verification output needs exactly the same treatment as workspace
+# file contents, and two independently maintained secret detectors would drift —
+# so there is one implementation and these are aliases onto it, kept so that the
+# Phase 5D2 call sites and their tests continue to name what they always named.
+_REDACTION_PLACEHOLDER = REDACTION_PLACEHOLDER
+_API_KEY_PLACEHOLDER = API_KEY_PLACEHOLDER
+_SECRET_ASSIGNMENT_RE = SECRET_ASSIGNMENT_RE
+_BEARER_TOKEN_RE = BEARER_TOKEN_RE
+_OPENAI_STYLE_KEY_RE = OPENAI_STYLE_KEY_RE
+_redact_secret_like_text = redact_secret_like_text
+_replace_assignment_value = _shared_replace_assignment_value
 
 
 def _read_bounded_bytes(resolved_candidate: str, *, limit: int) -> bytes | None:
@@ -3624,6 +3612,321 @@ def l2_apply_approved_file_edit(
         approved_diff_proposal=approved_diff_proposal,
         apply_approved_plan=apply_approved_plan,
         write_approved_file=write_approved_file,
+    )
+
+
+# -- L2 controlled verification (Phase 5F2D) -----------------------------------
+
+# Three exit categories, kept distinct because conflating any two of them is the
+# failure mode this phase exists to avoid:
+#
+#   1  refused before any project process was started; the workspace is
+#      untouched and stdout is empty.
+#   2  a verification process ran and did not pass — a non-zero exit, a timeout,
+#      or an output-cap kill. That is a legitimate answer about the code, not an
+#      AIDO error, and the structured result is printed.
+#   3  a verification process ran and afterwards the repository is not provably
+#      the approved state. Never reported as merely "failed"; nothing is
+#      repaired, restored, or retried, and a human must inspect the repository.
+_VERIFY_EXIT_REFUSED = 1
+_VERIFY_EXIT_NOT_PASSED = 2
+_VERIFY_EXIT_WORKSPACE_UNTRUSTED = 3
+
+
+def _run_l2_verify_approved_file_edit(
+    *,
+    project_config: Path,
+    approved_diff_proposal: Path,
+    apply_approved_plan: bool,
+    verify_approved_file_edit_flag: bool,
+) -> None:
+    """Execute one configured verification process, or refuse having run nothing.
+
+    Extracted from the command body so tests can call it directly and track
+    exactly which files are read, in which order.
+
+    Ordering is the safety property, and it is the writer's ordering with one
+    substitution. In sequence: both ``--apply-approved-plan`` and
+    ``--verify-approved-file-edit`` must be present — with **no file read at
+    all** if either is missing — then the project config loads, then
+    ``controlled_verification.enabled`` must be true, then the platform must be
+    Windows (all three before any target workspace is touched), then a
+    string/path check rejects an ``--approved-diff-proposal`` that sits inside
+    the configured workspace *before* it is opened or stat'd, then the artifact
+    is read and strictly parsed, and only then does the verifier begin its
+    workspace, Git, and execution work.
+
+    **The executable and its arguments come only from the project config.**
+    There is no ``--command``, ``--executable``, ``--args``, ``--shell`` or
+    ``--verification`` option, and the L1 plan's ``required_verification`` is
+    never consulted for execution authority.
+    """
+    from ai_dev_orchestrator.config_loader import ConfigError, load_project_config
+    from ai_dev_orchestrator.file_editing import (
+        FileEditingApprovalError,
+        parse_approved_diff_proposal_artifact,
+    )
+    from ai_dev_orchestrator.verification import (
+        VerificationRefusedError,
+        verify_approved_file_edit,
+    )
+
+    # 1. Explicit confirmation that an approved plan may be acted on.
+    if not apply_approved_plan:
+        typer.echo(
+            "Error: l2-verify-approved-file-edit acts on a human-approved "
+            "artifact and requires the explicit --apply-approved-plan flag. "
+            "Nothing was read and nothing was executed.",
+            err=True,
+        )
+        raise typer.Exit(code=_VERIFY_EXIT_REFUSED)
+
+    # 2. Explicit confirmation that a project's own program may actually be run.
+    #    A second, separate consent: approving a diff is not the same act as
+    #    telling this tool to execute repository-controlled code right now.
+    if not verify_approved_file_edit_flag:
+        typer.echo(
+            "Error: l2-verify-approved-file-edit executes the project's own "
+            "configured verification process — repository-controlled code, in a "
+            "process AIDO does not sandbox — and requires the explicit "
+            "--verify-approved-file-edit flag. Nothing was read and nothing was "
+            "executed.",
+            err=True,
+        )
+        raise typer.Exit(code=_VERIFY_EXIT_REFUSED)
+
+    # 3. Project config: the first file read.
+    try:
+        project = load_project_config(project_config)
+    except ConfigError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        typer.echo(
+            "The approved diff proposal artifact was not read and nothing was "
+            "executed.",
+            err=True,
+        )
+        raise typer.Exit(code=_VERIFY_EXIT_REFUSED)
+
+    # 4. The project-level verification opt-in. Checked before the artifact is
+    #    opened and long before the workspace is touched or anything is launched.
+    if not project.controlled_verification.enabled:
+        typer.echo(
+            "Error: this project's controlled_verification block is absent or "
+            "disabled, so no verification process may be executed for it. Set "
+            "controlled_verification.enabled to true, and configure an absolute "
+            "executable and its exact args, to permit it.",
+            err=True,
+        )
+        typer.echo(
+            "The approved diff proposal artifact was not read, no target "
+            "workspace was touched, and no process was launched.",
+            err=True,
+        )
+        raise typer.Exit(code=_VERIFY_EXIT_REFUSED)
+
+    # 5. Platform. This phase verifies a Phase 5F2C write, and that writer is
+    #    explicitly Windows-only.
+    if sys.platform != "win32":
+        typer.echo(
+            "Error: Phase 5F2D verifies a Phase 5F2C write, and that writer is "
+            "Windows-only. It refuses on this platform rather than reasoning "
+            "about semantics it has not established here.",
+            err=True,
+        )
+        typer.echo(
+            "The approved diff proposal artifact was not read, no target "
+            "workspace was touched, and no process was launched.",
+            err=True,
+        )
+        raise typer.Exit(code=_VERIFY_EXIT_REFUSED)
+
+    # 6. Refuse an artifact that lives inside the configured target workspace,
+    #    BEFORE it is read or stat'd — the same lexical guard every earlier phase
+    #    uses, and the reason --approved-diff-proposal carries no Typer exists=
+    #    check.
+    if _is_same_or_under(approved_diff_proposal, project.repo.workspace_path):
+        typer.echo(
+            "Error: --approved-diff-proposal is inside the project's configured "
+            f"repo.workspace_path ({project.repo.workspace_path}). The approval "
+            "must live outside the workspace it refers to; move the artifact and "
+            "retry.",
+            err=True,
+        )
+        typer.echo(
+            "The approved diff proposal artifact was not read and nothing was "
+            "executed.",
+            err=True,
+        )
+        raise typer.Exit(code=_VERIFY_EXIT_REFUSED)
+
+    # 7. The artifact: the second and final file read by this command.
+    try:
+        artifact_text = approved_diff_proposal.read_text(encoding="utf-8")
+    except OSError as exc:
+        typer.echo(
+            f"Error: could not read --approved-diff-proposal: {exc}", err=True
+        )
+        typer.echo("Nothing was executed.", err=True)
+        raise typer.Exit(code=_VERIFY_EXIT_REFUSED)
+
+    # 8. Parse strictly. Rejected, never repaired.
+    try:
+        artifact = parse_approved_diff_proposal_artifact(artifact_text)
+    except FileEditingApprovalError as exc:
+        name = type(exc).__name__
+        category = _APPROVED_DIFF_FAILURE_CATEGORIES.get(name, "artifact failure")
+        typer.echo(f"Error: {name}: {category}. {exc}", err=True)
+        typer.echo(
+            "The artifact text, the approval text, and the diffs are not "
+            "echoed. Nothing was executed and no target workspace was touched.",
+            err=True,
+        )
+        raise typer.Exit(code=_VERIFY_EXIT_REFUSED)
+
+    # 9. The verifier. Every remaining gate — identity, single-change,
+    #    modify-only, lexical write policy, canonical target, executable
+    #    validation, the exact approved post-image, the Git baseline of exactly
+    #    one approved dirty target, the single bounded execution, and the
+    #    post-execution state proof — lives there.
+    try:
+        report = verify_approved_file_edit(approved_diff=artifact, project=project)
+    except VerificationRefusedError as exc:
+        typer.echo(f"Error: refused-before-execution: {exc}", err=True)
+        typer.echo(
+            "No verification process was started. No source, diff, approval "
+            "text, absolute path, or environment value is echoed.",
+            err=True,
+        )
+        raise typer.Exit(code=_VERIFY_EXIT_REFUSED)
+
+    # 10. Print the report itself — nothing wrapped around it — for every outcome
+    #     in which a process actually ran. A failing verification and an
+    #     untrusted workspace are both results a human needs to read, not errors
+    #     to swallow.
+    typer.echo(report.model_dump_json(indent=2))
+
+    if report.outcome == "workspace-state-untrusted":
+        typer.echo(
+            "Error: workspace-state-untrusted: the verification process ran, and "
+            "afterwards the repository is NOT provably the approved state. This "
+            "is not a claim that verification merely failed. Nothing was "
+            "repaired, nothing was restored, no git restore was run, and nothing "
+            "was retried. HUMAN REPOSITORY INSPECTION IS REQUIRED.",
+            err=True,
+        )
+        raise typer.Exit(code=_VERIFY_EXIT_WORKSPACE_UNTRUSTED)
+
+    if report.outcome == "verification-failed":
+        typer.echo(
+            "Verification did not pass. The workspace is still exactly the "
+            "approved change; nothing was retried, repaired, restored, or "
+            "committed.",
+            err=True,
+        )
+        raise typer.Exit(code=_VERIFY_EXIT_NOT_PASSED)
+
+
+@app.command("l2-verify-approved-file-edit")
+def l2_verify_approved_file_edit(
+    project_config: Path = typer.Option(
+        ...,
+        "--project-config",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Path to the project config YAML the approved diff must match. Its "
+        "controlled_verification block must be enabled and must name the exact "
+        "absolute executable and args that may run.",
+    ),
+    approved_diff_proposal: Path = typer.Option(
+        ...,
+        "--approved-diff-proposal",
+        # Deliberately no exists=/readable= check: Typer would stat the path
+        # before the command body could reject one inside the configured
+        # workspace. The guard runs first; the file is opened only afterwards.
+        help="Path to the human-approved diff proposal artifact "
+        "(approved-diff-proposal.v2) whose modification has already been "
+        "applied. Must not be inside the project's configured workspace path.",
+    ),
+    apply_approved_plan: bool = typer.Option(
+        False,
+        "--apply-approved-plan",
+        help="Required explicit confirmation that a human-approved artifact may "
+        "be acted on. Without it this command fails without reading anything.",
+    ),
+    verify_approved_file_edit_flag: bool = typer.Option(
+        False,
+        "--verify-approved-file-edit",
+        help="Required explicit confirmation that the project's own configured "
+        "verification process may be executed. Without it this command fails "
+        "without reading anything.",
+    ),
+    output_format: GeneratePlanFormat = typer.Option(
+        GeneratePlanFormat.json,
+        "--format",
+        help="Output format. Only 'json' is currently supported.",
+    ),
+) -> None:
+    """Execute ONE configured verification process against ONE applied edit.
+
+    **This command runs repository-controlled code.** It is the first and only
+    one in this repository that does. Phase 5F2C's writer runs a fixed,
+    AIDO-owned, read-only Git inspection set as part of its own correctness
+    contract; this command launches a program the *project* chose — typically a
+    test runner — which may import arbitrary project modules, execute
+    ``conftest.py``, create files, open network connections and spawn children.
+
+    **Controlled invocation is not sandboxed execution.** AIDO controls which
+    absolute executable is launched, with which exact arguments, in which
+    directory, with which minimal environment, how long **AIDO waits**, and how
+    much output it may produce. AIDO does **not** confine what that process then
+    does, does **not** track its descendants — which may still be running after
+    this command returns — and the result report says so rather than claiming the
+    run touched nothing. Every AIDO-owned negative claim in the report carries an
+    ``orchestrator_`` prefix precisely so that none of them can be read as a
+    statement about the verification child.
+
+    Command authority comes only from the project config's
+    ``controlled_verification`` block: one absolute executable that must exist,
+    be a regular file, and resolve **outside** the target workspace, plus an
+    exact ordered argv list used verbatim. There is no shell, no command string,
+    no PATH lookup, no default executable, no interpolation or templating, no
+    working-directory override, no retry, and no CLI option through which a
+    command, an executable, or an argument could be supplied — the executable
+    and its arguments are project-config authority, never CLI authority, and
+    never model, plan, or artifact authority. The L1 plan's
+    ``required_verification`` is
+    planner-controlled prose that may have been written by a model: it is
+    **never** split, parsed, run, or turned into argv.
+
+    Verification is bound to the exact already-applied approved change. Before
+    anything is launched, the approved target must canonicalize inside the
+    workspace, be a regular file, hash to the approved ``post_image_sha256``
+    exactly, be tracked as one ordinary stage-0 blob, and be the **only**
+    Git-visible dirty path — as a plain unstaged modification, with nothing
+    staged, untracked, deleted, renamed, unmerged, or submodule-shaped anywhere.
+    The exact ``HEAD`` object id is captured too, and all of it is re-proved
+    after the process terminates: a verification that moves the baseline commit
+    (``git commit --allow-empty``, say) is refused as an untrusted workspace even
+    though the target's bytes and dirty status are untouched.
+
+    Exit codes are distinct on purpose. **1** means refused before any process
+    started. **2** means a process ran and verification did not pass — a non-zero
+    exit, a timeout, or an output-cap kill — with the workspace still exactly the
+    approved change. **3** means a process ran and the repository is no longer
+    provably the approved state; that is never reported as "verification failed",
+    nothing is repaired, restored, or retried, and a human must inspect the
+    repository.
+
+    Nothing here calls a model, contacts GitHub, creates a branch, commits,
+    pushes, or opens a PR, and no reviewer or fixer runs.
+    """
+    _run_l2_verify_approved_file_edit(
+        project_config=project_config,
+        approved_diff_proposal=approved_diff_proposal,
+        apply_approved_plan=apply_approved_plan,
+        verify_approved_file_edit_flag=verify_approved_file_edit_flag,
     )
 
 

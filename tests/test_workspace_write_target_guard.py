@@ -1383,17 +1383,21 @@ def test_this_suite_names_no_real_target_workspace():
 # -- 8. Phase 5F2B is library only --------------------------------------------
 
 
-def test_the_write_target_guard_has_exactly_one_caller():
-    """Phase 5F2B shipped this guard with no caller. Phase 5F2C is the caller.
+def test_the_write_target_guard_has_exactly_two_callers():
+    """Phase 5F2B shipped this guard with no caller. 5F2C and 5F2D are the two.
 
     The assertion is kept and updated rather than deleted, because the number
-    worth watching is "how many things can write into a workspace?". It went
-    from zero to exactly one, deliberately, and a second entry would be a change
-    someone should have to make on purpose.
+    worth watching is "how many things resolve a workspace write target?". It
+    went from zero, to one, to exactly two — deliberately, and a third entry
+    would be a change someone should have to make on purpose.
 
-    The one caller is the Phase 5F2C writer, and it reaches the guard through
-    the ``workspace`` package's public export rather than the private module
-    path.
+    The two callers reach the guard through the ``workspace`` package's public
+    export rather than the private module path:
+
+    - ``writer.py`` (Phase 5F2C) resolves the target in order to **write** it;
+    - ``verifier.py`` (Phase 5F2D) resolves the same target read-only, in order
+      to prove it still holds the exact approved post-image before and after a
+      verification process runs. It writes nothing.
     """
     package_root = Path(canonical.__file__).resolve().parents[2]
     exporter = Path(canonical.__file__).resolve().parent / "__init__.py"
@@ -1411,7 +1415,7 @@ def test_the_write_target_guard_has_exactly_one_caller():
             if name in source:
                 callers.add(module_path.name)
         assert "workspace.canonical" not in source, module_path.name
-    assert callers == {"writer.py"}
+    assert callers == {"writer.py", "verifier.py"}
 
 
 def test_exactly_one_write_command_exists_and_no_other_command_gained_one(tmp_path):

@@ -1,6 +1,6 @@
 # Phase 5A — L1-to-L2 Implementer Boundary (Design Review Only)
 
-> ## CURRENT STATUS (2026-08-12) — read this first
+> ## CURRENT STATUS (2026-08-13) — read this first
 >
 > This document began as a Phase 5A design review and has accumulated the
 > design history of every Phase 5 sub-phase since. **The sections below describe
@@ -18,13 +18,41 @@
 >   `ReplaceFileW` flag, the unsafe post-replacement cleanup, the Git
 >   filter-execution escape, ambient executable resolution, an overstated
 >   output bound, and a misleading `files_created: false` report field.
-> - **Phase 5F2D — Controlled Verification — is next and NOT AUTHORIZED.**
-> - **Phase 5F2E — Reviewer Integration — is NOT AUTHORIZED.**
+> - **Phase 5F2D is DONE and is the first controlled verification execution**
+>   (§29). One command, `l2-verify-approved-file-edit`, executes exactly one
+>   project-configured verification process, once, bound on both sides to one
+>   already-applied approved modification. **It is the first separately
+>   authorized capability here to execute repository-controlled code**, so
+>   statements elsewhere in this document that "no command execution exists",
+>   that "nothing runs a project's own checks", or that §7's command-execution
+>   policy is entirely unimplemented are **stale** and preserved only as history.
+>   **Controlled invocation is not sandboxed execution**, and the result report
+>   says so.
+> - **Phase 5F2D-FU1 is DONE** (§29.13): it corrected a wall-clock bound that was
+>   not actually a bound (a descendant holding the inherited output pipe kept
+>   AIDO's reader blocked long past the deadline), pinned the HEAD object id
+>   across the run, scoped every AIDO-owned negative capability claim with an
+>   `orchestrator_` prefix, rewrote `next_step` to stop making unprovable global
+>   claims, and narrowed the environment-forwarding claim to what is proved.
+> - **Phase 5F2D-FU2 is DONE** (§29.14): it corrected an output cap that was not
+>   enforced when it was passed (a fixed 64 KiB buffered read could sit waiting
+>   long after the cap had been exceeded), made the configured-timeout versus
+>   direct-child-reap-grace contract exact, and corrected the claim that the
+>   abandoned reader's lifetime was bounded. **No process-tree management was
+>   added.**
+> - **Phase 5F2E — Reviewer Integration — is NEXT and NOT AUTHORIZED.**
 > - **L2 is not complete.** There is no commit, no push, no PR, no branch
->   creation, no project verification execution, and no model-backed
->   implementer.
+>   creation, no reviewer/fixer wiring, and no model-backed implementer.
 > - The **old 5F2C–5F2F roadmap in §26.12 is superseded** by §27; §26.12 is kept
->   as history and marked as such.
+>   as history and marked as such. **No generalized writer work is inserted
+>   between 5F2D and 5F2E.**
+>
+> ```text
+> 5F2C  Controlled Single-File Writer      DONE
+> 5F2D  Controlled Verification            DONE
+> 5F2E  Reviewer Integration               NEXT
+> → first controlled implement → verify → review → human loop
+> ```
 >
 > ---
 >
@@ -207,10 +235,22 @@
 > **Phase 5F2B has since been authorized and completed as a library-only phase**
 > — the create-aware canonical write-target guard of §26.3, hardened by
 > 5F2B-FU1 against the remaining Win32 namespace aliases — with no config field,
-> no CLI command, no CLI option, no caller, and no write. **Phase 5F2C, 5F2D,
-> 5F2E, 5F2F / Phase 5F and every later sub-phase in §13 remain proposed and not
-> authorized**, 5F2F remains the first controlled workspace write, **L2 is still
-> not built, and nothing shipped so far edits a target workspace file.**
+> no CLI command, no CLI option, no caller, and no write. *(That paragraph
+> originally continued "**Phase 5F2C, 5F2D, 5F2E, 5F2F / Phase 5F and every later
+> sub-phase in §13 remain proposed and not authorized**, 5F2F remains the first
+> controlled workspace write, **L2 is still not built, and nothing shipped so far
+> edits a target workspace file**". **Phase 5F2C and Phase 5F2D have since been
+> authorized and completed** — §28 and §29 — so those claims are history. Phase
+> 5F2E and every later sub-phase in §13 remain proposals, and L2 is still not
+> complete.)*
+>
+> **Phase 5F2C has since been authorized and completed** as the first controlled
+> single-file workspace write (§28, corrected by §28.13), and **Phase 5F2D as the
+> first controlled verification execution** (§29). Phase 5F2D added an eighth
+> command, `l2-verify-approved-file-edit`, which — unlike every command before it
+> — really does execute a program the *project* chose. It changed none of the
+> other commands, the writer gained no verification flag, and the two capabilities
+> remain independently invokable.
 
 ## 1. Goal
 
@@ -4673,12 +4713,28 @@ AIDO-owned fixed Git plumbing: Python recommends a fully-qualified path, and
 Windows resolution of a bare name follows a search order this project does not
 control.
 
-`resolve_git_executable(workspace_root=...)` now resolves Git **once, before any
-target-workspace use**, via `shutil.which` over this process's own `PATH`, and
-then requires the result to be an absolute path to an existing regular file that
-is **not inside the target workspace** — the repository being edited may not
-supply the program that inspects it. The resolved path is threaded through every
-`run_fixed_git_operation` call in the run.
+`resolve_git_executable(workspace_root=...)` resolves Git via `shutil.which` over
+this process's own `PATH`, and then requires the result to be an absolute path to
+an existing regular file that is **not inside the target workspace** — the
+repository being edited may not supply the program that inspects it. The resolved
+path is threaded through every `run_fixed_git_operation` call in the run.
+
+The invariant is stated precisely, because an earlier draft of this section
+overstated it as "resolved before any workspace use". That is not what the code
+does, and the documentation is corrected rather than the code moved: the writer
+canonicalizes the approved target and probes its filesystem metadata *first*, and
+only then resolves Git. Those probes are `lstat`/`GetFileInformationByHandle`
+calls made by this process — they launch nothing. The property that actually
+matters is therefore:
+
+> **Git is resolved to one absolute executable path before any Git invocation or
+> child process is launched; a candidate inside the target workspace is refused;
+> and the same resolved path is reused for the whole run.**
+
+No code was moved to make the older sentence true. There is no independent
+runtime reason to resolve Git earlier — the filesystem probes cannot be
+influenced by which `git` binary would later be chosen — and documentation
+describes the implementation, not the other way round.
 
 `git_executable` is a **required keyword argument with no default** on both
 `build_git_argv` and `run_fixed_git_operation`, and an unqualified value raises
@@ -4757,9 +4813,9 @@ path, and this report carries none.
   `filter.<driver>.process` is covered too.
 - [x] Gate order is data (`ordered_preflight_operations`), asserted by test, and
   gitlinks are refused **before** `status` can descend into one.
-- [x] The Git executable is absolute, resolved before any workspace use, refused
-  when inside the target workspace, pinned for the run, and never defaulted to
-  the literal `"git"`.
+- [x] The Git executable is absolute, resolved **before any Git invocation or
+  child process is launched**, refused when inside the target workspace, pinned
+  for the run, and never defaulted to the literal `"git"`.
 - [x] stdout is bounded **during** capture with a kill on overflow, a watchdog
   enforces the timeout, and the residual resource-exhaustion limitation is
   recorded rather than hidden.
@@ -4771,3 +4827,874 @@ path, and this report carries none.
   supported input domain of §28.1 is unchanged.
 - [x] **Phase 5F2D (controlled verification) and Phase 5F2E (reviewer
   integration) remain NOT AUTHORIZED**, and the §27 roadmap pivot stands.
+  *(Phase 5F2D has since been authorized and completed — §29. Phase 5F2E remains
+  not authorized.)*
+
+## 29. Phase 5F2D — controlled verification slice (DONE)
+
+**Status: DONE.** Phase 5F2D is the **first separately authorized capability in
+this repository to execute repository-controlled code**. It shipped one new
+command, `l2-verify-approved-file-edit`, one new project opt-in,
+`controlled_verification`, and one new package,
+`ai_dev_orchestrator.verification`.
+
+The positive capability, in one sentence:
+
+> Given one already-applied Phase 5F2C approved single-file modification, and one
+> explicitly enabled project verification command from trusted project
+> configuration, AIDO can prove that the workspace still represents exactly the
+> approved post-image, execute exactly that configured verification process once
+> under bounded conditions, capture and redact its output, then prove the
+> Git-visible workspace state still contains only the approved modification.
+
+**5F2C writes. 5F2D verifies. 5F2E reviewer integration is next and is not
+authorized. L2 is still not complete.**
+
+### 29.1 The architectural distinction this phase must not blur
+
+Phase 5F2C's `workspace/git_adapter.py` is **AIDO-owned fixed repository
+inspection**: a closed, hard-coded set of read-only Git commands that exists to
+make the writer's own correctness claims true. No repository content selects what
+it runs.
+
+Phase 5F2D is **explicitly authorized execution of repository/project-controlled
+code**. A verification command such as pytest can import arbitrary project
+modules, execute `conftest.py`, create files, access other filesystem paths, open
+network connections, spawn child processes, and read whatever environment it is
+given.
+
+```text
+controlled invocation  !=  sandboxed execution
+```
+
+AIDO is **not** sandboxing the project in Phase 5F2D. That is stated in the code,
+in the report schema, and here, because the failure mode this phase most needs to
+avoid is a safety report that overstates what it established.
+
+The report therefore **must not** claim, and has no field capable of claiming:
+
+- that verification made no network access;
+- that verification touched only allowed paths;
+- that verification could not launch child processes;
+- that verification could not access credentials;
+- that verification was side-effect free.
+
+The `capability_boundaries` block splits along exactly that line. The
+`orchestrator_*` and action fields are `Literal[False]` — properties of a module
+that imports no client, opens no socket, and has no Git-mutation, GitHub, branch,
+commit, push or PR capability at all. The `child_process_*` fields are
+**strings**, and every one of them reads `"not sandboxed"`. A boolean there would
+invite `false`, and `network_called: false` as a claim about the whole invocation
+would be a lie.
+
+### 29.2 `required_verification` is never command authority
+
+The L1 plan carries `required_verification`. It is planner-controlled prose, and
+a model may have written it. Phase 5F2D never:
+
+- splits it;
+- parses it as shell syntax;
+- runs it;
+- transforms it into argv;
+- uses it to select an executable;
+- uses it to add or remove an argument.
+
+A plan that says `pytest tests/foo.py`, `rm -rf …`, or `curl …` changes
+**nothing** about which process runs. The field is read exactly twice in
+`verifier.py` — once to bind it, once to take its `len()` for the report — and a
+test asserts that with an **AST walk** rather than a text scan, so the module's
+(deliberately extensive) prose about the field cannot make the assertion pass.
+`runner.py`, the module that actually launches processes, does not mention the
+field at all.
+
+Execution authority is exactly: the project config's `controlled_verification`
+block, plus two explicit CLI flags.
+
+### 29.3 The project config block
+
+```yaml
+controlled_verification:
+  enabled: false
+  executable: "C:\\absolute\\path\\to\\python.exe"
+  args:
+    - "-m"
+    - "pytest"
+    - "tests/test_targeted.py"
+    - "-q"
+  timeout_seconds: 120
+  max_output_bytes: 200000
+```
+
+- absent block == disabled; `enabled` defaults false;
+- exactly **one** configured verification command in this first slice;
+- the executable has **no default** and is never looked up on `PATH`; it must be
+  an absolute path to an existing regular file, validated at run time;
+- `args` is an exact ordered argv tail, strings only, NUL refused, used
+  **verbatim** — no interpolation, no environment substitution, no `{path}`
+  template, no model or artifact substitution, no shell-syntax interpretation;
+- cwd is always the canonical configured repository root; there is no
+  working-directory override field.
+
+The resulting argv is exactly `[configured_absolute_executable, *configured_args]`
+and nothing else.
+
+Deliberately **absent**, each because adding it would either turn a
+per-invocation decision into standing configuration or widen a capability this
+phase does not have: any shell command string, multiple command profiles, command
+ids, before/after hooks, a retry setting, an install or dependency step, and any
+environment or secret forwarding field.
+
+Shape validation (blank, NUL, non-string args, bound ranges) happens in the
+pydantic model. Absoluteness, existence, file-kind and workspace separation are
+**run-time** properties and are checked at the gate, so a disabled or absent
+block can never make an unrelated command fail to load.
+
+### 29.4 The executable must resolve outside the target workspace
+
+For this first slice, a verification executable that canonicalizes inside the
+target workspace is **refused**.
+
+The verification process may still execute project code **from** the workspace —
+that is the capability being authorized. What may not come from inside it is the
+program that launches that code. Without this rule an ignored `.venv` or a
+project-supplied binary becomes a second mutable executable target inside the
+very tree whose state this phase is trying to pin down, and the whole point of
+the pre/post state binding is that the executable's identity does not move
+underneath it.
+
+Comparison is canonical, and inability to establish separation is treated as
+"not separate" — the caller refuses on that answer. This restriction may be
+revisited if real project usage proves workspace-local virtual environments are
+required. **It is not solved now.**
+
+### 29.5 The child environment
+
+A fixed minimal allowlist, never a copy of `os.environ`: `PATH`, `SystemRoot`,
+`SystemDrive`, `ComSpec`, `windir`, `TEMP`, `TMP`, `PATHEXT`, and the two
+processor variables — the OS/runtime variables a Windows child needs to
+initialize and a test runner needs to find its tools.
+
+Never forwarded, with **no configuration field that could add them**:
+`AIDO_LITELLM_*`, `GITHUB_TOKEN`, any `*_API_KEY` / `*_SECRET` / `*_TOKEN` /
+`*_PASSWORD`, database and cloud credentials, and `GIT_DIR` / `GIT_WORK_TREE` /
+`GIT_INDEX_FILE` / `GIT_CONFIG`. The allowlist result is re-filtered against a
+forbidden-fragment list, so a careless future widening of the allowlist fails
+loudly instead of leaking.
+
+A project whose tests require credentials is **outside this first supported
+domain and may fail**. That is accepted, and the report states that environment
+forwarding is minimal and that no project-configured secret forwarding exists.
+*(**Narrowed by §29.13.5.** "No project-configured secret forwarding" also read
+as a claim about argv, which is passed verbatim. The report now claims exactly
+`environment_forwarding_configurable: false` and states separately that AIDO does
+not prove configured args contain no sensitive literal.)*
+
+### 29.6 The CLI command, separate from the writer
+
+```text
+l2-verify-approved-file-edit
+  --project-config
+  --approved-diff-proposal
+  --apply-approved-plan
+  --verify-approved-file-edit
+  --format
+```
+
+Five options, asserted as a set by test. The writer did **not** gain a
+verification flag: write and verification remain independently invokable
+capabilities. There is no `--command`, `--executable`, `--args`, `--shell`,
+`--verification`, `--force`, `--repair`, `--retry`, `--commit`, `--push`, `--pr`
+or `--model`, because the executable and args are project-config authority, not
+CLI authority.
+
+Both explicit action flags are checked **before any input file is read**, and the
+remaining order is the writer's, with one substitution: config → the
+`controlled_verification` opt-in → the Windows-only platform check → the
+lexical rejection of an `--approved-diff-proposal` inside the configured
+workspace (before it is opened or stat'd) → the strict parse → the verifier.
+
+### 29.7 Pre-execution state binding
+
+Verification is authorized for the exact already-applied approved change and for
+nothing else. Before any process is launched:
+
+**Artifact/config gates.** The same strict approved-diff parsing and the same six
+exact identity comparisons the writer uses; exactly one change; `modify` only;
+protected, forbidden and unlisted targets refused; `allow_symlinks == false`;
+`deny_outside_workspace == true`.
+
+**Canonical target.** The Phase 5F2B write-target guard re-run read-only: inside
+the canonical workspace, existing, regular, no symlink or reparse point, one
+supported target. Nothing is created, opened for writing, or modified.
+
+**Exact post-image.** The target is read bounded by
+`workspace_write.max_file_bytes` and must satisfy
+
+```text
+sha256(current_target_bytes) == approved post_image_sha256
+```
+
+Verification does **not** run against the pre-image, a partially edited file, a
+file where the diff merely "still applies", or a different change.
+
+**Git state**, using the same safe fixed machinery in the same safe order — safe
+metadata, then the configuration gate, then the index gate, and only then
+anything that reads working-tree content:
+
+- workspace top-level == configured workspace root;
+- `HEAD` exists;
+- the Git configuration execution surface satisfies the writer's supported
+  inspection contract (a repository that could run a filter is refused **before**
+  `status` reads working-tree content);
+- simple index: no gitlink, no unmerged stage, no assume-unchanged, no
+  skip-worktree, no unusual index tag;
+- the target is tracked as exactly one ordinary stage-0 blob;
+- the Git-visible dirty state is **exactly** the approved target;
+- that target's status is an **unstaged modification** (`" M"`);
+- nothing staged, nothing else unstaged, nothing untracked, no deletion, rename,
+  unmerged entry or submodule state.
+
+This is the verification baseline, and it differs from the writer's on purpose:
+
+```text
+writer baseline:
+    zero dirty paths
+
+verification baseline:
+    exactly one approved dirty target
+```
+
+The distinction is not weakened anywhere.
+
+### 29.8 The execution
+
+`verification/runner.py` owns one operation: execute the exact configured
+verification argv once. It is deliberately **not** a general process executor,
+and `git_adapter.py` was **not** turned into one — there is no public "run
+arbitrary command" utility anywhere in the repository.
+
+- configured absolute executable only; fixed configured args;
+- `shell=False`; canonical repo root as cwd; `stdin=DEVNULL`;
+- one execution only — no retry, no fallback executable, no PATH search;
+- a bounded wall-clock timeout enforced by a `threading.Timer` watchdog that
+  kills the child; *(**superseded by §29.13.1.** That arrangement did not
+  actually bound anything: the main thread read the pipe, and a descendant with
+  inherited standard handles kept it open past the deadline. The read now happens
+  on a daemon thread and the main thread returns at a monotonic deadline. The
+  bound is on **AIDO's wait**, not on the child's life.)*
+- output bounded **during** capture, with the child killed the moment the cap is
+  passed; *(**This was not true as shipped either** — see §29.14.1. The reader
+  used a fixed 64 KiB blocking `read` and tested the cap only afterwards, so a
+  child that passed the cap and then stopped writing was discovered only when the
+  timeout fired. The read strategy now requests `min(remaining + 1, 64 KiB)` via
+  `read1`, making the sentence accurate, and the over-limit bytes are dropped
+  rather than retained.)*
+- `stdout=PIPE` with `stderr=STDOUT`, so exactly **one** pipe exists and a
+  single-threaded bounded read loop cannot deadlock. Merging rather than
+  discarding stderr is the one deliberate difference from the Git adapter: a test
+  runner's diagnostics are the very thing a human needs to read, whereas the
+  adapter never used stderr for a decision.
+
+No generic multi-stream process framework was built.
+
+### 29.9 Output capture and redaction
+
+Verification output can contain source text, paths, credentials, tokens, stack
+traces and environment-derived values.
+
+**Bounding happens first.** Redacting text that was already truncated does not
+make the truncation honest. If output exceeds the cap the child is killed, the
+outcome is "did not pass", the report records `output_limit_exceeded` and sets
+`output.complete` to `false`, and **truncated output is never presented as
+complete**.
+
+**Redaction happens second, through the Phase 5D2 implementation** — not a second
+detector. The helper was extracted **unchanged in behavior** to
+`ai_dev_orchestrator/redaction.py`, and the CLI's Phase 5D2 names are now aliases
+onto it. Two independently maintained secret detectors drift, and the one that
+drifts is the one that silently stops catching a shape the other still catches.
+Phase 5D2 behavior was not weakened, narrowed, or made configurable, and there is
+still no off switch. Redaction remains a **backstop, not a guarantee**, and the
+report says so in a `redaction_note` field rather than only in documentation.
+
+### 29.10 Result semantics and exit codes
+
+A process returning non-zero is **not** an AIDO internal error. It is a valid
+verification outcome, and it produces a typed `verification-result.v1` report.
+
+```text
+outcome: "verified" | "verification-failed" | "workspace-state-untrusted"
+```
+
+| Exit | Meaning |
+| --- | --- |
+| `0` | Verification passed and the workspace is still exactly the approved change. |
+| `1` | **Refused before project command execution.** Missing flag, disabled config, invalid artifact, identity mismatch, wrong workspace state, target bytes ≠ approved post-image, invalid executable, executable inside the workspace. No process was started; stdout is empty. |
+| `2` | **A process was started and verification did not pass** — non-zero return code, timeout, or output cap exceeded. The structured result is returned. Nothing is retried, repaired, restored, or committed. |
+| `3` | **Verification ran, but the post-execution workspace state is not trustworthy.** Never reported as merely "failed": the repository state itself requires human inspection. No automatic repair, no `git restore`, no cleanup command. |
+
+An untrusted workspace **outranks** a failing test run. A suite that fails *and*
+leaves the repository changed is exit 3, because the repository state is the more
+serious fact and the one a human must act on first. A non-zero test result with a
+still-valid workspace is exit 2.
+
+### 29.11 Post-execution workspace verification
+
+After the verification process terminates, times out, or is killed for output
+overflow — **including** in those failure cases, because a killed process may
+well have changed the tree before it died — the workspace state is re-established
+before the result is finalized:
+
+1. re-canonicalize the approved target;
+2. re-read its bounded bytes;
+3. require the exact approved `post_image_sha256`;
+4. re-run the safe Git configuration and index gates;
+5. obtain status;
+6. require the Git-visible state to still be exactly one unstaged modification of
+   the approved target.
+
+Any additional staged, unstaged, untracked, deleted, renamed, unmerged or
+submodule state means **exit 3**, and it is **not cleaned up**. This deliberately
+catches a verification process that altered tracked or untracked Git-visible
+repository state.
+
+**What it does not detect**, recorded in the report itself as
+`workspace_postcondition.detection_limits` rather than only here:
+
+- Git-ignored files;
+- changes outside the repository;
+- network effects;
+- registry or system changes;
+- spawned external services or processes left running;
+- any filesystem change invisible to Git.
+
+**No sandbox was built in this phase.**
+
+### 29.12 Acceptance criteria for Phase 5F2D (DONE)
+
+- [x] Two inherited documentation inaccuracies corrected first: the README's
+  current-capability description of the Git adapter (absolute pinned executable,
+  the FU1 configuration probes in the fixed set, execution-capable configuration
+  refused before content-reading operations, `dwReplaceFlags == 0`, output
+  bounded during capture), and §28.13's "resolved before any workspace use"
+  claim, corrected to the accurate invariant **without moving any code**.
+- [x] `controlled_verification` config block: absent == disabled, `enabled`
+  defaults false, exactly one command, absolute executable with no default and no
+  PATH lookup, exact argv list, NUL refused, no shell string, no cwd override, no
+  interpolation, no secret forwarding, no profiles/ids/hooks.
+- [x] The argv is exactly `[configured_absolute_executable, *configured_args]`,
+  asserted by test, with shell metacharacters passed through as one opaque
+  argument rather than interpreted.
+- [x] A malicious sentinel `required_verification` is proved never to run and
+  never to enter argv; an AST test proves the field is read only to count it; the
+  runner module never mentions it.
+- [x] Executable validation: unset, blank, relative, missing, directory, and
+  workspace-local all refused, each before any process is launched.
+- [x] Minimal child environment proved against a real child process: `AIDO_*` and
+  `GITHUB_TOKEN` are set in the parent and absent in the child.
+- [x] One new CLI command with exactly five options; both action flags checked
+  before any file is read; the writer gained no verification flag.
+- [x] Pre-execution binding: identity, single `modify`, policy, canonical target,
+  exact approved post-image, and a Git baseline of exactly one approved unstaged
+  dirty target — with clean, wrong-bytes, pre-image, second-dirty-file, staged,
+  untracked, deleted, renamed, unmerged, assume-unchanged, skip-worktree, gitlink
+  and executable-config repositories all refused.
+- [x] One bounded execution: `shell=False`, canonical cwd, `DEVNULL` stdin, one
+  combined stream, timeout kill, output-overflow kill, no retry. *(The timeout
+  half of this was **not actually true as shipped** — see §29.13.1, which
+  reproduced a 1.0s timeout returning after 60.30s and corrected the mechanism.)*
+- [x] Return code 0 → exit 0; non-zero → exit 2 with a structured result;
+  timeout → exit 2; output overflow → exit 2 with `output.complete == false`.
+- [x] Output redacted through the **shared** Phase 5D2 helper, extracted rather
+  than duplicated, with Phase 5D2 behavior unchanged and no off switch.
+- [x] Post-execution proof, with synthetic commands that alter the approved
+  target, modify a second tracked file, create an untracked file, and stage the
+  approved target — each exit 3, each left unrepaired. A failing verification
+  that changes nothing stays exit 2; a failing verification that dirties the tree
+  becomes exit 3.
+- [x] Absent capabilities proved: no model call, no orchestrator socket, no
+  GitHub access, no branch, no commit, no push, no PR, no retry, no repair, no
+  `git restore`, no Git mutation of any kind, and no command selected from an
+  artifact, a model, or a plan. **The child process is explicitly not claimed to
+  be confined.**
+- [x] Every real execution test uses a synthetic Git repository under pytest
+  `tmp_path` and a synthetic Python verification script. **No real target project
+  was used.**
+- [x] **No generalized writer capability was added.** No create, no delete, no
+  rename, no multi-file writes, no protected writes, no transaction framework, no
+  journal, no rollback, no crash recovery, no concurrency framework, and no
+  generalized Git executor. The supported input domain of §28.1 is unchanged.
+- [x] **Phase 5F2E (reviewer integration) remains NOT AUTHORIZED**, the §27
+  roadmap pivot stands, and no generalized writer work is inserted between 5F2D
+  and 5F2E.
+
+### 29.13 Phase 5F2D-FU1 — verification lifetime and post-state integrity (DONE)
+
+Phase 5F2D was reviewed before acceptance and five findings were returned. All
+five are fixed. **The verification capability was not broadened to fix any of
+them** — two were real defects closed by narrow mechanism changes, and three were
+claims the implementation could not support, closed by correcting the claim.
+
+Nothing here adds a shell, arbitrary commands, multiple command profiles, a
+retry, repair, `git restore`, sandboxing, a generalized process executor, a
+process-tree management framework, writer expansion, or reviewer/fixer
+integration.
+
+#### 29.13.1 The claimed hard timeout was not a hard invocation bound
+
+The original runner was::
+
+    watchdog = threading.Timer(timeout_seconds, process.kill)   # background
+    ...
+    chunk = stream.read(_READ_CHUNK_BYTES)                      # main thread
+
+and the reasoning was "the timer kills the child, so the read ends". **That
+reasoning was wrong, and a synthetic repository proves it.**
+
+Phase 5F2D explicitly permits the direct verification child to spawn descendants.
+A descendant launched with inherited standard handles — which is simply what
+`subprocess.Popen(...)` with `stdout=None` does — holds the **write end of the
+same pipe**. Killing or exiting the direct parent does not close the handle the
+descendant owns, so the pipe never reaches EOF and AIDO's main thread stays
+blocked in `read()` until the descendant lets go.
+
+Reproduced in this repository against a real synthetic parent/descendant pair
+under `tmp_path`, on Windows, with no monkeypatching:
+
+```text
+configured timeout:            1.0 s
+descendant lifetime cap:      60   s
+OLD algorithm returned after: 60.30 s      <-- the bound did not exist
+NEW algorithm returned after:  1.03 s
+```
+
+So the previous statement that Phase 5F2D had a hard wall-clock bound was false,
+and §29.8's "a bounded wall-clock timeout enforced by a `threading.Timer`
+watchdog that kills the child" described something that did not hold.
+
+**The new invariant, stated precisely:**
+
+> AIDO's verification invocation stops waiting and returns in bounded time when
+> the configured timeout expires, even if a descendant inherited stdout/stderr
+> and remains alive.
+
+**The mechanism, deliberately the smallest one.** The blocking read moved to a
+private daemon thread (`_BoundedOutputReader`); the main thread waits on that
+thread's completion event with a monotonic deadline. At expiry it kills the
+**direct** child, takes whatever the reader accumulated under a lock, and
+**returns — abandoning the reader thread** rather than joining it. Reaping the
+direct child after the kill is itself bounded, so the kill cannot become a second
+unbounded wait.
+
+Everything else is unchanged: one combined stdout/stderr stream, `shell=False`,
+bounded capture, one launch, no retry.
+
+Two consequences are recorded rather than hidden:
+
+- The abandoned daemon thread holds the pipe's read end until the descendant
+  closes it or the process exits. That is a known, bounded cost of *not* managing
+  a process tree, and it is preferred to an unbounded wait.
+- **This does not terminate descendants.** No job object, no `taskkill`, no
+  process group, no `psutil`, no enumeration of children. A test asserts none of
+  those appear in the module.
+
+**Honesty in the schema.** The execution block now separates what was bounded
+from what was stopped:
+
+```text
+execution.aido_wait_bounded:                 true
+execution.direct_child_killed:               true | false
+execution.descendant_processes_terminated:   "not tracked; descendants may
+                                              still be running"
+```
+
+`descendant_processes_terminated` is a fixed **string**, not a boolean, for the
+same reason the `child_process_*` fields are: a boolean invites `false`, and
+`false` would read as "we checked". A timeout also now marks
+`output_complete: false`, because abandoning the stream mid-flight means the
+captured text is a prefix — previously only overflow did.
+
+A run whose pipe is still held at the deadline is reported `timed_out` with no
+return code **even if the direct child already exited**. That is the honest
+answer: AIDO stopped waiting, so it has neither the whole output nor an exit
+status it may report.
+
+#### 29.13.2 HEAD identity was not bound across verification
+
+The Git proof ran `rev-parse --verify HEAD` on both sides and **discarded the
+answer**, establishing only that *a* HEAD existed. That is not the same
+repository state.
+
+A verification process running:
+
+```text
+git commit --allow-empty -m "side effect"
+```
+
+moves the baseline commit while leaving the approved target as an unstaged
+modification. Every other postcondition still held —
+
+```text
+exact approved target bytes      ✓
+exactly one dirty path           ✓
+approved path reported as " M"   ✓
+```
+
+— and the run reported success against a repository whose history had changed
+underneath it.
+
+**The new invariant.** The exact HEAD object id is captured before the process is
+launched, from the existing fixed `rev_parse_head` operation, and retained as
+in-memory state only. Afterwards HEAD is obtained again through the same safe
+fixed adapter and required to be **exactly equal**. A HEAD that moved, or that
+cannot be re-established, is:
+
+```text
+outcome = workspace-state-untrusted
+exit    = 3
+```
+
+Nothing is repaired, reset, or checked out. The id is **never written anywhere
+and never reported as a value** — the report carries only
+`workspace_postcondition.head_unchanged: true/false`, and a test asserts the
+actual object id does not appear in stdout.
+
+No branch-name pinning was added. The writer permits a detached HEAD, and what
+matters here is preserving the exact baseline commit, not which ref points at it.
+
+#### 29.13.3 Capability result fields made global claims about an unsandboxed child
+
+The block correctly scoped `orchestrator_model_called`,
+`orchestrator_network_called`, `orchestrator_github_accessed`,
+`orchestrator_shell_invoked` and `orchestrator_files_written` — and then carried
+these **unscoped**, all set to `false`:
+
+```text
+git_mutation_performed   branch_created   committed   pushed   pr_created
+retry_attempted   automatic_repair_attempted
+rollback_or_restore_performed   reviewer_or_fixer_invoked
+```
+
+Under this phase's own explicit model that is misleading. The child is not
+sandboxed and may itself run Git, create a branch, commit, or push — and some of
+those effects are not inferable from the final working-tree state at all, since a
+`git push` leaves it untouched. A reader scanning `pushed: false` would take it
+as a statement about the invocation.
+
+Every AIDO-owned negative claim now carries an `orchestrator_` prefix, and a test
+asserts that **every** key in the block begins with `orchestrator_` or
+`child_process_`, with the old unscoped names proved absent.
+
+The child half stays honest, and gained two fields:
+
+```text
+child_process_git_effects:  "not sandboxed; not observed beyond the
+                             post-execution Git-visible state"
+child_process_lifetime:     "not sandboxed; descendants are not tracked and
+                             may still be running"
+```
+
+**No detection was added.** AIDO does not attempt to observe the child's Git,
+network, or process effects; that is sandbox and process-audit scope and is not
+authorized.
+
+#### 29.13.4 `next_step` contained unprovable global claims
+
+It read approximately "Nothing was committed, nothing was pushed, no branch was
+created, no PR was opened…". None of that can be proven about an unsandboxed
+child. It now scopes what AIDO did and admits what is unobserved:
+
+```text
+AIDO left the approved change uncommitted in the working tree for human review.
+AIDO did not create a branch, commit, push, open a PR, call a model, contact
+GitHub, or run a reviewer. The verification child was NOT sandboxed: effects
+outside the post-execution Git-visible state — including network activity,
+pushes, and processes left running — are not comprehensively observed, and this
+report makes no claim about them. Phase 5F2E (reviewer integration) must be
+explicitly authorized before this result flows any further.
+```
+
+The report now distinguishes *what AIDO did* from *what the verification child
+may have done* in the schema itself, not only in explanatory prose.
+
+#### 29.13.5 `project_configured_secret_forwarding: false` overstated what is proved
+
+The environment genuinely is a non-configurable minimal allowlist, and that part
+was correct. But the configured argv is passed **verbatim**, so a project config
+could in principle contain:
+
+```yaml
+args:
+  - "--api-key"
+  - "literal-secret"
+```
+
+The project-wide rule is that secrets live in environment variables and never in
+files, and args are trusted configuration data written by a human — but Phase
+5F2D does not *prove* that an arbitrary argument string contains no sensitive
+literal, and the old field name claimed the broader property.
+
+The field became:
+
+```text
+command.environment_forwarding_configurable:  false
+command.configured_args_trust_note:           "The configured args are trusted
+    project-configuration data and are used verbatim. AIDO does not inspect them
+    and does not prove that an arbitrary argument string contains no sensitive
+    literal. They are never echoed into this report."
+```
+
+`ENVIRONMENT_FORWARDING_POLICY` was likewise reworded to speak only about the
+environment: *there is no project-configurable environment-variable or credential
+forwarding mechanism in this phase*.
+
+**No heuristic argv secret detection was added**, and configured args are still
+never echoed into the report — only `arg_count`.
+
+#### 29.13.6 The post-execution state model after FU1
+
+```text
+canonical target still valid
+        ↓
+exact approved post-image still present
+        ↓
+same Git repository / valid HEAD
+        ↓
+HEAD object id exactly unchanged from pre-execution
+        ↓
+Git configuration gate still supported
+        ↓
+simple index / no gitlink / no unusual state
+        ↓
+exactly one dirty path
+        ↓
+approved target exactly " M"
+```
+
+Any failure after the verification process was started is
+`workspace-state-untrusted`, exit 3. No repair, no retry, no restore.
+
+#### 29.13.7 Acceptance criteria for Phase 5F2D-FU1 (DONE)
+
+- [x] The timeout is a real bound on AIDO's wait, proved by a regression using a
+  **real** synthetic process under `tmp_path` whose descendant inherits
+  stdout/stderr and outlives the deadline while the direct parent exits. The
+  runner returns within a small margin of the configured timeout, reports
+  `timed_out`, `completed == false`, `passed == false`, `return_code is None`,
+  and starts exactly one process. Not faked with a monkeypatch.
+- [x] The regression cleans up its synthetic descendant after asserting, so the
+  pytest process is not polluted.
+- [x] Nothing claims descendants were killed. A test asserts the module contains
+  no `taskkill`, job object, process group, `psutil`, or child enumeration, and
+  that the bounded reader is private.
+- [x] HEAD object id captured pre-execution and compared for exact equality
+  post-execution; `git commit --allow-empty` with an otherwise identical approved
+  state is exit 3, with the empty commit left in place and no reset or restore.
+- [x] An ordinary passing verification leaves HEAD unchanged and returns exit 0;
+  a failing verification with unchanged HEAD and workspace stays exit 2.
+- [x] The HEAD object id never appears in the report.
+- [x] Every capability-boundary key is scoped `orchestrator_*` or
+  `child_process_*`; no global `"committed": false` / `"pushed": false` style
+  claim survives anywhere in the report.
+- [x] `next_step` scopes its claims to AIDO and states the child was not
+  sandboxed and is not comprehensively observed.
+- [x] Environment forwarding remains non-configurable and is claimed as exactly
+  that; configured args are documented as unproven and are never echoed; no argv
+  secret scanner exists.
+- [x] `required_verification` remains non-authoritative, and no retry, repair,
+  restore, generalized executor, or sandbox was added.
+- [x] Every real Git/process test uses a synthetic repository and a synthetic
+  program under pytest `tmp_path`. **No real target project was used.**
+- [x] **Phase 5F2E (reviewer integration) remains NOT AUTHORIZED.**
+
+### 29.14 Phase 5F2D-FU2 — exact output-cap enforcement and lifetime claim accuracy (DONE)
+
+The final narrow follow-up for Phase 5F2D. One remaining runtime defect in the
+process runner, plus two directly related contract inaccuracies. The verifier was
+not redesigned and the verification capability was not broadened.
+
+#### 29.14.1 The output cap was not enforced when it was passed
+
+The private reader did:
+
+```python
+chunk = stream.read(_READ_CHUNK_BYTES)   # 64 * 1024
+...
+if self._total > self._max_output_bytes:  # tested only after read() returns
+```
+
+`BufferedReader.read(n)` blocks until it has **n** bytes or reaches EOF. So a
+child that had already emitted more than the configured cap, and then stopped
+writing, was **not** detected: the read sat waiting for a 64 KiB buffer that
+would never fill. The documented contract —
+
+> the child is killed the moment the configured output cap is passed
+
+— was therefore false. The overflow surfaced only when more output happened to
+arrive, when the child exited, or when the **timeout** fired, which also meant
+the run was reported with the wrong outcome (`timed_out`) for the wrong reason.
+
+The pre-existing flood regression could not catch this: it writes megabytes, so
+the 64 KiB request fills immediately. This is a different failure shape.
+
+**Measured against a real Windows pipe**, child writes 5001 bytes, flushes, then
+sleeps 30s:
+
+```text
+read(65536)  -> returned after 30.1   s   (only once the child exited)
+read1(5001)  -> returned after  0.078 s
+```
+
+**Measured end to end**, `max_output_bytes = 5_000`, child writes 5001 then
+sleeps 120s, configured timeout 20s:
+
+```text
+OLD strategy: overflow never detected within the timeout; the run would have
+              ended as a TIMEOUT after 20.00 s
+NEW strategy: returned after 0.09 s
+              output_limit_exceeded=True  timed_out=False  bytes_kept=5000
+```
+
+**The fix is a read strategy, not a framework.** Each iteration requests:
+
+```python
+request = min(remaining + 1, _MAX_READ_REQUEST_BYTES)
+chunk = stream.read1(request)
+```
+
+`read1` performs **one** underlying read and returns as soon as any data is
+available rather than waiting for the request to be filled. Once fewer than
+64 KiB of allowance remain, the request is exactly `remaining + 1`, so the
+arrival of that single sentinel byte *is* the proof that the cap was passed.
+While more than 64 KiB of allowance remains, overflow is arithmetically
+impossible in one read, so the 64 KiB ceiling only bounds the per-read
+allocation.
+
+**No asyncio, no selectors, no polling loop, no non-blocking mode, no generic
+streaming API, no process supervisor.** The FU1 reader thread remains the
+lifetime boundary, unchanged.
+
+**The over-limit bytes are dropped, not stored.** The old code discarded the
+entire overflowing chunk; the new code keeps exactly the bytes that fit and drops
+the excess, so the reported output is at most the configured cap **exactly**.
+Overflow remains `> cap`, not `>= cap`: a child that emits exactly the cap and
+exits is a clean, complete, passing run.
+
+#### 29.14.2 The new regression
+
+A real synthetic Windows child under pytest `tmp_path`:
+
+1. writes exactly `max_output_bytes + 1` bytes;
+2. flushes;
+3. sleeps far longer than the configured timeout.
+
+```text
+max_output_bytes   = 5_000
+child output       = 5_001 bytes
+configured timeout = 20 seconds
+observed runner return: ~0.09 s
+```
+
+The test proves the runner returned because of **overflow, not timeout**:
+`output_limit_exceeded is True`, `timed_out is False`, `completed is False`,
+`passed is False`, `return_code is None`, `output_complete is False`,
+`len(output_bytes) <= max_output_bytes`, exactly one AIDO `Popen`, and no retry.
+Companion tests pin that exactly the cap is retained (`b"z" * 5000`), and that
+output exactly at the cap is **not** an overflow.
+
+The existing large-flood regression is kept — it covers the other shape — and its
+assertion was tightened from "at most cap + one chunk" to "exactly the cap".
+
+The command-level equivalents prove the same shape is **exit 2** with a trusted
+workspace, and that an untrusted workspace still **outranks** an overflow: a child
+that creates an untracked file *and* overflows the cap is exit 3, uncleaned.
+
+#### 29.14.3 The exact timing contract
+
+`_KILL_REAP_SECONDS = 5.0` meant statements like "the function returns at the
+configured deadline" were not literally true in the worst case. Rather than build
+new process management to remove the grace, the contract is made precise. The
+constant is now public and named, and the two quantities are distinguished:
+
+```text
+configured execution/capture timeout   — from project config
+fixed direct-child reap grace          — DIRECT_CHILD_REAP_GRACE_SECONDS, 5.0s,
+                                         not configurable, not a second timeout
+```
+
+> The configured timeout bounds the execution and output-capture wait. After that
+> deadline AIDO sends one kill to the direct child and may spend at most the
+> fixed direct-child reap grace waiting for that one process handle. It never
+> waits for descendants, and it never waits for the abandoned output reader.
+> Worst-case AIDO wait is therefore the configured timeout plus the reap grace,
+> and nothing else.
+
+That text is `WAIT_BOUND_POLICY`, and the execution block of the report carries
+it alongside `configured_timeout_seconds` and
+`direct_child_reap_grace_seconds`. **No measured high-resolution timing is
+reported, and no process id is exposed.**
+
+#### 29.14.4 The abandoned reader's lifetime is not bounded
+
+FU1's docstring described the abandoned daemon thread and its pipe handle as
+"a bounded, known cost". That conflated two different things. The **AIDO wait**
+is bounded; the **abandoned resource lifetime** is not — a descendant may retain
+the inherited write handle indefinitely, and the reader thread and the pipe's
+read end stay alive with it.
+
+The corrected statement:
+
+> Abandoning the daemon reader prevents its lifetime from extending the AIDO
+> invocation; the reader and the pipe may themselves remain alive for as long as
+> a descendant retains the inherited handle, possibly indefinitely.
+
+This is a **documented residual limitation**. It was explicitly *not* fixed by
+killing descendants, enumerating descendants, job objects, `taskkill`, process
+groups, `psutil`, or any process-tree manager. No runtime expansion is authorized
+here, and none was made.
+
+#### 29.14.5 Outcome semantics are unchanged
+
+```text
+exit 1   refused before the project verification process was launched
+exit 2   the process ran, verification did not pass, and the post-execution
+         workspace proof still succeeds — output overflow lands here when the
+         workspace is still trusted
+exit 3   the process ran and the post-execution repository state is not provably
+         the approved state; this still outranks overflow, timeout and a plain
+         test failure
+```
+
+Nothing is repaired, restored, or retried at any exit code.
+
+#### 29.14.6 Acceptance criteria for Phase 5F2D-FU2 (DONE)
+
+- [x] Overflow is detected on the read that carries the first over-cap byte, via
+  a `min(remaining + 1, 64 KiB)` `read1` request, without waiting for a
+  fixed-size buffer to fill. Asserted against the read loop's own source, not the
+  module text.
+- [x] A real synthetic Windows child writing `cap + 1` bytes, flushing, then
+  hanging far past the configured timeout causes a prompt overflow return
+  (~0.09s against a 20s timeout) with `output_limit_exceeded`, `timed_out` false,
+  `completed` false, `passed` false, `return_code is None`, `output_complete`
+  false, one `Popen`, and no retry.
+- [x] Retained output is at most the configured cap exactly; the over-limit bytes
+  are dropped. Output exactly at the cap is not an overflow.
+- [x] The large-flood regression is kept and tightened.
+- [x] The timing contract distinguishes the configured timeout from the fixed
+  direct-child reap grace, in prose and in the report, with no measured timing
+  and no process id.
+- [x] The abandoned reader's lifetime is documented as unbounded and as a
+  residual limitation, with the earlier "bounded, known cost" phrasing corrected
+  and attributed.
+- [x] **No process-tree management, sandbox, generic process runner, streaming
+  framework, or retry was added.** Asserted by tests over imports and the read
+  loop.
+- [x] FU1's fixes are intact: exact HEAD object id pinned pre/post, moved HEAD →
+  exit 3 with no reset/checkout/restore, every AIDO negative action field
+  `orchestrator_*`, child effects unsandboxed and unobserved, `next_step` scoped
+  to AIDO, no claim that configured args are secret-free, and
+  `required_verification` completely non-authoritative.
+- [x] Every real execution test uses synthetic programs and repositories under
+  pytest `tmp_path`. **No real target project was used.**
+- [x] **Phase 5F2E (reviewer integration) remains NOT AUTHORIZED.**

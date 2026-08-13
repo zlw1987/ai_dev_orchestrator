@@ -271,6 +271,110 @@ class WorkspaceWriteConfig(_Strict):
     )
 
 
+class ControlledVerificationConfig(_Strict):
+    """Per-project opt-in for the **controlled verification slice** (Phase 5F2D).
+
+    This is the first block in this repository that can authorize AIDO to execute
+    **repository-controlled code**, and the distinction from everything before it
+    matters more than its size suggests:
+
+    - the Phase 5F2C Git adapter runs a fixed, AIDO-owned, read-only inspection
+      set that is part of the writer's own correctness contract;
+    - this block names a **project's own verification process** — a test runner,
+      typically — which may import arbitrary project modules, execute
+      ``conftest.py``, create files, reach the network, and spawn children.
+
+    **Controlled invocation is not sandboxed execution.** AIDO controls *which*
+    program is launched, with which exact arguments, in which directory, with
+    which minimal environment, for how long, and how much output it may produce.
+    It does **not** confine what that program then does. Phase 5F2D says so in
+    its report rather than claiming otherwise.
+
+    It fails closed by construction — an absent block is identical to an
+    explicitly disabled one — and it deliberately has **no field** for any of:
+
+    - a shell command string, a command line to split, or any shell syntax;
+    - a working-directory override (cwd is always the canonical configured
+      repository root);
+    - a ``PATH`` lookup or an executable default (there is none: an absolute path
+      must be given, and it is validated at run time);
+    - interpolation, environment substitution, ``{path}`` templating, or any
+      other place a model, an artifact, or a plan could inject a token;
+    - environment or secret forwarding (the child environment is a fixed minimal
+      allowlist, and no project may extend it);
+    - multiple command profiles, command ids, or before/after hooks;
+    - install, dependency, package-manager, Git or GitHub actions of any kind.
+
+    In particular the L1 plan's ``required_verification`` is **not** wired here
+    and never becomes command authority: it is planner-controlled prose, it may
+    be produced by a model, and Phase 5F2D neither parses, splits, nor runs it.
+    Execution authority comes only from this block plus explicit CLI consent.
+    """
+
+    enabled: bool = Field(
+        default=False,
+        description="Whether this project's configured verification process may "
+        "be executed at all. Absent or false means nothing is launched.",
+    )
+    executable: str | None = Field(
+        default=None,
+        description="Absolute path to the one program that may be launched. "
+        "There is no default and no PATH lookup; a relative name, a missing "
+        "file, a directory, or a path inside the target workspace is refused at "
+        "run time.",
+    )
+    args: list[str] = Field(
+        default_factory=list,
+        description="The exact ordered argv tail. Strings only, used verbatim: "
+        "nothing is split, expanded, templated, or interpreted as shell syntax.",
+    )
+    timeout_seconds: int = Field(
+        default=120,
+        gt=0,
+        le=3600,
+        description="Hard wall-clock bound. The child is killed on expiry and "
+        "the verification outcome is 'did not pass'.",
+    )
+    max_output_bytes: int = Field(
+        default=200_000,
+        gt=0,
+        le=5_000_000,
+        description="Hard ceiling on captured output, enforced DURING capture. "
+        "Passing it kills the child and fails the verification; captured text is "
+        "never presented as if it were the complete output.",
+    )
+
+    @field_validator("executable")
+    @classmethod
+    def _check_executable(cls, value: str | None) -> str | None:
+        # Shape only. Absoluteness, existence, file-kind and workspace
+        # separation are run-time properties and are checked at the gate, so a
+        # disabled block can never make an unrelated command fail to load.
+        if value is None:
+            return None
+        if not value.strip():
+            raise ValueError(
+                "controlled_verification.executable must be a non-blank absolute "
+                "path, or absent"
+            )
+        if "\x00" in value:
+            raise ValueError(
+                "controlled_verification.executable must not contain a NUL byte"
+            )
+        return value
+
+    @field_validator("args")
+    @classmethod
+    def _check_args(cls, values: list[str]) -> list[str]:
+        for arg in values:
+            if "\x00" in arg:
+                raise ValueError(
+                    "controlled_verification.args entries must not contain a NUL "
+                    "byte"
+                )
+        return values
+
+
 class ProjectConfig(_Strict):
     """Top-level typed project configuration."""
 
@@ -302,6 +406,9 @@ class ProjectConfig(_Strict):
     )
     workspace_write: WorkspaceWriteConfig = Field(
         default_factory=WorkspaceWriteConfig
+    )
+    controlled_verification: ControlledVerificationConfig = Field(
+        default_factory=ControlledVerificationConfig
     )
 
     @property

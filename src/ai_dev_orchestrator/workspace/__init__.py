@@ -7,14 +7,24 @@ create-aware write-target counterpart from §26.3, which is **also library
 only**: it writes nothing and creates nothing.
 
 Phase 5F2C added :mod:`ai_dev_orchestrator.workspace.git_adapter`, a **fixed**
-Git inspection adapter. It is not command execution: the executable is the
-literal ``"git"``, every argv is assembled here from a closed set of constants,
-``shell=False`` always, the environment is a minimal allowlist rather than a
-copy of this process's, and the only variable component in the whole module is
-one already-validated repo-relative path passed after ``--``. Every operation in
-the set is read-only — there is no ``add``, ``commit``, ``checkout``,
-``restore``, ``reset``, ``branch``, ``fetch`` or ``push``, and no network
-operation of any kind.
+Git inspection adapter, corrected by 5F2C-FU1. It is not command execution: the
+executable is resolved to one **absolute path** and pinned for the run (never the
+bare name ``"git"``, and refused if it lives inside the target workspace), every
+argv is assembled there from a closed set of constants, ``shell=False`` always,
+the environment is a minimal allowlist rather than a copy of this process's,
+output is bounded during capture, and the only variable component in the whole
+module is one already-validated repo-relative path passed after ``--``. Every
+operation in the set is read-only — there is no ``add``, ``commit``,
+``checkout``, ``restore``, ``reset``, ``branch``, ``fetch`` or ``push``, and no
+network operation of any kind. A repository whose effective Git configuration
+could make Git execute a program is **refused** before any content-reading
+operation runs.
+
+That adapter is AIDO-owned repository *inspection*. Phase 5F2D's controlled
+verification — :mod:`ai_dev_orchestrator.verification` — is a deliberately
+separate thing: explicitly authorized execution of **repository-controlled**
+code. The two are not blurred together, and neither module is a general process
+executor.
 """
 
 from ai_dev_orchestrator.workspace.canonical import (
