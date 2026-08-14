@@ -1562,7 +1562,16 @@ def test_the_packet_scopes_every_negative_claim_to_the_orchestrator(tmp_path, ca
     for field in (
         "orchestrator_fixer_invoked",
         "orchestrator_second_reviewer_invoked",
-        "orchestrator_review_retry_or_reprompt_attempted",
+        # Phase 5F2E-RS1 replaced the hard-coded
+        # `orchestrator_review_retry_or_reprompt_attempted: false` — which would
+        # have been a lie whenever the bounded compact retry ran — with a real
+        # boolean plus these fixed negatives. This run made one attempt, so the
+        # compact-retry flag is false here too.
+        "orchestrator_bounded_compact_retry_used",
+        "orchestrator_third_semantic_attempt_made",
+        "orchestrator_parser_repair_attempted",
+        "orchestrator_partial_findings_merged_across_attempts",
+        "orchestrator_fallback_reviewer_model_used",
         "orchestrator_patch_generated_from_findings",
         "orchestrator_file_edit_from_findings",
         "orchestrator_automatic_repair_attempted",

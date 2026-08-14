@@ -6,14 +6,19 @@ validated :class:`ModelReviewResult` or rejects the reply outright.
 
 Two properties matter more than the schema itself.
 
-**It rejects rather than repairs.** There is no second prompt, no "please fix
-your JSON" retry, no fence stripping, no key renaming, no field coercion, and no
-semantic merging of findings. A reply that is not exactly one strict JSON object
-matching this schema is a reviewer failure, and a reviewer failure is reported to
-a human rather than negotiated with the model. The existing
-:class:`~ai_dev_orchestrator.llm.client.LLMClient` keeps its already-shipped
-bounded *transport*-level retries; that is a property of the transport, not a
-re-review, and this module adds nothing on top of it.
+**It rejects rather than repairs.** There is no fence stripping, no key renaming,
+no field coercion, no partial mining of findings, and no semantic merging of two
+replies. A reply that is not exactly one strict JSON object matching this schema
+is a reviewer failure, and a reviewer failure is reported to a human rather than
+negotiated with the model. Nothing here ever edits model output.
+
+A rejected reply may — when the project explicitly enabled it — be followed by
+**one** separate, smaller review request built by
+:mod:`~ai_dev_orchestrator.review.supervision`. That is a *new request*, not a
+repair of this one: the rejected text is discarded whole and is never quoted back
+to the model. It applies only to a **completed** response; a timeout is terminal.
+The controlled reviewer's *transport* retries are forced to zero, so each such
+request is exactly one HTTP/model request and the total AIDO may issue is two.
 
 **No trusted field is ever read from model output.** The project id, repo, issue
 number, title, target path, reviewer model, endpoint, verification outcome,
@@ -125,11 +130,17 @@ class ReviewRefusedError(ReviewError):
 class ReviewerStageError(ReviewError):
     """The reviewer stage failed **after** verification had already passed.
 
-    Scoped to AIDO's review stage: it repairs nothing, restores nothing, retries
-    nothing, re-prompts nothing, writes no file into the target workspace,
-    performs no Git mutation, and creates no branch, commit, push or PR. An
-    operator may correct the reviewer configuration and run the same command
-    again.
+    Scoped to AIDO's review stage: it repairs no model output, restores nothing,
+    writes no file into the target workspace, performs no Git mutation, and
+    creates no branch, commit, push or PR. An operator may correct the reviewer
+    configuration and run the same command again.
+
+    It is **not** a claim that only one model request was issued. Phase 5F2E-RS1
+    permits AIDO to issue one bounded compact second review request — only when
+    the project enabled it and only after a **completed but unusable** first
+    response, never after a timeout — for a maximum of two, each exactly one
+    HTTP/model request. That second request is a separate review, never a repair
+    or a merge of the first reply.
 
     That is deliberately **not** a claim about the whole invocation. The
     unsandboxed Phase 5F2D verification child has already run by this point. What
@@ -154,6 +165,24 @@ class ReviewParseError(ReviewerStageError):
 
 class ReviewValidationError(ReviewerStageError):
     """The decoded object had wrong keys, wrong types, or an incoherent verdict."""
+
+
+class ReviewerAttemptExhaustedError(ReviewerStageError):
+    """The bounded supervised attempt budget produced no valid review (RS1).
+
+    Raised by :mod:`ai_dev_orchestrator.review.supervision` once no further
+    semantic request is authorized — because the attempt timed out (terminal:
+    AIDO does not observe whether the backend released its inference slot),
+    because it failed for a reason a shorter prompt cannot plausibly solve, or
+    because the one compact retry also failed. The message names the **final
+    classification** and the attempt counts; it never carries the raw model
+    response, the prompt, the approved diff, an API key, or a base URL.
+
+    It is still a :class:`ReviewerStageError`, so the command's existing exit-4
+    contract is unchanged: no further semantic request, no transport retry, no
+    retry after a timeout, no fallback model, no fixer, no workspace mutation, no
+    re-verification, and no repair or restore follow it.
+    """
 
 
 class _Strict(BaseModel):

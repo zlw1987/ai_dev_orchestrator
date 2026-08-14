@@ -245,14 +245,73 @@ controlled_verification:
 # verification has passed.
 #
 # There is deliberately NO api_key, base_url, endpoint, credential, env-var name,
-# prompt template, header, retry count, fixer block, second reviewer, or
-# full-file transmission switch here. The verdict is advisory: no fixer, no
-# re-review, no patch, no file edit, no branch, no commit, no push, and no PR
-# follows it. Never put credentials here.
+# prompt template, header, transport retry count, fixer block, second reviewer,
+# fallback_model, reviewer list, or full-file transmission switch here. The
+# verdict is advisory: no fixer, no re-review of a completed verdict, no patch,
+# no file edit, no branch, no commit, no push, and no PR follows it. Never put
+# credentials here.
+#
+# ---- Phase 5F2E-RS1: bounded reviewer runtime supervision -------------------
+#
+# A LOCAL reviewer model can burn real resources — inference wall time, GPU
+# occupancy, concurrent-request capacity, context occupancy — while producing no
+# usable review at all. The three fields below bound AIDO's REQUEST ISSUANCE and
+# AIDO's WAIT. All have safe defaults, so a Phase 5F2E config that omits them
+# still loads and behaves exactly as before.
+#
+# attempt_timeout_seconds
+#     the maximum time AIDO WAITS for ONE reviewer HTTP/model call. That bound is
+#     AIDO's own monotonic deadline in the reviewer supervisor — NOT the httpx
+#     timeout, which is a network-operation/inactivity timeout a busy peer can
+#     outlive. (The reviewer's client also receives this value as a secondary
+#     network-inactivity timeout.) It is NOT a process-style hard kill: when the
+#     deadline wins, the worker performing the call is ABANDONED, not stopped,
+#     and AIDO never claims the request was cancelled or that the backend stopped
+#     inference. Because none of that is observed, a stalled attempt is TERMINAL.
+#     Default 90.
+#
+# max_output_tokens
+#     the REQUESTED model-output cap (the existing OpenAI-compatible
+#     `max_tokens`). A request to the provider, not a guarantee, and it says
+#     nothing about hidden reasoning or backend accounting. Default 2048.
+#
+# compact_retry_on_unusable_output
+#     whether ONE bounded compact second semantic request may be issued after a
+#     COMPLETED but unusable first response — one that exhausted its output
+#     budget or was rejected by the strict parser. Default false. Even when true
+#     the hard maximum is TWO semantic requests, using the SAME model, with a
+#     reduced context — never a repair or a merge of the first reply, and never
+#     a fallback model.
+#
+#     It deliberately does NOT cover a timeout. A client timeout is not evidence
+#     that the backend released its inference slot, so a second request could put
+#     a SECOND concurrent inference job on the same local model — increasing
+#     exactly the pressure this bound exists to contain.
+#
+# Retry OWNERSHIP is explicit: the reviewer client is built with
+# max_retries = 0, overriding AIDO_LITELLM_MAX_RETRIES for this command only, so
+# one semantic attempt is exactly ONE HTTP/model request. The generic LLM client
+# keeps its bounded transport retries for every other caller. Timeouts,
+# authentication failures, non-retryable 4xx, 429, 5xx and connection failures
+# all get NO compact retry.
+#
+# WHAT THIS DOES NOT BOUND: the abandoned worker's lifetime, the HTTP request's
+# lifetime after AIDO stops waiting, backend inference lifetime, GPU occupancy
+# after a client disconnect, backend context lifetime, or server-side
+# cancellation latency. Total GPU time is NOT bounded here.
+#
+#     AIDO wait ended  !=  worker stopped  !=  request cancelled
+#                      !=  backend inference stopped
+#
+# There is no attempt-count field, no timeout-retry field, no backoff setting,
+# no retry prompt, and no CLI override for any of these.
 controlled_review:
   enabled: false
   provider: "litellm"
   # model: "qwen3-coder-next"
+  attempt_timeout_seconds: 90
+  max_output_tokens: 2048
+  compact_retry_on_unusable_output: false
 
 run_limits:
   max_model_calls_per_issue: 20

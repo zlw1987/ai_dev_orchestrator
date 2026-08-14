@@ -17,11 +17,13 @@ changes. The eventual design will:
 
 The emphasis is on **control and review**, not autonomous action.
 
-## Current status: Phase 5F2E — AIDO can now write **one** approved file, **verify** it, and have **one** model review it, and that is all
+## Current status: Phase 5F2E-RS1 — AIDO can now write **one** approved file, **verify** it, and have **one** model review it under a bounded request budget, and that is all
 
-**Phase 5F2E is the latest completed phase, and it is the first one that sends
-source-derived code to a model.** Three commands now exist where there were
-none:
+**Phase 5F2E-RS1 (with its FU1 and FU2 corrections) is the latest completed
+phase.** Phase 5F2E was the first one that sends source-derived code to a model;
+RS1 bounded how many requests AIDO may issue to that reviewer and — via its own
+monotonic deadline, not httpx's — how long it may wait. Three commands now exist
+where there were none:
 
 - `l2-apply-approved-file-edit` (Phase 5F2C) applies **one** explicitly
   human-approved modification to **one** existing, Git-tracked, ordinary UTF-8
@@ -34,11 +36,12 @@ none:
   output, and then proves the Git-visible workspace state still contains only the
   approved modification.
 
-- `l2-review-approved-file-edit` (Phase 5F2E) runs that verification itself and,
-  **only** if it returns `verified`, sends **one** approved unified diff,
-  selected approved-plan prose, and the bounded, redacted verification output to
-  **one** project-configured reviewer model — once — and prints **one**
-  structured `review-packet.v1` for a human to read.
+- `l2-review-approved-file-edit` (Phase 5F2E, supervised by 5F2E-RS1) runs that
+  verification itself and, **only** if it returns `verified`, sends **one**
+  approved unified diff, selected approved-plan prose, and the bounded, redacted
+  verification output to **one** project-configured reviewer model — issuing at
+  most **two** semantic requests, each exactly one HTTP/model request — and
+  prints **one** structured `review-packet.v2` for a human to read.
 
 They are **separately invokable**. The writer has no verification flag, the
 verifier writes nothing and calls no model, and the reviewer command writes
@@ -49,9 +52,10 @@ Everything outside those three sentences fails closed. There is no file
 creation, no delete, no rename, no second file, no protected or forbidden path,
 no fuzzy patching, no non-Windows support, no shell, no command chaining, no
 arbitrary or model-proposed command, no model-backed implementer, no fixer, no
-review/fix loop, no second reviewer, no whole-file transmission, no GitHub
-access, no branch, no commit, no push, no PR, no application-level review retry,
-no automatic repair, no rollback and no journal.
+review/fix loop, no second reviewer, no fallback reviewer model, no whole-file
+transmission, no GitHub access, no branch, no commit, no push, no PR, no retry
+after findings, no parser repair, no automatic repair, no rollback and no
+journal.
 
 **The one honest exception to "no model call, no network call".** Phase 5F2E's
 reviewer command *does* call a model over the network — that is the capability —
@@ -474,10 +478,11 @@ One command, `l2-review-approved-file-edit`, and it is deliberately narrow:
   match, no CLI `--model`, no environment default, no glob or case folding. And
   `real_model_planning` does **not** authorize a review — planning authorization
   and review authorization are separate capabilities;
-- **one semantic reviewer request**, whose reply must be exactly one strict JSON
-  object. It is **rejected, never repaired**: no second prompt, no "fix your
-  JSON" round trip, no re-review. (The existing LLM client keeps its own bounded
-  *transport* retries; that is not a re-review.)
+- **the reply must be exactly one strict JSON object.** It is **rejected, never
+  repaired**: no parser repair, no "fix your JSON" round trip, no merging of two
+  replies;
+- **AIDO's request issuance is bounded** (5F2E-RS1, below): at most two semantic
+  requests, each exactly one HTTP/model request.
 
 **What the reviewer receives:** trusted identity, selected approved-plan prose
 (summary, scope, non-goals, proposed steps, risks, open questions), the **one**
@@ -499,23 +504,157 @@ are material to inspect and never instructions to follow.
 `needs_human_review` alike, because all three are successful reviews; `1`
 refused; `2` verification did not pass (no model contacted); `3` workspace no
 longer provably the approved state (no model contacted, nothing repaired); `4`
-verification passed but the reviewer stage failed — nothing repaired, restored,
-retried or re-prompted, and no raw model response, API key, base URL or diff in
-the error.
+verification passed but the reviewer stage failed — nothing repaired or restored,
+and no raw model response, API key, base URL or diff in the error.
 
 **A verdict is advisory and terminal.** There is no fixer, no second reviewer, no
 retry after findings, no patch generation, no file edit, no revert, no branch, no
 commit, no push, and no PR. The human decides what happens next.
+
+### What Phase 5F2E-RS1 actually ships
+
+RS1 exists because of a real failure mode with **local** reviewer models: a
+reviewer can consume substantial GPU inference time, concurrency and context
+capacity and still produce nothing a human can act on. For a local model, cost is
+inference wall time, GPU occupancy, concurrent-request capacity and context
+occupancy — not an API line item.
+
+> **What RS1 bounds, stated exactly.** It bounds **AIDO's reviewer request
+> issuance and AIDO's wait budget**. It proves: reviewer transport retries issued
+> by AIDO = 0; at most 2 semantic requests issued by AIDO; **an AIDO-owned
+> monotonic deadline on each attempt's wait**; the requested max output tokens;
+> and the completed-response retry policy. It does **not** prove any bound on the
+> abandoned worker's lifetime, the HTTP request's lifetime after AIDO stops
+> waiting, backend inference lifetime, GPU occupancy lifetime after a client
+> disconnect, backend context lifetime, or server-side cancellation latency.
+> **Total GPU time is not bounded here.**
+
+- **retry ownership is explicit.** The generic LLM client has bounded transport
+  retries, so with `max_retries = 2` one `chat()` could become **three** HTTP
+  requests on a timeout — invisible, unrecorded, and exactly wrong for a
+  supervised local reviewer. The reviewer client now forces `max_retries = 0`,
+  overriding `AIDO_LITELLM_MAX_RETRIES` **for this command only**. One semantic
+  attempt is exactly **one** HTTP/model request. **The generic client is
+  unchanged for every other caller**, and planner / smoke-test behavior is
+  untouched;
+- **the wait bound is AIDO's own deadline, not httpx's.** This is the FU2
+  correction. An httpx timeout is a **network-operation/inactivity** timeout, not
+  an absolute deadline around `client.chat()` — a peer producing frequent
+  activity can hold one request open far past the configured value without any
+  single read ever timing out. So each attempt runs its one client call on **one
+  daemon worker thread**, and the main thread waits to a monotonic deadline and
+  owns the decision. No executor, no pool, no registry, **no join at all**, no
+  thread kill, no socket close from the supervisor, no process, no asyncio. The
+  reviewer client still receives the same value as a *secondary*
+  network-inactivity timeout, which is useful but is not the proof;
+- **a stall is terminal.** This is the FU1 correction, and it is the safety
+  argument of the whole phase. When the client times out — or when AIDO's own
+  deadline expires first — AIDO stops waiting, but it cannot observe whether the
+  request ended or whether the backend released its inference slot. Issuing a
+  second request could give the same local model **two concurrent inference
+  jobs**, increasing exactly the GPU, concurrency and context pressure this bound
+  exists to contain. So `review_stalled` ends the review, from either source.
+  There is no sleep, no backoff, no polling, no cancellation request, no
+  streaming, and nothing that guesses the first job finished;
+- **the abandoned worker is abandoned, not terminated.** After an AIDO deadline
+  the worker may still be inside `client.chat()`. AIDO's wait is bounded; AIDO
+  does not wait for it, join it, or claim it stopped; it may outlive the
+  invocation in a long-lived process; and the network operation and backend
+  inference may still be active. This is the HTTP-side equivalent of the accepted
+  Phase 5F2D abandoned-reader limitation — documented, not fixed, with no worker
+  tracking or cleanup added. Because a stall is terminal, one invocation can
+  leave **at most one** abandoned worker;
+- **a hard maximum of two semantic requests.** Not configurable, not reachable
+  from a CLI flag. So one review command issues **at most two** HTTP/model
+  requests;
+- **one bounded compact retry**, and only when the project set
+  `controlled_review.compact_retry_on_unusable_output` **and** the first response
+  was **completed but unusable** — the provider reported a length finish
+  (`review_output_budget_exhausted`) or the strict parser rejected it
+  (`review_unusable_output`). Both share the property that makes a retry safe:
+  the response actually came back, so the first request is no longer an unknown
+  in flight. Timeouts, auth failures, 400/404, 429, 5xx and connection errors get
+  **no** retry, and an already-valid review never retries;
+- **the retry is a smaller review, not a repair.** Same configured model; a
+  strict subset of the already-accepted transmission boundary (plan summary,
+  proposed steps, risks and open questions dropped, **no new source added**); the
+  same strict schema, plus a post-parse cap of 5 findings enforced by rejection.
+  The first reply is discarded whole — never patched, never mined for partial
+  findings, never quoted into the second prompt, never merged;
+- **truthful human signals on stderr.** `REVIEW STALLED` for a stall — a
+  **terminal** notice that never says a retry was authorized, states that AIDO's
+  wait ending is not the request ending, and reports the requests actually
+  issued; `REVIEW UNUSABLE — compact retry authorized` only for a completed but
+  unusable response; and `REVIEWER UNAVAILABLE FOR THIS REVIEW` at the end. None
+  prints a prompt, a diff, a completion, a credential, a base URL, or an absolute
+  path;
+- **`review-packet.v2`**, which preserves every `v1` block and adds a
+  `reviewer_supervision` block: requests issued of a maximum of two, transport
+  retries per attempt (`0`), compact-retry enabled/used,
+  `timeout_attempt_is_terminal`, `attempt_wait_bound` (the AIDO-owned monotonic
+  deadline), the configured attempt timeout, the requested output cap, and
+  per-attempt outcome, `stall_source`, `finish_reason` and usage. `v1`'s meaning
+  is preserved as history rather than redefined.
+
+> **Packet facts and packet policy are different things.** A stall is terminal
+> and exits 4 with **no packet**, so every packet that exists came from a run in
+> which nothing stalled and no worker was abandoned. The two residual-limit
+> fields — `backend_inference_lifetime_if_stalled` and
+> `abandoned_worker_lifetime_if_supervisor_deadline_expires` — are therefore
+> worded from an explicit **IF**: they say what would and would not be known
+> *should* a stall occur, and never that one did. What this run actually did is
+> in `attempts[*].outcome` and `attempts[*].stall_source`.
+
+> **This is observable resource supervision, not agent-progress supervision.**
+> The reviewer is one non-streaming request with no tools, so AIDO classifies on
+> what it can actually see: whether the request returned or raised a typed error,
+> the `finish_reason` and `usage` the provider supplied, whether the content was
+> empty, and whether the strict parser accepted it. It deliberately reports **no**
+> private reasoning, reasoning similarity, chain-of-thought, time-to-first-token,
+> time-to-first-finding, tool calls, files inspected, or tests run. None of those
+> are observable here.
+
+> **The deadline bounds AIDO's wait, not the backend's work.**
+>
+> ```text
+> httpx timeout            = network-operation / inactivity timeout
+> RS1 supervisor deadline  = AIDO-owned wall-clock wait deadline
+>
+> AIDO wait ended  !=  worker stopped  !=  request cancelled
+>                  !=  backend inference stopped
+> ```
+>
+> A stall — from either source — means AIDO stopped waiting, and nothing more.
+> AIDO does **not** observe or claim that the request was cancelled, that the
+> worker stopped, or that a backend stopped inference. This is not a
+> process-style hard kill, and no subprocess, streaming, or cancellation
+> machinery was added to imply otherwise. Precisely because none of that is
+> observed, a stall is terminal: it could only become retryable in a future,
+> separately authorized phase in which AIDO gains an observable, trustworthy
+> backend-cancellation acknowledgement.
+
+> **`max_output_tokens` is a requested cap**, not a guarantee about hidden
+> reasoning or backend accounting. Usage is reported as the provider actually
+> returned it; when none is supplied it is recorded as **unknown, never zero**.
+
+**No fallback reviewer.** There is no `fallback_model`, `reviewer_chain`,
+`reviewers`, or `secondary_model` field anywhere. Automatic model failover would
+send the approved source-derived diff to *another* model, which is a separate
+authority decision — documented as a future candidate, **RS2 — Explicit Reviewer
+Failover**, and deliberately not implemented.
 
 **L2 as originally defined is still not complete.** There is no model-backed
 implementer, no automatic fixer, no local branch creation, no local commit, no
 push, no PR, and no generalized writer.
 
 ```text
-5F2C  Controlled Single-File Writer      DONE
-5F2D  Controlled Verification            DONE
-5F2E  Controlled Reviewer Integration    DONE
-→ first controlled write → verify → review → human milestone reached
+5F2C           Controlled Single-File Writer        DONE / ACCEPTED
+5F2D           Controlled Verification              DONE / ACCEPTED
+5F2E           Controlled Reviewer Integration      DONE / ACCEPTED
+5F2E-RS1       Reviewer Runtime Supervision         DONE
+5F2E-RS1-FU1   Terminal timeout + wording fixes     DONE
+5F2E-RS1-FU2   AIDO-owned reviewer wait deadline    DONE
+→ bounded write → verify → supervised review → human
 ```
 
 **The old "Phase 6 — qwen reviewer" roadmap entry is superseded by Phase 5F2E.**
@@ -2210,14 +2349,29 @@ controlled_review:
   enabled: false               # must be true; absent is identical to false
   provider: "litellm"          # only the existing internal OpenAI-compatible path
   model: "qwen3-coder-next"    # the exact reviewer model — the ONLY place one may be named
+  attempt_timeout_seconds: 90  # AIDO's OWN wall-clock wait deadline for ONE
+                               # attempt (finite, > 0)
+  max_output_tokens: 2048      # REQUESTED output cap, not a guarantee
+  compact_retry_on_unusable_output: false  # ONE compact retry after a COMPLETED
+                                           # but unusable response. Never after
+                                           # a timeout.
 ```
 
 `real_model_planning` does **not** authorize a review, and this block does not
 authorize planning. There is deliberately no `api_key`, `base_url`, endpoint,
-credential, environment-variable name, prompt template, header, retry count, or
-fixer field. Connection details still come from `AIDO_LITELLM_BASE_URL` and
+credential, environment-variable name, prompt template, header, transport retry
+count, attempt count, retry prompt, `fallback_model`, reviewer list, or fixer
+field. Connection details still come from `AIDO_LITELLM_BASE_URL` and
 `AIDO_LITELLM_API_KEY`; `AIDO_LITELLM_DEFAULT_MODEL` supplies a connection
 default and can **never** select the reviewer.
+
+The last three fields are Phase 5F2E-RS1's bounded reviewer supervision. All have
+safe defaults, so an existing Phase 5F2E config loads unchanged and keeps exactly
+one semantic request until it opts into the compact retry. There is no CLI
+override for any of them, and no timeout-retry field exists — the unaccepted
+draft name `compact_retry_on_stall` is **rejected** by `extra="forbid"` rather
+than aliased, so a stale draft config fails loudly instead of silently keeping
+the wrong semantics.
 
 **Ordering is the safety property.** Both action flags gate every read; then the
 project config loads; then `controlled_review` must authorize a reviewer; then
@@ -2261,20 +2415,47 @@ it changed anything, or contradict the supplied verification facts.
 human notes. It is **rejected, never repaired**: no markdown fence, no prose, no
 extra field, no orchestrator-owned field, and no verdict its findings contradict
 (`changes_requested` requires a blocker or major; `approve` may carry neither).
-**One semantic reviewer request** is made; the existing LLM client keeps its own
-bounded transport retries, and there is no application-level retry, re-prompt, or
-re-review.
+
+**Reviewer request issuance is supervised and bounded** (Phase 5F2E-RS1). The
+reviewer client is built with `max_retries = 0`, overriding
+`AIDO_LITELLM_MAX_RETRIES` for this command only, so one semantic attempt is
+exactly **one** HTTP/model request. AIDO issues at most **two** semantic
+requests: the second exists only when `compact_retry_on_unusable_output` is set
+**and** the first response was *completed but unusable* — it exhausted its output
+budget or was rejected by the strict parser. It uses the **same** model with a
+reduced context and a 5-finding cap, and it is never a repair or a merge of the
+first reply.
+
+**A stall is terminal.** AIDO's wait is bounded by its **own** monotonic
+deadline — an httpx timeout is a network-inactivity timeout a busy peer can
+outlive, so the attempt's single client call runs on one daemon worker and the
+main thread stops waiting at the deadline. When it does, the worker is
+**abandoned, not stopped**: AIDO cannot observe whether the request ended or
+whether the backend released its inference slot, so it never issues a second
+request that could run concurrently with the first on the same model. There is no
+third request, no fallback reviewer, and no retry for stalls, auth failures,
+400/404, 429, 5xx or connection errors. This bounds AIDO's request issuance and
+wait — not the abandoned worker's lifetime, backend inference lifetime, or GPU
+occupancy.
 
 A warning block goes to stderr before the call — naming the model, the endpoint
 **host only**, and exactly what is and is not transmitted — so a real reviewer
 call is impossible to miss in a scrollback. The diff itself, the base URL and the
-API key never appear in it.
+API key never appear in it. If an attempt produces nothing usable, a further
+notice appears: `REVIEW STALLED` (a client timeout or an expired AIDO deadline —
+**terminal**, and it never claims a retry was authorized), `REVIEW UNUSABLE —
+compact retry authorized` (a completed but unusable response), or `REVIEWER
+UNAVAILABLE FOR THIS REVIEW`.
 
-On success stdout is one `review-packet.v1` artifact: orchestrator-owned
+On success stdout is one `review-packet.v2` artifact: orchestrator-owned
 identity, the target, the **embedded validated verification result**, safe
-reviewer provenance (provider, exact model, endpoint host, `real_call: true`, one
-semantic request, token usage), the strict review, the transmission boundary, and
-capability claims. The approved diff is deliberately **not** re-echoed into it.
+reviewer provenance (provider, exact model, endpoint host, `real_call: true`,
+semantic requests used of a maximum of two, transport retries per request,
+token usage), the **reviewer supervision block** (attempts used, compact-retry
+enabled/used, configured attempt timeout, requested output cap, and per-attempt
+outcome, `finish_reason` and usage), the strict review, the transmission
+boundary, and capability claims. The approved diff is deliberately **not**
+re-echoed into it, and neither is any prompt or raw completion.
 
 > **Capability claims are scoped truthfully.** This command *does* make a model
 > and network call, and its verification stage *does* execute
@@ -2292,7 +2473,9 @@ work, because the Phase 5F2D verification child this command runs first is
 - write, create, delete, rename or move any file in the workspace,
 - run the writer, or apply anything,
 - re-run verification after the review,
-- invoke a fixer, a second reviewer, or a re-review,
+- invoke a fixer, a second reviewer, a fallback reviewer model, or a re-review of
+  a completed verdict,
+- make a third semantic attempt, repair a rejected reply, or merge two replies,
 - generate a patch or a file edit from the findings,
 - repair, restore, `git restore`, stage, commit, push, branch, or open a PR,
 - contact GitHub, or fetch an issue,
@@ -2531,13 +2714,45 @@ only on a `verified` outcome, sends one approved diff plus selected plan prose
 and redacted verification output to one model named by a `controlled_review`
 project opt-in that ships disabled, then prints one human-facing review packet.
 
+**Phase 5F2E-RS1** then bounded **AIDO's reviewer request issuance and wait
+budget**, because a local reviewer model can consume GPU inference time,
+concurrency and context capacity while producing nothing usable. It forces the
+reviewer's transport `max_retries` to `0` — so one semantic attempt is exactly
+one HTTP/model request, and the generic client is unchanged for every other
+caller — caps the semantic requests AIDO may issue at **two**, allows **one**
+compact retry using the same model, and evolves the output to `review-packet.v2`
+with a truthful attempt-accounting block.
+
+**Its FU1 correction** then made a **stall terminal**: a client timeout is not
+evidence that the backend released its inference slot, so retrying could give the
+same local model two concurrent inference jobs. The compact retry is now limited
+to a **completed but unusable** response, the opt-in was renamed
+`compact_retry_on_unusable_output`, and the resource claim was narrowed to what
+the implementation can prove.
+
+**Its FU2 correction** then established the wait bound itself. httpx's timeout is
+a network-operation/inactivity timeout, not an absolute deadline around
+`client.chat()`, so a peer producing frequent activity could hold a request open
+far past the configured value. Each attempt now runs its single client call on
+**one daemon worker thread** while the main thread waits to an **AIDO-owned
+monotonic deadline** — and when that deadline wins, the worker is **abandoned,
+not stopped**.
+
+Together they add **no fallback reviewer, no streaming, no reasoning inspection,
+no third request, no executor/pool/registry, no join, no backend-cancellation
+machinery, and no claim that the abandoned worker, backend inference time, or GPU
+occupancy is bounded**.
+
 **L2 as originally defined is not complete.** The sequence now reads:
 
 ```text
-5F2C  Controlled Single-File Writer      DONE
-5F2D  Controlled Verification            DONE
-5F2E  Controlled Reviewer Integration    DONE
-→ first controlled write → verify → review → human milestone reached
+5F2C           Controlled Single-File Writer        DONE / ACCEPTED
+5F2D           Controlled Verification              DONE / ACCEPTED
+5F2E           Controlled Reviewer Integration      DONE / ACCEPTED
+5F2E-RS1       Reviewer Runtime Supervision         DONE
+5F2E-RS1-FU1   Terminal timeout + wording fixes     DONE
+5F2E-RS1-FU2   AIDO-owned reviewer wait deadline    DONE
+→ bounded write → verify → supervised review → human
 ```
 
 The reviewer's verdict is **advisory and terminal**: a human decides what happens
@@ -2546,7 +2761,9 @@ execution, model-backed implementation, fixer wiring, review/fix loops, GitHub
 writes, GitHub issue fetching inside a real model command, branches, commits,
 pushes, and PRs. Project verification execution remains available only in the
 single, config-authorized, bounded form Phase 5F2D describes, and model-backed
-review only in the single, config-authorized form Phase 5F2E describes.
+review only in the single, config-authorized form Phase 5F2E describes under the
+bounded attempt policy Phase 5F2E-RS1 adds. A future **RS2 — Explicit Reviewer
+Failover** is documented as a candidate and is **not authorized or implemented**.
 Generalized writer expansion — multi-file, `create`, protected-path writes,
 transactions, journals, rollback, crash recovery and concurrency — has **not**
 resumed, and **no generalized writer work was inserted between 5F2D and 5F2E**.

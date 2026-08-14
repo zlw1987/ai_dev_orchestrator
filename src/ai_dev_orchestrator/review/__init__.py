@@ -6,7 +6,7 @@ project's own verification process whether that change holds up; this phase take
 the freshly verified change and asks a project-configured reviewer model what it
 thinks — and then stops, at a human.
 
-Four modules, and the split is the design:
+Five modules, and the split is the design:
 
 - :mod:`~ai_dev_orchestrator.review.models` owns the **model-controlled** shape:
   the strict reviewer output schema and a parser that rejects rather than
@@ -17,16 +17,23 @@ Four modules, and the split is the design:
   source, listings, git history, absolute paths, credentials), the redaction
   applied before transmission, and the untrusted-data delimiters that keep
   project text from reading as instructions.
+- :mod:`~ai_dev_orchestrator.review.supervision` owns the **bounded attempt
+  policy** added by Phase 5F2E-RS1: at most two supervised semantic attempts,
+  exactly one HTTP/model request each (reviewer transport retries are forced to
+  zero), one optional compact retry for three narrow non-actionable outcomes, and
+  the honest accounting of what was and was not observable.
 - :mod:`~ai_dev_orchestrator.review.packet` owns the **human-facing artifact**:
   orchestrator identity, the embedded Phase 5F2D result, safe reviewer
-  provenance, the review, and capability claims scoped truthfully.
+  provenance, the attempt accounting, the review, and capability claims scoped
+  truthfully.
 - :mod:`~ai_dev_orchestrator.review.reviewer` owns the **ordering**: verify with
   the accepted Phase 5F2D verifier first, and only after a ``verified`` outcome
   load the LiteLLM environment and contact the reviewer.
 
 A reviewer verdict is advisory. ``approve``, ``changes_requested`` and
-``needs_human_review`` all end with a human: there is no fixer, no re-review, no
-patch generation from findings, no branch, no commit, no push, and no PR.
+``needs_human_review`` all end with a human: there is no fixer, no re-review of a
+completed verdict, no patch generation from findings, no branch, no commit, no
+push, and no PR.
 
 Importing this package contacts nothing, reads no environment variable, builds no
 client, and touches no workspace.
@@ -46,6 +53,7 @@ from ai_dev_orchestrator.review.models import (
     ReviewParseError,
     ReviewRefusedError,
     ReviewValidationError,
+    ReviewerAttemptExhaustedError,
     ReviewerEnvironmentError,
     ReviewerStageError,
     ReviewerTransportError,
@@ -56,6 +64,8 @@ from ai_dev_orchestrator.review.packet import (
     REVIEW_HUMAN_DECISION,
     REVIEW_PACKET_MODE,
     REVIEW_PACKET_SCHEMA_VERSION,
+    REVIEW_PACKET_SCHEMA_VERSION_V1,
+    REVIEW_PACKET_SCHEMA_VERSION_V1_SEMANTICS,
     VERIFICATION_CHILD_PROCESS_NOTE,
     ReviewCapabilityBoundaries,
     ReviewPacket,
@@ -65,11 +75,14 @@ from ai_dev_orchestrator.review.packet import (
     build_review_packet,
 )
 from ai_dev_orchestrator.review.request import (
+    COMPACT_RETRY_MAX_FINDINGS,
+    COMPACT_RETRY_OMITTED_CONTEXT,
     REDACTION_NOTE,
     UNTRUSTED_BEGIN,
     UNTRUSTED_END,
     UNTRUSTED_NEUTRALIZED,
     ReviewContext,
+    build_compact_model_review_request,
     build_model_review_request,
     build_review_context,
 )
@@ -83,9 +96,40 @@ from ai_dev_orchestrator.review.reviewer import (
     request_model_review,
     run_controlled_review,
 )
+from ai_dev_orchestrator.review.supervision import (
+    ABANDONED_WORKER_LIFETIME_IF_DEADLINE_EXPIRES,
+    ATTEMPT_OUTCOME_LABELS,
+    ATTEMPT_WAIT_BOUND,
+    BACKEND_INFERENCE_LIFETIME_IF_STALLED,
+    MAX_SEMANTIC_REVIEW_ATTEMPTS,
+    OUTPUT_BUDGET_FINISH_REASONS,
+    RETRY_ELIGIBLE_OUTCOMES,
+    REVIEWER_ATTEMPT_THREAD_NAME,
+    REVIEWER_TRANSPORT_MAX_RETRIES,
+    SUPERVISION_COMPACT_RETRY_NOTE,
+    SUPERVISION_OBSERVABILITY_NOTE,
+    SUPERVISION_OUTPUT_CAP_NOTE,
+    SUPERVISION_RETRY_OWNERSHIP_NOTE,
+    SUPERVISION_SCOPE_NOTE,
+    SUPERVISION_TIMEOUT_NOTE,
+    SUPERVISION_WAIT_BOUND_NOTE,
+    TRANSPORT_REQUESTS_PER_ATTEMPT,
+    ReviewAttemptRecord,
+    ReviewSupervisionBlock,
+    ReviewSupervisionEvent,
+    SupervisedReviewOutcome,
+    run_one_review_attempt,
+    run_supervised_review,
+)
 
 __all__ = [
+    "ABANDONED_WORKER_LIFETIME_IF_DEADLINE_EXPIRES",
+    "ATTEMPT_OUTCOME_LABELS",
+    "ATTEMPT_WAIT_BOUND",
+    "BACKEND_INFERENCE_LIFETIME_IF_STALLED",
     "BLOCKING_SEVERITIES",
+    "COMPACT_RETRY_MAX_FINDINGS",
+    "COMPACT_RETRY_OMITTED_CONTEXT",
     "ControlledReviewOutcome",
     "MAX_REVIEW_FINDINGS",
     "MAX_REVIEW_MESSAGE_CHARS",
@@ -93,13 +137,21 @@ __all__ = [
     "MAX_REVIEW_NOTE_CHARS",
     "MAX_REVIEW_SUGGESTED_ACTION_CHARS",
     "MAX_REVIEW_SUMMARY_CHARS",
+    "MAX_SEMANTIC_REVIEW_ATTEMPTS",
     "ModelReviewResult",
+    "OUTPUT_BUDGET_FINISH_REASONS",
     "REDACTION_NOTE",
+    "RETRY_ELIGIBLE_OUTCOMES",
+    "REVIEWER_ATTEMPT_THREAD_NAME",
     "REVIEWER_ENV_NAMES",
     "REVIEWER_REQUEST_POLICY",
+    "REVIEWER_TRANSPORT_MAX_RETRIES",
     "REVIEW_HUMAN_DECISION",
     "REVIEW_PACKET_MODE",
     "REVIEW_PACKET_SCHEMA_VERSION",
+    "REVIEW_PACKET_SCHEMA_VERSION_V1",
+    "REVIEW_PACKET_SCHEMA_VERSION_V1_SEMANTICS",
+    "ReviewAttemptRecord",
     "ReviewCapabilityBoundaries",
     "ReviewContext",
     "ReviewError",
@@ -107,19 +159,32 @@ __all__ = [
     "ReviewPacket",
     "ReviewParseError",
     "ReviewRefusedError",
+    "ReviewSupervisionBlock",
+    "ReviewSupervisionEvent",
     "ReviewTargetBlock",
     "ReviewTransmissionBoundary",
     "ReviewValidationError",
+    "ReviewerAttemptExhaustedError",
     "ReviewerCallNotice",
     "ReviewerEnvironmentError",
     "ReviewerProvenanceBlock",
     "ReviewerStageError",
     "ReviewerTransportError",
+    "SUPERVISION_COMPACT_RETRY_NOTE",
+    "SUPERVISION_OBSERVABILITY_NOTE",
+    "SUPERVISION_OUTPUT_CAP_NOTE",
+    "SUPERVISION_RETRY_OWNERSHIP_NOTE",
+    "SUPERVISION_SCOPE_NOTE",
+    "SUPERVISION_TIMEOUT_NOTE",
+    "SUPERVISION_WAIT_BOUND_NOTE",
     "SUPPORTED_REVIEW_PROVIDER",
+    "SupervisedReviewOutcome",
+    "TRANSPORT_REQUESTS_PER_ATTEMPT",
     "UNTRUSTED_BEGIN",
     "UNTRUSTED_END",
     "UNTRUSTED_NEUTRALIZED",
     "VERIFICATION_CHILD_PROCESS_NOTE",
+    "build_compact_model_review_request",
     "build_model_review_request",
     "build_review_context",
     "build_review_packet",
@@ -128,4 +193,6 @@ __all__ = [
     "parse_model_review_response",
     "request_model_review",
     "run_controlled_review",
+    "run_one_review_attempt",
+    "run_supervised_review",
 ]

@@ -3990,7 +3990,92 @@ _REVIEWER_FAILURE_CATEGORIES: dict[str, str] = {
         "wrong-typed fields, supplied an orchestrator-controlled field, exceeded "
         "a bound, or carried a verdict its findings contradict"
     ),
+    "ReviewerAttemptExhaustedError": (
+        "reviewer unavailable — the bounded supervised attempt budget produced "
+        "no valid review"
+    ),
 }
+
+
+def _echo_supervision_event(event) -> None:
+    """Print one Phase 5F2E-RS1 circuit-breaker signal to stderr.
+
+    Three kinds, and the wording distinguishes them because they are genuinely
+    different failures:
+
+    - ``stalled`` — AIDO stopped waiting, because the client reported a timeout
+      or because AIDO's own attempt deadline expired first, and that is
+      **terminal**. Announced as ``REVIEW STALLED``, and it must never say a
+      compact retry was authorized: AIDO's wait ending is not the request ending,
+      and it cannot observe whether the backend released its inference slot, so
+      issuing a second request could put two concurrent inference jobs on the
+      same model. An ``unavailable`` block always follows, and attempts used
+      stays at what was actually issued;
+    - ``unusable`` — a response **came back** and was rejected by the strict
+      parser, or the provider said the output budget ran out. Announced as
+      ``REVIEW UNUSABLE``, because calling a parse error a stall would
+      misdescribe it. This is the only notice that precedes a compact retry;
+    - ``unavailable`` — the terminal notice, printed once no further request is
+      authorized.
+
+    The event object carries only a model name, attempt counters and a
+    classification token, so this function **cannot** print the prompt, the diff,
+    the completion, an API key, a base URL, or an absolute path — there is no
+    field holding one.
+    """
+    if event.kind == "unavailable":
+        lines = (
+            "=== REVIEWER UNAVAILABLE FOR THIS REVIEW ===",
+            f"Model:            {event.model}",
+            f"Attempts used:    {event.attempts_used} of at most "
+            f"{event.max_attempts} semantic requests AIDO may issue "
+            "(one HTTP/model request each)",
+            f"Final category:   {event.outcome} — {event.outcome_label}",
+            "No fallback reviewer model was contacted, no further semantic "
+            "request was made, and no transport retry was performed.",
+            "A HUMAN DECISION IS REQUIRED. Nothing was fixed, patched, "
+            "reverted, committed, or pushed by AIDO's review stage.",
+            "=" * 74,
+        )
+    elif event.kind == "stalled":
+        lines = (
+            "=== REVIEW STALLED ===",
+            f"Model:            {event.model}",
+            f"Attempt:          {event.attempt} (semantic requests issued: "
+            f"{event.attempts_used})",
+            f"Classification:   {event.outcome} — {event.outcome_label}",
+            "AIDO stopped waiting for this request when its own attempt deadline "
+            "elapsed, or when the client reported a timeout.",
+            "AIDO's WAIT ended. That is NOT the same as the request ending: the "
+            "worker performing the call is ABANDONED, not stopped, and its HTTP "
+            "request may still be active.",
+            "Backend cancellation / inference termination is NOT observed: the "
+            "model may still be generating on the server, holding its inference "
+            "slot and context.",
+            "NO compact retry is being issued. A second request could place a "
+            "SECOND concurrent inference job on the same model, increasing the "
+            "GPU, concurrency and context pressure this bound exists to contain.",
+            "The reviewer is UNAVAILABLE for this review and a HUMAN DECISION "
+            "IS REQUIRED.",
+            "=" * 74,
+        )
+    else:
+        lines = (
+            "=== REVIEW UNUSABLE — compact retry authorized ===",
+            f"Model:            {event.model}",
+            f"Attempt:          {event.attempt} of {event.max_attempts}",
+            f"Classification:   {event.outcome} — {event.outcome_label}",
+            "A response WAS returned and was unusable, so the first request is "
+            "no longer in flight and one smaller request is safe to issue.",
+            "AIDO will now make EXACTLY ONE compact retry, with a reduced "
+            "context and the SAME configured reviewer model.",
+            "No fallback reviewer is being selected, no third request exists, "
+            "and the first reply is discarded rather than repaired or merged.",
+            "=" * 74,
+        )
+
+    for line in lines:
+        typer.echo(line, err=True)
 
 
 def _echo_reviewer_banner(notice) -> None:
@@ -4031,8 +4116,14 @@ def _echo_reviewer_banner(notice) -> None:
         "Redaction was applied to project-controlled text before transmission. "
         "It is a best-effort backstop, NOT a guarantee that the material is "
         "secret-free.",
-        "The reviewer's verdict is advisory: no fixer, re-review, patch, file "
-        "edit, branch, commit, push, or PR follows it.",
+        "AIDO will issue at most TWO semantic requests to this same model, "
+        "exactly one HTTP/model request each, each waited on to AIDO's own "
+        "monotonic deadline. A stalled request is terminal and gets no retry. "
+        "No fallback reviewer model exists. This bounds AIDO's request issuance "
+        "and wait — NOT the request's own lifetime, and NOT backend inference "
+        "time.",
+        "The reviewer's verdict is advisory: no fixer, re-review of a completed "
+        "verdict, patch, file edit, branch, commit, push, or PR follows it.",
         "=" * 74,
     ):
         typer.echo(line, err=True)
@@ -4224,6 +4315,7 @@ def _run_l2_review_approved_file_edit(
             read_env=read_env,
             client_factory=client_factory,
             on_before_model_call=_echo_reviewer_banner,
+            on_supervision_event=_echo_supervision_event,
         )
     except VerificationRefusedError as exc:
         typer.echo(f"Error: refused-before-execution: {exc}", err=True)
@@ -4258,10 +4350,20 @@ def _run_l2_review_approved_file_edit(
         for line in (
             "The raw model response is not echoed, and no API key, base URL, "
             "prompt, or approved diff appears in this message.",
-            "AIDO's review stage: repaired nothing, restored nothing, retried "
-            "nothing, re-prompted nothing, wrote no file into the target "
-            "workspace, performed no Git mutation, and created no branch, "
-            "commit, push or PR.",
+            # "Retried nothing" would no longer be true when the project enabled
+            # the Phase 5F2E-RS1 compact retry, so the claim is stated as the
+            # bound that actually holds: at most two semantic attempts, each one
+            # HTTP/model request, with no repair of a rejected reply. The exact
+            # number used for this run is in the REVIEWER UNAVAILABLE block above.
+            "AIDO's review stage: repaired nothing, restored nothing, wrote no "
+            "file into the target workspace, performed no Git mutation, and "
+            "created no branch, commit, push or PR.",
+            "AIDO issued at most two semantic requests to the same configured "
+            "model, exactly one HTTP/model request each (reviewer transport "
+            "retries are forced to zero), with no request after a timeout, no "
+            "third request, no fallback reviewer model, and no parser repair or "
+            "merging of a rejected reply. That bounds AIDO's request issuance "
+            "and wait, not backend inference time.",
             "The workspace state that IS established comes from the "
             "verification that had already passed: the approved target's exact "
             "bytes, a HEAD object id equal to the one the run started from, and "
@@ -4324,9 +4426,15 @@ def _run_l2_review_approved_file_edit(
     typer.echo(f"Model:         {packet.reviewer.model}", err=True)
     typer.echo(f"Verdict:       {packet.review.verdict}", err=True)
     typer.echo(
+        f"Requests:      {packet.reviewer.semantic_requests} of at most "
+        f"{packet.reviewer.max_semantic_requests} semantic requests AIDO may "
+        "issue (one HTTP/model request each)",
+        err=True,
+    )
+    typer.echo(
         "The verdict is advisory and ends here: a human decides what happens "
-        "next. No fixer, re-review, patch, file edit, branch, commit, push, or "
-        "PR followed it.",
+        "next. No fixer, re-review of this verdict, patch, file edit, branch, "
+        "commit, push, or PR followed it.",
         err=True,
     )
     typer.echo(packet.model_dump_json(indent=2))
@@ -4411,9 +4519,31 @@ def l2_review_approved_file_edit(
     instructed to inspect, never to obey.
 
     The reviewer's reply must be exactly one strict JSON object matching the
-    review schema. It is **rejected rather than repaired**: no second prompt, no
-    re-review, no parser repair. The existing LLM client keeps its own bounded
-    transport-level retries; one *semantic* reviewer request is made.
+    review schema. It is **rejected rather than repaired**: no parser repair, no
+    "fix your JSON" round trip, and no merging of two replies.
+
+    Reviewer request issuance is **supervised and bounded** (Phase 5F2E-RS1). The
+    reviewer client is built with ``max_retries=0`` — overriding
+    ``AIDO_LITELLM_MAX_RETRIES`` for this command only — so one semantic attempt
+    is exactly one HTTP/model request. AIDO issues at most **two** semantic
+    requests: the second exists only when the project set
+    ``controlled_review.compact_retry_on_unusable_output`` **and** the first
+    response was *completed but unusable* — it exhausted its output budget or was
+    rejected by the strict parser. A **timeout is terminal**: AIDO stops waiting
+    but cannot observe whether the backend released its inference slot, so it
+    never issues a second request that could run concurrently with the first. The
+    retry uses the **same** configured model with a reduced context; there is no
+    third request and no fallback reviewer.
+
+    ``controlled_review.attempt_timeout_seconds`` bounds AIDO's *wait* on each
+    request, established by AIDO's **own** monotonic deadline in the supervisor
+    rather than by httpx timeout semantics (a network-inactivity timeout a busy
+    peer can outlive). When that deadline wins, the worker performing the call is
+    **abandoned, not stopped** — AIDO never claims the request was cancelled or
+    that a backend stopped inference. ``controlled_review.max_output_tokens`` is a
+    *requested* output cap, not a guarantee. This bounds AIDO's request issuance
+    and wait budget only; the abandoned worker's lifetime, backend inference
+    lifetime and GPU occupancy after a stall are **not** bounded here.
 
     Exit codes are distinct on purpose. **1** refused before any process started.
     **2** verification ran and did not pass — no model was contacted. **3**

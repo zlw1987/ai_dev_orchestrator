@@ -44,13 +44,41 @@
 >   (§30). One command, `l2-review-approved-file-edit`, runs the accepted 5F2D
 >   verification itself and — only on a `verified` outcome — sends one approved
 >   unified diff, selected approved-plan prose, and the redacted verification
->   output to one project-configured reviewer model, then prints one
->   `review-packet.v1`. **It is the first runtime capability here that
->   deliberately sends source-derived code to a model**, so statements elsewhere
->   in this document that "no model receives source", that "no reviewer exists",
->   or that §9's model-usage policy is entirely unimplemented are **stale** and
->   preserved only as history. The verdict is **advisory** and ends at a human.
-> - **The first controlled write → verify → review → human path now exists.**
+>   output to one project-configured reviewer model, then prints one review
+>   packet. **It is the first runtime capability here that deliberately sends
+>   source-derived code to a model**, so statements elsewhere in this document
+>   that "no model receives source", that "no reviewer exists", or that §9's
+>   model-usage policy is entirely unimplemented are **stale** and preserved only
+>   as history. The verdict is **advisory** and ends at a human.
+> - **Phase 5F2E-RS1 is DONE** (§31), **as corrected by 5F2E-RS1-FU1** (§31.16).
+>   The controlled reviewer forces its transport `max_retries` to **0**, so one
+>   semantic attempt is exactly one HTTP/model request, and the supervisor — not
+>   the transport — owns a hard maximum of **two** semantic requests AIDO may
+>   issue. The output artifact is now **`review-packet.v2`**, so statements in
+>   §30 that "exactly one semantic reviewer request" is made and that the packet
+>   is `review-packet.v1` are **superseded** and preserved only as history.
+>   **This is observable resource supervision, not agent-progress supervision**:
+>   no streaming, no reasoning inspection, no tool/file/test counters, and no
+>   claim that a backend stopped inference.
+> - **FU2 (§31.17) established the wait bound itself.** httpx's timeout is a
+>   network-operation/inactivity timeout, not an absolute deadline around
+>   `client.chat()`, so a busy peer could outlive it. AIDO now runs each attempt's
+>   single client call on **one daemon worker** and waits to its **own monotonic
+>   deadline**; when that deadline wins the worker is **abandoned, not stopped**.
+>   `attempt_timeout_seconds` is now a real AIDO wait bound. No executor, pool,
+>   join, process, asyncio, cancellation request, or thread-kill was added.
+> - **FU1 (§31.16) made a stall TERMINAL.** RS1's draft retried after a client
+>   timeout, which contradicted its own correct statement that a timeout proves
+>   nothing about the backend — the model may still be generating, so a second
+>   request could give it two concurrent inference jobs. The compact retry is now
+>   limited to a **completed but unusable** response, the opt-in is
+>   `compact_retry_on_unusable_output` (the draft `compact_retry_on_stall` is
+>   **rejected**, not aliased), and the scope claim is exact: **RS1 bounds AIDO's
+>   request issuance and wait budget, NOT backend inference lifetime or GPU
+>   occupancy.** Any text anywhere claiming "the reviewer runtime/resource
+>   envelope is bounded" is stale.
+> - **The first controlled write → verify → supervised review → human path now
+>   exists.**
 > - **L2 as originally defined is still NOT complete.** There is no model-backed
 >   implementer, no automatic fixer, no local branch creation, no local commit, no
 >   push, no PR, and no generalized writer.
@@ -64,11 +92,16 @@
 >   deliberately not renumbered here.
 >
 > ```text
-> 5F2C  Controlled Single-File Writer      DONE
-> 5F2D  Controlled Verification            DONE
-> 5F2E  Controlled Reviewer Integration    DONE
-> → first controlled write → verify → review → human milestone reached
+> 5F2C           Controlled Single-File Writer        DONE / ACCEPTED
+> 5F2D           Controlled Verification              DONE / ACCEPTED
+> 5F2E           Controlled Reviewer Integration      DONE / ACCEPTED
+> 5F2E-RS1       Reviewer Runtime Supervision         DONE
+> 5F2E-RS1-FU1   Terminal timeout + wording fixes     DONE
+> 5F2E-RS1-FU2   AIDO-owned reviewer wait deadline    DONE
+> → bounded write → verify → supervised review → human
 > ```
+>
+> **L2 is still not complete. Phase 7 (fixer) remains unauthorized.**
 >
 > ---
 >
@@ -6000,7 +6033,19 @@ reviewer request** is issued; the existing `LLMClient` keeps its already-shipped
 bounded *transport*-level retries, which are a transport property and not a
 re-review. No application-level re-review logic was added.
 
+> **Superseded by §31 (Phase 5F2E-RS1).** The parser is still strict and still
+> never repairs, but the request policy changed: the reviewer client now forces
+> transport `max_retries=0`, and a project may authorize **one** bounded compact
+> second semantic attempt. The maximum is two semantic attempts, one HTTP/model
+> request each. The paragraph above is preserved as history.
+
 ### 30.10 The review packet
+
+> **Superseded by §31.12.** The artifact is now `review-packet.v2`: it preserves
+> every block below, adds a `reviewer_supervision` block, and replaces the
+> hard-coded `orchestrator_review_retry_or_reprompt_attempted` field with
+> truthful ones. `review-packet.v1` keeps its original meaning for archived
+> packets. The description below is preserved as history.
 
 On success the command prints one `review-packet.v1` artifact in
 `controlled-review` mode, carrying orchestrator-owned identity plus:
@@ -6175,3 +6220,939 @@ separately unauthorized**.
   added.**
 - [x] The old Phase 6 "qwen reviewer" roadmap entry is explicitly reconciled
   (§30.13); Phase 7 / fixer remains unauthorized.
+
+## 31. Phase 5F2E-RS1 — bounded reviewer runtime supervision (DONE)
+
+> **Status: DONE, as corrected by §31.16 (FU1) and §31.17 (FU2).** This section
+> describes what shipped, and it **supersedes two specific claims in §30**: that
+> "exactly one semantic reviewer request" is made, and that the output artifact
+> is `review-packet.v1`. Everything else in §30 — the verify-then-review
+> ordering, the credential ordering, the transmission boundary, the strict
+> never-repaired parser, the advisory verdict, and the exit codes — is unchanged.
+>
+> **Read §31.16 and §31.17 with this section.** RS1's first draft made a
+> timed-out attempt retry-eligible, which contradicted its own (correct)
+> statement that a client timeout proves nothing about the backend. **FU1**
+> corrected that: a stall is terminal, the retry is limited to a *completed but
+> unusable* response, the opt-in is `compact_retry_on_unusable_output`, and the
+> resource claim was narrowed. **FU2** then established the wait bound the phase
+> had only been asserting: httpx's timeout is a network-operation/inactivity
+> timeout, not an absolute deadline around `client.chat()`, so AIDO now owns a
+> monotonic deadline of its own. The text below already reflects both
+> corrections.
+
+### 31.1 The production motivation
+
+The requirement came from a real multi-AI workflow failure mode observed with
+**local** reviewer models: a reviewer can consume substantial resources and still
+produce nothing a human can act on.
+
+For a local model, cost is not an API line item. It is:
+
+- inference wall time;
+- GPU occupancy;
+- concurrent-request capacity;
+- context occupancy.
+
+Phase 5F2E issued one reviewer request and waited. That is adequate against a
+hosted endpoint that either answers or errors promptly. Against a local model it
+is not: a stalled generation held a slot indefinitely, and — worse — the generic
+client's *hidden* transport retries could turn that one stalled semantic review
+into three full inference requests that nobody asked for and nothing recorded.
+
+RS1 makes **AIDO's reviewer request issuance and wait budget** bounded, owned,
+and auditable. It does *not* bound the backend's own inference — see §31.5 and
+§31.16.
+
+### 31.2 What RS1 can observe, and what it deliberately cannot
+
+The reviewer here is **not an agent**, and the existing `LLMClient` is **not
+streaming**. There are no tool calls, no reviewer file reads, no reviewer test
+runs, and no partial-generation events. So RS1 classifies attempts using only
+facts this architecture actually produces:
+
+| Observable | Used for |
+| --- | --- |
+| the request returned a response | success path |
+| the request raised `LLMTimeoutError` | `review_stalled` |
+| the request raised another typed `LLMClientError` | auth / response / transport classification |
+| `finish_reason` | `review_output_budget_exhausted` |
+| `usage`, when supplied | attempt accounting (unknown when absent) |
+| content empty / non-empty | feeds the strict parser |
+| strict parser accepted or rejected the reply | `valid_review` / `review_unusable_output` |
+
+And the explicit non-list. RS1 does **not** compute embedding or reasoning
+similarity, inspect chain-of-thought, ask the model to expose its reasoning, poll
+tokens, open an SSE or streaming connection, count tool calls, count files the
+reviewer inspected, count tests the reviewer ran, measure time-to-first-token or
+time-to-first-finding, or add a generic event bus. **None of those are honestly
+observable here**, and a report containing them would be fabrication.
+
+The distinction, stated once:
+
+```text
+observable resource supervision        <-- what RS1 is
+private reasoning / agent progress     <-- what RS1 is NOT
+supervision
+```
+
+RS1 is resource-budget supervision for a **one-shot** reviewer. It is not an
+agent-loop supervisor, and it must not grow into one here.
+
+### 31.3 Retry ownership (load-bearing)
+
+The generic `LLMClient` has bounded transport retries. With `max_retries = N`,
+one `client.chat(...)` may produce **N + 1** HTTP/model requests on timeout,
+transport error, HTTP 429, or HTTP 5xx. That is correct for the generic Phase 3
+client and **wrong as hidden retry ownership for a supervised local reviewer**.
+
+So, for the controlled reviewer only:
+
+```python
+LLMClientConfig(..., max_retries=REVIEWER_TRANSPORT_MAX_RETRIES)   # == 0
+```
+
+`build_reviewer_client_config` **overrides** the environment-derived value. The
+consequences are exact:
+
+- **one semantic reviewer attempt == one HTTP/model request**;
+- the supervisor, not the transport, owns any second attempt;
+- an authentication failure, a non-retryable 4xx, a 429, a 5xx, or a connection
+  refusal costs **one** request and surfaces immediately.
+
+**Nothing global changed.** The generic client keeps its shipped retry loop and
+its `max_retries` default of 2; `AIDO_LITELLM_MAX_RETRIES` keeps its meaning for
+every other caller; and the planner and smoke-test paths are untouched. A
+regression test proves the counterfactual directly: the same environment that
+gives the reviewer *one* request per attempt still gives a generic client
+*three*.
+
+The same builder also replaces the connection timeout with
+`controlled_review.attempt_timeout_seconds`, so the reviewer's bound is the
+project's declared reviewer budget rather than whatever generic value the
+environment carried.
+
+### 31.4 The project config extension
+
+```yaml
+controlled_review:
+  enabled: false
+  provider: "litellm"
+  model: "qwen3-coder-next"
+  attempt_timeout_seconds: 90            # finite, > 0, <= 3600
+  max_output_tokens: 2048                # positive, bounded (<= 32000)
+  compact_retry_on_unusable_output: false  # default OFF
+```
+
+- `extra="forbid"` still applies, and there is **no** `fallback_model`, no
+  `reviewer_chain`, no `reviewers`, no `secondary_model`, no attempt-count field,
+  no backoff setting, no retry prompt, and **no retry-on-timeout field**;
+- every field has a safe default, so **existing Phase 5F2E project configs load
+  unchanged**;
+- the field is named for what it actually covers. RS1's draft called it
+  `compact_retry_on_stall`, which became actively misleading once a stall was
+  made terminal (§31.16). It is **not** retained as an alias: `extra="forbid"`
+  rejects it, so a stale draft config fails loudly rather than silently keeping
+  the wrong semantics;
+- `compact_retry_on_unusable_output` defaults to **false**. That is the
+  fail-closed choice this repository's discipline calls for: a second model call
+  is a small capability addition, and a project that never opted into it keeps
+  exactly the accepted 5F2E behavior of one semantic request. The shipped example
+  config sets it explicitly rather than relying on the default;
+- the maximum number of semantic attempts is a **constant**, not configuration:
+  `MAX_SEMANTIC_REVIEW_ATTEMPTS = 2`;
+- there is **no CLI override** for any of these. The command's option surface is
+  still exactly the accepted five options.
+
+### 31.5 Timeout truthfulness
+
+**Two mechanisms share one configured number, and only one of them is the
+proof** (see §31.17):
+
+```text
+httpx timeout           = network-operation / inactivity timeout. It fires when
+                          an individual socket operation stalls. A peer that
+                          keeps producing activity often enough can hold one
+                          request open far past the configured value without any
+                          single read ever reaching its timeout.
+
+RS1 supervisor deadline = an AIDO-owned monotonic wall-clock deadline around ONE
+                          `client.chat(request)` call. It fires on total elapsed
+                          wait, whatever the network was doing.  <-- THE PROOF
+```
+
+`attempt_timeout_seconds` therefore means: **the maximum time AIDO waits for the
+reviewer HTTP/model call to complete**, subject only to small local scheduling
+overhead. The reviewer's client still receives the same value as a *secondary*
+network-inactivity timeout, which is useful — and is explicitly not what
+establishes the bound.
+
+AIDO may truthfully say:
+
+- the reviewer request used the configured value as its wait deadline;
+- if the client reported `LLMTimeoutError`, **or** if AIDO's own deadline expired
+  first, the attempt is classified `review_stalled` (distinguished only by
+  `stall_source`, for auditing — nothing branches on it);
+- **AIDO stopped waiting.**
+
+AIDO must **not** say:
+
+- that the HTTP request ended when AIDO stopped waiting;
+- that the worker performing the call was stopped, terminated, or cancelled — it
+  is **abandoned** (§31.17);
+- that a remote or internal backend stopped inference at the same moment;
+- that this is a process-style hard wall-clock kill of the Phase 5F2D kind;
+- that the abandoned worker's lifetime, backend inference lifetime, GPU
+  occupancy, backend context lifetime or server-side cancellation latency is
+  bounded by this phase. **Total GPU time is not bounded here.**
+
+Backend cancellation semantics are **outside this phase's observation boundary**,
+and the packet says so in `reviewer_supervision.timeout_semantics_note`,
+`reviewer_supervision.wait_bound_note` and
+`reviewer_supervision.supervision_scope_note`. No multiprocessing, no streaming,
+no cancellation request, and no thread-kill mechanism was added to manufacture a
+stronger-sounding claim; the single daemon worker of §31.17 exists only so the
+main thread can stop waiting.
+
+**That asymmetry is why a stall is terminal.** Retrying after a stall would mean
+issuing a second request while the first may still be generating on the same
+local model — see §31.16. RS1 therefore bounds AIDO's *request issuance* and
+AIDO's *wait*, and says so exactly:
+
+```text
+RS1 PROVES                              RS1 DOES NOT PROVE
+transport retries issued by AIDO = 0    abandoned worker lifetime
+<= 2 semantic requests issued by AIDO   HTTP request lifetime after AIDO stops
+an AIDO-owned monotonic deadline on       waiting
+  each attempt's wait                   backend inference lifetime after a stall
+requested max output tokens             GPU occupancy after client disconnect
+completed-response retry policy         backend context lifetime
+                                        server-side cancellation latency
+```
+
+### 31.6 The output-token budget
+
+Each reviewer request sets the **existing** `LLMRequest.max_tokens` field, which
+the existing client already serializes into the OpenAI-compatible payload. No
+second transport abstraction was added, and `LLMRequest` was not changed.
+
+The packet reports this as a **requested** cap. Provider semantics differ, and it
+says nothing about hidden reasoning or backend accounting. Reported `usage` is
+whatever the provider actually returned; when a provider returned none, usage is
+recorded as `usage_reported: false` / `usage: null` — **unknown, never an
+invented zero**.
+
+### 31.7 Attempt 1
+
+Attempt 1 is the accepted Phase 5F2E full request, unchanged: the same
+source-transmission boundary, the same untrusted-data delimiters, the approved
+diff, the selected plan context, the verification facts and output, the same
+strict review JSON schema, `temperature = 0`, and the exact configured model. The
+only addition is the configured `max_tokens`.
+
+It is exactly one `client.chat()` and — because reviewer `max_retries == 0` —
+exactly one HTTP/model request.
+
+### 31.8 The two retry-eligible conditions, and only those
+
+One compact second semantic request is issued **only** when
+`compact_retry_on_unusable_output == true` **and** attempt 1 returned a
+**completed but unusable** response, for one of exactly these reasons:
+
+| Condition | Classification |
+| --- | --- |
+| `finish_reason` indicates output-length exhaustion (`length`, `max_tokens`, `max_output_tokens`) and no valid review resulted | `review_output_budget_exhausted` |
+| a response was returned and strict parsing/validation did not produce a valid `ModelReviewResult` | `review_unusable_output` |
+
+What the two share is the whole justification: **the first HTTP/model response
+was actually returned to AIDO**, so the first request is no longer an unknown
+in-flight operation occupying the backend.
+
+The second case is **not parser repair**. Attempt 1's reply is discarded whole as
+an invalid review, and a separate, explicitly bounded review request is issued.
+Attempt 1's JSON is never modified, never partially mined for findings, never
+quoted into the second prompt, and never merged with attempt 2.
+
+**No compact retry** for: a timeout (`review_stalled` — terminal, §31.16),
+`ReviewerEnvironmentError`, authentication failure, non-retryable HTTP 4xx,
+generic connection refusal, HTTP 429, HTTP 5xx, any other service-availability or
+transport failure, the retry finding cap — or an already valid structured review,
+including `changes_requested` and `needs_human_review`.
+
+### 31.9 The compact retry request
+
+`build_compact_model_review_request` is pure and deterministic, exactly like the
+full builder, and it uses the **same** configured reviewer model. There is no
+model switch anywhere in the code path.
+
+It carries a **strict subset** of what the full request already carried:
+
+| Kept | Dropped |
+| --- | --- |
+| authoritative identity | plan summary |
+| plan scope summary | plan proposed steps |
+| plan non-goals | plan risks |
+| the one approved unified diff | plan open questions |
+| verification facts | |
+| bounded, redacted verification output | |
+| the same detection-limit language | |
+
+**No new source is added**, so the compact attempt cannot widen the accepted
+transmission boundary. It still never sends the full target file, unrelated
+files, a workspace path, an absolute path, a credential, the raw environment, the
+raw artifact, or the approval text, and every free-form value is still inside the
+accepted untrusted-data delimiters.
+
+The output schema is **identical** — the strict `ModelReviewResult` is not
+changed for the retry. The instruction changes only the review posture, in
+substance:
+
+> Review only the supplied changed diff, scope/non-goals, and verification
+> evidence. Return at most 5 concrete findings. Do not perform generic checklist
+> enumeration. Do not repeat observations merely to fill space. If the supplied
+> context is insufficient, use `needs_human_review`. Return the same strict JSON
+> review object and nothing else.
+
+The retry-specific cap of **5 findings** is enforced **after** strict parsing: a
+retry result carrying more is `review_retry_finding_cap_exceeded` and unusable.
+It is rejected, never truncated. The 20-finding bound still applies to a full
+first attempt.
+
+There is still no third attempt.
+
+### 31.10 The human circuit-breaker signals
+
+Three concise stderr notices, and the wording distinguishes them because they are
+genuinely different failures. None of them prints the prompt, the diff, a
+completion, an API key, a base URL, or an absolute path — the event object has no
+field capable of carrying one.
+
+```text
+=== REVIEW STALLED ===                      <-- TERMINAL. No retry follows.
+  model, the attempt number, the review_stalled classification,
+  that AIDO stopped waiting for the request,
+  that backend cancellation / inference termination is NOT observed,
+  that NO compact retry is being issued and why,
+  that the reviewer is unavailable and a human decision is required
+
+=== REVIEW UNUSABLE — compact retry authorized ===
+  ONLY for a completed but unusable response: model, attempt 1 of 2,
+  the classification, exactly one compact retry, same model,
+  no fallback reviewer selected
+  (a parse error is NEVER called "stalled", and a stall is never
+   announced as a retry)
+
+=== REVIEWER UNAVAILABLE FOR THIS REVIEW ===
+  exact configured model, attempts used of at most 2, final failure
+  category, no fallback reviewer contacted, human decision required
+```
+
+A timed-out run prints `REVIEW STALLED` followed by `REVIEWER UNAVAILABLE`, and
+its **attempts used is 1** — the output must never look as though two requests
+were issued.
+
+### 31.11 Second-attempt failure, and success
+
+If no attempt produces a valid review — attempt 1 timed out, attempt 1 failed for
+a non-retryable reason, or the one compact retry also failed: no further semantic
+request, no transport retry, no fallback model, no fixer, no workspace mutation,
+no re-verification, and no repair or restore. The command returns the **existing**
+reviewer-stage failure family and **exit 4** — deliberately preserved rather than
+given a new exit code merely for wording. The raw response text is never exposed.
+
+A valid second-attempt result is a **successful review**: exit 0, and all three
+verdicts keep their meanings and stay advisory. No fixer follows.
+
+### 31.12 `review-packet.v2`
+
+Adding attempt metadata is a material schema change, so the packet was
+**evolved**, not silently redefined:
+
+```text
+review-packet.v1  Phase 5F2E     one semantic request, generic transport
+                                 retries in effect and unreported
+review-packet.v2  Phase 5F2E-RS1 reviewer transport retries forced to 0,
+                                 at most two supervised semantic attempts,
+                                 full attempt accounting
+```
+
+`v1`'s meaning is preserved as history in the packet itself
+(`superseded_schema_version_note`) so an archived packet stays legible and is not
+reinterpreted under `v2` rules.
+
+`v2` preserves every accepted `v1` block — orchestrator-owned identity, target,
+the embedded `VerificationResultReport`, reviewer provenance, the validated
+review, the transmission boundary, truthful capability boundaries,
+`human_decision_required`, `next_step` — and adds one narrow block:
+
+```text
+reviewer_supervision:
+  supervision_enabled: true
+  supervision_scope: "orchestrator_request_issuance_and_wait_budget"
+  max_semantic_attempts: 2
+  semantic_attempts_used: 1 | 2
+  transport_retries_per_attempt: 0
+  transport_requests_per_attempt: 1
+  compact_retry_enabled: <bool>
+  compact_retry_used: <bool>
+  compact_retry_finding_cap: 5
+  timeout_attempt_is_terminal: true
+  attempt_wait_bound: "orchestrator_monotonic_deadline"   <-- NOT httpx timeout
+  backend_inference_lifetime_if_stalled: "Conditional policy, ... IF ..."
+  abandoned_worker_lifetime_if_supervisor_deadline_expires: "Conditional ..."
+                                          ^^^ both STRINGS, never bools, and both
+                                              CONDITIONAL — see below
+  configured_attempt_timeout_seconds: <float>
+  requested_max_output_tokens: <int>
+  first_attempt_outcome: <classification>
+  final_attempt_outcome: <classification>
+  attempts:
+    - attempt, kind (full|compact), outcome, transport_requests,
+      requested_max_output_tokens, finish_reason, usage_reported, usage,
+      elapsed_seconds, stall_source (client_timeout | supervisor_deadline | null)
+  same_model_used_for_every_attempt: true
+  fallback_reviewer_model_available: false
+  supervision_scope_note / retry_ownership_note /
+  compact_retry_policy_note / timeout_semantics_note /
+  wait_bound_note / output_cap_note / observability_note
+```
+
+**Two kinds of field live in this block, and conflating them was a real defect.**
+
+*Facts about this run*: `semantic_attempts_used`, `compact_retry_used`,
+`first_attempt_outcome`, `final_attempt_outcome`, and each record in `attempts`
+with its `outcome` and `stall_source`.
+
+*Conditional policy*: `timeout_attempt_is_terminal`,
+`backend_inference_lifetime_if_stalled` and
+`abandoned_worker_lifetime_if_supervisor_deadline_expires`. Both of the latter are
+**strings**, following the Phase 5F2D `child_process_*` precedent — AIDO cannot
+observe either, so neither may be reported as a boolean claim in either direction
+— and both are worded from an explicit **IF**.
+
+That conditional wording is load-bearing. A supervision block only ever reaches a
+packet on the **success path**: a stall is terminal, raises
+`ReviewerAttemptExhaustedError`, and the command exits 4 with no packet at all.
+So in every packet that exists, no attempt outcome is `review_stalled`, every
+`stall_source` is `None`, and **no abandoned worker was left behind**. An earlier
+draft stated these fields as facts (`abandoned_worker_lifetime_after_deadline:
+"...the worker thread is abandoned rather than stopped..."`), which made an
+ordinary successful run read as though a worker had been abandoned in it. The
+fields now describe what *would* be known after a future stall and explicitly
+disclaim asserting that one happened.
+
+`attempt_wait_bound` exists so a reader cannot mistake the client's
+network-inactivity timeout for the proof, and `stall_source` records which
+mechanism ended a wait — `supervisor_deadline` is precisely the case in which an
+abandoned worker would exist. Nothing branches on it.
+
+No prompt and no raw completion is retained. **This is not a generalized event
+log** — it is one fixed block with one record per attempt.
+
+Two provenance fields changed shape: `reviewer.semantic_requests` is now an
+integer fact about this run rather than the literal `1`, joined by
+`max_semantic_requests: 2`, `transport_retries_per_semantic_request: 0`, and
+`fallback_model_configured` / `fallback_model_used`, both fixed `false`.
+
+**One capability-boundary field was removed rather than left lying.**
+`orchestrator_review_retry_or_reprompt_attempted` was a hard-coded `false`; under
+RS1 it would have been false only when the compact retry did not run. Its
+replacements are truthful:
+
+```text
+orchestrator_bounded_compact_retry_used:              <real boolean>
+orchestrator_third_semantic_attempt_made:             false
+orchestrator_parser_repair_attempted:                 false
+orchestrator_partial_findings_merged_across_attempts: false
+orchestrator_fallback_reviewer_model_used:            false
+```
+
+Every negative claim still carries the `orchestrator_` prefix, and the
+child-process facts still live only inside the embedded verification report.
+
+### 31.13 Attempt timing
+
+Elapsed attempt duration is recorded with a **monotonic** clock, and the clock is
+**injectable** so unit tests assert durations deterministically. It is reported as
+*measured elapsed time* for AIDO's own wait — never as guaranteed backend
+inference time, and never as time-to-first-token or time-to-first-finding. Timing
+is not an authority boundary: nothing branches on it, and no generic metrics
+framework was built.
+
+### 31.14 RS2 — explicit reviewer failover (DEFERRED, NOT AUTHORIZED)
+
+A future candidate, **documented here and deliberately not implemented**:
+
+```text
+RS2 — Explicit Reviewer Failover
+```
+
+Automatic model failover is a **separate authority decision**, because it would
+send the approved source-derived diff to *another model*. RS1 uses only the
+already-authorized `controlled_review.model`. There is no `fallback_model`, no
+`reviewer_chain`, no `reviewers`, and no `secondary_model` field anywhere, and
+none may be added without an explicit, separate prompt.
+
+### 31.15 Acceptance criteria (all met)
+
+- [x] Reviewer transport `max_retries` is forced to **0**, proved with a
+  `MockTransport` returning retryable failures; the generic client's behavior,
+  its default, and `AIDO_LITELLM_MAX_RETRIES` semantics are unchanged for every
+  other caller.
+- [x] One semantic attempt == one HTTP/model request; the maximum in one review
+  command is **two**.
+- [x] `controlled_review` gained exactly three fields, all with safe defaults;
+  existing configs still load; non-positive/non-finite `attempt_timeout_seconds`
+  and non-positive/unbounded `max_output_tokens` are rejected; `extra="forbid"`
+  still rejects `fallback_model`, `reviewer_chain`, `reviewers`,
+  `secondary_model`, an attempt count, a retry prompt, a transport retry count,
+  any retry-on-timeout field, and the superseded draft name
+  `compact_retry_on_stall`. No CLI override was added — the command still has
+  exactly five options.
+- [x] Both requests carry the exact configured `max_tokens` through the existing
+  `LLMRequest` field; no second transport abstraction was added.
+- [x] The compact retry fires only for the two documented **completed-response**
+  conditions, uses the **same** configured model, sends a strict subset of the
+  accepted transmission boundary, keeps free-form text inside the untrusted
+  delimiters, and enforces its 5-finding cap by rejection after parsing.
+- [x] **A stall is terminal** (§31.16): it costs exactly one request even with
+  the compact option enabled, and is never announced as a retry — whether the
+  client reported the timeout or AIDO's own deadline expired first (§31.17).
+- [x] **AIDO's wait is bounded by AIDO's own monotonic deadline** (§31.17), not
+  by httpx timeout semantics, proved by a fake client with no transport at all.
+- [x] Auth failure, 400/404, 429, 5xx and connection errors each cost exactly one
+  request and get no compact retry.
+- [x] A valid review — `approve`, `changes_requested` or `needs_human_review` —
+  never triggers a retry.
+- [x] `REVIEW STALLED` is used only for a timeout; a parse or length failure is
+  announced as `REVIEW UNUSABLE`; the terminal notice is `REVIEWER UNAVAILABLE
+  FOR THIS REVIEW`. No notice carries a prompt, diff, completion, credential,
+  base URL, or absolute path.
+- [x] A second-attempt failure returns the existing exit **4**; a valid
+  second-attempt result exits **0**.
+- [x] The packet is `review-packet.v2`, preserves every `v1` block, records
+  attempts and known usage, records missing usage as unknown rather than zero,
+  states that a timeout is terminal and that backend inference lifetime is
+  unobserved, and reports no unobservable signal and no claim that backend or GPU
+  time is bounded.
+- [x] No fallback reviewer, no fixer, no review/fix loop, no second reviewer, no
+  consensus, no model-backed implementer, no branch, no commit, no push, and no
+  PR was added.
+- [x] Every workspace/Git/verification test uses synthetic `tmp_path`
+  repositories and synthetic verification programs; **no real target project was
+  touched**. Every reviewer test uses `httpx.MockTransport`; **no real model
+  call, no socket, and no API key is needed**.
+- [x] Phase 5F2C, 5F2D and the accepted 5F2E behavior are unchanged apart from
+  the explicitly authorized move from "at most one semantic review request" to
+  "at most two supervised semantic requests AIDO may issue, one transport request
+  each".
+
+### 31.16 Phase 5F2E-RS1-FU1 — terminal timeout and truthful scope (DONE)
+
+> **Status: DONE.** RS1 was **not accepted** as first drafted. Its core
+> retry-ownership implementation was sound, but acceptance was blocked by one
+> architecture contradiction plus two narrow truthfulness cleanups. This
+> subsection records the correction; §31.1–§31.15 above already describe the
+> corrected behavior.
+
+#### The blocker: RS1 retried after an unconfirmed timeout
+
+RS1 stated, correctly, that `attempt_timeout_seconds` is only the existing
+request/transport timeout and that AIDO does **not** observe or prove that the
+backend stopped inference when the client timed out.
+
+And then it made `review_stalled` retry-eligible and immediately issued a second
+request to the same model. Those two things cannot both be right.
+
+```text
+request 1 reaches a local inference backend
+  -> the client times out
+  -> AIDO stops waiting
+  -> the backend may STILL be running, holding its slot and context
+  -> AIDO immediately sends compact request 2
+  -> the same local model may now hold TWO concurrent inference jobs
+```
+
+That can **increase** GPU occupancy, concurrent-request pressure, context
+occupancy and total inference resource usage — the precise failure mode this
+phase exists to contain. A client timeout is not evidence that the inference slot
+was released, and this architecture has no way to obtain that evidence.
+
+So, with the current observable architecture:
+
+```text
+LLMTimeoutError
+  -> review_stalled
+  -> REVIEW STALLED  (terminal wording, no retry announced)
+  -> REVIEWER UNAVAILABLE FOR THIS REVIEW
+  -> exit 4, attempts used = 1
+```
+
+**Nothing was added to guess around it.** No sleep, no backoff, no polling, no
+cancellation request, no streaming, no threads, and no Run:AI- or
+LiteLLM-specific cancellation behavior. A timeout may become retryable only in a
+future, **separately authorized** phase in which AIDO gains an observable,
+trustworthy backend-cancellation acknowledgement.
+
+#### Correction 1 — retry eligibility narrowed to completed responses
+
+```python
+RETRY_ELIGIBLE_OUTCOMES = (
+    "review_output_budget_exhausted",
+    "review_unusable_output",
+)
+```
+
+`review_stalled` is **not** in it. What the two survivors share is the property
+that makes a retry safe: a response was **actually returned to AIDO**, so the
+first request is no longer an unknown in-flight operation.
+
+Everything else stays terminal, unchanged: authentication failures, non-retryable
+4xx, 429, 5xx, connection/transport failures, the compact finding-cap failure, a
+valid review (terminal success), and no third attempt.
+
+#### Correction 2 — the config field was renamed before acceptance
+
+`compact_retry_on_stall` became actively misleading the moment a stall was made
+terminal. Because RS1 had not been accepted, the public name was fixed rather
+than carrying a misleading compatibility alias forever:
+
+```yaml
+controlled_review:
+  enabled: false
+  provider: "litellm"
+  model: "qwen3-coder-next"
+  attempt_timeout_seconds: 90
+  max_output_tokens: 2048
+  compact_retry_on_unusable_output: false
+```
+
+- default remains `false`; `extra="forbid"` still applies;
+- `compact_retry_on_stall` is **not** retained as an alias — an old RS1 draft
+  config using it now fails loudly rather than silently retaining wrong
+  semantics;
+- no generic retry-enabled field, no retry-on-timeout field, no max-attempt
+  field, and no CLI override.
+
+#### Correction 3 — the resource-bound claim was narrowed
+
+RS1 prose sometimes said "the reviewer runtime is bounded" and "the reviewer
+resource envelope is bounded". Both are stronger than the implementation can
+prove, because a timed-out backend may continue inference. The exact contract is
+now:
+
+> **RS1 bounds AIDO's reviewer request issuance and AIDO's wait budget.**
+>
+> It proves: reviewer transport retries issued by AIDO = 0; at most 2 semantic
+> requests issued by AIDO; the configured timeout applied to each request wait;
+> the requested max output tokens; and the completed-response retry policy.
+>
+> It does **not** prove a bound on: backend inference lifetime after a timeout;
+> GPU occupancy lifetime after a client disconnect; backend context lifetime; or
+> server-side cancellation latency.
+
+The phase is still called "Reviewer Runtime Supervision", and its documentation
+defines that scope exactly. **Total GPU time is never claimed to be bounded.**
+
+#### Circuit-breaker wording
+
+`REVIEW STALLED` is now a **terminal** notice. It states the model, the attempt,
+the `review_stalled` classification, that AIDO stopped waiting, that backend
+cancellation / inference termination is **not** observed, that **no** compact
+retry is being issued and why, and that a human decision is required. It never
+says "compact retry authorized", and the run reports **attempts used = 1**.
+
+`REVIEW UNUSABLE — compact retry authorized` is emitted only for a completed but
+unusable response, immediately before the one compact request.
+
+#### Packet wording (still `review-packet.v2`)
+
+RS1 had not been accepted, so this is a correction to the **draft** v2 semantics,
+not a v3 evolution. No new packet version was created. The supervision block now
+states explicitly that a timeout is terminal because backend cancellation is
+unobserved, that the compact retry is only for a completed but unusable response,
+that the maximum AIDO may **issue** is two, and that none of this proves the
+backend's inference lifetime is bounded — carried by the new
+`supervision_scope`, `timeout_attempt_is_terminal`,
+`backend_inference_lifetime_if_stalled`, `supervision_scope_note` and
+`compact_retry_policy_note` fields.
+
+#### Stale Python contracts corrected
+
+Current, non-historical docstrings that still claimed "no second prompt",
+"retries nothing", "re-prompts nothing", or that the reviewer uses the generic
+transport retries were corrected in `review/models.py` (module docstring,
+`ReviewerStageError`, `ReviewerAttemptExhaustedError`), `review/reviewer.py`
+(module docstring, `build_reviewer_client_config`, `run_controlled_review`),
+`review/supervision.py`, `review/packet.py` and the CLI. The truthful wording is:
+model output is never repaired; a rejected response is never edited, partially
+mined, or merged; RS1 may issue one separate compact second request **only** after
+a completed but unusable first response and only when the project enabled it;
+timeout never gets a second request; reviewer transport retries are zero.
+Historical §30 text remains, explicitly marked superseded by §31.
+
+#### What did NOT change
+
+The generic `LLMClient` retry behavior and its default; generic
+`AIDO_LITELLM_MAX_RETRIES` semantics; reviewer `max_retries = 0`; the configured
+reviewer attempt timeout; the requested `max_tokens`; the strict parser; the full
+and compact request data boundaries; the same-model rule; the 5-finding retry cap;
+the `review-packet.v2` structure apart from the naming and wording this
+correction required; verify-before-review ordering; credential ordering; the exit
+codes; and the human-terminal verdict semantics.
+
+**No backend-cancellation API, LiteLLM-specific cancellation, Run:AI integration,
+retry-after-timeout, sleep/backoff, polling, streaming/SSE, reasoning monitoring,
+tool/file/test progress, fallback reviewer, RS2, fixer, branch, commit, push, or
+PR was added.**
+
+#### FU1 acceptance criteria (all met)
+
+- [x] A timeout produces exactly **one** HTTP request even with the compact
+  option enabled, and exits 4 with `REVIEW STALLED` present, `REVIEW UNUSABLE`
+  absent, and attempts used = 1.
+- [x] A timeout with the compact option disabled behaves identically.
+- [x] A compact retry that itself times out is terminal, with no third request.
+- [x] A malformed response with the compact option enabled issues exactly two
+  requests, the second compact, with the same model.
+- [x] A `length` finish_reason with an unusable body issues exactly two requests.
+- [x] `RETRY_ELIGIBLE_OUTCOMES == {"review_output_budget_exhausted",
+  "review_unusable_output"}`.
+- [x] `compact_retry_on_unusable_output` is accepted and defaults to `false`;
+  `compact_retry_on_stall` is rejected as an unknown field; no timeout-retry or
+  generic retry field exists.
+- [x] A successful compact retry still reports max 2, used 2, compact used true,
+  same model true, transport retries 0.
+- [x] A first-attempt success remains exactly one request, and every auth / 4xx /
+  429 / 5xx / connection failure remains exactly one request.
+- [x] No note or field claims backend inference lifetime, GPU occupancy, or total
+  GPU time is bounded.
+- [x] No backend-cancellation capability exists, so no test pretends to exercise
+  one.
+
+### 31.17 Phase 5F2E-RS1-FU2 — the wait bound is AIDO's own deadline (DONE)
+
+> **Status: DONE.** FU1 correctly fixed retry-after-timeout, but RS1 still could
+> not be accepted: its claim that `attempt_timeout_seconds` **bounds AIDO's
+> reviewer wait** was not established by the existing `LLMClient`. This
+> subsection records the correction. §31.1–§31.16 already describe the corrected
+> behavior.
+
+#### The blocker: an httpx timeout is not an absolute deadline
+
+`LLMClient` builds its `httpx.Client` with `timeout=config.timeout_seconds`. That
+is a **network-operation / inactivity** timeout: it fires when an individual
+socket operation stalls. It is **not** an absolute deadline around the whole
+synchronous `client.chat()` call.
+
+So a peer that keeps producing network activity frequently enough — a local model
+trickling tokens, a proxy keeping the connection warm — can hold one request open
+for far longer than `attempt_timeout_seconds` without any single read ever
+reaching its timeout. RS1 exists specifically to stop AIDO waiting indefinitely
+on an unusable local reviewer, and the mechanism it was pointing at could not
+deliver that.
+
+```text
+httpx timeout           = network-operation / inactivity timeout
+RS1 supervisor deadline = AIDO-owned wall-clock wait deadline   <-- THE PROOF
+```
+
+The generic `LLMClient` timeout semantics were **not** modified, and httpx
+behavior was **not** globally replaced. The AIDO-side wait bound was fixed
+instead.
+
+#### The mechanism, and why it is this small
+
+```text
+run_one_review_attempt
+    |
+    +-- start ONE daemon worker thread ------------------+
+    |                                                    |
+    |   worker performs exactly:  client.chat(request)   |
+    |   then publishes ONE of:  response | exception     |
+    |                                                    |
+    +-- main thread waits to an AIDO-owned monotonic <---+
+        deadline (Event.wait(timeout=...))
+            |
+     +------+------+
+     |             |
+ published    deadline reached
+     |             |
+ existing      classify review_stalled
+ parsing       (stall_source = supervisor_deadline)
+ path              |
+               TERMINAL — no retry
+```
+
+- **exactly one worker per semantic attempt**, `daemon=True`;
+- **no `ThreadPoolExecutor`**, no pool, no registry, no reusable task framework —
+  an executor's shutdown would wait for the worker, which is the one thing that
+  must not happen;
+- **no `join`, bounded or otherwise.** `Event.wait` returns on the deadline and
+  does not return early spuriously, so one bounded wait suffices: no loop, no
+  polling;
+- **no attempt to kill a Python thread**, no socket close from the supervisor, no
+  cancellation request, no process, no asyncio;
+- the worker does *only* `client.chat(request)` — no classification, no parsing,
+  no timing, no decision. The main thread owns the deadline decision, and
+  re-raises the worker's exception unchanged so behavior matches a direct call.
+
+The publication box is a two-slot object plus a `threading.Event`, not a queue or
+a future. `Event.set` / `Event.wait` provide the ordering, so no extra lock
+exists, and the supervisor reads the slot **only** after `done` is set — if the
+deadline wins it never reads it at all.
+
+#### Client lifetime
+
+The worker owns execution of `client.chat()`. The supervisor never calls
+`client.close()` and never mutates the client while a worker may still be inside
+that call. `LLMClient.chat` continues to own and close any temporary transport
+client it created, if and when it returns. **No new shared or global client was
+introduced.**
+
+#### Deadline semantics
+
+`controlled_review.attempt_timeout_seconds` now means: **the maximum time AIDO
+waits for the reviewer HTTP/model call to complete**, subject only to small local
+scheduling overhead. The reviewer's `LLMClient` still receives the same value as
+a *secondary* network-inactivity timeout — useful, but explicitly not the proof.
+
+If the worker has not published by the deadline, the attempt is `review_stalled`
+and the invocation stops waiting. AIDO does **not** then wait for that worker,
+join it, issue the compact retry, issue any second HTTP/model request, close its
+socket from another thread, claim the worker stopped, claim the request was
+cancelled, or claim backend inference stopped.
+
+#### FU1's terminal rule is preserved, from both sources
+
+```text
+review_stalled -> REVIEW STALLED -> REVIEWER UNAVAILABLE -> exit 4
+                                 -> no second semantic request
+```
+
+This holds whether the stall came from httpx raising `LLMTimeoutError` before the
+supervisor deadline, or from the AIDO deadline expiring first. **Both classify as
+`review_stalled`**, and no second timeout outcome was created. The two are
+distinguished only by a small closed field, `ReviewAttemptRecord.stall_source`
+(`client_timeout` | `supervisor_deadline`), recorded for truthful auditing:
+`supervisor_deadline` is precisely the case in which an abandoned worker exists.
+**Nothing branches on it.**
+
+#### The abandoned worker, stated exactly
+
+After an AIDO-side deadline the daemon worker may still be executing
+`client.chat()`. This is the HTTP-side equivalent of the accepted Phase 5F2D
+abandoned-reader limitation, and it is documented, not fixed:
+
+- **AIDO's wait is bounded**;
+- AIDO does not wait for the abandoned worker;
+- the worker may **outlive this review invocation** in a long-lived Python
+  process;
+- the network operation may still be active;
+- backend inference may still be active;
+- process exit may ultimately end local daemon-thread state, but RS1 does **not**
+  use or depend on interpreter exit as a cancellation mechanism.
+
+The worker is never called "terminated", its lifetime is never called bounded,
+and **no worker tracking or cleanup infrastructure was added**. Because a stall is
+terminal, **one command invocation can leave at most one abandoned reviewer
+worker.**
+
+#### Attempt timing
+
+`ReviewAttemptRecord.elapsed_seconds` is still measured with a monotonic clock,
+and the clock is still injectable. On a supervisor-deadline stall it represents
+**how long AIDO waited** before declaring the attempt stalled — never how long
+the request or any backend inference eventually ran. The existing wording that it
+is not backend inference time is unchanged.
+
+#### Retry ownership is unchanged
+
+The reviewer client still forces `max_retries = 0`, and generic `LLMClient`
+behavior remains untouched. Therefore: one semantic attempt begins exactly one
+HTTP/model request; **a supervisor deadline does not create another transport
+request**; a stall remains terminal; and a completed-but-unusable response may
+still buy one compact second request when configured.
+
+#### Packet truthfulness (still `review-packet.v2`)
+
+RS1 has still not been accepted, so this is a correction to the **draft** v2
+semantics — **no version bump**. The claim
+
+> RS1 bounds AIDO's reviewer request issuance and AIDO's wait budget
+
+may now stand, and the packet clarifies that it is established by the supervisor
+monotonic deadline and **not** by httpx timeout semantics. Three narrow fields
+and one note carry it: `attempt_wait_bound`,
+`abandoned_worker_lifetime_if_supervisor_deadline_expires`,
+`ReviewAttemptRecord.stall_source`, and `wait_bound_note`. The two
+residual-limit fields are **conditional**, because a successful packet can never
+describe a stall that occurred — see §31.12. The packet continues to state that it does **not** bound
+the abandoned worker's lifetime, the HTTP request's lifetime after AIDO stops
+waiting, backend inference lifetime, GPU occupancy lifetime, backend context
+lifetime, or server-side cancellation latency. **The packet was not turned into a
+generic thread or event report.**
+
+#### The distinction, in one place
+
+```text
+httpx timeout            = network-operation / inactivity timeout
+RS1 supervisor deadline  = AIDO-owned wall-clock wait deadline
+
+AIDO wait ended  !=  worker stopped
+                 !=  request cancelled
+                 !=  backend inference stopped
+```
+
+#### FU2 acceptance criteria (all met)
+
+- [x] AIDO's wait is bounded by its own monotonic deadline, proved by a fake
+  client with **no transport at all** — so no httpx timeout can be credited —
+  whose `chat()` blocks on a `threading.Event`.
+- [x] A "slow progress" discriminator: an operation that stays demonstrably
+  active past the configured value still ends at the supervisor deadline.
+- [x] A response arriving before the deadline behaves exactly as before
+  (`stall_source is None`).
+- [x] An httpx `LLMTimeoutError` before the deadline is a terminal stall recorded
+  as `client_timeout`.
+- [x] A supervisor deadline before the client returns is a terminal stall
+  recorded as `supervisor_deadline`, with exactly **one** request begun and no
+  compact retry even when `compact_retry_on_unusable_output=true`.
+- [x] A compact attempt that itself exceeds the deadline is terminal: two total
+  requests, never a third.
+- [x] At CLI level: `REVIEW STALLED`, no "compact retry authorized", attempts
+  used = 1, exit 4.
+- [x] The worker is verified `daemon=True` and never joined, asserted via `ast`
+  rather than substring search (this module's own prose disclaims the very words
+  a grep would flag).
+- [x] No executor, pool, registry, queue, process, asyncio, `psutil` or `signal`
+  import exists in the supervision module; no `join`, `close`, `shutdown`,
+  `cancel`, `abort`, `terminate` or `kill` call exists anywhere in the review
+  package.
+- [x] Generic `LLMClient` timeout and retry behavior is unchanged.
+- [x] No packet, note, or message claims the abandoned worker or backend
+  inference stopped, or that either lifetime is bounded.
+- [x] **A successful packet never implies a stall or an abandoned worker
+  occurred.** The two residual-limit fields are named and worded conditionally
+  (`backend_inference_lifetime_if_stalled`,
+  `abandoned_worker_lifetime_if_supervisor_deadline_expires`), and regressions on
+  both success paths — first-attempt success and successful compact retry —
+  assert that no attempt outcome is `review_stalled`, every `stall_source` is
+  `None`, and no value asserts an abandonment as fact.
+- [x] Every blocked synthetic worker is released in a `finally`, so the suite
+  leaves nothing parked. All tests remain fully offline.
+
+#### Also corrected here: a stale `ReviewerCallNotice` docstring
+
+`ReviewerCallNotice` claimed that `project_id` and `repo` are "constrained by
+their own validators (`repo` must be `owner/repo`)". `RepoConfig` enforces no such
+shape and `ProjectConfig` does not constrain `project_id` beyond requiring it, so
+the sentence was simply wrong — previously recorded as a non-blocking
+documentation note.
+
+The docstring now says what is actually true: those values are kept because they
+come from the **project config**, which this repository treats as trusted
+authority, unlike an issue title that arrives with the issue. That is a statement
+about *provenance*, not validation. **No validator was added merely to make the
+prose true, and no terminal-escaping infrastructure was created.** Project config
+remains the trusted authority for those values.

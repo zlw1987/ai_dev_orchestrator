@@ -396,15 +396,31 @@ class ControlledReviewConfig(_Strict):
       environment-variable *name* (connection details come from the existing
       ``AIDO_LITELLM_*`` environment, and only after verification has passed);
     - a prompt template, system-prompt override, or arbitrary header;
-    - a retry count (the existing LLM client's bounded transport retries are the
-      only retries; there is no application-level re-review);
-    - a fixer, a second reviewer, a reviewer list, or any consensus/voting
-      setting — this phase implements the reviewer role only;
+    - a *transport* retry count — Phase 5F2E-RS1 forces the reviewer client's
+      ``max_retries`` to ``0``, so one semantic attempt is exactly one
+      HTTP/model request, and the number of semantic attempts is a fixed
+      maximum of two rather than a configurable count;
+    - a fixer, a second reviewer, a reviewer list, a ``fallback_model``, or any
+      consensus/voting setting — this phase implements the reviewer role only,
+      with exactly one model;
     - a full-file or repository-wide transmission switch.
 
     ``model`` is the **only** place a reviewer model may be named. There is no
     CLI ``--model`` override, ``AIDO_LITELLM_DEFAULT_MODEL`` never selects it,
     and matching is exact — no glob, prefix, or case folding.
+
+    Phase 5F2E-RS1 — bounded reviewer runtime supervision
+    -----------------------------------------------------
+
+    Three narrow fields were added for **observable resource supervision** of a
+    local reviewer model, whose cost is inference wall time, GPU occupancy,
+    concurrent-request capacity and context occupancy rather than an API price.
+    All three carry safe defaults, so every existing Phase 5F2E project config
+    still loads unchanged and keeps exactly its previous behavior.
+
+    They are deliberately **not** a generic resource-policy framework: there is
+    no attempt count, no backoff curve, no per-role budget, no fallback model,
+    no reviewer chain, and no CLI override for any of them.
     """
 
     enabled: bool = Field(
@@ -423,6 +439,45 @@ class ControlledReviewConfig(_Strict):
         description="The exact reviewer model name. There is no default and no "
         "environment fallback; an enabled block without one is refused at the "
         "review gate.",
+    )
+    attempt_timeout_seconds: float = Field(
+        default=90.0,
+        gt=0,
+        le=3600,
+        allow_inf_nan=False,
+        description="The maximum time AIDO WAITS for ONE reviewer HTTP/model "
+        "call to complete, subject only to small local scheduling overhead. That "
+        "bound is established by AIDO's own monotonic deadline in the reviewer "
+        "supervisor, NOT by the client's timeout — an httpx timeout is a "
+        "network-operation/inactivity timeout that a peer producing frequent "
+        "activity can outlive. The reviewer's client also receives this value as "
+        "a secondary network-inactivity timeout. It is NOT a process-style hard "
+        "wall-clock kill: when the deadline wins, the worker performing the call "
+        "is ABANDONED rather than stopped, and AIDO never claims that the "
+        "request or the backend's inference stopped. Because neither release is "
+        "observed, a stalled attempt is TERMINAL: no second request is issued.",
+    )
+    max_output_tokens: int = Field(
+        default=2048,
+        gt=0,
+        le=32_000,
+        description="The REQUESTED model-output cap, sent as the existing "
+        "OpenAI-compatible 'max_tokens' field on each reviewer attempt. It is a "
+        "request to the provider, not a guarantee about hidden reasoning, "
+        "backend accounting, or provider-specific semantics.",
+    )
+    compact_retry_on_unusable_output: bool = Field(
+        default=False,
+        description="Whether ONE bounded compact second semantic attempt may be "
+        "made after a COMPLETED but unusable first response — that is, a "
+        "response AIDO actually received, which either exhausted its output "
+        "budget or was rejected by the strict parser. It deliberately does NOT "
+        "cover a timeout: a client timeout is not evidence that the backend "
+        "released its inference slot, so a second request could put a second "
+        "concurrent job on the same model. Defaults to false, so a project "
+        "keeps exactly one semantic attempt until it opts in. Even when true "
+        "the hard maximum is TWO semantic attempts; there is no third, no "
+        "configurable count, no retry-on-timeout switch, and no fallback model.",
     )
 
     @field_validator("provider")

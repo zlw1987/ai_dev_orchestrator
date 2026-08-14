@@ -41,8 +41,11 @@ The orchestrator drives the loop; the human reviews and approves at gated points
 
 *(Status note: as of Phase 5F2E the **reviewer** box exists in a narrow,
 configurable, controlled form — one approved diff, one configured model, one
-advisory verdict that ends at a human. The **implementer** box and the
-**review / fix loop** box do not exist, and the PR box does not exist.)*
+advisory verdict that ends at a human — and as of Phase 5F2E-RS1 (with its FU1
+and FU2 corrections) AIDO issues at most two semantic requests to it, one
+HTTP/model request each, each waited on to AIDO's own monotonic deadline, with a
+stalled request terminal. The **implementer** box and the **review / fix loop**
+box do not exist, and the PR box does not exist.)*
 
 ## 4. Automation levels
 
@@ -343,29 +346,87 @@ Model roles must be configurable. Each role specifies:
   `l2-review-approved-file-edit`, runs the accepted 5F2D verification itself and
   — only on a `verified` outcome — sends **one** approved unified diff, selected
   approved-plan prose, and the redacted verification output to **one**
-  project-configured reviewer model, then prints one `review-packet.v1` for a
-  human. It is the **first runtime capability here that deliberately sends
+  project-configured reviewer model, then prints one review packet for a human.
+  It is the **first runtime capability here that deliberately sends
   source-derived code to a model**. Gated by a project opt-in
   (`controlled_review`, ships disabled — and **`real_model_planning` does not
   authorize it**) plus two explicit CLI flags. Reviewer credentials are not read
   until verification has passed. The reply must be exactly one strict JSON
-  object and is **rejected, never repaired**: one semantic reviewer request, no
-  application-level retry, no re-prompt. The verdict is **advisory** —
-  `approve`, `changes_requested` and `needs_human_review` all end at a human. See
+  object and is **rejected, never repaired** — no parser repair and no "fix your
+  JSON" round trip. The verdict is **advisory** — `approve`,
+  `changes_requested` and `needs_human_review` all end at a human. See
   [PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md §30](PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md).
+  *(The original text here said "one semantic reviewer request, no
+  application-level retry". That is superseded by Phase 5F2E-RS1 below and is
+  preserved as history.)*
+- **Phase 5F2E-RS1 — bounded reviewer runtime supervision. DONE.** A **local**
+  reviewer model can consume inference wall time, GPU occupancy,
+  concurrent-request capacity and context occupancy while producing nothing a
+  human can act on, so the reviewer now runs under an explicit resource budget.
+  The reviewer client forces its transport `max_retries` to **0** — overriding
+  `AIDO_LITELLM_MAX_RETRIES` for that command only, so one semantic attempt is
+  exactly one HTTP/model request — and the supervisor owns a hard maximum of
+  **two** semantic requests AIDO may issue. **One** bounded compact retry is
+  available, and only when the project set
+  `controlled_review.compact_retry_on_unusable_output` and the first response was
+  **completed but unusable** — it exhausted its output budget or was rejected by
+  the strict parser; it uses the **same** configured model with a reduced
+  context, never a repair or a merge. See
+  [PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md §31](PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md).
+- **Phase 5F2E-RS1-FU1 — terminal timeout and truthful scope. DONE.** Acceptance
+  of RS1 was blocked by one architecture contradiction: RS1 correctly said that a
+  client timeout proves nothing about the backend, and then retried after one.
+  Because a timed-out request may still be generating and holding its inference
+  slot, a second request could give the same local model **two concurrent
+  inference jobs** — increasing exactly the GPU, concurrency and context pressure
+  the phase exists to contain. FU1 makes a timeout **terminal**, narrows
+  `RETRY_ELIGIBLE_OUTCOMES` to the two **completed-response** conditions, renames
+  the opt-in from the misleading `compact_retry_on_stall` (rejected, not aliased),
+  and corrects the resource claim: **RS1 bounds AIDO's request issuance and wait
+  budget, not backend inference lifetime or GPU occupancy.** Timeouts, auth
+  failures, non-retryable 4xx, 429, 5xx and connection errors all get no retry.
+  **This is observable resource supervision, not agent-progress supervision**: no
+  streaming, no reasoning inspection, no tool/file/test counters, no
+  backend-cancellation machinery, and no claim that a backend stopped inference.
+  **The generic LLM client is unchanged for every other caller.** See
+  [PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md §31.16](PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md).
+- **Phase 5F2E-RS1-FU2 — the wait bound is AIDO's own deadline. DONE.** RS1
+  claimed `attempt_timeout_seconds` bounded AIDO's reviewer wait, but the
+  existing `LLMClient` passes that value to httpx as a **network-operation /
+  inactivity** timeout, not as an absolute deadline around the synchronous
+  `client.chat()` call — a peer producing frequent activity can hold one request
+  open far past it without any single read timing out. FU2 fixes the AIDO-side
+  bound instead of changing generic client semantics: each attempt's single
+  client call runs on **one daemon worker thread** that publishes the response or
+  the exception, and the main thread waits to an **AIDO-owned monotonic
+  deadline** and owns the decision. No executor, pool, registry, task framework,
+  process, or asyncio; **no join at all**; no thread kill, socket close, or
+  cancellation request. When the deadline wins the attempt is `review_stalled`
+  (terminal, per FU1) and the worker is **abandoned, not stopped** — the
+  HTTP-side equivalent of the accepted 5F2D abandoned-reader limitation, and one
+  invocation can leave at most one. **AIDO wait ended ≠ worker stopped ≠ request
+  cancelled ≠ backend inference stopped.** See
+  [PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md §31.17](PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md).
 
   The first controlled path now exists:
 
   ```text
-  5F2C  Controlled Single-File Writer      DONE
-  5F2D  Controlled Verification            DONE
-  5F2E  Controlled Reviewer Integration    DONE
-  → first controlled write → verify → review → human milestone reached
+  5F2C           Controlled Single-File Writer        DONE / ACCEPTED
+  5F2D           Controlled Verification              DONE / ACCEPTED
+  5F2E           Controlled Reviewer Integration      DONE / ACCEPTED
+  5F2E-RS1       Reviewer Runtime Supervision         DONE
+  5F2E-RS1-FU1   Terminal timeout + wording fixes     DONE
+  5F2E-RS1-FU2   AIDO-owned reviewer wait deadline    DONE
+  → bounded write → verify → supervised review → human
   ```
 
   **L2 as originally defined is still not complete**: there is no model-backed
   implementer, no automatic fixer, no local branch creation, no local commit, no
   push, no PR, and no generalized writer.
+- **RS2 — explicit reviewer failover. Proposed, NOT authorized.** Automatic
+  reviewer-model failover is a separate authority decision, because it would send
+  the approved source-derived diff to *another* model. RS1 deliberately ships no
+  `fallback_model`, `reviewer_chain`, `reviewers`, or `secondary_model` field.
 - ~~**Phase 6 — qwen reviewer.**~~ **Superseded by Phase 5F2E.** A separate
   qwen-only reviewer phase would duplicate a capability that now exists in
   configurable form: 5F2E hard-codes no model, and a project may configure an
@@ -373,9 +434,11 @@ Model roles must be configurable. Each role specifies:
   Qwen model is a configuration choice, not a phase. **No separate qwen-only
   integration phase is required.** Later phases were deliberately **not**
   renumbered.
-- **Phase 7 — fix loop.** Still proposed and **separately unauthorized**. Phase
-  5F2E adds no fixer, no review/fix loop, no second reviewer, and no automatic
-  action of any kind on a reviewer's findings.
+- **Phase 7 — fix loop.** Still proposed and **separately unauthorized**. Phases
+  5F2E and 5F2E-RS1 add no fixer, no review/fix loop, no second reviewer, no
+  fallback reviewer model, and no automatic action of any kind on a reviewer's
+  findings. RS1's bounded compact retry is not a fix loop: it fires only when an
+  attempt produced **no usable review at all**, never in response to findings.
 - **Phase 8 — local commit.**
 - **Phase 9 — push + PR.**
 - **Phase 10 — CI / Codex loop.**
