@@ -39,6 +39,11 @@ GitHub issue
 
 The orchestrator drives the loop; the human reviews and approves at gated points.
 
+*(Status note: as of Phase 5F2E the **reviewer** box exists in a narrow,
+configurable, controlled form — one approved diff, one configured model, one
+advisory verdict that ends at a human. The **implementer** box and the
+**review / fix loop** box do not exist, and the PR box does not exist.)*
+
 ## 4. Automation levels
 
 Progressive, opt-in levels of autonomy:
@@ -325,21 +330,52 @@ Model roles must be configurable. Each role specifies:
     documented residual limitation. **No process-tree management was added** — no
     job object, `taskkill`, process group, `psutil`, or descendant enumeration.
 
-  **L2 is still not complete.** The near-term sequence is now:
+  **L2 is still not complete.** *(The paragraph that followed here read: the
+  near-term sequence is `5F2C DONE → 5F2D DONE → 5F2E NEXT`, "Phase 5F2E
+  (reviewer integration) remains proposed and not authorized", so the loop does
+  not exist and there is no reviewer. That was true **when 5F2D shipped** and is
+  preserved as history only. **Phase 5F2E has since been authorized and
+  completed** — see the next bullet — so the sequence and the "not authorized"
+  claim above are superseded. What remains true from it: there is still no
+  model-backed implementer, no fixer, no commit, no push, and no PR, and no
+  generalized writer work was inserted between 5F2D and 5F2E.)*
+- **Phase 5F2E — controlled reviewer integration. DONE.** One command,
+  `l2-review-approved-file-edit`, runs the accepted 5F2D verification itself and
+  — only on a `verified` outcome — sends **one** approved unified diff, selected
+  approved-plan prose, and the redacted verification output to **one**
+  project-configured reviewer model, then prints one `review-packet.v1` for a
+  human. It is the **first runtime capability here that deliberately sends
+  source-derived code to a model**. Gated by a project opt-in
+  (`controlled_review`, ships disabled — and **`real_model_planning` does not
+  authorize it**) plus two explicit CLI flags. Reviewer credentials are not read
+  until verification has passed. The reply must be exactly one strict JSON
+  object and is **rejected, never repaired**: one semantic reviewer request, no
+  application-level retry, no re-prompt. The verdict is **advisory** —
+  `approve`, `changes_requested` and `needs_human_review` all end at a human. See
+  [PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md §30](PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md).
+
+  The first controlled path now exists:
 
   ```text
   5F2C  Controlled Single-File Writer      DONE
   5F2D  Controlled Verification            DONE
-  5F2E  Reviewer Integration               NEXT
-  → first controlled implement → verify → review → human loop
+  5F2E  Controlled Reviewer Integration    DONE
+  → first controlled write → verify → review → human milestone reached
   ```
 
-  Phase 5F2E (reviewer integration) remains proposed and not authorized, so the
-  complete implement → verify → review → human loop does not exist, and there is
-  still no model-backed implementer, no reviewer, no commit, no push, and no PR.
-  No generalized writer work is inserted between 5F2D and 5F2E.
-- **Phase 6 — qwen reviewer.**
-- **Phase 7 — fix loop.**
+  **L2 as originally defined is still not complete**: there is no model-backed
+  implementer, no automatic fixer, no local branch creation, no local commit, no
+  push, no PR, and no generalized writer.
+- ~~**Phase 6 — qwen reviewer.**~~ **Superseded by Phase 5F2E.** A separate
+  qwen-only reviewer phase would duplicate a capability that now exists in
+  configurable form: 5F2E hard-codes no model, and a project may configure an
+  allowed internal reviewer model in `controlled_review.model` — pointing it at a
+  Qwen model is a configuration choice, not a phase. **No separate qwen-only
+  integration phase is required.** Later phases were deliberately **not**
+  renumbered.
+- **Phase 7 — fix loop.** Still proposed and **separately unauthorized**. Phase
+  5F2E adds no fixer, no review/fix loop, no second reviewer, and no automatic
+  action of any kind on a reviewer's findings.
 - **Phase 8 — local commit.**
 - **Phase 9 — push + PR.**
 - **Phase 10 — CI / Codex loop.**

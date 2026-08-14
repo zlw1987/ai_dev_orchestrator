@@ -14,7 +14,7 @@ before doing any work here.
 
 ## Current phase
 
-- **Phases 0 through 5F2D: complete.** See
+- **Phases 0 through 5F2E: complete.** See
   [docs/PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md](docs/PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md)
   — read its **CURRENT STATUS** block first; older sections in that file are
   design history and some of their status claims are deliberately stale.
@@ -29,18 +29,29 @@ before doing any work here.
   more: an output cap that was not enforced when it was passed, an imprecise
   timeout-versus-reap-grace contract, and an overstated abandoned-reader lifetime
   claim.
-- **Phase 5F2E (Reviewer Integration) is next, and is NOT AUTHORIZED.**
-- **L2 is not complete.** There is no commit, no push, no PR, no branch
-  creation, no reviewer/fixer wiring, and no model-backed implementer.
+- **Phase 5F2E shipped the first controlled reviewer integration** (§30) — the
+  first runtime capability here that deliberately sends **source-derived code**
+  to a model. One command, `l2-review-approved-file-edit`, runs the accepted
+  5F2D verification itself and, only on a `verified` outcome, sends one approved
+  diff plus selected plan prose and redacted verification output to one
+  project-configured reviewer model, then prints one human-facing packet.
+- **The first controlled write → verify → review → human path now exists.**
+  **L2 as originally defined is still NOT complete**: there is no model-backed
+  implementer, no automatic fixer, no branch creation, no commit, no push, no
+  PR, and no generalized writer.
 
 ```text
 5F2C  Controlled Single-File Writer      DONE
 5F2D  Controlled Verification            DONE
-5F2E  Reviewer Integration               NEXT
-→ first controlled implement → verify → review → human loop
+5F2E  Controlled Reviewer Integration    DONE
+→ first controlled write → verify → review → human milestone reached
 ```
 
-Do **not** insert generalized writer work between 5F2D and 5F2E.
+Do **not** insert generalized writer work here, and do **not** implement a fixer
+(old Phase 7) or a model-backed implementer: both remain separately
+unauthorized. The old roadmap's **Phase 6 "qwen reviewer" is superseded** by
+5F2E's configurable reviewer — 5F2E hard-codes no model, so no separate
+qwen-only integration phase is required.
 
 ### What the writer can and cannot do
 
@@ -122,6 +133,60 @@ forwarding; installation or dependency commands; a generalized command executor;
 a process-tree management framework (job objects, `taskkill`, process groups,
 `psutil`); or any form of sandboxing or child-effect auditing.
 
+### What the reviewer can and cannot do
+
+A **third** command, `l2-review-approved-file-edit`, is the first runtime
+capability here that deliberately sends **source-derived code** to a model. It
+does **not** run the writer, and it does **not** duplicate the verifier — it
+calls the accepted 5F2D library path.
+
+- **verify first, review second.** The command runs the existing verification
+  itself; there is **no `--verification-result` input** and no saved report is
+  trusted as authority. Only a `verified` outcome proceeds;
+- **credential ordering is load-bearing.** `AIDO_LITELLM_API_KEY`,
+  `AIDO_LITELLM_BASE_URL` and `AIDO_LITELLM_DEFAULT_MODEL` are **not read** until
+  after verification returns `verified`, so reviewer credentials never coexist in
+  process state with unsandboxed repository-controlled execution. Reviewer
+  credentials are never forwarded to the verification child, and 5F2D's
+  environment policy is unchanged;
+- gated by a project opt-in (`controlled_review`, ships disabled) plus two
+  explicit CLI flags (`--verify-approved-file-edit`, `--real-reviewer`). The
+  model comes **only** from `controlled_review.model` — no CLI `--model`, no
+  environment default, no glob or case-folded matching. `real_model_planning`
+  does **not** authorize review;
+- the reviewer receives **only**: trusted identity, selected approved-plan prose,
+  the **one** approved unified diff, and the freshly produced verification facts
+  with their already-bounded, redacted output. Never the full target file, never
+  unrelated source, a listing, a tree, git history, an absolute path, the
+  approval text, the raw artifact, or any credential;
+- **one** semantic reviewer request. The reply must be exactly one strict JSON
+  object; it is **rejected, never repaired** — no second prompt, no re-review, no
+  parser repair. The existing `LLMClient` keeps its own bounded transport retries;
+- exit **1** refused, **2** verification did not pass, **3** workspace untrusted,
+  **4** reviewer stage failed after verification passed, **0** a valid review —
+  for `approve`, `changes_requested` **and** `needs_human_review` alike.
+
+> **A verdict is advisory and terminal.** All three verdicts end at a human.
+> Never add a fixer, a second reviewer, a retry after findings, patch generation
+> from findings, a file edit from findings, a revert or restore, a branch, a
+> commit, a push, or a PR.
+>
+> **Scope claims truthfully here too.** This command *does* make a model/network
+> call, and its verification stage *does* execute repository-controlled code — so
+> a blanket `network_called: false` or `commands_run: false` is forbidden for the
+> invocation. Keep the `orchestrator_` prefix, scope review-stage claims to the
+> review stage, and leave child-process facts inside the embedded verification
+> report.
+>
+> **Redaction is a backstop, not a guarantee.** Never write code or documentation
+> claiming the transmitted material is secret-free.
+
+Do **not** add any of the following without an explicit, separate prompt: a
+model-backed implementer; a fixer; a review/fix loop; a second reviewer,
+consensus, or voting; multiple reviewer models; full-file or repository-wide
+transmission; multi-file review; a prompt audit file; a persistent review
+database, queue, or background job.
+
 ## Role split
 
 - **ChatGPT** = architect / planner / reviewer / prompt writer.
@@ -152,12 +217,17 @@ prompt explicitly asks:
   named by the `controlled_verification` opt-in (ships disabled), with an exact
   configured argv, once, bounded. It runs repository-controlled code by design —
   **controlled invocation, not a sandbox** — and must never claim otherwise.
-- No **agent logic**, and no reviewer/fixer role wiring.
+- **Reviewer integration exists, in exactly one narrow form** (Phase 5F2E), and
+  it is the **only** role wired up. There is **no fixer**, no review/fix loop, no
+  second reviewer, no consensus, and no model-backed implementer. A reviewer
+  verdict is advisory and ends at a human.
+- No **agent logic** beyond that one reviewer call.
 - No LangGraph / CrewAI / AutoGen / n8n (no agent framework).
 
-Real LiteLLM calls exist only behind the two explicitly gated commands
-(`real-llm-smoke-test`, `generate-model-plan`); nothing else may call a model,
-and no model output may ever select a path, a command, or an executable.
+Real LiteLLM calls exist only behind the three explicitly gated commands
+(`real-llm-smoke-test`, `generate-model-plan`, `l2-review-approved-file-edit`);
+nothing else may call a model, and no model output may ever select a path, a
+command, an executable, or a file to change.
 
 ## Coding discipline
 
@@ -172,6 +242,9 @@ and no model output may ever select a path, a command, or an executable.
   repository under pytest `tmp_path`**. Never test against a real target project.
   A verification test's program must likewise be a **synthetic script written
   under `tmp_path`**, never a real project executable.
+- Any test that exercises the reviewer must use the existing mockable LiteLLM
+  client path with `httpx.MockTransport`. **No real model call and no socket in
+  the test suite**, and no API key is ever needed to run it.
 
 ## Safety principles
 

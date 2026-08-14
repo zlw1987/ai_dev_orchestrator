@@ -1512,6 +1512,13 @@ EXPECTED_COMMANDS = [
     # NOT a sandbox. It calls no model, contacts no GitHub, and creates no
     # branch/commit/push/PR.
     "l2-verify-approved-file-edit",
+    # Phase 5F2E. The FIRST command that deliberately sends source-derived code
+    # to a model: it runs the Phase 5F2D verification itself, and only after a
+    # `verified` outcome sends ONE approved unified diff, selected plan prose,
+    # and the redacted verification output to ONE project-configured reviewer
+    # model. The verdict is advisory: no fixer, no re-review, no patch, no file
+    # edit, and no branch/commit/push/PR.
+    "l2-review-approved-file-edit",
 ]
 
 

@@ -214,6 +214,46 @@ controlled_verification:
   timeout_seconds: 120
   max_output_bytes: 200000
 
+# Controlled REVIEW of an already-verified approved edit (Phase 5F2E). DISABLED,
+# and a fifth separate opt-in — the first one that can authorize AIDO to send
+# SOURCE-DERIVED CODE to a model. Every earlier model-facing capability carried
+# issue text only. While disabled, `l2-review-approved-file-edit` refuses before
+# the approved-diff artifact is even opened and before anything is executed.
+#
+# `real_model_planning` above does NOT authorize review, and this block does not
+# authorize planning. Planning authorization and review authorization are
+# separate capabilities on purpose.
+#
+# When enabled, the command can do exactly one thing: run the Phase 5F2D
+# verification itself, and only if it returns `verified`, send ONE approved
+# unified diff, selected approved-plan prose (summary, scope, non-goals, proposed
+# steps, risks, open questions) and the bounded, redacted verification output to
+# the ONE model named below, once, and print one review packet for a human.
+#
+# It never sends the full target file, any unrelated repository source, a
+# directory listing, a repository tree, git history, the workspace path, any
+# absolute path, the approval text, the raw artifact, any environment value, the
+# GitHub token, the endpoint base URL, or the API key. Project-controlled text is
+# redacted before transmission — a best-effort backstop, NOT a guarantee that the
+# transmitted material is secret-free.
+#
+# `model` is the ONLY place a reviewer model may be named: there is no CLI
+# --model, AIDO_LITELLM_DEFAULT_MODEL never selects it, and matching is exact —
+# no glob, no prefix, no case folding. `provider` currently accepts only
+# "litellm", the existing internal OpenAI-compatible path; connection details
+# still come from the AIDO_LITELLM_* environment, and are read ONLY after the
+# verification has passed.
+#
+# There is deliberately NO api_key, base_url, endpoint, credential, env-var name,
+# prompt template, header, retry count, fixer block, second reviewer, or
+# full-file transmission switch here. The verdict is advisory: no fixer, no
+# re-review, no patch, no file edit, no branch, no commit, no push, and no PR
+# follows it. Never put credentials here.
+controlled_review:
+  enabled: false
+  provider: "litellm"
+  # model: "qwen3-coder-next"
+
 run_limits:
   max_model_calls_per_issue: 20
   max_review_loops: 3

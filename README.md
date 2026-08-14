@@ -17,10 +17,10 @@ changes. The eventual design will:
 
 The emphasis is on **control and review**, not autonomous action.
 
-## Current status: Phase 5F2D — AIDO can now write **one** approved file and **verify** it, and that is all
+## Current status: Phase 5F2E — AIDO can now write **one** approved file, **verify** it, and have **one** model review it, and that is all
 
-**Phase 5F2D is the latest completed phase, and it is the first one that
-executes repository-controlled code.** Two commands now exist where there were
+**Phase 5F2E is the latest completed phase, and it is the first one that sends
+source-derived code to a model.** Three commands now exist where there were
 none:
 
 - `l2-apply-approved-file-edit` (Phase 5F2C) applies **one** explicitly
@@ -34,15 +34,32 @@ none:
   output, and then proves the Git-visible workspace state still contains only the
   approved modification.
 
-They are **separately invokable**. The writer has no verification flag, and the
-verifier writes nothing.
+- `l2-review-approved-file-edit` (Phase 5F2E) runs that verification itself and,
+  **only** if it returns `verified`, sends **one** approved unified diff,
+  selected approved-plan prose, and the bounded, redacted verification output to
+  **one** project-configured reviewer model — once — and prints **one**
+  structured `review-packet.v1` for a human to read.
 
-Everything outside those two sentences fails closed. There is no file creation,
-no delete, no rename, no second file, no protected or forbidden path, no fuzzy
-patching, no non-Windows support, no shell, no command chaining, no arbitrary or
-model-proposed command, no model call, no orchestrator network call, no GitHub
-access, no branch, no commit, no push, no PR, no retry, no automatic repair, no
-rollback and no journal.
+They are **separately invokable**. The writer has no verification flag, the
+verifier writes nothing and calls no model, and the reviewer command writes
+nothing and applies nothing. The reviewer's verdict is **advisory**: `approve`,
+`changes_requested` and `needs_human_review` all end at a human.
+
+Everything outside those three sentences fails closed. There is no file
+creation, no delete, no rename, no second file, no protected or forbidden path,
+no fuzzy patching, no non-Windows support, no shell, no command chaining, no
+arbitrary or model-proposed command, no model-backed implementer, no fixer, no
+review/fix loop, no second reviewer, no whole-file transmission, no GitHub
+access, no branch, no commit, no push, no PR, no application-level review retry,
+no automatic repair, no rollback and no journal.
+
+**The one honest exception to "no model call, no network call".** Phase 5F2E's
+reviewer command *does* call a model over the network — that is the capability —
+and its verification stage *does* execute repository-controlled code. So the
+review packet never carries a blanket `network_called: false` or
+`commands_run: false`; it admits both plainly and scopes every negative claim to
+the orchestrator, and to the review *stage* where that matters. The writer and
+the verifier still call no model and open no socket.
 
 > **Controlled invocation is not sandboxed execution.** Phase 5F2D chooses which
 > program runs, with which arguments, where, with which minimal environment, for
@@ -69,10 +86,10 @@ that machinery is itself reliability and security surface. The new rules are:
 > capability, **consume the existing safety primitives** before creating
 > additional generalized ones.
 
-The near-term sequence is now **5F2C controlled single-file writer → 5F2D
-controlled verification → 5F2E reviewer integration → the first complete
-controlled implement → verify → review → human loop**. Generalized writer
-expansion resumes only after that. See
+That sequence — **5F2C controlled single-file writer → 5F2D controlled
+verification → 5F2E reviewer integration** — is now complete, and the first
+controlled **write → verify → review → human** path exists. Generalized writer
+expansion resumes only after that, and has not resumed. See
 [§27 and §28 of the design doc](docs/PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md);
 §26.12 is preserved as history and marked superseded prospectively.
 
@@ -432,17 +449,81 @@ and again **nothing was widened**.
   *not* "fixed" by killing, enumerating, or grouping descendants: **no job
   object, `taskkill`, process group, `psutil`, or process-tree manager exists.**
 
-**L2 is still not complete.** Phase 5F2E (reviewer integration) remains
-**unauthorized**, so the complete implement → verify → review → human loop does
-not exist. There is still no model-backed implementer, no reviewer, no commit, no
-push and no PR.
+### What Phase 5F2E actually ships
+
+Phase 5F2E is the **first runtime capability in this repository that
+deliberately sends source-derived code to a model.** Every earlier model-facing
+command carried issue text: a title, a body pasted into a local file, and path
+*patterns*. This one carries a unified diff of the project's own source.
+
+One command, `l2-review-approved-file-edit`, and it is deliberately narrow:
+
+- **it does not run the writer.** It starts from the exact state
+  `l2-apply-approved-file-edit` leaves behind;
+- **it runs the existing 5F2D verification itself.** There is no
+  `--verification-result` input, and no previously saved report is trusted as
+  authority. That keeps the verification fresh for the review it informs, and
+  makes the whole command re-runnable if the reviewer configuration turns out to
+  be wrong;
+- **reviewer credentials are not read until verification passes.** The
+  `AIDO_LITELLM_*` names are read only after the verifier returns `verified`, so
+  they never coexist in AIDO's process state while unsandboxed
+  repository-controlled code is running. They are never forwarded to the
+  verification child;
+- **the model comes only from project config.** `controlled_review.model`, exact
+  match, no CLI `--model`, no environment default, no glob or case folding. And
+  `real_model_planning` does **not** authorize a review — planning authorization
+  and review authorization are separate capabilities;
+- **one semantic reviewer request**, whose reply must be exactly one strict JSON
+  object. It is **rejected, never repaired**: no second prompt, no "fix your
+  JSON" round trip, no re-review. (The existing LLM client keeps its own bounded
+  *transport* retries; that is not a re-review.)
+
+**What the reviewer receives:** trusted identity, selected approved-plan prose
+(summary, scope, non-goals, proposed steps, risks, open questions), the **one**
+approved unified diff, and the verification facts with their bounded, redacted
+output. **What it never receives:** the full target file, any unrelated source, a
+directory listing, a repository tree, git history, the workspace path, any
+absolute path, the approval text, the raw artifact, any environment value, the
+GitHub token, the endpoint base URL, or the API key.
+
+Project-controlled text is redacted before transmission and wrapped in explicit
+untrusted-data delimiters that injected delimiters cannot escape; the reviewer is
+told that diffs, comments, string literals, plan prose and verification output
+are material to inspect and never instructions to follow.
+
+> **Redaction is a best-effort backstop, not a guarantee.** Nothing in the code
+> or the packet claims the transmitted material is secret-free.
+
+**Exit codes:** `0` a valid review — for `approve`, `changes_requested` **and**
+`needs_human_review` alike, because all three are successful reviews; `1`
+refused; `2` verification did not pass (no model contacted); `3` workspace no
+longer provably the approved state (no model contacted, nothing repaired); `4`
+verification passed but the reviewer stage failed — nothing repaired, restored,
+retried or re-prompted, and no raw model response, API key, base URL or diff in
+the error.
+
+**A verdict is advisory and terminal.** There is no fixer, no second reviewer, no
+retry after findings, no patch generation, no file edit, no revert, no branch, no
+commit, no push, and no PR. The human decides what happens next.
+
+**L2 as originally defined is still not complete.** There is no model-backed
+implementer, no automatic fixer, no local branch creation, no local commit, no
+push, no PR, and no generalized writer.
 
 ```text
 5F2C  Controlled Single-File Writer      DONE
 5F2D  Controlled Verification            DONE
-5F2E  Reviewer Integration               NEXT
-→ first controlled implement → verify → review → human loop
+5F2E  Controlled Reviewer Integration    DONE
+→ first controlled write → verify → review → human milestone reached
 ```
+
+**The old "Phase 6 — qwen reviewer" roadmap entry is superseded by Phase 5F2E.**
+5F2E hard-codes no model: a project configures an allowed internal reviewer model
+in `controlled_review.model`, so pointing it at a Qwen model is a configuration
+choice rather than a phase, and no separate qwen-only integration phase is
+required. Phases were **not** renumbered, and **Phase 7 (fixer) remains
+separately unauthorized**.
 
 Phase 5F0 typed the human approval a future file-editing phase would have to be
 handed, and shipped nothing that consumes it. Phase 5F1 is the first consumer:
@@ -556,9 +637,10 @@ yet, so a `create` target had no guard at all.
 **Phase 5F2D the first controlled verification execution** — both described at
 the top of this document. So the old statement that "5F2F remains the first
 controlled workspace write" is history, not current status, and so is
-"nothing here runs a project's own checks". **Phase 5F2E (reviewer integration)
-remains proposed and not authorized**, and **L2 is still not complete**: nothing
-here calls a model to implement, reviews, commits, pushes, or opens a PR.
+"nothing here runs a project's own checks". **Phase 5F2E has since shipped the
+first controlled reviewer integration**, so "nothing here calls a model to
+review" is history too. **L2 is still not complete**: nothing calls a model to *implement*,
+fixes, commits, pushes, or opens a PR.
 
 See
 [docs/PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md §25 and §26](docs/PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md)
@@ -1286,14 +1368,16 @@ The following are intentionally **not** implemented yet:
 - No **GitHub writes** (read-only issue access only — no comments, labels,
   branches, or PRs).
 - No **complete L2 automation loop**, and no L3 automation at all. This is no
-  longer "nothing acts on the plan": two commands do act, and only on artifacts a
-  human approved in the exact required wording. `l2-apply-approved-file-edit`
-  (Phase 5F2C) applies one approved modification to one tracked file, and
+  longer "nothing acts on the plan": three commands do act, and only on artifacts
+  a human approved in the exact required wording. `l2-apply-approved-file-edit`
+  (Phase 5F2C) applies one approved modification to one tracked file,
   `l2-verify-approved-file-edit` (Phase 5F2D) runs one project-configured
-  verification process against it. Each requires its own project opt-in (both
-  ship disabled) plus its own explicit consent flag, and each is invoked by a
-  human, one step at a time. What is missing is the **loop**: Phase 5F2E reviewer
-  integration is not authorized, so there is no reviewer, no fixer, no
+  verification process against it, and `l2-review-approved-file-edit` (Phase
+  5F2E) runs that verification itself and then has one project-configured model
+  review the approved diff. Each requires its own project opt-in (all three ship
+  disabled) plus its own explicit consent flag, and each is invoked by a human,
+  one step at a time. What is missing is the **loop**: the reviewer's verdict is
+  advisory and ends at a human, so there is no fixer, no re-review, no
   model-backed implementer, and no branch, commit, push or PR.
 - No agent logic.
 - No **general command execution**. Nothing creates a branch, commits, pushes, or
@@ -2102,11 +2186,143 @@ activity, registry or system changes, services or child processes the
 verification left running, and any filesystem effect Git does not report. That
 limitation is carried in the report itself.
 
+### Reviewing one verified file edit (Phase 5F2E — the only command that sends source to a model)
+
+```bash
+python -m ai_dev_orchestrator l2-review-approved-file-edit --project-config projects/my_project.yaml --approved-diff-proposal path/to/approved_diff_proposal.json --verify-approved-file-edit --real-reviewer
+```
+
+`l2-review-approved-file-edit` is the **only** command in this repository that
+deliberately sends source-derived code to a model. It reads the same two **local
+files**, runs the Phase 5F2D verification **itself**, and only if that returns
+`verified` does it read the `AIDO_LITELLM_*` environment, build a client, and
+send one review request.
+
+Note the option set: there is **no `--apply-approved-plan`**, **no `--model`**,
+and — importantly — **no `--verification-result`**. A verification result is
+never an input, and no previously saved report is trusted as authority.
+
+It requires this block in the project config, shipped **disabled** and separate
+from every other opt-in:
+
+```yaml
+controlled_review:
+  enabled: false               # must be true; absent is identical to false
+  provider: "litellm"          # only the existing internal OpenAI-compatible path
+  model: "qwen3-coder-next"    # the exact reviewer model — the ONLY place one may be named
+```
+
+`real_model_planning` does **not** authorize a review, and this block does not
+authorize planning. There is deliberately no `api_key`, `base_url`, endpoint,
+credential, environment-variable name, prompt template, header, retry count, or
+fixer field. Connection details still come from `AIDO_LITELLM_BASE_URL` and
+`AIDO_LITELLM_API_KEY`; `AIDO_LITELLM_DEFAULT_MODEL` supplies a connection
+default and can **never** select the reviewer.
+
+**Ordering is the safety property.** Both action flags gate every read; then the
+project config loads; then `controlled_review` must authorize a reviewer; then
+`controlled_verification` must be enabled and the platform must be Windows; then
+the artifact path is checked lexically and read; then the **accepted 5F2D
+verifier runs**; and only after a `verified` outcome is any reviewer credential
+read. Reviewer credentials are never forwarded to the verification child, and
+5F2D's environment policy is unchanged.
+
+**What is transmitted:** trusted identity (project id, repo, issue number, issue
+title, and the one repo-relative target path), selected approved-plan prose
+(summary, scope summary, non-goals, proposed steps, risks, open questions), the
+**one** approved unified diff, and the verification facts with their bounded,
+redacted output.
+
+**What is never transmitted:** the full target file, any unrelated repository
+source, a directory listing, a repository tree, git history, a status dump, the
+configured workspace path, any absolute path (including the verification and Git
+executables), the approval text, the raw input artifact, raw unredacted
+verification bytes, any environment value, the GitHub token, the endpoint base
+URL, or the API key.
+
+> **Redaction is a best-effort backstop, not a guarantee.** Project-controlled
+> text passes through the shared secret-like redactor into a transmission copy —
+> the authoritative artifact is never mutated — and the packet reports that
+> redaction ran with safe counts and kinds. Nothing claims the transmitted
+> material is secret-free.
+
+All project-controlled text is wrapped in explicit untrusted-data delimiters, and
+delimiters occurring inside supplied text are neutralized first, so a comment,
+string literal or plan sentence cannot close the block and continue as apparent
+instructions. The reviewer is told that such text is material to inspect and
+never instructions to follow, and that it must not write replacement file
+contents, produce an applyable patch, invoke tools, run commands, select a
+different file, claim orchestrator authority for a branch/commit/push/PR, claim
+it changed anything, or contradict the supplied verification facts.
+
+**The reply must be exactly one strict JSON object** — verdict, summary, findings
+(at most 20, each with a closed severity and category, a positive line or
+`null`, a message and a plain-language suggested action), residual risks, and
+human notes. It is **rejected, never repaired**: no markdown fence, no prose, no
+extra field, no orchestrator-owned field, and no verdict its findings contradict
+(`changes_requested` requires a blocker or major; `approve` may carry neither).
+**One semantic reviewer request** is made; the existing LLM client keeps its own
+bounded transport retries, and there is no application-level retry, re-prompt, or
+re-review.
+
+A warning block goes to stderr before the call — naming the model, the endpoint
+**host only**, and exactly what is and is not transmitted — so a real reviewer
+call is impossible to miss in a scrollback. The diff itself, the base URL and the
+API key never appear in it.
+
+On success stdout is one `review-packet.v1` artifact: orchestrator-owned
+identity, the target, the **embedded validated verification result**, safe
+reviewer provenance (provider, exact model, endpoint host, `real_call: true`, one
+semantic request, token usage), the strict review, the transmission boundary, and
+capability claims. The approved diff is deliberately **not** re-echoed into it.
+
+> **Capability claims are scoped truthfully.** This command *does* make a model
+> and network call, and its verification stage *does* execute
+> repository-controlled code — so the packet carries
+> `orchestrator_model_called: true`, `orchestrator_network_called: true` and
+> `orchestrator_repository_controlled_code_executed_by_verification_stage: true`,
+> and there is **no** blanket `network_called: false` or `commands_run: false`.
+> Every negative claim keeps the `orchestrator_` prefix, and child-process facts
+> stay in the embedded verification report.
+
+**AIDO's review stage does not** — scoped to the orchestrator's own reviewer
+work, because the Phase 5F2D verification child this command runs first is
+**not** sandboxed and no claim below is made on its behalf:
+
+- write, create, delete, rename or move any file in the workspace,
+- run the writer, or apply anything,
+- re-run verification after the review,
+- invoke a fixer, a second reviewer, or a re-review,
+- generate a patch or a file edit from the findings,
+- repair, restore, `git restore`, stage, commit, push, branch, or open a PR,
+- contact GitHub, or fetch an issue,
+- accept a `--model`, `--provider`, `--prompt`, `--command`, `--fix`, `--retry`,
+  `--commit`, `--push`, `--pr` or `--verification-result` option, because none
+  exists.
+
+**Exit codes are distinct on purpose:**
+
+| Code | Meaning |
+| --- | --- |
+| `0` | A **valid structured review**. stdout is the review packet. `approve`, `changes_requested` **and** `needs_human_review` all exit 0 — all three are successful reviews, not AIDO errors. |
+| `1` | **Refused before anything ran.** No workspace touched, no process launched, no environment read, no model contacted. |
+| `2` | **Verification ran and did not pass.** No model was contacted and no reviewer credential was read. stdout is the 5F2D report. |
+| `3` | **Verification ran and the repository is no longer provably the approved state.** No model was contacted; nothing was repaired. stdout is the 5F2D report. |
+| `4` | **Verification passed but the reviewer stage failed** — environment, transport, non-strict JSON, or schema/consistency validation. **AIDO's review stage** repaired nothing, restored nothing, retried nothing, re-prompted nothing, wrote no file into the workspace, performed no Git mutation and created no branch/commit/push/PR; the passed verification had established the approved bytes, an unchanged HEAD and exactly one unstaged dirty path; **nothing is claimed beyond Phase 5F2D's documented detection boundary**, because that child was not sandboxed. Fix the configuration and run the same command again. No raw model response, API key, base URL, or diff appears in the error. |
+
+**The verdict is advisory and terminal.** A human decides what happens next.
+
 ## Tests
 
 ```bash
 pytest
 ```
+
+Every test is offline. Git, workspace and verification tests use **synthetic
+repositories and synthetic verification programs under pytest `tmp_path`** —
+never a real target project — and every reviewer test goes through the existing
+LLM client with `httpx.MockTransport`, so no socket is opened, no real model is
+contacted, and **no API key is needed to run the suite**.
 
 ## Configuration
 
@@ -2308,22 +2524,29 @@ run repository-controlled code, bound on both sides to the exact already-applied
 approved change, with the command coming only from a `controlled_verification`
 project opt-in that ships disabled.
 
-**L2 is not complete.** The near-term sequence is:
+**Phase 5F2E** then shipped the **first controlled reviewer integration**,
+`l2-review-approved-file-edit` — the first capability here that deliberately
+sends source-derived code to a model. It runs the 5F2D verification itself and,
+only on a `verified` outcome, sends one approved diff plus selected plan prose
+and redacted verification output to one model named by a `controlled_review`
+project opt-in that ships disabled, then prints one human-facing review packet.
+
+**L2 as originally defined is not complete.** The sequence now reads:
 
 ```text
 5F2C  Controlled Single-File Writer      DONE
 5F2D  Controlled Verification            DONE
-5F2E  Reviewer Integration               NEXT
-→ first controlled implement → verify → review → human loop
+5F2E  Controlled Reviewer Integration    DONE
+→ first controlled write → verify → review → human milestone reached
 ```
 
-**Phase 5F2E remains unauthorized**, so the complete
-implement → verify → review → human loop does not exist. Until it is explicitly
-authorized, the project continues to avoid agent automation, arbitrary command
-execution, model-backed implementation, reviewer/fixer wiring, GitHub writes,
-GitHub issue fetching inside a real model command, branches, commits, pushes, and
-PRs. Project verification execution is now available, but only in the single,
-config-authorized, bounded form Phase 5F2D describes. Generalized writer expansion
-— multi-file, `create`, protected-path writes, transactions, journals, rollback,
-crash recovery and concurrency — resumes only after that loop exists, and **no
-generalized writer work is inserted between 5F2D and 5F2E**.
+The reviewer's verdict is **advisory and terminal**: a human decides what happens
+next. The project continues to avoid agent automation, arbitrary command
+execution, model-backed implementation, fixer wiring, review/fix loops, GitHub
+writes, GitHub issue fetching inside a real model command, branches, commits,
+pushes, and PRs. Project verification execution remains available only in the
+single, config-authorized, bounded form Phase 5F2D describes, and model-backed
+review only in the single, config-authorized form Phase 5F2E describes.
+Generalized writer expansion — multi-file, `create`, protected-path writes,
+transactions, journals, rollback, crash recovery and concurrency — has **not**
+resumed, and **no generalized writer work was inserted between 5F2D and 5F2E**.

@@ -138,10 +138,12 @@ SINGLE_WRITER_CONTRACT = (
 # What a human must do next, and what must be authorized before anything more.
 NEXT_STEP_REQUIRES_HUMAN_REVIEW = (
     "The change is left uncommitted in the working tree for human review. "
-    "Nothing was verified by running the project's own checks, nothing was "
-    "committed, nothing was pushed, and no PR was opened. Phase 5F2D "
-    "(controlled verification) and Phase 5F2E (reviewer integration) must each "
-    "be explicitly authorized before this result flows any further."
+    "This writer verified nothing by running the project's own checks, "
+    "committed nothing, pushed nothing, and opened no PR. Running the project's "
+    "verification and taking the result to a reviewer model are the separate, "
+    "separately gated Phase 5F2D and Phase 5F2E commands, each of which a human "
+    "invokes deliberately; nothing consumes this result automatically, and a "
+    "reviewer verdict is advisory."
 )
 
 # The largest human-facing Git diff the report will carry. Beyond it the diff is

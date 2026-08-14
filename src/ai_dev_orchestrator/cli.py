@@ -5,9 +5,10 @@ inspection), `llm-smoke-test` (a fake-provider dry-run of the Phase 3C LLM
 client — no real model call), `generate-plan` (an offline fake/deterministic L1
 plan generator — Phase 4D, no GitHub fetch, no model call), `l2-dry-run` (an
 offline validator that reports what a future L2 *would* have in scope — Phase
-5C, no workspace access and no implementation), and the **two** commands that
+5C, no workspace access and no implementation), and the **three** commands that
 may open a real socket, each only after every gate precondition passes:
-`real-llm-smoke-test` (Phase 4K) and `generate-model-plan` (Phase 4L).
+`real-llm-smoke-test` (Phase 4K), `generate-model-plan` (Phase 4L) and
+`l2-review-approved-file-edit` (Phase 5F2E).
 
 `real-llm-smoke-test` is a **connectivity check, not a planner**: it sends a
 fixed, harmless prompt, never issue text, and produces no plan.
@@ -15,19 +16,24 @@ fixed, harmless prompt, never issue text, and produces no plan.
 text of the local file explicitly named on the command line, and nothing else —
 no source files, no workspace contents, no directory listings, no git history.
 Both require an explicit `--real-model` flag plus a project config that opts in
-and allowlists the model.
+and allowlists the model. `l2-review-approved-file-edit` is the **reviewer**, and
+the only one of the three that transmits source-derived text; it is gated by a
+**separate** `controlled_review` project opt-in — `real_model_planning` does not
+authorize it — plus two explicit flags, and it is described below.
 
 Every other command remains offline in the sense that matters here: no GitHub
-fetch happens in either gated command, and no agent logic, role wiring, GitHub
-write, branch, commit, push or PR is wired up anywhere.
+fetch happens in any gated command, and no model-backed implementer, fixer,
+review/fix loop, GitHub write, branch, commit, push or PR is wired up anywhere.
 
-**Two commands do act on explicitly approved artifacts**, and the older prose
+**Three commands do act on explicitly approved artifacts**, and the older prose
 claiming that nothing here edits a file or runs a command is history, not current
 status. `l2-apply-approved-file-edit` (Phase 5F2C) writes one approved
-modification to one tracked file, and `l2-verify-approved-file-edit` (Phase 5F2D)
-executes one project-configured verification process. Both are described below.
-**L2 is still not complete**: there is no reviewer, no model-backed implementer,
-and no commit, push or PR.
+modification to one tracked file, `l2-verify-approved-file-edit` (Phase 5F2D)
+executes one project-configured verification process, and
+`l2-review-approved-file-edit` (Phase 5F2E) runs that verification itself and
+then sends the approved change to a project-configured reviewer model. All three
+are described below. **L2 is still not complete**: there is no model-backed
+implementer, no automatic fixer, and no branch, commit, push or PR.
 
 `l2-dry-run` is the first command that reads an approved-plan artifact, and it
 does exactly two file reads — the `--project-config` YAML and the
@@ -78,6 +84,18 @@ says so rather than claiming otherwise. Every AIDO-owned negative claim in that
 report is scoped with an `orchestrator_` prefix, so no field can be misread as a
 statement about the child. The command is separate from the writer on purpose,
 and the L1 plan's `required_verification` is never command authority.
+
+`l2-review-approved-file-edit` (Phase 5F2E) is the first command that
+**deliberately sends source-derived code to a model**. It runs the Phase 5F2D
+verification internally — there is no `--verification-result` input, and no saved
+report is trusted as authority — and only after a `verified` outcome does it read
+the `AIDO_LITELLM_*` environment and contact the project-configured reviewer. It
+transmits one approved unified diff, selected approved-plan prose, and the
+bounded, redacted verification output, all as delimited untrusted data; it never
+transmits the full target file, unrelated source, a directory listing, git
+history, an absolute path, or a credential. The reviewer's verdict is advisory:
+`approve`, `changes_requested` and `needs_human_review` all end with a human, and
+no fixer, re-review, patch, file edit, branch, commit, push or PR follows.
 """
 
 from __future__ import annotations
@@ -3927,6 +3945,500 @@ def l2_verify_approved_file_edit(
         approved_diff_proposal=approved_diff_proposal,
         apply_approved_plan=apply_approved_plan,
         verify_approved_file_edit_flag=verify_approved_file_edit_flag,
+    )
+
+
+# -- L2 controlled reviewer integration (Phase 5F2E) ---------------------------
+
+# Five exit categories. The first three are Phase 5F2D's, unchanged in meaning,
+# because this command runs that verifier and must not reinterpret it:
+#
+#   1  refused before any project process was started.
+#   2  a verification process ran and did not pass. No model was contacted.
+#   3  a verification process ran and the repository is no longer provably the
+#      approved state. No model was contacted.
+#   4  verification PASSED and the reviewer stage failed — environment, client,
+#      transport, strict JSON, or schema/consistency validation. The approved
+#      change is untouched and the same command may be run again.
+#   0  the reviewer produced a valid structured result. All three verdicts —
+#      approve, changes_requested, needs_human_review — are successful reviewer
+#      completions, not runtime errors.
+_REVIEW_EXIT_REFUSED = 1
+_REVIEW_EXIT_VERIFICATION_NOT_PASSED = 2
+_REVIEW_EXIT_WORKSPACE_UNTRUSTED = 3
+_REVIEW_EXIT_REVIEWER_FAILED = 4
+
+# Human-readable categories for the reviewer-stage failures, following the Phase
+# 4L precedent: name *what kind* of thing failed. None of these messages may carry
+# the raw model response, the prompt, the approved diff, the API key, or the base
+# URL — the review module's own messages are built from fixed strings and field
+# names for exactly that reason.
+_REVIEWER_FAILURE_CATEGORIES: dict[str, str] = {
+    "ReviewerEnvironmentError": (
+        "reviewer environment failure — the AIDO_LITELLM_* connection settings "
+        "were missing or invalid"
+    ),
+    "ReviewerTransportError": (
+        "reviewer transport failure — the endpoint call failed under the LLM "
+        "client's existing policy"
+    ),
+    "ReviewParseError": (
+        "reviewer parse failure — the reply was not exactly one strict JSON object"
+    ),
+    "ReviewValidationError": (
+        "reviewer validation failure — the reply had missing, extra, or "
+        "wrong-typed fields, supplied an orchestrator-controlled field, exceeded "
+        "a bound, or carried a verdict its findings contradict"
+    ),
+}
+
+
+def _echo_reviewer_banner(notice) -> None:
+    """Print the non-suppressible pre-call warning block to stderr.
+
+    Follows the Phase 4 real-model command pattern, and says the one thing those
+    banners never had to: **source-derived code is about to leave the machine.**
+    Host only — never the base URL (which may embed userinfo or a query string),
+    never the API key, and never the diff itself.
+
+    The issue **title** is deliberately absent. It is free-form third-party text
+    that may contain newlines and banner-shaped lines, and this block is a
+    non-suppressible human-facing safety notice: a hostile title could forge
+    banner lines here and misrepresent what is being transmitted. The prompt
+    contains that text inside untrusted-data delimiters, but a terminal has no
+    such boundary. ``ReviewerCallNotice`` therefore has no ``title`` field at
+    all, so this function cannot print one — no escaping or sanitization
+    machinery was added for it. The issue number identifies the run; the title
+    still appears in the review packet and the model request.
+    """
+    for line in (
+        "=== REAL REVIEWER MODEL CALL — a real network call is about to be made ===",
+        f"Endpoint host: {notice.endpoint_host}",
+        f"Model:         {notice.model}",
+        f"Project:       {notice.project_id}",
+        f"Repo:          {notice.repo}",
+        f"Issue:         #{notice.issue_number}",
+        "SOURCE-DERIVED CODE WILL BE TRANSMITTED to the model above:",
+        "  - the ONE human-approved unified diff for the one approved file;",
+        "  - selected approved-plan prose (summary, scope, non-goals, proposed "
+        "steps, risks, open questions);",
+        "  - the redacted output of the verification run that just passed.",
+        "NOT transmitted: the full target file, any unrelated repository source, "
+        "any directory listing, repository tree or git history, the workspace "
+        "absolute path, the verification or git executable path, the approval "
+        "text, the raw input artifact, any environment value, the GitHub token, "
+        "the endpoint base URL, or the API key.",
+        "Redaction was applied to project-controlled text before transmission. "
+        "It is a best-effort backstop, NOT a guarantee that the material is "
+        "secret-free.",
+        "The reviewer's verdict is advisory: no fixer, re-review, patch, file "
+        "edit, branch, commit, push, or PR follows it.",
+        "=" * 74,
+    ):
+        typer.echo(line, err=True)
+
+
+def _run_l2_review_approved_file_edit(
+    *,
+    project_config: Path,
+    approved_diff_proposal: Path,
+    verify_approved_file_edit_flag: bool,
+    real_reviewer: bool,
+    read_env=_read_real_llm_env,
+    client_factory=_build_real_llm_client,
+) -> None:
+    """Verify one applied approved change, then review it. Extracted for tests.
+
+    ``read_env`` and ``client_factory`` are injection points: the CLI wrapper
+    supplies the real environment reader and the real client builder, while tests
+    supply a literal mapping and an ``httpx.MockTransport``-backed client, so the
+    test suite never reads a real value or opens a real socket.
+
+    Ordering is the safety property, and the credential ordering in particular is
+    load-bearing. In sequence: both ``--verify-approved-file-edit`` and
+    ``--real-reviewer`` must be present — with **no file read at all** if either
+    is missing — then the project config loads, then ``controlled_review`` must
+    authorize a reviewer (enabled, supported provider, exact non-blank model),
+    then ``controlled_verification`` must be enabled and the platform must be
+    Windows, then a string/path check rejects an ``--approved-diff-proposal``
+    inside the configured workspace *before* it is opened, then the artifact is
+    read and strictly parsed, then the **accepted Phase 5F2D verifier runs**, and
+    only after it returns ``verified`` is ``read_env`` called and a client built.
+
+    No reviewer credential is read on behalf of a run whose verification refused,
+    failed, or left the workspace untrusted.
+    """
+    from ai_dev_orchestrator.config_loader import ConfigError, load_project_config
+    from ai_dev_orchestrator.file_editing import (
+        FileEditingApprovalError,
+        parse_approved_diff_proposal_artifact,
+    )
+    from ai_dev_orchestrator.review import (
+        ReviewerStageError,
+        ReviewRefusedError,
+        check_controlled_review_gate,
+        run_controlled_review,
+    )
+    from ai_dev_orchestrator.verification import VerificationRefusedError
+
+    # 1. Explicit confirmation that the project's own verification process may be
+    #    executed. This command runs it internally, so it demands the same
+    #    consent the standalone verifier does.
+    if not verify_approved_file_edit_flag:
+        typer.echo(
+            "Error: l2-review-approved-file-edit runs the project's own "
+            "configured verification process — repository-controlled code, in a "
+            "process AIDO does not sandbox — before it contacts a reviewer, and "
+            "requires the explicit --verify-approved-file-edit flag. Nothing was "
+            "read, nothing was executed, and no model was contacted.",
+            err=True,
+        )
+        raise typer.Exit(code=_REVIEW_EXIT_REFUSED)
+
+    # 2. Explicit confirmation that source-derived code may leave the machine. A
+    #    second, separate consent: agreeing to run the tests is not agreeing to
+    #    send the diff to a model.
+    if not real_reviewer:
+        typer.echo(
+            "Error: l2-review-approved-file-edit transmits SOURCE-DERIVED CODE — "
+            "the approved unified diff, selected plan prose, and redacted "
+            "verification output — to a REAL reviewer model, and requires the "
+            "explicit --real-reviewer flag. Nothing was read, nothing was "
+            "executed, and no model was contacted.",
+            err=True,
+        )
+        raise typer.Exit(code=_REVIEW_EXIT_REFUSED)
+
+    # 3. Project config: the first file read.
+    try:
+        project = load_project_config(project_config)
+    except ConfigError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        typer.echo(
+            "The approved diff proposal artifact was not read, nothing was "
+            "executed, and no model was contacted.",
+            err=True,
+        )
+        raise typer.Exit(code=_REVIEW_EXIT_REFUSED)
+
+    # 4. Reviewer authority, from trusted project config only. Checked before the
+    #    artifact is opened and long before repository-controlled code could run
+    #    on behalf of a project that may never be reviewed. `real_model_planning`
+    #    is not consulted: planning authorization is not review authorization.
+    try:
+        check_controlled_review_gate(project)
+    except ReviewRefusedError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        typer.echo(
+            "The approved diff proposal artifact was not read, no target "
+            "workspace was touched, no process was launched, no environment "
+            "value was read, and no model was contacted.",
+            err=True,
+        )
+        raise typer.Exit(code=_REVIEW_EXIT_REFUSED)
+
+    # 5. The verification opt-in. The verifier re-checks this itself; it is
+    #    checked here too so a project that cannot verify fails before its
+    #    artifact is opened.
+    if not project.controlled_verification.enabled:
+        typer.echo(
+            "Error: this project's controlled_verification block is absent or "
+            "disabled. Phase 5F2E verifies before it reviews, so a project that "
+            "cannot run its own verification cannot be reviewed here.",
+            err=True,
+        )
+        typer.echo(
+            "The approved diff proposal artifact was not read, no process was "
+            "launched, and no model was contacted.",
+            err=True,
+        )
+        raise typer.Exit(code=_REVIEW_EXIT_REFUSED)
+
+    # 6. Platform. This phase reviews a Phase 5F2C write, and that writer is
+    #    explicitly Windows-only.
+    if sys.platform != "win32":
+        typer.echo(
+            "Error: Phase 5F2E reviews a Phase 5F2C write verified by Phase "
+            "5F2D, and that writer is Windows-only. It refuses on this platform "
+            "rather than reasoning about semantics it has not established here.",
+            err=True,
+        )
+        typer.echo(
+            "The approved diff proposal artifact was not read, no process was "
+            "launched, and no model was contacted.",
+            err=True,
+        )
+        raise typer.Exit(code=_REVIEW_EXIT_REFUSED)
+
+    # 7. Refuse an artifact that lives inside the configured target workspace,
+    #    BEFORE it is read or stat'd — the same lexical guard every earlier phase
+    #    uses, and the reason --approved-diff-proposal carries no Typer exists=
+    #    check.
+    if _is_same_or_under(approved_diff_proposal, project.repo.workspace_path):
+        typer.echo(
+            "Error: --approved-diff-proposal is inside the project's configured "
+            f"repo.workspace_path ({project.repo.workspace_path}). The approval "
+            "must live outside the workspace it refers to; move the artifact and "
+            "retry.",
+            err=True,
+        )
+        typer.echo(
+            "The approved diff proposal artifact was not read, nothing was "
+            "executed, and no model was contacted.",
+            err=True,
+        )
+        raise typer.Exit(code=_REVIEW_EXIT_REFUSED)
+
+    # 8. The artifact: the second and final file read by this command.
+    try:
+        artifact_text = approved_diff_proposal.read_text(encoding="utf-8")
+    except OSError as exc:
+        typer.echo(
+            f"Error: could not read --approved-diff-proposal: {exc}", err=True
+        )
+        typer.echo("Nothing was executed and no model was contacted.", err=True)
+        raise typer.Exit(code=_REVIEW_EXIT_REFUSED)
+
+    # 9. Parse strictly. Rejected, never repaired.
+    try:
+        artifact = parse_approved_diff_proposal_artifact(artifact_text)
+    except FileEditingApprovalError as exc:
+        name = type(exc).__name__
+        category = _APPROVED_DIFF_FAILURE_CATEGORIES.get(name, "artifact failure")
+        typer.echo(f"Error: {name}: {category}. {exc}", err=True)
+        typer.echo(
+            "The artifact text, the approval text, and the diffs are not "
+            "echoed. Nothing was executed, no target workspace was touched, and "
+            "no model was contacted.",
+            err=True,
+        )
+        raise typer.Exit(code=_REVIEW_EXIT_REFUSED)
+
+    # 10. Verify first, review second. The composition lives in the review
+    #     package; the accepted Phase 5F2D verifier is CALLED there, not copied,
+    #     and `read_env` is invoked only after it returns `verified`.
+    try:
+        outcome = run_controlled_review(
+            approved_diff=artifact,
+            project=project,
+            read_env=read_env,
+            client_factory=client_factory,
+            on_before_model_call=_echo_reviewer_banner,
+        )
+    except VerificationRefusedError as exc:
+        typer.echo(f"Error: refused-before-execution: {exc}", err=True)
+        typer.echo(
+            "No verification process was started, no reviewer environment value "
+            "was read, and no model was contacted. No source, diff, approval "
+            "text, absolute path, or environment value is echoed.",
+            err=True,
+        )
+        raise typer.Exit(code=_REVIEW_EXIT_REFUSED)
+    except ReviewRefusedError as exc:  # pragma: no cover - gate ran at step 4
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=_REVIEW_EXIT_REFUSED)
+    except ReviewerStageError as exc:
+        name = type(exc).__name__
+        category = _REVIEWER_FAILURE_CATEGORIES.get(name, "reviewer failure")
+        typer.echo(
+            "=== REAL REVIEWER MODEL CALL FAILED (verification had already "
+            "passed) ===",
+            err=True,
+        )
+        typer.echo(f"Error: {name}: {category}. {exc}", err=True)
+        # Every claim below is scoped, because by this point the unsandboxed
+        # Phase 5F2D verification child has already run. An unscoped "no file was
+        # written / no Git state was changed / no push happened" would be a claim
+        # about the whole invocation, and this command cannot make it: the child
+        # may have written Git-ignored files, written outside the repository,
+        # reached the network, pushed, created a ref that leaves HEAD and the
+        # worktree untouched, or left descendants running. Phase 5F2D
+        # deliberately does not observe those effects, and Phase 5F2E adds no
+        # detection for them.
+        for line in (
+            "The raw model response is not echoed, and no API key, base URL, "
+            "prompt, or approved diff appears in this message.",
+            "AIDO's review stage: repaired nothing, restored nothing, retried "
+            "nothing, re-prompted nothing, wrote no file into the target "
+            "workspace, performed no Git mutation, and created no branch, "
+            "commit, push or PR.",
+            "The workspace state that IS established comes from the "
+            "verification that had already passed: the approved target's exact "
+            "bytes, a HEAD object id equal to the one the run started from, and "
+            "a Git-visible dirty state of exactly that one unstaged path.",
+            "Beyond that boundary nothing is claimed. The verification child was "
+            "NOT sandboxed, and effects outside Phase 5F2D's documented "
+            "detection boundary — Git-ignored files, anything outside this "
+            "repository, network activity, remote operations such as a push, "
+            "additional refs that leave HEAD and the worktree unchanged, and "
+            "descendants still running — are not observed by AIDO.",
+            "Correct the reviewer configuration and run this command again.",
+        ):
+            typer.echo(line, err=True)
+        raise typer.Exit(code=_REVIEW_EXIT_REVIEWER_FAILED)
+
+    # 11. Verification ran but did not produce a reviewable state. The Phase
+    #     5F2D report is printed as-is and its exit semantics are preserved
+    #     exactly; no model was contacted and no reviewer environment value was
+    #     read.
+    if outcome.packet is None:
+        report = outcome.verification
+        typer.echo(report.model_dump_json(indent=2))
+        if report.outcome == "workspace-state-untrusted":
+            typer.echo(
+                "Error: workspace-state-untrusted: the verification process ran, "
+                "and afterwards the repository is NOT provably the approved "
+                "state. No reviewer was contacted and no reviewer environment "
+                "value was read. AIDO repaired nothing, restored nothing, and "
+                "retried nothing. The verification child was NOT sandboxed. "
+                "HUMAN REPOSITORY INSPECTION IS REQUIRED.",
+                err=True,
+            )
+            raise typer.Exit(code=_REVIEW_EXIT_WORKSPACE_UNTRUSTED)
+        # Scoped for the same reason exit 4 is: the unsandboxed Phase 5F2D child
+        # has already run by now, so "nothing was committed" would be a claim
+        # about the whole invocation rather than about AIDO.
+        for line in (
+            "Verification did not pass, so no reviewer was contacted and no "
+            "reviewer environment value was read.",
+            "The report above is what establishes the workspace state: the "
+            "approved target's exact bytes, a HEAD object id equal to the one "
+            "the run started from, and the expected Git-visible dirty state.",
+            "AIDO performed no retry, no repair, no restore, and no "
+            "reviewer-stage action.",
+            "The verification child was NOT sandboxed, and effects outside "
+            "Phase 5F2D's documented detection boundary are not claimed here.",
+        ):
+            typer.echo(line, err=True)
+        raise typer.Exit(code=_REVIEW_EXIT_VERIFICATION_NOT_PASSED)
+
+    # 12. A structured reviewer result. Exit 0 for every verdict — a change
+    #     request is a successful review, not an AIDO error — and the packet
+    #     itself is stdout, with no wrapper.
+    packet = outcome.packet
+    typer.echo(
+        "=== REAL REVIEWER MODEL CALL COMPLETED ===",
+        err=True,
+    )
+    typer.echo(f"Endpoint host: {packet.reviewer.endpoint_host}", err=True)
+    typer.echo(f"Model:         {packet.reviewer.model}", err=True)
+    typer.echo(f"Verdict:       {packet.review.verdict}", err=True)
+    typer.echo(
+        "The verdict is advisory and ends here: a human decides what happens "
+        "next. No fixer, re-review, patch, file edit, branch, commit, push, or "
+        "PR followed it.",
+        err=True,
+    )
+    typer.echo(packet.model_dump_json(indent=2))
+
+
+@app.command("l2-review-approved-file-edit")
+def l2_review_approved_file_edit(
+    project_config: Path = typer.Option(
+        ...,
+        "--project-config",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Path to the project config YAML the approved diff must match. Its "
+        "controlled_verification block must be enabled, and its "
+        "controlled_review block must be enabled and name the exact reviewer "
+        "model.",
+    ),
+    approved_diff_proposal: Path = typer.Option(
+        ...,
+        "--approved-diff-proposal",
+        # Deliberately no exists=/readable= check: Typer would stat the path
+        # before the command body could reject one inside the configured
+        # workspace. The guard runs first; the file is opened only afterwards.
+        help="Path to the human-approved diff proposal artifact "
+        "(approved-diff-proposal.v2) whose modification has already been "
+        "applied. Must not be inside the project's configured workspace path.",
+    ),
+    verify_approved_file_edit_flag: bool = typer.Option(
+        False,
+        "--verify-approved-file-edit",
+        help="Required explicit confirmation that the project's own configured "
+        "verification process may be executed. Without it this command fails "
+        "without reading anything.",
+    ),
+    real_reviewer: bool = typer.Option(
+        False,
+        "--real-reviewer",
+        help="Required explicit confirmation that source-derived code may be "
+        "sent to a REAL reviewer model. Without it this command fails without "
+        "reading anything.",
+    ),
+    output_format: GeneratePlanFormat = typer.Option(
+        GeneratePlanFormat.json,
+        "--format",
+        help="Output format. Only 'json' is currently supported.",
+    ),
+) -> None:
+    """Verify ONE applied approved edit, then have ONE reviewer model review it.
+
+    **This is the first command that deliberately sends source-derived code to a
+    model.** Every earlier model-facing command transmitted issue text; this one
+    transmits a unified diff of the project's own source, selected approved-plan
+    prose, and the redacted output of a verification run.
+
+    It does **not** run the writer. It starts from the exact state
+    ``l2-apply-approved-file-edit`` leaves behind and runs the **existing** Phase
+    5F2D verification internally, so a verification result is never an input:
+    there is no ``--verification-result`` option, and no saved report is trusted
+    as authority. That keeps the verification fresh for the review it informs,
+    keeps reviewer credentials out of the process while unsandboxed
+    repository-controlled code runs, and makes the whole command re-runnable if
+    the reviewer configuration turns out to be wrong.
+
+    The reviewer model comes only from the project config's ``controlled_review``
+    block. There is no ``--model``, ``--provider``, ``--prompt``, ``--message``,
+    ``--command``, ``--shell``, ``--fix``, ``--repair``, ``--retry``,
+    ``--commit``, ``--branch``, ``--push``, ``--pr``, ``--github``, ``--fetch``,
+    or ``--apply`` option, and ``AIDO_LITELLM_DEFAULT_MODEL`` never selects the
+    reviewer.
+
+    What is transmitted: the one approved unified diff, the plan's summary, scope
+    summary, non-goals, proposed steps, risks and open questions, and the
+    verification outcome plus its bounded, redacted output. What is never
+    transmitted: the full target file, any unrelated source, any directory
+    listing, repository tree or git history, the configured workspace path, any
+    absolute path, the approval text, the raw artifact, any environment value,
+    the GitHub token, the endpoint base URL, or the API key. Project-controlled
+    text is redacted before transmission — a best-effort backstop, not a
+    guarantee — and is delimited as untrusted data that the reviewer is
+    instructed to inspect, never to obey.
+
+    The reviewer's reply must be exactly one strict JSON object matching the
+    review schema. It is **rejected rather than repaired**: no second prompt, no
+    re-review, no parser repair. The existing LLM client keeps its own bounded
+    transport-level retries; one *semantic* reviewer request is made.
+
+    Exit codes are distinct on purpose. **1** refused before any process started.
+    **2** verification ran and did not pass — no model was contacted. **3**
+    verification ran and the repository is no longer provably the approved state
+    — no model was contacted. **4** verification passed but the reviewer stage
+    failed — AIDO's review stage wrote nothing, mutated no Git state and created
+    no branch/commit/push/PR, the passed verification had established the
+    approved bytes, an unchanged HEAD and the expected single dirty path, and
+    nothing is claimed beyond Phase 5F2D's documented detection boundary; the
+    command may be re-run. **0**
+    the reviewer produced a valid result — for ``approve``,
+    ``changes_requested`` *and* ``needs_human_review`` alike, because all three
+    are successful reviews.
+
+    A verdict is advisory and terminal: there is no fixer, no second reviewer, no
+    retry after findings, no patch generation, no file edit, no revert or
+    restore, no branch, no commit, no push, and no PR. The human decides.
+    """
+    _run_l2_review_approved_file_edit(
+        project_config=project_config,
+        approved_diff_proposal=approved_diff_proposal,
+        verify_approved_file_edit_flag=verify_approved_file_edit_flag,
+        real_reviewer=real_reviewer,
+        read_env=_read_real_llm_env,
+        client_factory=_build_real_llm_client,
     )
 
 

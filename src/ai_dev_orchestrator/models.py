@@ -375,6 +375,79 @@ class ControlledVerificationConfig(_Strict):
         return values
 
 
+class ControlledReviewConfig(_Strict):
+    """Per-project opt-in for the **controlled reviewer slice** (Phase 5F2E).
+
+    This is the first block that can authorize AIDO to send **source-derived
+    material** — one human-approved unified diff, selected approved-plan prose,
+    and the redacted output of a verification run — to a model. Every earlier
+    model-facing block carried issue text only; this one carries code.
+
+    It is deliberately **not** :class:`RealModelPlanningConfig`. Planning
+    authorization and review authorization are separate capabilities: a project
+    that agreed its *issue text* may be planned by a model has not thereby agreed
+    that its *source* may be reviewed by one, and neither block is ever consulted
+    on the other's behalf.
+
+    It fails closed by construction — an absent block is identical to an
+    explicitly disabled one — and it deliberately has **no field** for any of:
+
+    - an ``api_key``, ``base_url``, endpoint, credential, or
+      environment-variable *name* (connection details come from the existing
+      ``AIDO_LITELLM_*`` environment, and only after verification has passed);
+    - a prompt template, system-prompt override, or arbitrary header;
+    - a retry count (the existing LLM client's bounded transport retries are the
+      only retries; there is no application-level re-review);
+    - a fixer, a second reviewer, a reviewer list, or any consensus/voting
+      setting — this phase implements the reviewer role only;
+    - a full-file or repository-wide transmission switch.
+
+    ``model`` is the **only** place a reviewer model may be named. There is no
+    CLI ``--model`` override, ``AIDO_LITELLM_DEFAULT_MODEL`` never selects it,
+    and matching is exact — no glob, prefix, or case folding.
+    """
+
+    enabled: bool = Field(
+        default=False,
+        description="Whether this project's approved change may be sent to a "
+        "reviewer model at all. Absent or false means no model call.",
+    )
+    provider: str = Field(
+        default="litellm",
+        description="The reviewer provider. Only the existing internal "
+        "OpenAI-compatible LiteLLM path ('litellm') is supported; anything else "
+        "is refused at the review gate.",
+    )
+    model: str | None = Field(
+        default=None,
+        description="The exact reviewer model name. There is no default and no "
+        "environment fallback; an enabled block without one is refused at the "
+        "review gate.",
+    )
+
+    @field_validator("provider")
+    @classmethod
+    def _check_provider(cls, value: str) -> str:
+        # Shape only. Which providers are *supported* is enforced at the review
+        # gate, so an unsupported value in a disabled block can never make an
+        # unrelated command fail to load its config.
+        if not value.strip():
+            raise ValueError("controlled_review.provider must be a non-blank string")
+        return value
+
+    @field_validator("model")
+    @classmethod
+    def _check_model(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not value.strip():
+            raise ValueError(
+                "controlled_review.model must be a non-blank exact model name, or "
+                "absent"
+            )
+        return value
+
+
 class ProjectConfig(_Strict):
     """Top-level typed project configuration."""
 
@@ -409,6 +482,9 @@ class ProjectConfig(_Strict):
     )
     controlled_verification: ControlledVerificationConfig = Field(
         default_factory=ControlledVerificationConfig
+    )
+    controlled_review: ControlledReviewConfig = Field(
+        default_factory=ControlledReviewConfig
     )
 
     @property

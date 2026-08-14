@@ -191,12 +191,13 @@ VERIFICATION_SINGLE_ACTOR_CONTRACT = (
 NEXT_STEP_REQUIRES_HUMAN_REVIEW = (
     "AIDO left the approved change uncommitted in the working tree for human "
     "review. AIDO did not create a branch, commit, push, open a PR, call a "
-    "model, contact GitHub, or run a reviewer. The verification child was NOT "
-    "sandboxed: effects outside the post-execution Git-visible state — including "
-    "network activity, pushes, and processes left running — are not "
-    "comprehensively observed, and this report makes no claim about them. Phase "
-    "5F2E (reviewer integration) must be explicitly authorized before this "
-    "result flows any further."
+    "model, contact GitHub, or run a reviewer *while producing this report*. The "
+    "verification child was NOT sandboxed: effects outside the post-execution "
+    "Git-visible state — including network activity, pushes, and processes left "
+    "running — are not comprehensively observed, and this report makes no claim "
+    "about them. A verified result may be taken to a configured reviewer model "
+    "by the separate Phase 5F2E command, whose verdict is advisory and ends with "
+    "a human; nothing else consumes this result automatically."
 )
 
 
