@@ -1,4 +1,4 @@
-"""The human-facing review packet (``review-packet.v2``) — Phase 5F2E / RS1.
+"""The human-facing review packet (``review-packet.v3``) — Phase 5F2E / RS1 / V1.
 
 One structured artifact per successful controlled review, assembled from five
 sources that are kept strictly separate:
@@ -10,8 +10,9 @@ sources that are kept strictly separate:
   :class:`~ai_dev_orchestrator.verification.VerificationResultReport` rather than
   summarized into something weaker;
 - **reviewer provenance**, built from the project config and the validated
-  connection settings — provider, exact configured model, endpoint **host only**,
-  and token usage if the endpoint reported any;
+  connection settings — the configured provider (``litellm`` or ``vllm``), the
+  exact configured model, the endpoint **host only**, the transport scheme and
+  whether it was TLS, and token usage if the endpoint reported any;
 - **reviewer supervision** (Phase 5F2E-RS1) — how many semantic requests AIDO
   issued, of a hard maximum of two; that each was exactly one HTTP/model request
   because reviewer transport retries are forced to zero; whether the one compact
@@ -72,6 +73,36 @@ rather than left in place lying: ``orchestrator_review_retry_or_reprompt_attempt
 was a hard-coded ``false``, and under RS1 it would have been false only when the
 compact retry did not run. Its replacements are truthful about what actually
 happened — see :class:`ReviewCapabilityBoundaries`.
+
+Why this is now ``v3`` and not a redefined ``v2`` (Phase 5F2E-V1)
+-----------------------------------------------------------------
+
+``review-packet.v2`` carried a **LiteLLM-specific** reviewer provenance contract:
+``provider`` could only ever be ``"litellm"``, because that was the only reviewer
+provider that existed, and the packet said nothing at all about the transport's
+scheme. Phase 5F2E-V1 added a second explicitly supported reviewer backend — a
+direct OpenAI-compatible vLLM endpoint — and, with it, a fact a reader now needs:
+**whether the source-derived diff went over TLS.**
+
+Redefining ``v2`` in place would have made every archived ``v2`` packet ambiguous
+about which backend produced it, and would have retroactively implied a
+transport claim those packets never made. So the version was bumped again.
+``v2``'s meaning is preserved verbatim in
+:data:`REVIEW_PACKET_SCHEMA_VERSION_V2_SEMANTICS`, and the whole history is
+stated in :data:`REVIEW_PACKET_SCHEMA_VERSION_HISTORY`.
+
+**The supervision semantics did not change.** ``v3`` records exactly the accepted
+Phase 5F2E-RS1 policy that ``v2`` did — transport retries forced to zero, at most
+two semantic requests, an AIDO-owned monotonic wait deadline per attempt, a
+terminal stall, and per-attempt accounting — applied identically to both
+providers. The only additions are provenance: ``provider`` now admits ``"vllm"``,
+and ``endpoint_scheme`` / ``transport_tls`` report what was actually used.
+
+``transport_tls`` is a statement about the URL scheme the client was configured
+with, and nothing more. It does not certify a certificate, a cipher, a peer
+identity, or a network. A ``false`` here means the material was sent
+unencrypted — and, for the vLLM provider, that the project had to explicitly opt
+in for that to be possible at all.
 """
 
 from __future__ import annotations
@@ -95,20 +126,55 @@ from ai_dev_orchestrator.review.supervision import (
 )
 from ai_dev_orchestrator.verification import VerificationResultReport
 
-REVIEW_PACKET_SCHEMA_VERSION = "review-packet.v2"
+REVIEW_PACKET_SCHEMA_VERSION = "review-packet.v3"
 REVIEW_PACKET_MODE = "controlled-review"
 
-# The superseded version, kept so an archived packet's meaning stays legible.
+# The superseded versions, kept so an archived packet's meaning stays legible.
+# Neither is reinterpreted under a later version's rules.
 REVIEW_PACKET_SCHEMA_VERSION_V1 = "review-packet.v1"
 REVIEW_PACKET_SCHEMA_VERSION_V1_SEMANTICS = (
     "review-packet.v1 (Phase 5F2E) recorded exactly ONE semantic reviewer "
     "request, made with the generic LLM client's shipped transport-retry "
     "behavior still in effect and unreported, and it carried no attempt "
-    "accounting. review-packet.v2 (Phase 5F2E-RS1) supersedes it: the reviewer "
-    "client forces transport max_retries=0, so one semantic attempt is exactly "
-    "one HTTP/model request, and a project may authorize at most one bounded "
+    "accounting. Its reviewer provenance was LiteLLM-specific: the only "
+    "supported provider was the internal OpenAI-compatible LiteLLM path, and "
+    "the packet reported no endpoint scheme and no transport-TLS fact. "
+    "review-packet.v2 (Phase 5F2E-RS1) supersedes it: the reviewer client "
+    "forces transport max_retries=0, so one semantic attempt is exactly one "
+    "HTTP/model request, and a project may authorize at most one bounded "
     "compact second semantic attempt. A v1 packet keeps its original meaning and "
-    "is not reinterpreted under v2 rules."
+    "is not reinterpreted under v2 or v3 rules."
+)
+
+REVIEW_PACKET_SCHEMA_VERSION_V2 = "review-packet.v2"
+REVIEW_PACKET_SCHEMA_VERSION_V2_SEMANTICS = (
+    "review-packet.v2 (Phase 5F2E-RS1, with FU1 and FU2) recorded the bounded "
+    "reviewer supervision that is still in force: reviewer transport retries "
+    "forced to zero, at most two semantic requests, an AIDO-owned monotonic "
+    "wait deadline per attempt, a terminal stall, and per-attempt accounting. "
+    "Its reviewer provenance was still LiteLLM-SPECIFIC: 'litellm' was the only "
+    "provider a v2 packet could have been produced by, and v2 carried no "
+    "endpoint_scheme and no transport_tls field. A v2 packet must NOT be read "
+    "as though it may have come from a direct vLLM endpoint, and it must not be "
+    "read as making any claim about transport encryption. review-packet.v3 "
+    "(Phase 5F2E-V1) supersedes it for new runs, with identical supervision "
+    "semantics."
+)
+
+REVIEW_PACKET_SCHEMA_VERSION_HISTORY = (
+    "review-packet.v1 = original Phase 5F2E semantics: exactly one semantic "
+    "reviewer attempt, unreported generic transport retries, no attempt "
+    "accounting, LiteLLM-only reviewer provenance, no transport-scheme "
+    "reporting. "
+    "review-packet.v2 = Phase 5F2E-RS1 supervision semantics (transport retries "
+    "forced to zero, at most two semantic requests, AIDO-owned per-attempt wait "
+    "deadline, terminal stall, per-attempt accounting), with LiteLLM-only "
+    "reviewer provenance and still no transport-scheme reporting. "
+    "review-packet.v3 = the SAME accepted RS1 supervision semantics as v2, now "
+    "with explicit LiteLLM/vLLM reviewer provenance and truthful "
+    "transport-scheme reporting (endpoint_scheme and transport_tls). The version "
+    "was bumped rather than v2 redefined, so no archived v2 packet becomes "
+    "ambiguous about which provider produced it."
 )
 
 # What the reviewer request policy actually is, stated exactly.
@@ -189,6 +255,20 @@ class ReviewerProvenanceBlock(_Strict):
     ``base_url`` field, no ``api_key`` field, and no header field, so no code path
     can place one here.
 
+    ``provider`` is ``"litellm"`` or ``"vllm"``, taken from
+    ``project_config.controlled_review.provider`` after the review gate accepted
+    it. **It cannot be forged by model output**: the strict reviewer parser has
+    no such field, and this block is assembled from orchestrator-owned values
+    only.
+
+    ``endpoint_scheme`` and ``transport_tls`` were added by Phase 5F2E-V1 and are
+    derived from the base URL the client was configured with — the scheme is the
+    one URL component that carries neither credential nor payload.
+    ``transport_tls`` is exactly ``endpoint_scheme == "https"``; it is a statement
+    about the configured scheme and **not** a certificate, cipher, peer-identity,
+    or network-privacy claim. It is reported truthfully for both providers,
+    including the synthetic ``http`` URLs the offline test suite uses.
+
     ``usage`` is the usage block of the attempt that produced this review, or
     ``None`` when the provider reported none — recorded as **unknown**, never
     invented as zero. Per-attempt usage for every attempt, including one that
@@ -201,10 +281,12 @@ class ReviewerProvenanceBlock(_Strict):
     decision and is deliberately not taken here.
     """
 
-    provider: Literal["litellm"]
+    provider: Literal["litellm", "vllm"]
     model: str
     model_source: Literal["project_config.controlled_review.model"]
     endpoint_host: str
+    endpoint_scheme: Literal["http", "https"]
+    transport_tls: bool
     operation: Literal["code-review"]
     real_call: Literal[True]
     # RS1: no longer pinned to 1 — one or two, and the exact number is a fact
@@ -356,8 +438,10 @@ def build_review_packet(
     verification: VerificationResultReport,
     context: ReviewContext,
     review: ModelReviewResult,
+    provider: str,
     model: str,
     endpoint_host: str,
+    endpoint_scheme: str,
     usage: LLMUsage | None,
     supervision: ReviewSupervisionBlock,
 ) -> ReviewPacket:
@@ -369,7 +453,14 @@ def build_review_packet(
     ``supervision`` is the Phase 5F2E-RS1 attempt accounting, produced by
     :func:`~ai_dev_orchestrator.review.supervision.run_supervised_review`. It is
     a required argument rather than an optional extra so that no code path can
-    emit a ``v2`` packet whose attempt history is missing.
+    emit a ``v3`` packet whose attempt history is missing.
+
+    ``provider`` and ``endpoint_scheme`` are required for the same reason: a
+    ``v3`` packet's whole added value over ``v2`` is that it names the backend
+    and states truthfully whether the transport was TLS, so neither may default.
+    Both come from trusted project config and the validated connection settings;
+    ``transport_tls`` is derived here rather than passed, so it can never
+    disagree with the scheme beside it.
 
     Raises:
         ReviewerStageError: The assembled packet failed its own validation. That
@@ -393,10 +484,14 @@ def build_review_packet(
         },
         "verification": verification,
         "reviewer": {
-            "provider": "litellm",
+            # Orchestrator-owned, from the accepted review gate — never from the
+            # model, which has no field capable of naming a provider.
+            "provider": provider,
             "model": model,
             "model_source": "project_config.controlled_review.model",
             "endpoint_host": endpoint_host,
+            "endpoint_scheme": endpoint_scheme,
+            "transport_tls": endpoint_scheme == "https",
             "operation": "code-review",
             "real_call": True,
             "semantic_requests": supervision.semantic_attempts_used,
@@ -471,7 +566,7 @@ def build_review_packet(
         },
         "human_decision_required": True,
         "next_step": REVIEW_HUMAN_DECISION,
-        "superseded_schema_version_note": REVIEW_PACKET_SCHEMA_VERSION_V1_SEMANTICS,
+        "superseded_schema_version_note": REVIEW_PACKET_SCHEMA_VERSION_HISTORY,
     }
 
     try:

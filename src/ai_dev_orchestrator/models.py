@@ -393,8 +393,11 @@ class ControlledReviewConfig(_Strict):
     explicitly disabled one — and it deliberately has **no field** for any of:
 
     - an ``api_key``, ``base_url``, endpoint, credential, or
-      environment-variable *name* (connection details come from the existing
-      ``AIDO_LITELLM_*`` environment, and only after verification has passed);
+      environment-variable *name* — connection details come from the
+      **configured provider's** environment names, and only after verification
+      has passed: the five ``AIDO_LITELLM_*`` names for ``provider: "litellm"``,
+      or ``AIDO_VLLM_BASE_URL`` plus the optional ``AIDO_VLLM_API_KEY`` for
+      ``provider: "vllm"``. Only the configured provider's names are read;
     - a prompt template, system-prompt override, or arbitrary header;
     - a *transport* retry count — Phase 5F2E-RS1 forces the reviewer client's
       ``max_retries`` to ``0``, so one semantic attempt is exactly one
@@ -406,8 +409,21 @@ class ControlledReviewConfig(_Strict):
     - a full-file or repository-wide transmission switch.
 
     ``model`` is the **only** place a reviewer model may be named. There is no
-    CLI ``--model`` override, ``AIDO_LITELLM_DEFAULT_MODEL`` never selects it,
-    and matching is exact — no glob, prefix, or case folding.
+    CLI ``--model`` override, no environment variable of either provider ever
+    selects it — ``AIDO_LITELLM_DEFAULT_MODEL`` is overridden and there is no
+    ``AIDO_VLLM_DEFAULT_MODEL`` at all — and matching is exact: no glob, prefix,
+    or case folding.
+
+    Phase 5F2E-V1 — two reviewer providers
+    ---------------------------------------
+
+    ``provider`` selects between the existing internal OpenAI-compatible LiteLLM
+    path and a direct OpenAI-compatible vLLM endpoint, matched exactly and
+    case-sensitively. ``vllm_allow_insecure_http`` is the only field it added; it
+    applies to the vLLM provider only, ships ``false``, and is an
+    acknowledgement of unencrypted transport rather than any claim that the
+    transport is secure. There is still no provider list, provider priority,
+    failover, registry, or endpoint field here.
 
     Phase 5F2E-RS1 — bounded reviewer runtime supervision
     -----------------------------------------------------
@@ -430,9 +446,13 @@ class ControlledReviewConfig(_Strict):
     )
     provider: str = Field(
         default="litellm",
-        description="The reviewer provider. Only the existing internal "
-        "OpenAI-compatible LiteLLM path ('litellm') is supported; anything else "
-        "is refused at the review gate.",
+        description="The reviewer provider. Exactly two values are supported, "
+        "matched exactly and case-sensitively: 'litellm' (the existing internal "
+        "OpenAI-compatible LiteLLM path) and 'vllm' (a direct OpenAI-compatible "
+        "vLLM endpoint). Anything else — including 'openai', "
+        "'openai_compatible', 'LiteLLM' or 'VLLM' — is refused at the review "
+        "gate. There is no alias, no glob, no case folding, and no provider "
+        "registry.",
     )
     model: str | None = Field(
         default=None,
@@ -478,6 +498,18 @@ class ControlledReviewConfig(_Strict):
         "keeps exactly one semantic attempt until it opts in. Even when true "
         "the hard maximum is TWO semantic attempts; there is no third, no "
         "configurable count, no retry-on-timeout switch, and no fallback model.",
+    )
+
+    vllm_allow_insecure_http: bool = Field(
+        default=False,
+        description="Whether this project explicitly permits source-derived "
+        "reviewer material to be sent to a direct vLLM endpoint over PLAINTEXT "
+        "HTTP. Applies to provider 'vllm' only; it is never consulted for the "
+        "LiteLLM provider. Defaults to false, so an http:// vLLM endpoint is "
+        "refused before any model request is issued. Setting it to true does "
+        "NOT make the transport secure, encrypted, private, authenticated, "
+        "company-approved, or safe for secrets — it records only that the "
+        "project accepted an unencrypted reviewer transport.",
     )
 
     @field_validator("provider")

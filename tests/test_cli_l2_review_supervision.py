@@ -108,7 +108,7 @@ MALFORMED = "SENTINEL_RAW_FIRST_REPLY — this is not JSON at all"
 TRUNCATED = '{"verdict": "appro'
 
 
-def _retry_env() -> dict[str, str]:
+def _retry_env(_provider: str) -> dict[str, str]:
     """An environment that would give the generic client TWO transport retries."""
     return _env(AIDO_LITELLM_MAX_RETRIES="2")
 
@@ -626,7 +626,7 @@ def test_a_failed_run_never_echoes_either_raw_reply(tmp_path, capsys):
 
 @windows_only
 @git_required
-def test_the_packet_validates_as_v2_and_records_the_attempt_history(
+def test_the_packet_validates_as_v3_and_records_the_attempt_history(
     tmp_path, capsys
 ):
     code, seen, _ = _review(
@@ -646,7 +646,10 @@ def test_the_packet_validates_as_v2_and_records_the_attempt_history(
     raw = json.loads(capsys.readouterr().out)
     packet = ReviewPacket.model_validate(raw)
 
-    assert packet.schema_version == "review-packet.v2"
+    # Phase 5F2E-V1 bumped the version for reviewer provenance only; the RS1
+    # attempt history this test asserts is unchanged.
+    assert packet.schema_version == "review-packet.v3"
+    assert packet.reviewer.provider == "litellm"
     supervision = packet.reviewer_supervision
 
     assert supervision.supervision_enabled is True

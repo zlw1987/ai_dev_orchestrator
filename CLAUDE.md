@@ -14,7 +14,7 @@ before doing any work here.
 
 ## Current phase
 
-- **Phases 0 through 5F2E-RS1: complete.** See
+- **Phases 0 through 5F2E-V1-FU1: complete.** See
   [docs/PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md](docs/PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md)
   — read its **CURRENT STATUS** block first; older sections in that file are
   design history and some of their status claims are deliberately stale.
@@ -48,7 +48,25 @@ before doing any work here.
   FU2 then established the wait bound itself: httpx's timeout is a
   network-operation/inactivity timeout, so AIDO now runs each attempt's single
   client call on **one daemon worker** and waits to its **own monotonic
-  deadline**. The output artifact is **`review-packet.v2`**.
+  deadline**. The output artifact was **`review-packet.v2`**.
+- **Phase 5F2E-V1 shipped the direct vLLM reviewer provider.** It is a
+  **reviewer-provider extension and nothing else**: `controlled_review.provider`
+  now accepts exactly `"litellm"` or `"vllm"`, matched exactly and
+  case-sensitively. LiteLLM remains supported for when internal infrastructure
+  returns; direct vLLM is an **additional** explicit option, not a replacement.
+  Every accepted 5F2E and RS1 semantic is unchanged and applies identically to
+  both providers. The output artifact is now **`review-packet.v3`**, which
+  additionally records the reviewer provider and the transport scheme truthfully.
+- **Phase 5F2E-V1-FU1 corrected V1's one acceptance blocker**: the reviewer's
+  environment reader snapshotted **both** provider families from the process
+  environment and discarded the unconfigured one afterwards, which is still
+  reading it. The reader is now handed the provider and resolves it to an exact
+  name tuple **before** touching any environment, so a vLLM review never reads an
+  `AIDO_LITELLM_*` value and a LiteLLM review never reads an `AIDO_VLLM_*` value.
+  The union env-name constant and the narrow-afterwards helper were **removed**.
+  FU1 also made the CLI's reviewer-environment failure category
+  provider-neutral and corrected stale `v2`/LiteLLM-only prose. No accepted V1 or
+  RS1 behavior was reopened.
 - **The first controlled write → verify → supervised review → human path now
   exists.** **L2 as originally defined is still NOT complete**: there is no
   model-backed implementer, no automatic fixer, no branch creation, no commit, no
@@ -61,6 +79,8 @@ before doing any work here.
 5F2E-RS1       Reviewer Runtime Supervision         DONE
 5F2E-RS1-FU1   Terminal timeout + wording fixes     DONE
 5F2E-RS1-FU2   AIDO-owned reviewer wait deadline    DONE
+5F2E-V1        Direct vLLM Reviewer Provider        DONE
+5F2E-V1-FU1    Provider env isolation + wording     DONE
 → bounded write → verify → supervised review → human
 ```
 
@@ -160,17 +180,18 @@ calls the accepted 5F2D library path.
 - **verify first, review second.** The command runs the existing verification
   itself; there is **no `--verification-result` input** and no saved report is
   trusted as authority. Only a `verified` outcome proceeds;
-- **credential ordering is load-bearing.** `AIDO_LITELLM_API_KEY`,
-  `AIDO_LITELLM_BASE_URL` and `AIDO_LITELLM_DEFAULT_MODEL` are **not read** until
-  after verification returns `verified`, so reviewer credentials never coexist in
-  process state with unsandboxed repository-controlled execution. Reviewer
-  credentials are never forwarded to the verification child, and 5F2D's
+- **credential ordering is load-bearing.** No reviewer endpoint or credential
+  value of **either** provider — `AIDO_LITELLM_API_KEY`, `AIDO_LITELLM_BASE_URL`,
+  `AIDO_LITELLM_DEFAULT_MODEL`, `AIDO_VLLM_BASE_URL`, `AIDO_VLLM_API_KEY` — is
+  read until after verification returns `verified`, so reviewer credentials never
+  coexist in process state with unsandboxed repository-controlled execution.
+  Reviewer credentials are never forwarded to the verification child, and 5F2D's
   environment policy is unchanged;
 - gated by a project opt-in (`controlled_review`, ships disabled) plus two
   explicit CLI flags (`--verify-approved-file-edit`, `--real-reviewer`). The
   model comes **only** from `controlled_review.model` — no CLI `--model`, no
-  environment default, no glob or case-folded matching. `real_model_planning`
-  does **not** authorize review;
+  environment default of either provider, no glob or case-folded matching.
+  `real_model_planning` does **not** authorize review;
 - the reviewer receives **only**: trusted identity, selected approved-plan prose,
   the **one** approved unified diff, and the freshly produced verification facts
   with their already-bounded, redacted output. Never the full target file, never
@@ -182,6 +203,77 @@ calls the accepted 5F2D library path.
 - exit **1** refused, **2** verification did not pass, **3** workspace untrusted,
   **4** reviewer stage failed after verification passed, **0** a valid review —
   for `approve`, `changes_requested` **and** `needs_human_review` alike.
+
+### Which reviewer backend, and over what transport (5F2E-V1)
+
+V1 is a **reviewer-provider extension and nothing else**. It is not Pi
+integration, not a model-backed implementer, not an agent loop, not RS2 reviewer
+failover, not a fallback or second reviewer, not a fixer, not a review/fix loop,
+not backend cancellation, and not a generic provider framework. Do not add any of
+those here.
+
+- `controlled_review.provider` accepts **exactly** `"litellm"` or `"vllm"`,
+  matched **exactly and case-sensitively**. No alias, no glob, no case folding,
+  no `"openai"`, no `"openai_compatible"`, no provider registry, no plugin
+  system, no provider list, no provider priority, and no failover. A small
+  explicit two-way branch dispatches them — do not generalize it;
+- **LiteLLM stays supported**, unchanged, for when internal infrastructure
+  returns. Direct vLLM is an **additional** option, not a replacement, and V1 must
+  not retroactively break an accepted LiteLLM deployment;
+- **model authority is unchanged and provider-independent:**
+  `project_config.controlled_review.model` only. The vLLM path deliberately has
+  **no** `AIDO_VLLM_DEFAULT_MODEL`, and the LiteLLM path still overrides
+  `AIDO_LITELLM_DEFAULT_MODEL`;
+- **the endpoint is environment-only, never project config.** vLLM requires
+  `AIDO_VLLM_BASE_URL`; `AIDO_VLLM_API_KEY` is optional. **No** `AIDO_LITELLM_*`
+  variable is required, read, or accepted for a vLLM reviewer, and the reverse
+  holds too;
+- **only the configured provider's names are ever read** (5F2E-V1-FU1). The
+  reader is handed the provider and resolves it to an exact name tuple **before**
+  it touches the process environment, so the other family is never looked up at
+  all. Do **not** reintroduce a union snapshot narrowed afterwards: reading a
+  credential and then discarding it is still reading it, and that was V1's one
+  acceptance blocker. There is deliberately no union `REVIEWER_ENV_NAMES`
+  constant left to regress to;
+- **a keyless vLLM server gets a placeholder, not a credential.** When
+  `AIDO_VLLM_API_KEY` is absent or blank, AIDO substitutes the fixed, non-secret
+  literal `no_api_key` so the existing client shape — which always sends an
+  `Authorization` header and requires a non-blank `api_key` — works unchanged.
+  **Never describe it as authentication**, and do **not** weaken the generic
+  `LLMClientConfig` to make `api_key` optional;
+- **plaintext HTTP fails closed for vLLM.** `http` is refused before any model
+  request unless `controlled_review.vllm_allow_insecure_http` is true (it ships
+  `false`). The refusal happens after verification may already have passed —
+  ordering is preserved — and never prints the full base URL. Nothing upgrades,
+  rewrites, or tunnels the URL. The rule is **not** applied to the LiteLLM
+  provider;
+- **the opt-in is an acknowledgement, not a security property.** It means only
+  that this project explicitly permits source-derived reviewer material over
+  plaintext vLLM transport. It does **not** mean secure, encrypted, private,
+  authenticated, company-approved, or safe for secrets, and an internal,
+  colleague-hosted, or same-network endpoint is not private merely because of
+  where it sits. Never write otherwise, and never hard-code a real endpoint or IP
+  into runtime code, warning logic, or documentation;
+- **the human-facing banner names the provider, the endpoint host and the
+  transport**, and an unencrypted transport is announced unmistakably as
+  `NOT TLS-ENCRYPTED`. Host only — never the base URL, the API key, the
+  placeholder, the prompt, the diff, or an absolute path;
+- **no CLI surface change.** `l2-review-approved-file-edit` keeps its exact
+  option set: no new command, no `--provider`, `--model`, `--endpoint`,
+  `--base-url`, `--api-key`, or `--allow-insecure-http`. Provider selection is
+  project-config only; endpoint selection is environment-only;
+- **RS1 applies identically to both providers.** A vLLM timeout is still
+  `review_stalled`, still terminal, and still gets no retry; the only second
+  request remains the accepted completed-but-unusable compact retry. Do not add a
+  provider-specific retry, timeout, or backoff.
+
+The output artifact is **`review-packet.v3`**, whose reviewer provenance carries
+`provider`, `model`, `model_source`, `endpoint_host`, `endpoint_scheme` and
+`transport_tls` — and still never a base URL, credential, header, full path,
+query, fragment, or workspace absolute path. **`v1` and `v2` keep their original
+meanings**: both were LiteLLM-only and reported no transport scheme, and an
+archived `v2` packet must never be reinterpreted as though it may have come from
+vLLM.
 
 ### What the reviewer supervisor can and cannot do (5F2E-RS1 + FU1 + FU2)
 
@@ -269,7 +361,10 @@ exactly:
   `max_output_tokens`, `compact_retry_on_unusable_output` — the last defaults to
   `false`), so every existing 5F2E config loads unchanged. The unaccepted draft
   name `compact_retry_on_stall` is **rejected**, never aliased;
-- the packet is **`review-packet.v2`** with a `reviewer_supervision` block.
+- the packet carries a `reviewer_supervision` block. It was
+  **`review-packet.v2`** when RS1 shipped; Phase 5F2E-V1 bumped it to
+  **`review-packet.v3`** for reviewer provenance only, leaving every RS1
+  supervision field and meaning exactly as accepted.
 
 > **Do not describe RS1 as a hard wall-clock kill.** `attempt_timeout_seconds`
 > bounds AIDO's *wait*, via AIDO's own monotonic deadline. **Never claim the
@@ -370,9 +465,11 @@ prompt explicitly asks:
   configured argv, once, bounded. It runs repository-controlled code by design —
   **controlled invocation, not a sandbox** — and must never claim otherwise.
 - **Reviewer integration exists, in exactly one narrow form** (Phase 5F2E,
-  supervised by 5F2E-RS1), and it is the **only** role wired up. There is **no
-  fixer**, no review/fix loop, no second reviewer, no consensus, no fallback
-  model, and no model-backed implementer. A reviewer verdict is advisory and ends
+  supervised by 5F2E-RS1, with two selectable backends since 5F2E-V1), and it is
+  the **only** role wired up. Two *providers* is not two *reviewers*: exactly one
+  project-configured model reviews, over exactly one project-configured backend.
+  There is **no fixer**, no review/fix loop, no second reviewer, no consensus, no
+  fallback model, no provider failover, and no model-backed implementer. A reviewer verdict is advisory and ends
   at a human. The only application-level second model call anywhere is RS1's
   **one** bounded compact retry, which fires only after a **completed** response
   carried no usable review at all — never after a timeout, and never to revisit a
@@ -382,7 +479,7 @@ prompt explicitly asks:
   agent-loop supervisor, and must not grow into one here.
 - No LangGraph / CrewAI / AutoGen / n8n (no agent framework).
 
-Real LiteLLM calls exist only behind the three explicitly gated commands
+Real model calls exist only behind the three explicitly gated commands
 (`real-llm-smoke-test`, `generate-model-plan`, `l2-review-approved-file-edit`);
 nothing else may call a model, and no model output may ever select a path, a
 command, an executable, or a file to change.

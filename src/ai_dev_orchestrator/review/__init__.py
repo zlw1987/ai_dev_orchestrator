@@ -26,9 +26,13 @@ Five modules, and the split is the design:
   orchestrator identity, the embedded Phase 5F2D result, safe reviewer
   provenance, the attempt accounting, the review, and capability claims scoped
   truthfully.
-- :mod:`~ai_dev_orchestrator.review.reviewer` owns the **ordering**: verify with
-  the accepted Phase 5F2D verifier first, and only after a ``verified`` outcome
-  load the LiteLLM environment and contact the reviewer.
+- :mod:`~ai_dev_orchestrator.review.reviewer` owns the **ordering** and the
+  **reviewer authority**: verify with the accepted Phase 5F2D verifier first,
+  and only after a ``verified`` outcome select the configured provider's
+  environment names, load them, and contact the reviewer. Phase 5F2E-V1 made the
+  provider an explicit two-way choice — the existing internal LiteLLM path, or a
+  direct OpenAI-compatible vLLM endpoint — with the model still coming only from
+  project config.
 
 A reviewer verdict is advisory. ``approve``, ``changes_requested`` and
 ``needs_human_review`` all end with a human: there is no fixer, no re-review of a
@@ -64,8 +68,11 @@ from ai_dev_orchestrator.review.packet import (
     REVIEW_HUMAN_DECISION,
     REVIEW_PACKET_MODE,
     REVIEW_PACKET_SCHEMA_VERSION,
+    REVIEW_PACKET_SCHEMA_VERSION_HISTORY,
     REVIEW_PACKET_SCHEMA_VERSION_V1,
     REVIEW_PACKET_SCHEMA_VERSION_V1_SEMANTICS,
+    REVIEW_PACKET_SCHEMA_VERSION_V2,
+    REVIEW_PACKET_SCHEMA_VERSION_V2_SEMANTICS,
     VERIFICATION_CHILD_PROCESS_NOTE,
     ReviewCapabilityBoundaries,
     ReviewPacket,
@@ -87,14 +94,26 @@ from ai_dev_orchestrator.review.request import (
     build_review_context,
 )
 from ai_dev_orchestrator.review.reviewer import (
-    REVIEWER_ENV_NAMES,
-    SUPPORTED_REVIEW_PROVIDER,
+    LITELLM_REVIEWER_ENV_NAMES,
+    REVIEW_PROVIDER_LITELLM,
+    REVIEW_PROVIDER_VLLM,
+    REVIEWER_ENV_NAMES_BY_PROVIDER,
+    SUPPORTED_ENDPOINT_SCHEMES,
+    SUPPORTED_REVIEW_PROVIDERS,
+    VLLM_COMPATIBILITY_PLACEHOLDER_API_KEY,
+    VLLM_ENV_API_KEY,
+    VLLM_ENV_BASE_URL,
+    VLLM_INSECURE_HTTP_OPT_IN_MEANING,
+    VLLM_REVIEWER_ENV_NAMES,
     ControlledReviewOutcome,
+    ReviewerAuthority,
     ReviewerCallNotice,
     build_reviewer_client_config,
     check_controlled_review_gate,
+    endpoint_scheme_from_base_url,
     request_model_review,
     run_controlled_review,
+    reviewer_env_names_for_provider,
 )
 from ai_dev_orchestrator.review.supervision import (
     ABANDONED_WORKER_LIFETIME_IF_DEADLINE_EXPIRES,
@@ -131,6 +150,7 @@ __all__ = [
     "COMPACT_RETRY_MAX_FINDINGS",
     "COMPACT_RETRY_OMITTED_CONTEXT",
     "ControlledReviewOutcome",
+    "LITELLM_REVIEWER_ENV_NAMES",
     "MAX_REVIEW_FINDINGS",
     "MAX_REVIEW_MESSAGE_CHARS",
     "MAX_REVIEW_NOTES",
@@ -143,14 +163,19 @@ __all__ = [
     "REDACTION_NOTE",
     "RETRY_ELIGIBLE_OUTCOMES",
     "REVIEWER_ATTEMPT_THREAD_NAME",
-    "REVIEWER_ENV_NAMES",
+    "REVIEWER_ENV_NAMES_BY_PROVIDER",
     "REVIEWER_REQUEST_POLICY",
     "REVIEWER_TRANSPORT_MAX_RETRIES",
     "REVIEW_HUMAN_DECISION",
     "REVIEW_PACKET_MODE",
     "REVIEW_PACKET_SCHEMA_VERSION",
+    "REVIEW_PACKET_SCHEMA_VERSION_HISTORY",
     "REVIEW_PACKET_SCHEMA_VERSION_V1",
     "REVIEW_PACKET_SCHEMA_VERSION_V1_SEMANTICS",
+    "REVIEW_PACKET_SCHEMA_VERSION_V2",
+    "REVIEW_PACKET_SCHEMA_VERSION_V2_SEMANTICS",
+    "REVIEW_PROVIDER_LITELLM",
+    "REVIEW_PROVIDER_VLLM",
     "ReviewAttemptRecord",
     "ReviewCapabilityBoundaries",
     "ReviewContext",
@@ -165,6 +190,7 @@ __all__ = [
     "ReviewTransmissionBoundary",
     "ReviewValidationError",
     "ReviewerAttemptExhaustedError",
+    "ReviewerAuthority",
     "ReviewerCallNotice",
     "ReviewerEnvironmentError",
     "ReviewerProvenanceBlock",
@@ -177,21 +203,29 @@ __all__ = [
     "SUPERVISION_SCOPE_NOTE",
     "SUPERVISION_TIMEOUT_NOTE",
     "SUPERVISION_WAIT_BOUND_NOTE",
-    "SUPPORTED_REVIEW_PROVIDER",
+    "SUPPORTED_ENDPOINT_SCHEMES",
+    "SUPPORTED_REVIEW_PROVIDERS",
     "SupervisedReviewOutcome",
     "TRANSPORT_REQUESTS_PER_ATTEMPT",
     "UNTRUSTED_BEGIN",
     "UNTRUSTED_END",
     "UNTRUSTED_NEUTRALIZED",
     "VERIFICATION_CHILD_PROCESS_NOTE",
+    "VLLM_COMPATIBILITY_PLACEHOLDER_API_KEY",
+    "VLLM_ENV_API_KEY",
+    "VLLM_ENV_BASE_URL",
+    "VLLM_INSECURE_HTTP_OPT_IN_MEANING",
+    "VLLM_REVIEWER_ENV_NAMES",
     "build_compact_model_review_request",
     "build_model_review_request",
     "build_review_context",
     "build_review_packet",
     "build_reviewer_client_config",
     "check_controlled_review_gate",
+    "endpoint_scheme_from_base_url",
     "parse_model_review_response",
     "request_model_review",
+    "reviewer_env_names_for_provider",
     "run_controlled_review",
     "run_one_review_attempt",
     "run_supervised_review",

@@ -389,7 +389,7 @@ def _mock_client_factory(
 
 
 def _forbidden_env():
-    def read_env():
+    def read_env(_provider):
         raise AssertionError(
             "reviewer environment was read before verification succeeded"
         )
@@ -829,7 +829,7 @@ def test_a_successful_verification_lets_the_reviewer_proceed(tmp_path, capsys):
         _run(
             config,
             artifact,
-            read_env=lambda: _env(),
+            read_env=lambda _provider: _env(),
             client_factory=_mock_client_factory(seen),
         )
         == 0
@@ -873,7 +873,7 @@ def test_reviewer_env_names_are_not_touched_before_verification_succeeds(
 
     monkeypatch.setattr(subprocess, "Popen", recording_popen)
 
-    def read_env():
+    def read_env(_provider):
         events.append("env")
         return _env()
 
@@ -896,7 +896,7 @@ def test_after_a_verified_state_the_environment_configuration_is_loaded(
         _run(
             config,
             artifact,
-            read_env=lambda: _env(),
+            read_env=lambda _provider: _env(),
             client_factory=_mock_client_factory(),
         )
         == 0
@@ -917,7 +917,7 @@ def test_a_missing_reviewer_environment_fails_the_reviewer_stage_only(
         _run(
             config,
             artifact,
-            read_env=lambda: _env(AIDO_LITELLM_API_KEY=None),
+            read_env=lambda _provider: _env(AIDO_LITELLM_API_KEY=None),
             client_factory=_forbidden_client(),
         )
         == 4
@@ -942,7 +942,7 @@ def test_the_environment_default_model_cannot_override_the_configured_model(
         _run(
             config,
             artifact,
-            read_env=lambda: _env(),
+            read_env=lambda _provider: _env(),
             client_factory=_mock_client_factory(seen),
         )
         == 0
@@ -974,7 +974,7 @@ def test_the_transmitted_prompt_carries_the_diff_plan_and_verification_output(
         _run(
             config,
             artifact,
-            read_env=lambda: _env(),
+            read_env=lambda _provider: _env(),
             client_factory=_mock_client_factory(seen),
         )
         == 0
@@ -996,7 +996,7 @@ def test_the_transmitted_prompt_carries_no_absolute_path_or_credential(tmp_path)
     _run(
         config,
         artifact,
-        read_env=lambda: _env(),
+        read_env=lambda _provider: _env(),
         client_factory=_mock_client_factory(seen),
     )
 
@@ -1023,7 +1023,7 @@ def test_secret_like_verification_output_is_redacted_before_transmission(tmp_pat
         _run(
             config,
             artifact,
-            read_env=lambda: _env(),
+            read_env=lambda _provider: _env(),
             client_factory=_mock_client_factory(seen),
         )
         == 0
@@ -1049,7 +1049,7 @@ def test_exactly_one_semantic_reviewer_request_is_made(tmp_path, capsys):
     _run(
         config,
         artifact,
-        read_env=lambda: _env(),
+        read_env=lambda _provider: _env(),
         client_factory=_mock_client_factory(seen),
     )
 
@@ -1087,7 +1087,7 @@ def test_a_bad_reviewer_reply_exits_four_without_a_second_request(
         _run(
             config,
             artifact,
-            read_env=lambda: _env(),
+            read_env=lambda _provider: _env(),
             client_factory=_mock_client_factory(seen, content=content),
         )
         == 4
@@ -1109,7 +1109,7 @@ def test_a_transport_failure_exits_four(tmp_path, capsys):
         _run(
             config,
             artifact,
-            read_env=lambda: _env(),
+            read_env=lambda _provider: _env(),
             client_factory=_mock_client_factory(raise_transport=True),
         )
         == 4
@@ -1130,7 +1130,7 @@ def test_a_reviewer_failure_leaks_neither_the_reply_nor_the_credentials(
         _run(
             config,
             artifact,
-            read_env=lambda: _env(),
+            read_env=lambda _provider: _env(),
             client_factory=_mock_client_factory(content=leaky),
         )
         == 4
@@ -1160,7 +1160,7 @@ def test_a_reviewer_failure_leaves_the_git_visible_state_as_verification_found_i
         _run(
             config,
             artifact,
-            read_env=lambda: _env(),
+            read_env=lambda _provider: _env(),
             client_factory=_mock_client_factory(content="{}"),
         )
         == 4
@@ -1192,7 +1192,7 @@ def test_every_valid_verdict_exits_zero(tmp_path, capsys, content, verdict):
         _run(
             config,
             artifact,
-            read_env=lambda: _env(),
+            read_env=lambda _provider: _env(),
             client_factory=_mock_client_factory(content=content),
         )
         == 0
@@ -1211,7 +1211,7 @@ def test_the_pre_call_banner_names_the_model_and_host_but_not_the_diff(
     _run(
         config,
         artifact,
-        read_env=lambda: _env(),
+        read_env=lambda _provider: _env(),
         client_factory=_mock_client_factory(),
     )
 
@@ -1258,7 +1258,7 @@ def test_a_hostile_issue_title_never_reaches_the_warning_banner(tmp_path, capsys
         _run(
             config,
             artifact,
-            read_env=lambda: _env(),
+            read_env=lambda _provider: _env(),
             client_factory=_mock_client_factory(),
         )
         == 0
@@ -1292,8 +1292,11 @@ def test_the_reviewer_call_notice_carries_no_title_field():
     assert "title" not in ReviewerCallNotice.__slots__
     assert not hasattr(
         ReviewerCallNotice(
+            provider="litellm",
             model="m",
             endpoint_host="h",
+            endpoint_scheme="https",
+            transport_tls=True,
             project_id="p",
             repo="o/r",
             issue_number=1,
@@ -1319,7 +1322,7 @@ def test_the_exit_four_message_scopes_every_claim_to_aidos_review_stage(
         _run(
             config,
             artifact,
-            read_env=lambda: _env(),
+            read_env=lambda _provider: _env(),
             client_factory=_mock_client_factory(content="{}"),
         )
         == 4
@@ -1390,7 +1393,7 @@ def test_exit_four_wording_holds_when_the_child_really_did_write_a_file(
         _run(
             config,
             artifact,
-            read_env=lambda: _env(),
+            read_env=lambda _provider: _env(),
             client_factory=_mock_client_factory(content="{}"),
         )
         == 4
@@ -1425,7 +1428,7 @@ def test_the_packet_validates_and_embeds_the_verification_result(tmp_path, capsy
         _run(
             config,
             artifact,
-            read_env=lambda: _env(),
+            read_env=lambda _provider: _env(),
             client_factory=_mock_client_factory(),
         )
         == 0
@@ -1460,7 +1463,7 @@ def test_trusted_identity_comes_from_the_orchestrator_not_the_model(tmp_path, ca
     _run(
         config,
         artifact,
-        read_env=lambda: _env(),
+        read_env=lambda _provider: _env(),
         client_factory=_mock_client_factory(content=forged),
     )
 
@@ -1483,7 +1486,7 @@ def test_the_packet_carries_no_absolute_path_endpoint_url_or_credential(
     _run(
         config,
         artifact,
-        read_env=lambda: _env(),
+        read_env=lambda _provider: _env(),
         client_factory=_mock_client_factory(),
     )
 
@@ -1510,7 +1513,7 @@ def test_the_packet_does_not_re_echo_the_approved_diff(tmp_path, capsys):
     _run(
         config,
         artifact,
-        read_env=lambda: _env(),
+        read_env=lambda _provider: _env(),
         client_factory=_mock_client_factory(),
     )
 
@@ -1525,7 +1528,7 @@ def test_the_packet_admits_the_model_call_and_the_code_execution(tmp_path, capsy
     _run(
         config,
         artifact,
-        read_env=lambda: _env(),
+        read_env=lambda _provider: _env(),
         client_factory=_mock_client_factory(),
     )
 
@@ -1553,7 +1556,7 @@ def test_the_packet_scopes_every_negative_claim_to_the_orchestrator(tmp_path, ca
     _run(
         config,
         artifact,
-        read_env=lambda: _env(),
+        read_env=lambda _provider: _env(),
         client_factory=_mock_client_factory(),
     )
 
@@ -1599,7 +1602,7 @@ def test_the_packet_states_the_transmission_boundary(tmp_path, capsys):
     _run(
         config,
         artifact,
-        read_env=lambda: _env(),
+        read_env=lambda _provider: _env(),
         client_factory=_mock_client_factory(),
     )
 
@@ -1624,7 +1627,7 @@ def test_the_packet_records_safe_reviewer_provenance(tmp_path, capsys):
     _run(
         config,
         artifact,
-        read_env=lambda: _env(),
+        read_env=lambda _provider: _env(),
         client_factory=_mock_client_factory(),
     )
 
@@ -1649,7 +1652,7 @@ def test_the_human_decision_is_the_terminal_step(tmp_path, capsys):
     _run(
         config,
         artifact,
-        read_env=lambda: _env(),
+        read_env=lambda _provider: _env(),
         client_factory=_mock_client_factory(content=CHANGES_REQUESTED_JSON),
     )
 
@@ -1674,7 +1677,7 @@ def test_no_git_state_changes_across_a_successful_review(tmp_path):
         _run(
             config,
             artifact,
-            read_env=lambda: _env(),
+            read_env=lambda _provider: _env(),
             client_factory=_mock_client_factory(),
         )
         == 0
@@ -1751,7 +1754,7 @@ def test_the_writer_is_never_invoked_by_the_review_command(tmp_path, monkeypatch
         _run(
             config,
             artifact,
-            read_env=lambda: _env(),
+            read_env=lambda _provider: _env(),
             client_factory=_mock_client_factory(),
         )
         == 0

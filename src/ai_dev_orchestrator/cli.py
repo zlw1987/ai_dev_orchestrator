@@ -421,6 +421,40 @@ def _read_real_llm_env() -> dict[str, str]:
     }
 
 
+def _read_reviewer_env(provider: str) -> dict[str, str]:
+    """Snapshot **only** the configured reviewer provider's environment names.
+
+    Used by ``l2-review-approved-file-edit`` alone, and called only after the
+    accepted Phase 5F2D verification returned ``verified``.
+
+    **The ordering inside this function is the point** (Phase 5F2E-V1-FU1). The
+    provider is resolved to an exact tuple of names *before* ``os.environ`` is
+    touched at all, so:
+
+    - a ``vllm`` review reads **only** ``AIDO_VLLM_BASE_URL`` and
+      ``AIDO_VLLM_API_KEY``, and no ``AIDO_LITELLM_*`` name is ever looked up;
+    - a ``litellm`` review reads **only** the five ``AIDO_LITELLM_*`` names, and
+      no ``AIDO_VLLM_*`` name is ever looked up.
+
+    Phase 5F2E-V1 shipped this reader as a *union* snapshot of both families,
+    narrowed afterwards. That was wrong: reading a credential and then discarding
+    it is still reading it, and it contradicted the contract V1 documented. There
+    is deliberately no union constant left for this function to use.
+
+    An unsupported provider raises before any name is resolved, so it cannot read
+    an environment value either. No other variable is read, and no value is
+    printed.
+
+    ``_read_real_llm_env`` above is untouched: it still serves the planner and
+    smoke-test commands with their own five ``AIDO_LITELLM_*`` names.
+    """
+    from ai_dev_orchestrator.review import reviewer_env_names_for_provider
+
+    # Resolved from the provider alone — no environment access has happened yet.
+    names = reviewer_env_names_for_provider(provider)
+    return {name: os.environ[name] for name in names if name in os.environ}
+
+
 def _build_real_llm_client(config):
     """Construct the real, socket-capable client. The only such call site."""
     from ai_dev_orchestrator.llm.client import LLMClient
@@ -3974,9 +4008,16 @@ _REVIEW_EXIT_REVIEWER_FAILED = 4
 # URL — the review module's own messages are built from fixed strings and field
 # names for exactly that reason.
 _REVIEWER_FAILURE_CATEGORIES: dict[str, str] = {
+    # Deliberately provider-neutral. Two reviewer providers exist, so naming one
+    # family here would misdescribe a failure of the other — and "disallowed"
+    # covers the case where the settings were present and well-formed but the
+    # transport was refused, such as a direct vLLM endpoint on plaintext HTTP
+    # without the project opt-in. The raised exception carries the specific,
+    # safe detail (which environment variable NAME is required, or why the
+    # transport was refused); this category never does.
     "ReviewerEnvironmentError": (
-        "reviewer environment failure — the AIDO_LITELLM_* connection settings "
-        "were missing or invalid"
+        "reviewer connection configuration failure — the configured reviewer "
+        "connection settings were missing, invalid, or disallowed"
     ),
     "ReviewerTransportError": (
         "reviewer transport failure — the endpoint call failed under the LLM "
@@ -4078,6 +4119,26 @@ def _echo_supervision_event(event) -> None:
         typer.echo(line, err=True)
 
 
+def _reviewer_transport_line(notice) -> str:
+    """One unmistakable line about whether the transport is encrypted.
+
+    Derived from the endpoint's URL **scheme** only — the one URL component that
+    carries neither credential nor payload. The base URL itself, its userinfo,
+    path and query are never printed, and there is no field here holding them.
+
+    A plaintext endpoint says so in capitals. It is never softened by where the
+    endpoint happens to sit: an internal, colleague-hosted, or same-network HTTP
+    endpoint is not private, and this line must never imply that it is.
+    """
+    if notice.transport_tls:
+        return f"{notice.endpoint_scheme.upper()} — TLS-encrypted"
+    return (
+        f"{notice.endpoint_scheme.upper()} — NOT TLS-ENCRYPTED. Source-derived "
+        "code will be sent UNENCRYPTED over this network path. Being internal, "
+        "colleague-hosted, or on a particular network does NOT make it private."
+    )
+
+
 def _echo_reviewer_banner(notice) -> None:
     """Print the non-suppressible pre-call warning block to stderr.
 
@@ -4098,7 +4159,9 @@ def _echo_reviewer_banner(notice) -> None:
     """
     for line in (
         "=== REAL REVIEWER MODEL CALL — a real network call is about to be made ===",
+        f"Provider:      {notice.provider}",
         f"Endpoint host: {notice.endpoint_host}",
+        f"Transport:     {_reviewer_transport_line(notice)}",
         f"Model:         {notice.model}",
         f"Project:       {notice.project_id}",
         f"Repo:          {notice.repo}",
@@ -4135,7 +4198,7 @@ def _run_l2_review_approved_file_edit(
     approved_diff_proposal: Path,
     verify_approved_file_edit_flag: bool,
     real_reviewer: bool,
-    read_env=_read_real_llm_env,
+    read_env=_read_reviewer_env,
     client_factory=_build_real_llm_client,
 ) -> None:
     """Verify one applied approved change, then review it. Extracted for tests.
@@ -4143,7 +4206,8 @@ def _run_l2_review_approved_file_edit(
     ``read_env`` and ``client_factory`` are injection points: the CLI wrapper
     supplies the real environment reader and the real client builder, while tests
     supply a literal mapping and an ``httpx.MockTransport``-backed client, so the
-    test suite never reads a real value or opens a real socket.
+    test suite never reads a real value or opens a real socket. ``read_env`` is
+    called as ``read_env(provider)``.
 
     Ordering is the safety property, and the credential ordering in particular is
     load-bearing. In sequence: both ``--verify-approved-file-edit`` and
@@ -4154,10 +4218,21 @@ def _run_l2_review_approved_file_edit(
     Windows, then a string/path check rejects an ``--approved-diff-proposal``
     inside the configured workspace *before* it is opened, then the artifact is
     read and strictly parsed, then the **accepted Phase 5F2D verifier runs**, and
-    only after it returns ``verified`` is ``read_env`` called and a client built.
+    only after it returns ``verified`` is ``read_env`` called — **once**, with the
+    configured provider — and a client built.
 
     No reviewer credential is read on behalf of a run whose verification refused,
-    failed, or left the workspace untrusted.
+    failed, or left the workspace untrusted — for either provider. And on a run
+    that *does* reach the reader, only the **configured** provider's names are
+    read: the other family is never looked up at all, rather than looked up and
+    discarded (Phase 5F2E-V1-FU1).
+
+    Phase 5F2E-V1 changed nothing about that ordering. It widened one step: the
+    gate now accepts ``provider: "litellm"`` or ``provider: "vllm"``, still
+    exactly and case-sensitively, and an unsupported provider still refuses here
+    before any workspace access, process launch, environment read, or model
+    contact. There is no new flag and no new command; provider selection is
+    project-config only and the endpoint is environment-only.
     """
     from ai_dev_orchestrator.config_loader import ConfigError, load_project_config
     from ai_dev_orchestrator.file_editing import (
@@ -4422,7 +4497,17 @@ def _run_l2_review_approved_file_edit(
         "=== REAL REVIEWER MODEL CALL COMPLETED ===",
         err=True,
     )
+    typer.echo(f"Provider:      {packet.reviewer.provider}", err=True)
     typer.echo(f"Endpoint host: {packet.reviewer.endpoint_host}", err=True)
+    typer.echo(
+        "Transport:     "
+        + (
+            f"{packet.reviewer.endpoint_scheme.upper()} — TLS-encrypted"
+            if packet.reviewer.transport_tls
+            else f"{packet.reviewer.endpoint_scheme.upper()} — NOT TLS-ENCRYPTED"
+        ),
+        err=True,
+    )
     typer.echo(f"Model:         {packet.reviewer.model}", err=True)
     typer.echo(f"Verdict:       {packet.review.verdict}", err=True)
     typer.echo(
@@ -4504,8 +4589,19 @@ def l2_review_approved_file_edit(
     block. There is no ``--model``, ``--provider``, ``--prompt``, ``--message``,
     ``--command``, ``--shell``, ``--fix``, ``--repair``, ``--retry``,
     ``--commit``, ``--branch``, ``--push``, ``--pr``, ``--github``, ``--fetch``,
-    or ``--apply`` option, and ``AIDO_LITELLM_DEFAULT_MODEL`` never selects the
-    reviewer.
+    or ``--apply`` option, and no environment variable of either provider ever
+    selects the reviewer model.
+
+    The reviewer **backend** likewise comes only from
+    ``controlled_review.provider``, which is exactly ``"litellm"`` (the existing
+    internal OpenAI-compatible LiteLLM path, connection details from the
+    ``AIDO_LITELLM_*`` names) or ``"vllm"`` (a direct OpenAI-compatible vLLM
+    endpoint, connection details from ``AIDO_VLLM_BASE_URL`` and the optional
+    ``AIDO_VLLM_API_KEY``). Matching is exact and case-sensitive. A direct vLLM
+    endpoint reached over plaintext ``http`` is refused before any model request
+    unless the project set ``controlled_review.vllm_allow_insecure_http`` — an
+    acknowledgement that unencrypted transport is accepted, **not** a claim that
+    it is secure, private, or authenticated.
 
     What is transmitted: the one approved unified diff, the plan's summary, scope
     summary, non-goals, proposed steps, risks and open questions, and the
@@ -4567,7 +4663,7 @@ def l2_review_approved_file_edit(
         approved_diff_proposal=approved_diff_proposal,
         verify_approved_file_edit_flag=verify_approved_file_edit_flag,
         real_reviewer=real_reviewer,
-        read_env=_read_real_llm_env,
+        read_env=_read_reviewer_env,
         client_factory=_build_real_llm_client,
     )
 

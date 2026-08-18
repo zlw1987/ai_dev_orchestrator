@@ -228,7 +228,8 @@ controlled_verification:
 # verification itself, and only if it returns `verified`, send ONE approved
 # unified diff, selected approved-plan prose (summary, scope, non-goals, proposed
 # steps, risks, open questions) and the bounded, redacted verification output to
-# the ONE model named below, once, and print one review packet for a human.
+# the ONE model named below — under the bounded Phase 5F2E-RS1 semantic-attempt
+# policy described further down — and print one review packet for a human.
 #
 # It never sends the full target file, any unrelated repository source, a
 # directory listing, a repository tree, git history, the workspace path, any
@@ -238,11 +239,11 @@ controlled_verification:
 # transmitted material is secret-free.
 #
 # `model` is the ONLY place a reviewer model may be named: there is no CLI
-# --model, AIDO_LITELLM_DEFAULT_MODEL never selects it, and matching is exact —
-# no glob, no prefix, no case folding. `provider` currently accepts only
-# "litellm", the existing internal OpenAI-compatible path; connection details
-# still come from the AIDO_LITELLM_* environment, and are read ONLY after the
-# verification has passed.
+# --model, no environment variable of either provider ever selects it, and
+# matching is exact — no glob, no prefix, no case folding. `provider` accepts
+# exactly "litellm" or "vllm" (see the Phase 5F2E-V1 notes further down);
+# connection details come from the CONFIGURED provider's environment names only,
+# and are read ONLY after the verification has passed.
 #
 # There is deliberately NO api_key, base_url, endpoint, credential, env-var name,
 # prompt template, header, transport retry count, fixer block, second reviewer,
@@ -289,8 +290,10 @@ controlled_verification:
 #     exactly the pressure this bound exists to contain.
 #
 # Retry OWNERSHIP is explicit: the reviewer client is built with
-# max_retries = 0, overriding AIDO_LITELLM_MAX_RETRIES for this command only, so
-# one semantic attempt is exactly ONE HTTP/model request. The generic LLM client
+# max_retries = 0 for BOTH providers — overriding AIDO_LITELLM_MAX_RETRIES for
+# this command only on the litellm path, and with no equivalent variable to
+# override on the vllm path — so one semantic attempt is exactly ONE HTTP/model
+# request. The generic LLM client
 # keeps its bounded transport retries for every other caller. Timeouts,
 # authentication failures, non-retryable 4xx, 429, 5xx and connection failures
 # all get NO compact retry.
@@ -305,13 +308,64 @@ controlled_verification:
 #
 # There is no attempt-count field, no timeout-retry field, no backoff setting,
 # no retry prompt, and no CLI override for any of these.
+#
+# ---- Phase 5F2E-V1: two reviewer providers ----------------------------------
+#
+# `provider` now accepts exactly two values, matched EXACTLY and CASE-SENSITIVELY
+# (no alias, no case folding, no glob, no provider registry):
+#
+#   "litellm"   the existing internal OpenAI-compatible LiteLLM path. Unchanged,
+#               and still supported for when internal infrastructure returns.
+#               Connection details come from the five AIDO_LITELLM_* variables.
+#
+#   "vllm"      a direct OpenAI-compatible vLLM endpoint. Connection details come
+#               from AIDO_VLLM_BASE_URL (required) and AIDO_VLLM_API_KEY
+#               (optional). There is NO AIDO_VLLM_DEFAULT_MODEL, and no
+#               AIDO_LITELLM_* variable is read, required, or accepted.
+#
+# ONLY the configured provider's variables are read, and that is literal: the
+# provider resolves to an exact tuple of variable NAMES before the process
+# environment is touched at all. A "vllm" review never looks up an
+# AIDO_LITELLM_* name, and a "litellm" review never looks up an AIDO_VLLM_* one.
+#
+# The reviewer MODEL is provider-independent and comes ONLY from
+# `controlled_review.model` below. No environment variable of either provider can
+# select it, and there is no CLI --model or --provider option.
+#
+# A keyless vLLM server needs no credential: when AIDO_VLLM_API_KEY is absent or
+# blank, AIDO sends a fixed, NON-SECRET compatibility placeholder in the
+# Authorization header the OpenAI-compatible client shape always sends. That
+# placeholder is not a credential and is not authentication.
+#
+# vllm_allow_insecure_http
+#     Applies to provider "vllm" ONLY; it is never consulted for "litellm", so
+#     accepted LiteLLM deployments are unaffected. Default false, which REFUSES
+#     an http:// vLLM endpoint before any model request is issued. Setting it to
+#     true records ONLY that this project explicitly permits source-derived
+#     reviewer material to be sent over PLAINTEXT vLLM transport. It does NOT
+#     make that transport secure, encrypted, private, authenticated,
+#     company-approved, or safe for secrets — and an internal, colleague-hosted,
+#     or same-network endpoint is not private merely because of where it sits.
+#     Nothing upgrades, rewrites, or tunnels the URL.
+#
+# The RS1 semantics above are UNCHANGED and apply identically to both providers:
+# transport retries forced to zero, at most two semantic requests, an AIDO-owned
+# per-attempt wait deadline, and a TERMINAL stall. There is no fallback model, no
+# reviewer chain, no provider failover, and no automatic provider selection.
+#
+# The successful output artifact is now `review-packet.v3`, which additionally
+# records the reviewer provider and the transport scheme truthfully.
 controlled_review:
   enabled: false
   provider: "litellm"
+  # provider: "vllm"
   # model: "qwen3-coder-next"
   attempt_timeout_seconds: 90
   max_output_tokens: 2048
   compact_retry_on_unusable_output: false
+  # vLLM only. Refuses plaintext HTTP unless explicitly set to true, and true is
+  # an acknowledgement of unencrypted transport, never a security claim.
+  vllm_allow_insecure_http: false
 
 run_limits:
   max_model_calls_per_issue: 20

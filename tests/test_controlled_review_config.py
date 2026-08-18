@@ -102,13 +102,13 @@ def test_an_unsupported_provider_still_loads_so_other_commands_are_unaffected():
 # =============================================================================
 
 
-def test_the_gate_returns_the_exact_configured_model():
-    assert (
-        check_controlled_review_gate(
-            _project(enabled=True, model="qwen3-coder-next")
-        )
-        == "qwen3-coder-next"
+def test_the_gate_returns_the_exact_configured_provider_and_model():
+    authority = check_controlled_review_gate(
+        _project(enabled=True, model="qwen3-coder-next")
     )
+
+    assert authority.model == "qwen3-coder-next"
+    assert authority.provider == "litellm"
 
 
 def test_an_absent_block_refuses():
@@ -165,7 +165,7 @@ def test_the_review_gate_ignores_the_planning_allowlist_entirely():
     payload["controlled_review"] = {"enabled": True, "model": "reviewer-only-model"}
     project = ProjectConfig.model_validate(payload)
 
-    assert check_controlled_review_gate(project) == "reviewer-only-model"
+    assert check_controlled_review_gate(project).model == "reviewer-only-model"
 
 
 def test_the_gate_reads_no_environment_variable(monkeypatch):
@@ -178,4 +178,4 @@ def test_the_gate_reads_no_environment_variable(monkeypatch):
     monkeypatch.setattr(os.environ, "get", boom)
     monkeypatch.setattr(os.environ.__class__, "__getitem__", lambda self, key: boom())
 
-    assert check_controlled_review_gate(_project(enabled=True, model="m")) == "m"
+    assert check_controlled_review_gate(_project(enabled=True, model="m")).model == "m"

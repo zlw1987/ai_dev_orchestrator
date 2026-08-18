@@ -77,6 +77,32 @@
 >   request issuance and wait budget, NOT backend inference lifetime or GPU
 >   occupancy.** Any text anywhere claiming "the reviewer runtime/resource
 >   envelope is bounded" is stale.
+> - **Phase 5F2E-V1 is DONE** (§32), **as corrected by 5F2E-V1-FU1** (§32.11):
+>   the **direct vLLM reviewer provider**.
+>   `controlled_review.provider` now accepts exactly `"litellm"` or `"vllm"`,
+>   matched exactly and case-sensitively, with the vLLM endpoint coming from
+>   `AIDO_VLLM_BASE_URL` and an optional `AIDO_VLLM_API_KEY`, and the model still
+>   coming only from `controlled_review.model`. LiteLLM remains supported;
+>   direct vLLM is an **additional** option, not a replacement. Plaintext HTTP is
+>   refused for vLLM unless the project sets `vllm_allow_insecure_http`, which is
+>   an **acknowledgement, never a security claim**. The output artifact is now
+>   **`review-packet.v3`**, so statements in §30 and §31 that the packet is
+>   `review-packet.v1`/`v2` are **superseded** and preserved only as history —
+>   though `v1` and `v2` keep their original LiteLLM-only meanings and must never
+>   be reinterpreted as possibly-vLLM. **Every accepted RS1 semantic is
+>   unchanged**, and V1 added no command, flag, role, loop, fallback, second
+>   reviewer, fixer, implementer, cancellation, or provider framework.
+> - **FU1 (§32.11) made the provider-specific environment claim true.** V1's
+>   reader snapshotted **both** provider families from the process environment and
+>   discarded the unconfigured one afterwards — and reading a credential then
+>   dropping it is still reading it. The reader is now handed the provider and
+>   resolves it to an exact name tuple **before** touching any environment, so a
+>   vLLM review never reads an `AIDO_LITELLM_*` value and a LiteLLM review never
+>   reads an `AIDO_VLLM_*` value. The union `REVIEWER_ENV_NAMES` constant and the
+>   narrow-afterwards helper `select_reviewer_env` were **removed**, not renamed.
+>   FU1 also made the CLI's reviewer-environment failure category
+>   provider-neutral and corrected stale `v2`/LiteLLM-only prose in live
+>   docstrings and examples. **No accepted V1 or RS1 behavior was reopened.**
 > - **The first controlled write → verify → supervised review → human path now
 >   exists.**
 > - **L2 as originally defined is still NOT complete.** There is no model-backed
@@ -98,6 +124,8 @@
 > 5F2E-RS1       Reviewer Runtime Supervision         DONE
 > 5F2E-RS1-FU1   Terminal timeout + wording fixes     DONE
 > 5F2E-RS1-FU2   AIDO-owned reviewer wait deadline    DONE
+> 5F2E-V1        Direct vLLM Reviewer Provider        DONE
+> 5F2E-V1-FU1    Provider env isolation + wording     DONE
 > → bounded write → verify → supervised review → human
 > ```
 >
@@ -7156,3 +7184,380 @@ authority, unlike an issue title that arrives with the issue. That is a statemen
 about *provenance*, not validation. **No validator was added merely to make the
 prose true, and no terminal-escaping infrastructure was created.** Project config
 remains the trusted authority for those values.
+
+---
+
+## 32. Phase 5F2E-V1 — direct vLLM reviewer provider (DONE)
+
+> **Status:** DONE. This section describes the accepted implementation.
+>
+> **Scope, stated exactly:** V1 is a **reviewer-provider extension and nothing
+> else.** It is **not** Pi integration, a model-backed implementer, an agent
+> loop, RS2 reviewer failover, a fallback reviewer, a second reviewer, a fixer, a
+> review/fix loop, backend cancellation, a generic provider framework, a generic
+> OpenAI-compatible provider abstraction, or branch/commit/push/PR work. None of
+> those were added, and none may be added under this section's authority.
+
+### 32.1 Why
+
+Phase 5F2E's reviewer *transport* was already OpenAI-compatible, but its reviewer
+**authority and provenance** were LiteLLM-specific in four places:
+
+1. `controlled_review.provider` accepted only `"litellm"`;
+2. reviewer environment loading read only the five `AIDO_LITELLM_*` names;
+3. a successful `review-packet.v2` reported the provider as `litellm`;
+4. `review-packet.v2`'s `provider` field *meant* LiteLLM by construction.
+
+A second reviewer backend is now explicitly supported: a **direct
+OpenAI-compatible vLLM endpoint**. LiteLLM remains supported for when internal
+infrastructure returns; direct vLLM is an **additional** option, not a
+replacement, and V1 must not retroactively break an accepted LiteLLM deployment.
+
+No model name and no endpoint is hard-coded anywhere in runtime code or in this
+document. Model authority remains exactly
+`project_config.controlled_review.model`, and endpoint authority remains the
+environment. Examples here use neutral `.invalid` hostnames only.
+
+### 32.2 Configuration contract
+
+```yaml
+controlled_review:
+  enabled: true
+  provider: "vllm"                        # exactly "litellm" or "vllm"
+  model: "my-served-model-name"           # the ONLY place a reviewer model is named
+  attempt_timeout_seconds: 90
+  max_output_tokens: 2048
+  compact_retry_on_unusable_output: false
+  vllm_allow_insecure_http: false         # vLLM only; ships false
+```
+
+- `provider` is matched **exactly and case-sensitively** against exactly two
+  values. No alias, no case folding, no whitespace trimming, no glob, no
+  `"openai"`, no `"openai_compatible"`, no provider registry, no plugin system,
+  no provider list, no provider priority, and no failover. Shape is validated at
+  load (non-blank) and **support** is enforced at the review gate, so a mis-set
+  reviewer block still cannot make an unrelated command fail to load its project
+  config — the accepted Phase 5F2D executable precedent.
+- `vllm_allow_insecure_http` is the **only** new field. It defaults to `false`,
+  so every existing Phase 5F2E / RS1 config loads unchanged with unchanged
+  behavior. It exists solely to authorize direct vLLM plaintext HTTP transport.
+- Nothing else was broadened. The block still has **no** field for an endpoint
+  URL, an API key, a header, an environment-variable name, a `fallback_model`, a
+  `secondary_model`, a `reviewer_chain`, a provider priority or list, a model
+  list, or a transport retry count — and there is no CLI override for any of
+  them.
+
+### 32.3 Provider-specific environment, and the preserved ordering
+
+The accepted ordering is unchanged and remains the safety property:
+
+```text
+verify FIRST  →  reviewer environment SECOND
+```
+
+No reviewer endpoint or credential value of **either** provider is read before
+the accepted Phase 5F2D verifier returns `verified`.
+
+| provider | required | optional |
+| --- | --- | --- |
+| `litellm` | `AIDO_LITELLM_BASE_URL`, `AIDO_LITELLM_API_KEY`, `AIDO_LITELLM_DEFAULT_MODEL` | `AIDO_LITELLM_TIMEOUT_SECONDS`, `AIDO_LITELLM_MAX_RETRIES` |
+| `vllm` | `AIDO_VLLM_BASE_URL` | `AIDO_VLLM_API_KEY` |
+
+A vLLM reviewer requires **no** `AIDO_LITELLM_*` variable, and there is
+deliberately **no** `AIDO_VLLM_DEFAULT_MODEL`: the environment must never be able
+to select the reviewer model.
+
+The injected reader is called **once**, as `read_env(provider)`, and only the
+configured provider's names are ever read. See §32.11, which corrected this: V1
+shipped a reader that snapshotted the union of both families and narrowed the
+result afterwards, which is still *reading* the unconfigured provider's values.
+
+The existing LiteLLM loader and the generic `LLMClient` were **not** globally
+altered.
+
+### 32.4 Keyless vLLM without weakening the generic client
+
+`LLMClientConfig.api_key` is a required non-blank string, and the shipped
+OpenAI-compatible client always sends an `Authorization` header. A keyless vLLM
+server accepts the request regardless of that header's contents.
+
+Rather than make `api_key` optional for every caller — which would weaken a model
+whose purpose is to hold the one credential copy in one place — the vLLM branch
+substitutes a fixed literal when `AIDO_VLLM_API_KEY` is absent or blank:
+
+```text
+VLLM_COMPATIBILITY_PLACEHOLDER_API_KEY = "no_api_key"
+```
+
+**It is a compatibility placeholder, not a credential.** It carries no secret,
+grants no access, proves nothing about the endpoint, and must never be described
+as authentication. When a real key *is* supplied it reaches the client config and
+nothing else — never stdout, stderr, the packet, an error, a warning, or a log,
+and `LLMClientConfig` still excludes it from `repr`.
+
+### 32.5 Insecure-transport refusal (vLLM only)
+
+- HTTPS: allowed normally.
+- HTTP: **refused**, unless `controlled_review.vllm_allow_insecure_http` is true.
+
+The refusal happens while the connection settings are being built — before a
+client exists — so no model request can be issued past it. Verification may
+already have passed, because the credential ordering is preserved; that is
+expected, and the command exits **4** (reviewer stage failed after verification
+passed) with the Phase 5F2E-scoped failure text. The message never prints the
+full base URL or any credential; the endpoint **host** is shown only where the
+existing banner already shows it.
+
+Nothing upgrades, rewrites, or tunnels the URL. Schemes other than `http` and
+`https` are refused for both providers before a client is built — `httpx` could
+not have spoken them either, so no working deployment can be affected.
+
+> **The opt-in means exactly one thing:** *this project explicitly permits
+> source-derived reviewer material to be sent over direct vLLM plaintext HTTP
+> transport.* It does **not** mean secure, encrypted, private, authenticated,
+> company-approved, or safe for secrets, and an internal, colleague-hosted, or
+> same-network endpoint is **not** private merely because of where it sits.
+
+The rule is deliberately **not** applied to the LiteLLM provider, whose
+deployments were accepted before this phase existed.
+
+### 32.6 Client construction
+
+The vLLM branch produces the same `LLMClientConfig` concepts as the LiteLLM one:
+
+| field | value |
+| --- | --- |
+| `base_url` | `AIDO_VLLM_BASE_URL` |
+| `api_key` | the supplied vLLM key, or the fixed compatibility placeholder |
+| `default_model` | the exact `controlled_review.model` |
+| `timeout_seconds` | `controlled_review.attempt_timeout_seconds` |
+| `max_retries` | `REVIEWER_TRANSPORT_MAX_RETRIES` (`0`) |
+
+The existing `LLMClient` is reused. **No** second HTTP client, vLLM SDK,
+`requests`, `aiohttp`, or `curl` dependency was added, and generic `LLMClient`
+retry or timeout behavior is unchanged for every other caller.
+
+### 32.7 What did NOT change
+
+The reviewer prompt, the compact-retry prompt semantics, the transmitted source
+boundary, the strict JSON parser, the finding limits, the verdict semantics, the
+RS1 attempt classifications, `RETRY_ELIGIBLE_OUTCOMES`, the terminal-timeout
+rule, the daemon-worker wait deadline, the maximum of two semantic attempts,
+`max_retries=0`, `stall_source`, the output-token policy, and every
+backend-cancellation disclaimer are all **unchanged**, and apply **identically**
+to both providers.
+
+A vLLM timeout is still `review_stalled` → terminal → **no retry after the
+stall**, unless the accepted completed-but-unusable compact-retry policy applies.
+No provider-specific retry, timeout, backoff, streaming, or cancellation behavior
+was added.
+
+The CLI is unchanged: no new command, and `l2-review-approved-file-edit` keeps
+its exact option surface. Provider selection is project-config only; endpoint
+selection is environment-only.
+
+### 32.8 `review-packet.v3`
+
+`review-packet.v2` is **not** redefined. Its `provider` contract was
+LiteLLM-specific and it reported no transport scheme, so silently widening it
+would have made every archived `v2` packet ambiguous about which backend produced
+it, and would have implied a transport claim those packets never made.
+
+Schema-version history, as the packet itself now states:
+
+- **`review-packet.v1`** — original Phase 5F2E semantics: exactly one semantic
+  reviewer attempt, unreported generic transport retries, no attempt accounting,
+  **LiteLLM-only** reviewer provenance, no transport-scheme reporting.
+- **`review-packet.v2`** — Phase 5F2E-RS1 supervision semantics (transport
+  retries forced to zero, at most two semantic requests, an AIDO-owned
+  per-attempt wait deadline, a terminal stall, per-attempt accounting), still
+  with **LiteLLM-only** reviewer provenance and still no transport-scheme
+  reporting. **An archived `v2` packet must never be read as though it may have
+  come from vLLM.**
+- **`review-packet.v3`** — the **same** accepted RS1 supervision semantics as
+  `v2`, now with explicit LiteLLM/vLLM reviewer provenance and truthful
+  transport-scheme reporting.
+
+`v3` reviewer provenance adds:
+
+```text
+provider:        "litellm" | "vllm"      (from trusted project config)
+model:           exact configured model
+model_source:    project_config.controlled_review.model
+endpoint_host:   host (or host:port) only
+endpoint_scheme: "http" | "https"
+transport_tls:   endpoint_scheme == "https"
+```
+
+`transport_tls` is a statement about the configured URL **scheme** and nothing
+more — not a certificate, cipher, peer-identity, or network-privacy claim. It is
+reported truthfully for both providers, including the synthetic `http` URLs the
+offline test suite uses; that is test provenance being recorded honestly, not a
+security approval.
+
+Still absent, because there is no field for any of them: the base URL, the API
+key, any header, the full endpoint path, the query, the fragment, and any
+workspace absolute path. `provider` **cannot be forged by model output** — the
+strict reviewer schema has no such field, and the block is assembled entirely
+from orchestrator-owned values.
+
+### 32.9 Human-facing notice
+
+The pre-call stderr banner gains three safe lines — the provider, the transport,
+and the existing endpoint host — and a plaintext transport is announced
+unmistakably:
+
+```text
+Provider:      vllm
+Endpoint host: vllm.example.invalid:8000
+Transport:     HTTP — NOT TLS-ENCRYPTED. Source-derived code will be sent
+               UNENCRYPTED over this network path. Being internal,
+               colleague-hosted, or on a particular network does NOT make it
+               private.
+```
+
+The banner still carries no API key, no base URL, no prompt, no diff, no absolute
+path, and no issue title. No real endpoint or IP appears in warning logic or in
+this document.
+
+### 32.10 Verification checklist
+
+- [x] Existing LiteLLM configs load unchanged, with `vllm_allow_insecure_http`
+  defaulting to `false` and every RS1 default untouched.
+- [x] The existing `AIDO_LITELLM_*` contract is unchanged, and a
+  project-configured model still overrides `AIDO_LITELLM_DEFAULT_MODEL`.
+- [x] Reviewer transport `max_retries` is `0` for **both** providers.
+- [x] `provider` matching is exact and case-sensitive; `"VLLM"`, `"vllm "`,
+  `"LiteLLM"`, `"openai"`, `"openai_compatible"` and arbitrary values all refuse
+  at the gate, before workspace access, verification launch, environment read,
+  client construction, or model contact.
+- [x] A vLLM reviewer requires no `AIDO_LITELLM_*` variable and no
+  `AIDO_VLLM_DEFAULT_MODEL`; the exact configured model becomes
+  `LLMClientConfig.default_model`.
+- [x] A missing or blank `AIDO_VLLM_BASE_URL` fails after verification and before
+  any model request.
+- [x] An absent or blank `AIDO_VLLM_API_KEY` yields the fixed non-secret
+  placeholder; a supplied key reaches only the client config and appears in no
+  packet, stdout, stderr, or error text.
+- [x] LiteLLM environment values cannot supply a vLLM endpoint, credential, or
+  model — or the reverse.
+- [x] vLLM HTTPS works with the default opt-out; vLLM HTTP is refused by default
+  before model contact; vLLM HTTP proceeds only with the explicit opt-in; the
+  refusal echoes no URL or credential; the HTTP banner says **NOT TLS-ENCRYPTED**.
+- [x] Successful packets record `endpoint_scheme` / `transport_tls` truthfully
+  for `http` and `https`, and for both providers.
+- [x] For **both** providers: a disabled review, an unsupported provider, or a
+  missing action flag reads no reviewer environment; verification exit 2 or 3
+  reads no reviewer environment and contacts no model; the provider's environment
+  is read only after `verified`, and only the configured provider's names are
+  read at all (see §32.11).
+- [x] RS1 invariants hold on the vLLM path: one request on first-attempt success;
+  a client timeout is terminal at one request; an expired AIDO deadline is
+  terminal at one request; a completed-but-unusable response uses the compact
+  retry only when the project enabled it; never a third request; no fallback
+  model.
+- [x] `REVIEW_PACKET_SCHEMA_VERSION == "review-packet.v3"`; `v1` and `v2`
+  semantic-history constants remain present and truthful; `v2` is documented as
+  LiteLLM-only and explicitly not vLLM-capable; the packet's provider cannot be
+  forged by model output.
+- [x] No Pi import or invocation, no implementer, no fixer, no fallback or
+  reviewer chain, no new subprocess worker, no backend cancellation, and no CLI
+  surface expansion.
+- [x] Every reviewer test uses `httpx.MockTransport`. No socket, no real API key,
+  and no real endpoint appears in the suite.
+
+### 32.11 Phase 5F2E-V1-FU1 — provider environment isolation (DONE)
+
+V1 was implemented but not yet accepted. One runtime blocker was found against
+it, plus a few directly related truthfulness defects. This sub-section records
+their correction. **Nothing else about V1 was reopened**: the provider set, the
+matching rule, model authority, the vLLM environment contract, the keyless
+placeholder, the insecure-HTTP refusal and its opt-in, `review-packet.v3`, the
+`v1`/`v2` historical meanings, and every RS1 semantic are exactly as §32
+describes.
+
+#### The blocker: read-then-discard is still reading
+
+V1's real reader, `cli._read_reviewer_env()`, took **no argument**. It snapshotted
+the union of both provider families from `os.environ` and returned it; the
+configured provider's subset was selected afterwards, inside
+`run_controlled_review`.
+
+So a vLLM review really did read `AIDO_LITELLM_API_KEY` from the process
+environment before discarding it, and a LiteLLM review really did read
+`AIDO_VLLM_BASE_URL`. That contradicted the contract §32.3 documents, and it was
+the wrong way round: **the selection must happen before the environment is
+touched, not after.**
+
+#### The fix
+
+The smallest explicit shape, and no framework:
+
+```text
+read_env(provider)                      # injected reader, called ONCE
+  └─ reviewer_env_names_for_provider(provider)   -> exact tuple of NAMES
+       └─ {name: environ[name] for name in names if name in environ}
+```
+
+`reviewer_env_names_for_provider` answers from the provider alone — no
+environment access, no default, no fallback, no aliasing — and raises for an
+unsupported provider **before** any name is resolved, so a bad provider cannot
+read a value either. A LiteLLM review resolves to exactly the five
+`AIDO_LITELLM_*` names; a vLLM review resolves to exactly `AIDO_VLLM_BASE_URL`
+and `AIDO_VLLM_API_KEY`.
+
+Two things were **removed** rather than left as decoys:
+
+- `select_reviewer_env` — the narrow-afterwards helper, which now has no
+  truthful purpose;
+- the union constant `REVIEWER_ENV_NAMES` — which was the defect's enabler.
+  There is deliberately no union read authority left to regress to.
+  `LITELLM_REVIEWER_ENV_NAMES`, `VLLM_REVIEWER_ENV_NAMES` and
+  `REVIEWER_ENV_NAMES_BY_PROVIDER` remain, documenting the two exact families.
+
+The verify-first / credential-second ordering is **unchanged**: the reader is
+still called only after the accepted Phase 5F2D verifier returns `verified`, and
+still exactly once. `_read_real_llm_env`, used by the planner and smoke-test
+commands, is untouched.
+
+#### The regressions
+
+The tests deliberately **fail against the old implementation**. Rather than pass
+a pre-built mapping and check the filtering, they replace `os.environ` with a
+tracking mapping (seeded from a copy of the real one, with the seven reviewer
+names removed and synthetic values added) that instruments `__getitem__`,
+`__contains__` and `get`, records every lookup of a watched name, and raises
+immediately on a forbidden one. Verified: simulating V1's union snapshot makes
+**eight** of these tests fail.
+
+They prove: a vLLM review looks up only the two `AIDO_VLLM_*` names; a LiteLLM
+review looks up only the five `AIDO_LITELLM_*` names; an unsupported provider
+looks up none; a verification exit 2 or 3 looks up none of the seven; a refused
+run looks up none of the seven; and the reader runs exactly once with the
+configured provider. Two of them drive the whole command with the **real
+wired-in** reader rather than an injected one.
+
+#### Truthfulness corrections shipped alongside
+
+- **Provider-neutral connection-failure category.** The CLI's
+  `ReviewerEnvironmentError` category said *"the AIDO_LITELLM_\* connection
+  settings were missing or invalid"*, which misdescribes every vLLM failure. It
+  is now *"reviewer connection configuration failure — the configured reviewer
+  connection settings were missing, invalid, or disallowed"*. "Disallowed" covers
+  the refused-transport case, which is neither missing nor invalid. The category
+  names no provider family and carries no value; the raised **exception** still
+  safely names the required variable *name* (for example `AIDO_VLLM_BASE_URL`)
+  and never an endpoint, credential, or raw environment value.
+- **`review/packet.py`'s module docstring** still opened by calling the artifact
+  `review-packet.v2`. Corrected to `v3` / Phase 5F2E-V1 semantics, and the
+  reviewer-provenance bullet now mentions the transport scheme. Prose only:
+  `REVIEW_PACKET_SCHEMA_VERSION`, the `v1`/`v2` semantics constants, the `v3`
+  schema and every packet field are unchanged.
+- **Stale live prose corrected**: `ControlledReviewConfig`'s docstring described
+  connection details as `AIDO_LITELLM_*` only; the CLI runner's ordering
+  docstring described the narrow-afterwards behavior; `mis_project.yaml.example`
+  still said `provider` accepts only `"litellm"`, that connection details "still
+  come from the `AIDO_LITELLM_*` environment", and (pre-RS1) that the material is
+  sent to the one model "once"; `.env.example`'s "read ONLY when provider is
+  vllm" claim is now literally true and says why. Sections explicitly marked as
+  design history were left alone.

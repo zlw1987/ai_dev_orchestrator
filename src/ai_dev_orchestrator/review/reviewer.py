@@ -10,7 +10,8 @@ This module is the ordering, and the ordering is the safety property::
       refused                  → no model call, no reviewer environment read
       verification-failed      → no model call, no reviewer environment read
       workspace-state-untrusted→ no model call, no reviewer environment read
-      verified                 → NOW load the LiteLLM environment and review
+      verified                 → NOW select and load the CONFIGURED PROVIDER's
+                                 environment, and review
 
 Why the command runs the verifier itself
 ----------------------------------------
@@ -41,9 +42,38 @@ Credential ordering
 Before verification this module may read action flags, project config, the
 approved diff artifact, the ``controlled_review`` block, and the configured
 provider/model. It must **not** read ``AIDO_LITELLM_API_KEY``,
-``AIDO_LITELLM_BASE_URL``, ``AIDO_LITELLM_DEFAULT_MODEL``, or any other reviewer
-credential or endpoint value. The environment reader is **injected** and is
+``AIDO_LITELLM_BASE_URL``, ``AIDO_LITELLM_DEFAULT_MODEL``, ``AIDO_VLLM_BASE_URL``,
+``AIDO_VLLM_API_KEY``, or any other reviewer credential or endpoint value. The
+environment reader is **injected**, is handed the configured provider, and is
 called only after the verifier returns ``verified``.
+
+**Only the configured provider's names are ever read** (Phase 5F2E-V1-FU1). The
+provider resolves to an exact name tuple *before* any environment is touched, so
+a vLLM review never reads an ``AIDO_LITELLM_*`` value and a LiteLLM review never
+reads an ``AIDO_VLLM_*`` value. V1 originally snapshotted both families and
+discarded the unconfigured one afterwards; reading a credential and then dropping
+it is still reading it, so that was corrected rather than re-documented.
+
+Two reviewer providers, one ordering (Phase 5F2E-V1)
+----------------------------------------------------
+
+``controlled_review.provider`` selects between the existing internal
+OpenAI-compatible LiteLLM path (``"litellm"``) and a direct OpenAI-compatible
+vLLM endpoint (``"vllm"``). Matching is exact and case-sensitive; there is no
+alias, no case folding, no glob, and no provider registry — just one explicit
+branch. Everything else is shared: the same prompt, the same strict parser, the
+same Phase 5F2E-RS1 supervision, and the same single ``LLMClient``.
+
+The **model** is provider-independent and comes only from
+``controlled_review.model``. Neither provider has an environment default-model
+variable that could select one: the LiteLLM path overrides
+``AIDO_LITELLM_DEFAULT_MODEL``, and the vLLM path has no such name at all.
+
+Direct vLLM transport is refused over plaintext HTTP unless the project set
+``controlled_review.vllm_allow_insecure_http``. That opt-in is an
+acknowledgement, not a security property — see
+:data:`VLLM_INSECURE_HTTP_OPT_IN_MEANING`. The rule is **not** applied to the
+LiteLLM provider, whose accepted deployments predate it.
 
 Reviewer failure semantics
 --------------------------
@@ -87,6 +117,9 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
+
+from pydantic import ValidationError
 
 from ai_dev_orchestrator.file_editing.models import ApprovedDiffProposalArtifact
 from ai_dev_orchestrator.llm.config import LLMConfigError, load_llm_client_config_from_env
@@ -126,19 +159,81 @@ if TYPE_CHECKING:  # pragma: no cover - typing only, never imported at runtime.
     # able to build a real client itself, so the import stays out of globals.
     from ai_dev_orchestrator.llm.client import LLMClient
 
-# The one supported reviewer provider: the existing internal OpenAI-compatible
-# LiteLLM path. Matched with ``==`` — no alias, no case folding, no prefix.
-SUPPORTED_REVIEW_PROVIDER = "litellm"
+# The two supported reviewer providers, matched with ``==`` — no alias, no case
+# folding, no prefix, no glob, no registry, and no plugin lookup. Phase 5F2E-V1
+# added the second one; a small explicit branch dispatches them, deliberately
+# rather than a generic "OpenAI-compatible provider" abstraction.
+#
+#   "litellm" — the existing internal OpenAI-compatible LiteLLM path, unchanged.
+#               It remains supported for when internal infrastructure returns.
+#   "vllm"    — a direct OpenAI-compatible vLLM endpoint, named by environment.
+#
+REVIEW_PROVIDER_LITELLM = "litellm"
+REVIEW_PROVIDER_VLLM = "vllm"
+SUPPORTED_REVIEW_PROVIDERS: tuple[str, ...] = (
+    REVIEW_PROVIDER_LITELLM,
+    REVIEW_PROVIDER_VLLM,
+)
 
 # The environment variable names the reviewer stage may read, and only after
 # verification has returned `verified`. Named here so the ordering rule is a
 # reviewable list rather than a comment.
-REVIEWER_ENV_NAMES: tuple[str, ...] = (
+#
+# The LiteLLM contract is untouched by Phase 5F2E-V1: the same five names, loaded
+# by the same shipped loader, with the same required/optional split.
+LITELLM_REVIEWER_ENV_NAMES: tuple[str, ...] = (
     "AIDO_LITELLM_BASE_URL",
     "AIDO_LITELLM_API_KEY",
     "AIDO_LITELLM_DEFAULT_MODEL",
     "AIDO_LITELLM_TIMEOUT_SECONDS",
     "AIDO_LITELLM_MAX_RETRIES",
+)
+
+# The direct-vLLM contract is deliberately smaller: one required endpoint and one
+# optional credential. There is **no** ``AIDO_VLLM_DEFAULT_MODEL``, because the
+# reviewer model may only come from ``project_config.controlled_review.model``
+# and an environment default must never be able to select one.
+VLLM_ENV_BASE_URL = "AIDO_VLLM_BASE_URL"
+VLLM_ENV_API_KEY = "AIDO_VLLM_API_KEY"
+VLLM_REVIEWER_ENV_NAMES: tuple[str, ...] = (VLLM_ENV_BASE_URL, VLLM_ENV_API_KEY)
+
+# The whole runtime read authority: which exact names the reviewer stage may
+# read, given the configured provider. There is deliberately **no union**
+# constant used as read authority. Phase 5F2E-V1-FU1 removed one, because a union
+# is exactly what let the reader touch the unconfigured provider's names and
+# discard them afterwards — reading a credential and then dropping it is still
+# reading it.
+#
+# The provider is resolved to this exact tuple **before** any environment is
+# accessed. See :func:`reviewer_env_names_for_provider`.
+REVIEWER_ENV_NAMES_BY_PROVIDER: dict[str, tuple[str, ...]] = {
+    REVIEW_PROVIDER_LITELLM: LITELLM_REVIEWER_ENV_NAMES,
+    REVIEW_PROVIDER_VLLM: VLLM_REVIEWER_ENV_NAMES,
+}
+
+# A keyless vLLM server still receives an ``Authorization: Bearer ...`` header
+# because the existing OpenAI-compatible client shape always sends one and
+# ``LLMClientConfig.api_key`` is a required non-blank string. Rather than weaken
+# that model for every caller, the vLLM path substitutes this fixed, non-secret
+# literal when no ``AIDO_VLLM_API_KEY`` is set.
+#
+# It is NOT a credential and must never be described as authentication: it
+# carries no secret, grants no access, and proves nothing about the endpoint.
+VLLM_COMPATIBILITY_PLACEHOLDER_API_KEY = "no_api_key"
+
+# The endpoint schemes a reviewer transport may use. Anything else is refused
+# before a client is built — ``httpx`` could not have spoken it anyway.
+SUPPORTED_ENDPOINT_SCHEMES: tuple[str, ...] = ("http", "https")
+
+# What the explicit insecure-HTTP opt-in does and does not mean, stated once so
+# no message, packet field, or document can quietly upgrade it.
+VLLM_INSECURE_HTTP_OPT_IN_MEANING = (
+    "controlled_review.vllm_allow_insecure_http records ONLY that this project "
+    "explicitly permits source-derived reviewer material to be sent over direct "
+    "vLLM PLAINTEXT HTTP transport. It does NOT make that transport secure, "
+    "encrypted, private, authenticated, company-approved, or safe for secrets, "
+    "and an internal, colleague-hosted, or same-network endpoint is not private "
+    "merely because of where it sits."
 )
 
 
@@ -164,6 +259,13 @@ class ReviewerCallNotice:
     as trusted authority — unlike an issue title, which is third-party prose that
     arrives with the issue.
 
+    Phase 5F2E-V1 added ``provider``, ``endpoint_scheme`` and ``transport_tls``
+    for one reason: a human about to send source-derived code deserves to know
+    whether it is going over TLS. All three are derived from trusted project
+    config and the validated connection settings — never from model output, and
+    never from the base URL's path, query or userinfo, none of which is carried
+    here.
+
     That is a statement about *provenance*, not about validation. ``RepoConfig``
     does **not** currently enforce an ``owner/repo`` shape, and ``ProjectConfig``
     does not constrain ``project_id`` beyond requiring the field; an earlier
@@ -173,19 +275,34 @@ class ReviewerCallNotice:
     trusted here in exactly the way the rest of this repository trusts it.
     """
 
-    __slots__ = ("model", "endpoint_host", "project_id", "repo", "issue_number")
+    __slots__ = (
+        "provider",
+        "model",
+        "endpoint_host",
+        "endpoint_scheme",
+        "transport_tls",
+        "project_id",
+        "repo",
+        "issue_number",
+    )
 
     def __init__(
         self,
         *,
+        provider: str,
         model: str,
         endpoint_host: str,
+        endpoint_scheme: str,
+        transport_tls: bool,
         project_id: str,
         repo: str,
         issue_number: int,
     ) -> None:
+        self.provider = provider
         self.model = model
         self.endpoint_host = endpoint_host
+        self.endpoint_scheme = endpoint_scheme
+        self.transport_tls = transport_tls
         self.project_id = project_id
         self.repo = repo
         self.issue_number = issue_number
@@ -212,13 +329,37 @@ class ControlledReviewOutcome:
         self.packet = packet
 
 
-def check_controlled_review_gate(project: ProjectConfig) -> str:
-    """Validate the project's reviewer authority and return the exact model.
+class ReviewerAuthority:
+    """What trusted project config authorizes: exactly one provider, one model.
+
+    Both halves are established **before** verification runs, so an unsupported
+    provider or a missing model refuses before this command causes any workspace
+    access, launches repository-controlled code, reads an environment value,
+    builds a client, or contacts a model.
+
+    Deliberately not a config object: it carries no endpoint, no credential, no
+    environment-variable name, and no timeout. It answers "may this project be
+    reviewed, by which backend, with which exact model", and nothing else.
+    """
+
+    __slots__ = ("provider", "model")
+
+    def __init__(self, *, provider: str, model: str) -> None:
+        self.provider = provider
+        self.model = model
+
+
+def check_controlled_review_gate(project: ProjectConfig) -> ReviewerAuthority:
+    """Validate the project's reviewer authority: the provider and exact model.
 
     Config-only, and fail-closed: an absent ``controlled_review`` block is
     identical to an explicitly disabled one, an unsupported provider is refused,
     and an enabled block without a model permits no review rather than falling
     back to a default.
+
+    Provider matching is exact and **case-sensitive**. ``"LiteLLM"``, ``"VLLM"``,
+    ``"openai"`` and ``"openai_compatible"`` are all refused: this phase
+    dispatches two specifically named backends, not a family of compatible ones.
 
     Reads **no** environment variable, builds no client, touches no workspace, and
     contacts nothing. ``real_model_planning`` is never consulted: planning
@@ -239,12 +380,16 @@ def check_controlled_review_gate(project: ProjectConfig) -> str:
             "was read, and no model was contacted."
         )
 
-    if settings.provider != SUPPORTED_REVIEW_PROVIDER:
+    if settings.provider not in SUPPORTED_REVIEW_PROVIDERS:
+        supported = ", ".join(repr(name) for name in SUPPORTED_REVIEW_PROVIDERS)
         raise ReviewRefusedError(
             f"provider error: controlled_review.provider is "
-            f"{settings.provider!r}, but the only supported reviewer provider is "
-            f"{SUPPORTED_REVIEW_PROVIDER!r} (the existing internal "
-            "OpenAI-compatible LiteLLM path). Nothing was contacted."
+            f"{settings.provider!r}, but the supported reviewer providers are "
+            f"exactly {supported} — the existing internal OpenAI-compatible "
+            "LiteLLM path, and a direct OpenAI-compatible vLLM endpoint. "
+            "Matching is exact and case-sensitive: there is no alias, no case "
+            "folding, no glob, and no generic OpenAI-compatible provider. "
+            "Nothing was contacted."
         )
 
     model = settings.model
@@ -252,11 +397,163 @@ def check_controlled_review_gate(project: ProjectConfig) -> str:
         raise ReviewRefusedError(
             f"model error: project {project.project_id!r} enables controlled "
             "review but names no controlled_review.model. There is no default "
-            "reviewer model, the environment's default model may never select "
-            "one, and there is no CLI override. Nothing was contacted."
+            "reviewer model, no environment variable of either provider may "
+            "select one, and there is no CLI override. Nothing was contacted."
         )
 
-    return model
+    return ReviewerAuthority(provider=settings.provider, model=model)
+
+
+def reviewer_env_names_for_provider(provider: str) -> tuple[str, ...]:
+    """Return the exact environment names one provider's reviewer may read.
+
+    This is the **only** thing that decides which names a reviewer environment
+    reader touches, and it is answered from the provider alone — no environment
+    access, no ``os.environ``, no default, no fallback, and no aliasing between
+    the two name families.
+
+    Phase 5F2E-V1-FU1 exists because of the ordering here. V1's reader snapshotted
+    the union of both families from the real process environment and discarded
+    the unconfigured provider's values afterwards; that is still *reading* them,
+    and it contradicted the contract V1 documented. Now the provider resolves to
+    an exact name tuple **first**, and only those names are ever looked up.
+
+    A conforming reader is therefore:
+
+    .. code-block:: python
+
+        names = reviewer_env_names_for_provider(provider)   # no environment yet
+        {name: environ[name] for name in names if name in environ}
+
+    Raises:
+        ReviewerEnvironmentError: ``provider`` names no reviewer environment
+            contract. The gate refuses that far earlier; this is fail-closed
+            defence for a caller that skipped it, and it fails **before** any
+            environment name is resolved.
+    """
+    names = REVIEWER_ENV_NAMES_BY_PROVIDER.get(provider)
+    if names is None:
+        raise ReviewerEnvironmentError(
+            f"reviewer provider error: {provider!r} names no reviewer "
+            "environment contract. No environment value was read and nothing "
+            "was contacted."
+        )
+    return names
+
+
+def endpoint_scheme_from_base_url(base_url: str) -> str:
+    """Reduce an endpoint base URL to ``"http"`` or ``"https"``.
+
+    Pure string/URL parsing, like
+    :func:`~ai_dev_orchestrator.plan.real_model_gate.endpoint_host_from_base_url`
+    beside it: no DNS lookup, no connection, no filesystem access. The scheme is
+    the one part of a URL that carries neither credential nor payload, so
+    reporting it is safe — and a human deciding whether to transmit
+    source-derived code needs it.
+
+    Only ``http`` and ``https`` are accepted. Anything else is refused here
+    rather than handed to ``httpx``, which could not have spoken it either.
+
+    Raises:
+        ReviewerEnvironmentError: The URL is blank, unparseable, or names an
+            unsupported scheme. The message never echoes the URL, which may embed
+            a credential in userinfo or a query string.
+    """
+    if not isinstance(base_url, str) or not base_url.strip():
+        raise ReviewerEnvironmentError(
+            "reviewer endpoint error: the endpoint base URL is missing or "
+            "blank; refusing to derive a transport scheme."
+        )
+
+    try:
+        scheme = urlsplit(base_url.strip()).scheme
+    except ValueError as exc:  # pragma: no cover - defensive
+        raise ReviewerEnvironmentError(
+            "reviewer endpoint error: the endpoint base URL could not be parsed."
+        ) from exc
+
+    if scheme not in SUPPORTED_ENDPOINT_SCHEMES:
+        supported = " or ".join(SUPPORTED_ENDPOINT_SCHEMES)
+        raise ReviewerEnvironmentError(
+            "reviewer endpoint error: the endpoint base URL must be an absolute "
+            f"{supported} URL. The URL itself is not echoed."
+        )
+    return scheme
+
+
+def _load_vllm_client_config(
+    env: Mapping[str, str],
+    *,
+    model: str,
+    attempt_timeout_seconds: float,
+) -> LLMClientConfig:
+    """Build connection settings for a **direct** OpenAI-compatible vLLM endpoint.
+
+    A deliberately smaller contract than the LiteLLM loader's, because a direct
+    vLLM server needs less:
+
+    - ``AIDO_VLLM_BASE_URL`` — **required**, the endpoint's absolute
+      OpenAI-compatible base URL (for example
+      ``https://vllm.example.invalid/v1``);
+    - ``AIDO_VLLM_API_KEY`` — **optional**, passed through as the client
+      credential when it is set to a non-blank value.
+
+    There is **no** ``AIDO_VLLM_DEFAULT_MODEL``, and no ``AIDO_LITELLM_*`` value
+    is consulted, required, or accepted: the caller has already narrowed the
+    mapping to this provider's two names. ``default_model`` is the exact
+    project-configured reviewer model, so nothing in the environment can select
+    what the review is performed with.
+
+    **The keyless case.** A vLLM server started without ``--api-key`` accepts the
+    OpenAI-compatible request regardless of the ``Authorization`` header, but
+    :class:`~ai_dev_orchestrator.llm.models.LLMClientConfig` requires a non-blank
+    ``api_key`` string and the shipped client always sends the header. Rather
+    than make ``api_key`` optional for every caller — which would weaken a model
+    that exists to keep the one credential copy in one place — the fixed literal
+    :data:`VLLM_COMPATIBILITY_PLACEHOLDER_API_KEY` is substituted. It is a
+    **compatibility placeholder, not a credential**: it carries no secret, grants
+    no access, and is never described as authentication.
+
+    Raises:
+        ReviewerEnvironmentError: The base URL is missing, blank, or invalid. The
+            message never echoes the base URL or the API key.
+    """
+    base_url = env.get(VLLM_ENV_BASE_URL)
+    if base_url is None or not base_url.strip():
+        raise ReviewerEnvironmentError(
+            "reviewer environment error: the vLLM reviewer provider requires "
+            f"{VLLM_ENV_BASE_URL} to be set to the endpoint's absolute "
+            "OpenAI-compatible base URL. It is missing or blank. No "
+            "AIDO_LITELLM_* variable substitutes for it, there is no "
+            "AIDO_VLLM_DEFAULT_MODEL, and no model request was issued."
+        )
+
+    # Optional. A blank value is treated exactly as an absent one, so an empty
+    # variable cannot become a blank Bearer token.
+    supplied_key = env.get(VLLM_ENV_API_KEY)
+    api_key = (
+        supplied_key
+        if supplied_key is not None and supplied_key.strip()
+        else VLLM_COMPATIBILITY_PLACEHOLDER_API_KEY
+    )
+
+    try:
+        return LLMClientConfig(
+            base_url=base_url.strip(),
+            api_key=api_key,
+            default_model=model,
+            timeout_seconds=attempt_timeout_seconds,
+            max_retries=REVIEWER_TRANSPORT_MAX_RETRIES,
+        )
+    except ValidationError as exc:
+        # Field names and constraints only — pydantic does not echo ``api_key``
+        # into its message here, and the base URL failure mode is "blank", which
+        # was already rejected above.
+        raise ReviewerEnvironmentError(
+            "reviewer environment error: the vLLM reviewer connection settings "
+            f"are invalid: {exc.error_count()} field error(s). No value is "
+            "echoed."
+        ) from exc
 
 
 def build_reviewer_client_config(
@@ -264,11 +561,38 @@ def build_reviewer_client_config(
     *,
     model: str,
     attempt_timeout_seconds: float,
+    provider: str = REVIEW_PROVIDER_LITELLM,
+    allow_insecure_http: bool = False,
 ) -> LLMClientConfig:
     """Build validated connection settings for the reviewer call.
 
     ``env`` is **injected** — this function never falls back to ``os.environ``, so
-    a caller cannot read reviewer credentials by accident or out of order.
+    a caller cannot read reviewer credentials by accident or out of order. It is
+    expected to contain only ``provider``'s names — the reader resolves those via
+    :func:`reviewer_env_names_for_provider` before touching any environment — and
+    in any case each branch below reads only its own family, so a stray foreign
+    name could not supply an endpoint, credential, or model.
+
+    ``provider`` selects one of two explicit branches (Phase 5F2E-V1). Both end
+    at the same :class:`~ai_dev_orchestrator.llm.models.LLMClientConfig` and the
+    same single :class:`~ai_dev_orchestrator.llm.client.LLMClient`; there is no
+    provider registry, no plugin lookup, and no generic OpenAI-compatible
+    abstraction between them.
+
+    - ``"litellm"`` uses the shipped ``AIDO_LITELLM_*`` loader, unchanged;
+    - ``"vllm"`` uses the narrow ``AIDO_VLLM_*`` contract in
+      :func:`_load_vllm_client_config`.
+
+    **Insecure transport, vLLM only.** A direct vLLM endpoint reached over
+    plaintext ``http`` is refused unless ``allow_insecure_http`` is true — that
+    is, unless the project explicitly set
+    ``controlled_review.vllm_allow_insecure_http``. The refusal happens here, in
+    the same call that would otherwise produce the settings a client is built
+    from, so no model request can be issued past it. The opt-in means only what
+    :data:`VLLM_INSECURE_HTTP_OPT_IN_MEANING` says it means; it never upgrades,
+    rewrites, or tunnels the URL, and it makes no claim of privacy. The rule is
+    deliberately **not** applied to the LiteLLM provider, whose deployments were
+    accepted before this phase existed.
 
     Three values are **overridden** rather than taken from the environment, and
     two of those overrides are load-bearing.
@@ -276,7 +600,8 @@ def build_reviewer_client_config(
     ``default_model`` is replaced by the project-configured reviewer ``model``,
     exactly as the Phase 4J planning gate does for its own allowlisted model:
     ``AIDO_LITELLM_DEFAULT_MODEL`` supplies *connection* defaults and can never
-    select *what is reviewed with*.
+    select *what is reviewed with*. The vLLM branch has no default-model variable
+    at all, so the same property holds there by construction.
 
     ``timeout_seconds`` is replaced by the project's
     ``controlled_review.attempt_timeout_seconds``, so the reviewer's network
@@ -312,9 +637,11 @@ def build_reviewer_client_config(
     caller, and the planner and smoke-test paths are untouched.
 
     Raises:
-        ReviewerEnvironmentError: A required ``AIDO_LITELLM_*`` value is missing,
-            blank, or invalid, or the base URL does not reduce to a host. The
-            message never echoes the API key or the base URL.
+        ReviewerEnvironmentError: The provider is unsupported; a required
+            environment value is missing, blank, or invalid; the base URL does
+            not reduce to a host or a supported scheme; or a direct vLLM endpoint
+            is plaintext ``http`` without the explicit project opt-in. The message
+            never echoes the API key or the base URL.
     """
     if env is None or not isinstance(env, Mapping):
         raise ReviewerEnvironmentError(
@@ -322,10 +649,29 @@ def build_reviewer_client_config(
             "stage never reads the process environment on its own."
         )
 
-    try:
-        config = load_llm_client_config_from_env(env)
-    except LLMConfigError as exc:
-        raise ReviewerEnvironmentError(f"reviewer environment error: {exc}") from exc
+    if provider == REVIEW_PROVIDER_LITELLM:
+        try:
+            loaded = load_llm_client_config_from_env(env)
+        except LLMConfigError as exc:
+            raise ReviewerEnvironmentError(
+                f"reviewer environment error: {exc}"
+            ) from exc
+        config = LLMClientConfig(
+            base_url=loaded.base_url,
+            api_key=loaded.api_key,
+            default_model=model,
+            timeout_seconds=attempt_timeout_seconds,
+            max_retries=REVIEWER_TRANSPORT_MAX_RETRIES,
+        )
+    elif provider == REVIEW_PROVIDER_VLLM:
+        config = _load_vllm_client_config(
+            env, model=model, attempt_timeout_seconds=attempt_timeout_seconds
+        )
+    else:
+        raise ReviewerEnvironmentError(
+            f"reviewer provider error: {provider!r} is not a supported reviewer "
+            "provider. Nothing was contacted."
+        )
 
     try:
         endpoint_host_from_base_url(config.base_url)
@@ -334,13 +680,27 @@ def build_reviewer_client_config(
         # failure is not a planning-gate failure.
         raise ReviewerEnvironmentError(f"reviewer endpoint error: {exc}") from exc
 
-    return LLMClientConfig(
-        base_url=config.base_url,
-        api_key=config.api_key,
-        default_model=model,
-        timeout_seconds=attempt_timeout_seconds,
-        max_retries=REVIEWER_TRANSPORT_MAX_RETRIES,
-    )
+    scheme = endpoint_scheme_from_base_url(config.base_url)
+
+    # The insecure-transport gate. vLLM only, and it refuses BEFORE a client
+    # exists, so no model request can be issued past this point. Nothing here
+    # upgrades the scheme, rewrites the URL, or tunnels the connection.
+    if (
+        provider == REVIEW_PROVIDER_VLLM
+        and scheme == "http"
+        and not allow_insecure_http
+    ):
+        raise ReviewerEnvironmentError(
+            "reviewer transport error: the configured direct vLLM endpoint uses "
+            "PLAINTEXT HTTP, which would send this project's source-derived "
+            "diff, plan prose and verification output unencrypted. That is "
+            "refused by default. Set controlled_review.vllm_allow_insecure_http "
+            "to true only if this project accepts that. "
+            + VLLM_INSECURE_HTTP_OPT_IN_MEANING
+            + " No model request was issued, and the base URL is not echoed."
+        )
+
+    return config
 
 
 def request_model_review(
@@ -393,7 +753,7 @@ def run_controlled_review(
     *,
     approved_diff: ApprovedDiffProposalArtifact,
     project: ProjectConfig,
-    read_env: Callable[[], Mapping[str, str]],
+    read_env: Callable[[str], Mapping[str, str]],
     client_factory: Callable[[LLMClientConfig], "LLMClient"],
     on_before_model_call: Callable[[ReviewerCallNotice], None] | None = None,
     on_supervision_event: Callable[[ReviewSupervisionEvent], None] | None = None,
@@ -407,9 +767,14 @@ def run_controlled_review(
         project: The project config the approval must match exactly, whose
             ``controlled_verification`` block authorizes the verification process
             and whose ``controlled_review`` block authorizes the reviewer model.
-        read_env: **Injected** reader for the ``AIDO_LITELLM_*`` names. It is
-            called only after the verifier returns ``verified``, and never
-            before.
+        read_env: **Injected** reader, called as ``read_env(provider)`` with the
+            configured provider name. It is called **once**, only after the
+            verifier returns ``verified``, and never before. The provider
+            argument is not advisory: a conforming reader resolves it to that
+            provider's exact names via
+            :func:`reviewer_env_names_for_provider` **before** touching any
+            environment, so the unconfigured provider's names are never read at
+            all — not read-then-discarded.
         client_factory: **Injected** builder for the chat client. The only thing
             in this flow that can reach a socket.
         on_before_model_call: Optional callback invoked with a
@@ -445,7 +810,9 @@ def run_controlled_review(
     # 1. Reviewer authority, from trusted project config only. Checked BEFORE the
     #    verification runs so a project that could never be reviewed does not
     #    cause repository-controlled code to be executed on its behalf.
-    model = check_controlled_review_gate(project)
+    authority = check_controlled_review_gate(project)
+    provider = authority.provider
+    model = authority.model
     # The Phase 5F2E-RS1 supervision settings come from the same trusted block and
     # were bounds-checked at load. They are plain policy numbers — no credential,
     # no endpoint — so reading them here does not breach the credential ordering.
@@ -463,17 +830,26 @@ def run_controlled_review(
     if verification.outcome != "verified":
         return ControlledReviewOutcome(verification=verification, packet=None)
 
-    # 4. Only now may reviewer credentials enter this process.
-    env = read_env()
+    # 4. Only now may reviewer credentials enter this process — and only the
+    #    configured provider's names. The provider is handed to the reader, which
+    #    resolves it to an exact name tuple before touching any environment, so
+    #    the other provider's names are never read (Phase 5F2E-V1-FU1).
+    env = read_env(provider)
     config = build_reviewer_client_config(
         env,
         model=model,
         attempt_timeout_seconds=review_settings.attempt_timeout_seconds,
+        provider=provider,
+        allow_insecure_http=review_settings.vllm_allow_insecure_http,
     )
     try:
         endpoint_host = endpoint_host_from_base_url(config.base_url)
     except RealModelPlanningGateError as exc:  # pragma: no cover - defensive
         raise ReviewerEnvironmentError(f"reviewer endpoint error: {exc}") from exc
+    # Already validated inside the config builder; re-derived here so the notice
+    # and the packet report the scheme of the URL a client will actually use.
+    endpoint_scheme = endpoint_scheme_from_base_url(config.base_url)
+    transport_tls = endpoint_scheme == "https"
 
     # Defensive: the config builder pins the model to the project-configured one.
     # If that ever stops holding, fail closed rather than review with a model the
@@ -493,8 +869,11 @@ def run_controlled_review(
     if on_before_model_call is not None:
         on_before_model_call(
             ReviewerCallNotice(
+                provider=provider,
                 model=model,
                 endpoint_host=endpoint_host,
+                endpoint_scheme=endpoint_scheme,
+                transport_tls=transport_tls,
                 project_id=verification.project_id,
                 repo=verification.repo,
                 issue_number=verification.issue_number,
@@ -523,8 +902,10 @@ def run_controlled_review(
         verification=verification,
         context=context,
         review=supervised.review,
+        provider=provider,
         model=model,
         endpoint_host=endpoint_host,
+        endpoint_scheme=endpoint_scheme,
         usage=supervised.usage,
         supervision=supervised.supervision,
     )
