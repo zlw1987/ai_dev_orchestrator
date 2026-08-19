@@ -280,6 +280,8 @@ def test_real_smoke_help_exposes_only_the_gated_options():
         "--message",
         "--repo",
         "--title",
+        "--max-tokens",
+        "--max-output-tokens",
     ):
         assert absent not in result.output
 
@@ -533,6 +535,42 @@ def test_successful_run_sends_the_explicit_model_and_a_fixed_prompt(tmp_path, ca
     assert sent["temperature"] == 0.0
     for leaked in ("demo_project", "demo/widgets", "workspace", "src/**"):
         assert leaked not in json.dumps(sent)
+
+
+def test_real_smoke_max_tokens_is_512_not_the_old_32(tmp_path):
+    # Real deployment evidence (nemotron-3-super, minimax-m2.7,
+    # minimax-m2.7-thinking) showed reasoning-capable models exhausting a
+    # 32-token budget on reasoning before emitting final assistant `content`.
+    # The fixed internal smoke-test budget is now 512, still a plain constant
+    # with no CLI option, no project config, and no per-model table.
+    assert cli._REAL_SMOKE_MAX_TOKENS == 512
+
+    seen: list[dict] = []
+    _run(tmp_path, client_factory=_mock_client_factory(seen))
+
+    assert seen[0]["max_tokens"] == 512
+
+
+def test_real_smoke_prompts_are_byte_for_byte_unchanged():
+    # Locks the exact prompt text so a future edit to the max_tokens constant
+    # cannot silently smuggle in a prompt change too.
+    assert cli._REAL_SMOKE_SYSTEM_PROMPT == (
+        "You are responding to a connectivity smoke test for AI Dev Orchestrator. "
+        "Do not include secrets. Reply briefly."
+    )
+    assert cli._REAL_SMOKE_USER_PROMPT == "Reply with exactly: AIDO_REAL_SMOKE_OK"
+
+
+def test_successful_run_response_carries_no_reasoning_field(tmp_path, capsys):
+    # The smoke test judges only final assistant `content`. No reasoning /
+    # reasoning_content / thinking_blocks field is read, surfaced, logged, or
+    # stored anywhere in the machine-readable output.
+    _run(tmp_path)
+
+    payload = json.loads(capsys.readouterr().out)
+    assert set(payload) == {"provenance", "response_content", "usage", "notice"}
+    for forbidden in ("reasoning", "reasoning_content", "thinking_blocks"):
+        assert forbidden not in json.dumps(payload)
 
 
 def test_successful_run_prints_the_before_call_warning_to_stderr(tmp_path, capsys):

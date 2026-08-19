@@ -406,7 +406,12 @@ _REAL_SMOKE_SYSTEM_PROMPT = (
     "Do not include secrets. Reply briefly."
 )
 _REAL_SMOKE_USER_PROMPT = "Reply with exactly: AIDO_REAL_SMOKE_OK"
-_REAL_SMOKE_MAX_TOKENS = 32
+# 512, not 32: observed real deployment evidence showed reasoning-capable
+# models (e.g. nemotron-3-super, minimax-m2.7, minimax-m2.7-thinking) consuming
+# the entire 32-token budget on reasoning content before emitting any final
+# assistant `content`, so the smoke test never saw usable output. This is a
+# generation-room fix only; the smoke test still judges `content` alone.
+_REAL_SMOKE_MAX_TOKENS = 512
 
 _REAL_SMOKE_NOTICE = (
     "REAL MODEL SMOKE TEST ONLY — no issue text, planning, file edits, "

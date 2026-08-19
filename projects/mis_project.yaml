@@ -1,0 +1,387 @@
+# Real project config for mis_project. Contains NO secrets — provider
+# connection details are referenced by ENV VAR NAME only (see *_env fields).
+# The workspace_path below is configuration/documentation only; Phase 1 code
+# never reads or touches that folder.
+
+project_id: mis_project
+display_name: MIS_PROJECT
+
+repo:
+  workspace_path: "C:/dev/mis_project"
+  github_repo: "zlw1987/mis_project"
+  default_base_branch: "main"
+  branch_prefix: "ai/mis"
+
+workspace_policy:
+  deny_outside_workspace: true
+  allow_symlinks: false
+  max_changed_files: 20
+
+# Paths (relative to workspace) the orchestrator may read/modify.
+allowed_paths:
+  - "documents/**"
+  - ".github/ISSUE_TEMPLATE/**"
+  - ".github/pull_request_template.md"
+  - ".github/workflows/**"
+  - "accounts/**"
+  - "project_requests/**"
+  - "external_auth/**"
+  - "templates/**"
+  - "config/**"
+  - "requirements.txt"
+  - "manage.py"
+
+# Sensitive paths requiring explicit authorization to modify (even if allowed).
+protected_paths:
+  - "config/settings.py"
+  - "requirements.txt"
+  - "external_auth/**"
+  - "**/migrations/**"
+  - ".github/workflows/**"
+
+# Paths the orchestrator must never read or modify. Forbidden beats everything.
+forbidden_paths:
+  - ".git"
+  - ".git/**"
+  - ".env"
+  - ".venv"
+  - ".venv/**"
+  - "db.sqlite3"
+  - "media"
+  - "media/**"
+  - "__pycache__/**"
+  - "**/__pycache__/**"
+  - "*.pyc"
+  - ".ai_runs"
+  - ".ai_runs/**"
+
+# Model providers. Default is the internal LiteLLM OpenAI-compatible endpoint.
+# Secrets come from the named environment variables, never from this file.
+providers:
+  litellm_local:
+    type: openai_compatible
+    base_url_env: AIDO_LITELLM_BASE_URL
+    api_key_env: AIDO_LITELLM_API_KEY
+    timeout_seconds: 600
+    default_headers:
+      User-Agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+
+# External integrations are OPTIONAL and disabled by default.
+external_integrations:
+  openai_api:
+    enabled: false
+  anthropic_api:
+    enabled: false
+  github_copilot_review:
+    enabled: false
+  codex_review:
+    enabled: false
+
+# Real model-backed L1 planning. ENABLED for this project via the gated
+# real-model planning/smoke path. allowed_models is the exact, case-sensitive
+# authorization list; a model not on it is refused even if enabled.
+# Never put credentials or endpoints here; providers name env vars instead.
+real_model_planning:
+  enabled: true
+  allowed_models:
+    - "qwen3-coder-next"
+    - "minimax-m2.7"
+    - "minimax-m2.7-thinking"
+    - "nemotron-3-super"
+  allow_prompt_audit_files: false
+
+# Read-only workspace metadata inspection (Phase 5D1). DISABLED. While disabled,
+# `l2-inspect-workspace` refuses to touch this project's workspace at all — it
+# fails before the approved-plan artifact is even opened. When enabled it may
+# only canonicalize and stat the paths an approved plan lists under
+# files_likely_to_change; it never reads file contents, never lists a directory,
+# never runs a command, and never edits a file. Never put credentials here.
+read_only_workspace_inspection:
+  enabled: false
+  max_inspected_files: 20
+  allow_protected_paths: false
+
+# Bounded read-only workspace file-CONTENT reads (Phase 5D2). DISABLED, and a
+# separate opt-in from the metadata block above: agreeing that path names may be
+# stat'd is not agreeing that this project's source may be printed. While
+# disabled, `l2-read-workspace-files` refuses to touch this project's workspace
+# at all — it fails before the approved-plan artifact is even opened. When
+# enabled it may only read the paths an approved plan lists under
+# files_likely_to_change, within the byte caps below, and every byte it prints
+# passes through mandatory secret-like redaction (which has no off switch and is
+# best-effort, not a guarantee). It still never lists a directory, never
+# generates a diff, never edits a file, never runs a command, and never sends
+# file contents to a model. Never put credentials here.
+read_only_workspace_content:
+  enabled: false
+  max_files: 10
+  max_file_bytes: 50000
+  max_total_bytes: 200000
+  allow_protected_paths: false
+
+# Controlled single-file WRITES into this project's workspace (Phase 5F2C).
+# DISABLED, and a third separate opt-in: agreeing that source may be read is not
+# agreeing that it may be modified. While disabled, `l2-apply-approved-file-edit`
+# refuses before the approved-diff artifact is even opened.
+#
+# When enabled, the writer can do exactly one thing: apply ONE explicitly
+# human-approved modification to ONE existing, Git-tracked, ordinary UTF-8 file
+# inside ONE wholly clean Windows Git repository whose top level is exactly
+# workspace_path — transforming an exact approved pre-image into an exact
+# approved post-image, and leaving the change uncommitted for human review.
+#
+# It cannot create, delete, or rename a file; cannot write more than one file
+# (whatever workspace_policy.max_changed_files allows); cannot write a protected
+# or forbidden path; cannot apply a diff with fuzz; cannot run this project's
+# verification commands or any other command; and cannot call a model, open a
+# socket, contact GitHub, create a branch, commit, push, or open a PR.
+#
+# There is deliberately NO allow_protected_paths here, no create flag, no
+# multi-file switch, and no rollback/journal setting. Never put credentials here.
+workspace_write:
+  enabled: false
+  max_file_bytes: 200000
+
+# Controlled VERIFICATION of an already-applied approved edit (Phase 5F2D).
+# DISABLED, and a fourth separate opt-in — and the most consequential one, because
+# it is the only block in this file that can authorize AIDO to execute
+# REPOSITORY-CONTROLLED CODE. While disabled, `l2-verify-approved-file-edit`
+# refuses before the approved-diff artifact is even opened.
+#
+# When enabled, the command can do exactly one thing: prove the workspace still
+# holds exactly the one approved modification, launch the configured process ONCE
+# in workspace_path with the exact argv [executable, *args], capture and redact
+# its output under the bounds below, and prove the Git-visible workspace state
+# again afterwards.
+#
+#   CONTROLLED INVOCATION IS NOT SANDBOXED EXECUTION.
+#
+# The launched process is NOT confined. A test runner can import arbitrary
+# project modules, execute conftest.py, create files, open network connections,
+# and spawn children — and those children are not tracked and may still be
+# running after the command returns. AIDO controls which program runs, with which
+# arguments, where, with which minimal environment, how long AIDO WAITS, and how
+# much output it may produce — and nothing beyond that. The timeout below bounds
+# AIDO's wait; it does not guarantee the verification stopped. The result report
+# says all of this explicitly rather than claiming the run touched nothing.
+#
+# `executable` must be an ABSOLUTE path to an existing regular file that lives
+# OUTSIDE workspace_path: the repository being verified may not supply the
+# program that launches its own verification. There is no default and no PATH
+# lookup. `args` is an exact ordered argv tail used verbatim — nothing is split,
+# expanded, templated, or read as shell syntax.
+#
+# The L1 plan's `required_verification` is NEVER command authority. It is planner
+# prose, possibly model-written, and is never split, parsed, run, or turned into
+# argv. Only this block plus two explicit CLI flags can cause a process to run.
+#
+# The child environment is a fixed minimal allowlist of OS/runtime variables.
+# AIDO_LITELLM_*, GITHUB_TOKEN and every other credential are NOT forwarded, and
+# there is deliberately NO field here that could forward one. A project whose
+# tests require credentials is outside this first supported domain and may fail.
+# That is a claim about the ENVIRONMENT only: `args` are trusted configuration
+# data passed verbatim, and AIDO does not inspect them or prove that an argument
+# string contains no sensitive literal. Keep secrets out of them, as everywhere.
+#
+# There is deliberately NO shell command string, no working-directory override,
+# no interpolation or {path} template, no second command profile, no command id,
+# no before/after hook, and no retry setting. Never put credentials here.
+controlled_verification:
+  enabled: false
+  # executable: "C:/tools/python/python.exe"
+  # args:
+  #   - "-m"
+  #   - "pytest"
+  #   - "tests/test_targeted.py"
+  #   - "-q"
+  timeout_seconds: 120
+  max_output_bytes: 200000
+
+# Controlled REVIEW of an already-verified approved edit (Phase 5F2E). ENABLED,
+# and a fifth separate opt-in — the first one that can authorize AIDO to send
+# SOURCE-DERIVED CODE to a model. Every earlier model-facing capability carried
+# issue text only. While disabled, `l2-review-approved-file-edit` refuses before
+# the approved-diff artifact is even opened and before anything is executed.
+#
+# `real_model_planning` above does NOT authorize review, and this block does not
+# authorize planning. Planning authorization and review authorization are
+# separate capabilities on purpose.
+#
+# When enabled, the command can do exactly one thing: run the Phase 5F2D
+# verification itself, and only if it returns `verified`, send ONE approved
+# unified diff, selected approved-plan prose (summary, scope, non-goals, proposed
+# steps, risks, open questions) and the bounded, redacted verification output to
+# the ONE model named below — under the bounded Phase 5F2E-RS1 semantic-attempt
+# policy described further down — and print one review packet for a human.
+#
+# It never sends the full target file, any unrelated repository source, a
+# directory listing, a repository tree, git history, the workspace path, any
+# absolute path, the approval text, the raw artifact, any environment value, the
+# GitHub token, the endpoint base URL, or the API key. Project-controlled text is
+# redacted before transmission — a best-effort backstop, NOT a guarantee that the
+# transmitted material is secret-free.
+#
+# `model` is the ONLY place a reviewer model may be named: there is no CLI
+# --model, no environment variable of either provider ever selects it, and
+# matching is exact — no glob, no prefix, no case folding. `provider` accepts
+# exactly "litellm" or "vllm" (see the Phase 5F2E-V1 notes further down);
+# connection details come from the CONFIGURED provider's environment names only,
+# and are read ONLY after the verification has passed.
+#
+# There is deliberately NO api_key, base_url, endpoint, credential, env-var name,
+# prompt template, header, transport retry count, fixer block, second reviewer,
+# fallback_model, reviewer list, or full-file transmission switch here. The
+# verdict is advisory: no fixer, no re-review of a completed verdict, no patch,
+# no file edit, no branch, no commit, no push, and no PR follows it. Never put
+# credentials here.
+#
+# ---- Phase 5F2E-RS1: bounded reviewer runtime supervision -------------------
+#
+# A LOCAL reviewer model can burn real resources — inference wall time, GPU
+# occupancy, concurrent-request capacity, context occupancy — while producing no
+# usable review at all. The three fields below bound AIDO's REQUEST ISSUANCE and
+# AIDO's WAIT. All have safe defaults, so a Phase 5F2E config that omits them
+# still loads and behaves exactly as before.
+#
+# attempt_timeout_seconds
+#     the maximum time AIDO WAITS for ONE reviewer HTTP/model call. That bound is
+#     AIDO's own monotonic deadline in the reviewer supervisor — NOT the httpx
+#     timeout, which is a network-operation/inactivity timeout a busy peer can
+#     outlive. (The reviewer's client also receives this value as a secondary
+#     network-inactivity timeout.) It is NOT a process-style hard kill: when the
+#     deadline wins, the worker performing the call is ABANDONED, not stopped,
+#     and AIDO never claims the request was cancelled or that the backend stopped
+#     inference. Because none of that is observed, a stalled attempt is TERMINAL.
+#     Default 90.
+#
+# max_output_tokens
+#     the REQUESTED model-output cap (the existing OpenAI-compatible
+#     `max_tokens`). A request to the provider, not a guarantee, and it says
+#     nothing about hidden reasoning or backend accounting. Default 2048.
+#
+# compact_retry_on_unusable_output
+#     whether ONE bounded compact second semantic request may be issued after a
+#     COMPLETED but unusable first response — one that exhausted its output
+#     budget or was rejected by the strict parser. Default false. Even when true
+#     the hard maximum is TWO semantic requests, using the SAME model, with a
+#     reduced context — never a repair or a merge of the first reply, and never
+#     a fallback model.
+#
+#     It deliberately does NOT cover a timeout. A client timeout is not evidence
+#     that the backend released its inference slot, so a second request could put
+#     a SECOND concurrent inference job on the same local model — increasing
+#     exactly the pressure this bound exists to contain.
+#
+# Retry OWNERSHIP is explicit: the reviewer client is built with
+# max_retries = 0 for BOTH providers — overriding AIDO_LITELLM_MAX_RETRIES for
+# this command only on the litellm path, and with no equivalent variable to
+# override on the vllm path — so one semantic attempt is exactly ONE HTTP/model
+# request. The generic LLM client
+# keeps its bounded transport retries for every other caller. Timeouts,
+# authentication failures, non-retryable 4xx, 429, 5xx and connection failures
+# all get NO compact retry.
+#
+# WHAT THIS DOES NOT BOUND: the abandoned worker's lifetime, the HTTP request's
+# lifetime after AIDO stops waiting, backend inference lifetime, GPU occupancy
+# after a client disconnect, backend context lifetime, or server-side
+# cancellation latency. Total GPU time is NOT bounded here.
+#
+#     AIDO wait ended  !=  worker stopped  !=  request cancelled
+#                      !=  backend inference stopped
+#
+# There is no attempt-count field, no timeout-retry field, no backoff setting,
+# no retry prompt, and no CLI override for any of these.
+#
+# ---- Phase 5F2E-V1: two reviewer providers ----------------------------------
+#
+# `provider` now accepts exactly two values, matched EXACTLY and CASE-SENSITIVELY
+# (no alias, no case folding, no glob, no provider registry):
+#
+#   "litellm"   the existing internal OpenAI-compatible LiteLLM path. Unchanged,
+#               and still supported for when internal infrastructure returns.
+#               Connection details come from the five AIDO_LITELLM_* variables.
+#
+#   "vllm"      a direct OpenAI-compatible vLLM endpoint. Connection details come
+#               from AIDO_VLLM_BASE_URL (required) and AIDO_VLLM_API_KEY
+#               (optional). There is NO AIDO_VLLM_DEFAULT_MODEL, and no
+#               AIDO_LITELLM_* variable is read, required, or accepted.
+#
+# ONLY the configured provider's variables are read, and that is literal: the
+# provider resolves to an exact tuple of variable NAMES before the process
+# environment is touched at all. A "vllm" review never looks up an
+# AIDO_LITELLM_* name, and a "litellm" review never looks up an AIDO_VLLM_* one.
+#
+# The reviewer MODEL is provider-independent and comes ONLY from
+# `controlled_review.model` below. No environment variable of either provider can
+# select it, and there is no CLI --model or --provider option.
+#
+# A keyless vLLM server needs no credential: when AIDO_VLLM_API_KEY is absent or
+# blank, AIDO sends a fixed, NON-SECRET compatibility placeholder in the
+# Authorization header the OpenAI-compatible client shape always sends. That
+# placeholder is not a credential and is not authentication.
+#
+# vllm_allow_insecure_http
+#     Applies to provider "vllm" ONLY; it is never consulted for "litellm", so
+#     accepted LiteLLM deployments are unaffected. Default false, which REFUSES
+#     an http:// vLLM endpoint before any model request is issued. Setting it to
+#     true records ONLY that this project explicitly permits source-derived
+#     reviewer material to be sent over PLAINTEXT vLLM transport. It does NOT
+#     make that transport secure, encrypted, private, authenticated,
+#     company-approved, or safe for secrets — and an internal, colleague-hosted,
+#     or same-network endpoint is not private merely because of where it sits.
+#     Nothing upgrades, rewrites, or tunnels the URL.
+#
+# The RS1 semantics above are UNCHANGED and apply identically to both providers:
+# transport retries forced to zero, at most two semantic requests, an AIDO-owned
+# per-attempt wait deadline, and a TERMINAL stall. There is no fallback model, no
+# reviewer chain, no provider failover, and no automatic provider selection.
+#
+# vllm_structured_output  (Phase 5F2E-V2)
+#     Applies to provider "vllm" ONLY. Setting it with any other provider is
+#     REFUSED at the review gate, not silently ignored. Default false, so every
+#     accepted Phase 5F2E-V1 config and deployment keeps exactly its behavior.
+#
+#     When true, the request carries the ModelReviewResult JSON Schema in the
+#     OpenAI-compatible response_format/json_schema field, so the SERVER
+#     constrains generation. It exists because a controlled real-model trial
+#     returned HTTP 200 with finish_reason=stop and a review that correctly
+#     identified a seeded semantic bug — wrapped in a markdown JSON fence the
+#     strict parser rejected. The identical prompt with a JSON-Schema
+#     response_format produced one bare JSON object the UNMODIFIED parser
+#     accepted. The reasoning was never the failure; the envelope was.
+#
+#     The schema is GENERATED from the shipped ModelReviewResult, never
+#     hand-maintained. The strict parser is UNCHANGED and remains the final
+#     authority: a JSON Schema cannot express AIDO's Pydantic validators (string
+#     length caps, line > 0, count bounds, verdict/finding consistency), so a
+#     schema-valid reply that violates one is still REJECTED, never repaired.
+#
+#     Both possible semantic requests — the full attempt and the one bounded RS1
+#     compact retry — carry the same schema. A server that rejects the schema
+#     (HTTP 400, structured-decoding 5xx) is a TERMINAL reviewer-stage failure:
+#     there is NO fallback to an unstructured request, no provider capability
+#     detection, and no provider registry.
+#
+# The successful output artifact is now `review-packet.v4`, which records the
+# reviewer provider, the transport scheme, and whether generation was requested
+# under a JSON Schema — all truthfully.
+controlled_review:
+  enabled: true
+  provider: "litellm"
+  model: "nemotron-3-super"
+  attempt_timeout_seconds: 90
+  max_output_tokens: 2048
+  compact_retry_on_unusable_output: false
+  # vLLM only. Refuses plaintext HTTP unless explicitly set to true, and true is
+  # an acknowledgement of unencrypted transport, never a security claim.
+  vllm_allow_insecure_http: false
+  # vLLM only. Constrains GENERATION with the generated ModelReviewResult JSON
+  # Schema. It never relaxes the strict parser, and there is no fallback to an
+  # unstructured request.
+  vllm_structured_output: false
+
+run_limits:
+  max_model_calls_per_issue: 20
+  max_review_loops: 3
+  max_ci_fix_loops: 2
+  max_total_runtime_minutes: 60
