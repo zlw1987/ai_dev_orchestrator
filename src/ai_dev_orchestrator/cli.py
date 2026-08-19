@@ -135,6 +135,21 @@ app = typer.Typer(
 )
 
 
+def _echo_json_model(model: object) -> None:
+    """Echo a Pydantic model to stdout as ASCII-safe JSON.
+
+    ``model.model_dump_json()`` emits raw Unicode by default, which crashes
+    ``typer.echo`` under a non-UTF-8 Windows console codepage (e.g. cp1252)
+    the moment reviewer-, model-, or subprocess-controlled text contains a
+    character that codepage cannot represent. ``json.dumps`` defaults to
+    ``ensure_ascii=True``, so every non-ASCII character is escaped
+    (``\\u2192``) instead. The escaped text round-trips through
+    ``json.loads`` to the exact original string, and remains valid
+    ``review-packet``/report JSON.
+    """
+    typer.echo(json.dumps(model.model_dump(mode="json"), indent=2))
+
+
 @app.callback()
 def main() -> None:
     """Controlled AI software development pipeline orchestrator."""
@@ -2058,7 +2073,7 @@ def _run_generate_patch_proposal(
     #    command output, the raw artifact text, any prompt or completion, and any
     #    API key or base URL. The approval travels only inside the embedded
     #    approved-plan snapshot, exactly as it was given.
-    typer.echo(proposal.model_dump_json(indent=2))
+    _echo_json_model(proposal)
 
 
 @app.command("generate-patch-proposal")
@@ -3020,7 +3035,7 @@ def _run_generate_diff_proposal(
     #     key or base URL. Source text appears only as diff context inside the
     #     generated unified diffs, and the approval only inside the embedded
     #     approved-plan snapshot, exactly as it was given.
-    typer.echo(proposal.model_dump_json(indent=2))
+    _echo_json_model(proposal)
 
 
 @app.command("generate-diff-proposal")
@@ -3300,7 +3315,7 @@ def _run_l2_preview_file_edits(
     #    the configured workspace_path, any resolved absolute path, any command
     #    or command output, any apply result, any branch/commit/push/PR claim,
     #    and any API key or base URL.
-    typer.echo(report.model_dump_json(indent=2))
+    _echo_json_model(report)
 
 
 @app.command("l2-preview-file-edits")
@@ -3586,7 +3601,7 @@ def _run_l2_apply_approved_file_edit(
     #     configured workspace path, any absolute path, the raw artifact text,
     #     the approval text, the approved unified diff, any unrelated source
     #     file, any arbitrary command output, and any API key or base URL.
-    typer.echo(report.model_dump_json(indent=2))
+    _echo_json_model(report)
 
 
 @app.command("l2-apply-approved-file-edit")
@@ -3872,7 +3887,7 @@ def _run_l2_verify_approved_file_edit(
     #     in which a process actually ran. A failing verification and an
     #     untrusted workspace are both results a human needs to read, not errors
     #     to swallow.
-    typer.echo(report.model_dump_json(indent=2))
+    _echo_json_model(report)
 
     if report.outcome == "workspace-state-untrusted":
         typer.echo(
@@ -4484,7 +4499,7 @@ def _run_l2_review_approved_file_edit(
     #     read.
     if outcome.packet is None:
         report = outcome.verification
-        typer.echo(report.model_dump_json(indent=2))
+        _echo_json_model(report)
         if report.outcome == "workspace-state-untrusted":
             typer.echo(
                 "Error: workspace-state-untrusted: the verification process ran, "
@@ -4546,7 +4561,7 @@ def _run_l2_review_approved_file_edit(
         "commit, push, or PR followed it.",
         err=True,
     )
-    typer.echo(packet.model_dump_json(indent=2))
+    _echo_json_model(packet)
 
 
 @app.command("l2-review-approved-file-edit")

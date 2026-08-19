@@ -1759,3 +1759,155 @@ def test_the_writer_is_never_invoked_by_the_review_command(tmp_path, monkeypatch
         )
         == 0
     )
+
+
+# =============================================================================
+# Windows console-encoding robustness: the reviewer packet is echoed as
+# ASCII-safe JSON, never raw Unicode, so a non-ASCII reviewer reply cannot
+# crash typer.echo() under a non-UTF-8 Windows console codepage (cp1252).
+# =============================================================================
+
+UNICODE_ARROW_REVIEW_JSON = json.dumps(
+    {
+        "verdict": "changes_requested",
+        "summary": "The refactor changes behavior → equality is now rejected.",
+        "findings": [
+            {
+                "severity": "blocker",
+                "category": "correctness",
+                "line": 2,
+                "message": "value == limit now returns False → was True before.",
+                "suggested_action": "Restore the inclusive comparison → use <=.",
+            }
+        ],
+        "residual_risks": ["Callers relying on the boundary → silently break."],
+        "human_notes": [],
+    }
+)
+
+
+@windows_only
+@git_required
+def test_a_unicode_reviewer_reply_does_not_crash_stdout_serialization(
+    tmp_path, capsys
+):
+    """The exact production defect: a real reviewer reply containing U+2192
+    completed successfully and was accepted by the strict parser, but the CLI
+    then crashed printing it under a cp1252 console. The fix must let this
+    packet print with no UnicodeEncodeError."""
+    repo, config, artifact = _setup(tmp_path)
+
+    exit_code = _run(
+        config,
+        artifact,
+        read_env=lambda _provider: _env(),
+        client_factory=_mock_client_factory(content=UNICODE_ARROW_REVIEW_JSON),
+    )
+
+    assert exit_code == 0
+    rendered = capsys.readouterr().out
+    assert rendered  # the packet was actually printed, not lost
+
+    # Representable in ASCII (and therefore cp1252, and any other legacy
+    # single-byte console codepage) rather than raw multi-byte Unicode.
+    rendered.encode("ascii")
+
+    # The character was escaped, not dropped or replaced.
+    assert "\\u2192" in rendered
+    assert "→" not in rendered
+
+    # json.loads() reconstructs the exact original Unicode value.
+    packet = json.loads(rendered)
+    assert "→" in packet["review"]["summary"]
+    assert packet["review"]["findings"][0]["message"].count("→") == 1
+    assert "→" in packet["review"]["residual_risks"][0]
+
+    # Verdict/findings and schema/version are exactly what the reviewer sent.
+    assert packet["review"]["verdict"] == "changes_requested"
+    assert len(packet["review"]["findings"]) == 1
+    assert packet["review"]["findings"][0]["severity"] == "blocker"
+    assert packet["schema_version"] == REVIEW_PACKET_SCHEMA_VERSION
+
+
+@windows_only
+@git_required
+def test_an_ascii_only_reviewer_reply_is_unaffected(tmp_path, capsys):
+    """Ordinary ASCII-only packets must remain byte-for-byte semantically
+    identical: no escaping is introduced where none is needed, and the
+    already-accepted VALID_REVIEW_JSON fixture still parses the same way."""
+    repo, config, artifact = _setup(tmp_path)
+
+    exit_code = _run(
+        config,
+        artifact,
+        read_env=lambda _provider: _env(),
+        client_factory=_mock_client_factory(content=VALID_REVIEW_JSON),
+    )
+
+    assert exit_code == 0
+    rendered = capsys.readouterr().out
+    rendered.encode("ascii")  # already ASCII; must still succeed trivially
+
+    packet = json.loads(rendered)
+    original = json.loads(VALID_REVIEW_JSON)
+    assert packet["review"]["verdict"] == original["verdict"]
+    assert packet["review"]["summary"] == original["summary"]
+    assert packet["review"]["findings"] == original["findings"]
+    assert packet["schema_version"] == REVIEW_PACKET_SCHEMA_VERSION
+
+
+@windows_only
+@git_required
+def test_unicode_safe_stdout_requires_no_new_environment_variable(
+    tmp_path, capsys, monkeypatch
+):
+    """The fix must not require PYTHONIOENCODING/PYTHONUTF8/chcp 65001 -- the
+    benchmark harness's workaround, not a real fix. Explicitly unset both so
+    a regression back to relying on the environment would be caught."""
+    monkeypatch.delenv("PYTHONIOENCODING", raising=False)
+    monkeypatch.delenv("PYTHONUTF8", raising=False)
+    repo, config, artifact = _setup(tmp_path)
+
+    exit_code = _run(
+        config,
+        artifact,
+        read_env=lambda _provider: _env(),
+        client_factory=_mock_client_factory(content=UNICODE_ARROW_REVIEW_JSON),
+    )
+
+    assert exit_code == 0
+    rendered = capsys.readouterr().out
+    rendered.encode("ascii")
+    assert "→" in json.loads(rendered)["review"]["summary"]
+
+
+def test_cli_module_does_not_reconfigure_stdout_encoding():
+    """No global sys.stdout.reconfigure(...) or encoding mutation anywhere in
+    cli.py: the fix is scoped to serialization, not console I/O globally."""
+    import inspect
+
+    source = inspect.getsource(cli)
+    assert "sys.stdout.reconfigure" not in source
+    assert "stdout.encoding" not in source
+    assert ".buffer.write" not in source
+
+
+def test_echo_json_model_helper_uses_ascii_safe_json_dumps():
+    """The narrow fix: one small helper, reused at every structured-output
+    call site, backed by json.dumps' default ensure_ascii=True -- not a new
+    generalized serialization framework."""
+    import inspect
+
+    source = inspect.getsource(cli._echo_json_model)
+    assert "json.dumps" in source
+    assert "model_dump(mode=" in source
+    # No remaining raw model_dump_json(...) CALL anywhere in the module: every
+    # structured stdout site was migrated to the ASCII-safe helper. (The
+    # helper's own docstring names the old method for context, so exclude it.)
+    module_source = inspect.getsource(cli)
+    call_sites = [
+        line
+        for line in module_source.splitlines()
+        if "model_dump_json(" in line and not line.strip().startswith("``")
+    ]
+    assert call_sites == []
