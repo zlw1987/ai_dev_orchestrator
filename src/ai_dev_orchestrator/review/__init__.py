@@ -150,6 +150,7 @@ from ai_dev_orchestrator.review.supervision import (
     ReviewSupervisionBlock,
     ReviewSupervisionEvent,
     SupervisedReviewOutcome,
+    attempt_outcome_label,
     run_one_review_attempt,
     run_supervised_review,
 )
@@ -239,6 +240,7 @@ __all__ = [
     "VLLM_REVIEWER_ENV_NAMES",
     "build_compact_model_review_request",
     "build_model_review_request",
+    "attempt_outcome_label",
     "build_review_context",
     "build_review_packet",
     "build_review_response_format",

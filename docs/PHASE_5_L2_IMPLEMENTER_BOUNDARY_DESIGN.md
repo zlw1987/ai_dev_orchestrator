@@ -122,6 +122,30 @@
 >   `message.reasoning` field is deliberately **not** captured, and no command,
 >   flag, role, loop, fallback, second reviewer, fixer, implementer, or
 >   cancellation was added.
+> - **Operator token policy corrected: AIDO imposes NO model output-token
+>   ceiling by default.** Real deployment evidence exposed the defect — a reviewer
+>   benchmark inherited the shipped `controlled_review.max_output_tokens: 2048`,
+>   the model completed its request, the provider reported a length finish
+>   condition, AIDO classified it `review_output_budget_exhausted`, and no packet
+>   was produced under a ceiling the operator never intended. The field is now
+>   `int | None`, defaulting to **`None`**, and "unlimited" means exactly one
+>   thing on the wire: **no OpenAI-compatible `max_tokens` field is sent** — never
+>   a substituted large number, a context size, or a per-model guess. A positive
+>   integer remains an explicit operator-requested cap, sent verbatim on **both**
+>   possible semantic attempts, and the artifact-only ceiling `le=32_000` was
+>   removed as an AIDO policy artifact expressing no provider-independent truth.
+>   Provenance is truthful: `requested_max_output_tokens` is **`null`** exactly
+>   when AIDO requested no cap, never `0`, `-1`, or `"unlimited"`. The
+>   classification token `review_output_budget_exhausted` is retained for
+>   artifact compatibility, but all human-facing wording now distinguishes a
+>   provider-native output limit from an AIDO-requested one, and never claims to
+>   know which native limit was reached. The dormant `AIRoleConfig.max_tokens`
+>   default was corrected to `None` for the same reason — **`ai_roles` remains
+>   unwired**. **`review-packet.v4` was NOT bumped**: an existing field merely
+>   gained `null`, no archived packet becomes ambiguous, and every archived
+>   integer still means exactly what it always meant. **Every accepted RS1, V1 and
+>   V2 semantic is unchanged**, and the real smoke test's deliberate
+>   `_REAL_SMOKE_MAX_TOKENS = 512` connectivity probe is untouched.
 > - **The first controlled write → verify → supervised review → human path now
 >   exists.**
 > - **L2 as originally defined is still NOT complete.** There is no model-backed
@@ -146,6 +170,7 @@
 > 5F2E-V1        Direct vLLM Reviewer Provider        DONE
 > 5F2E-V1-FU1    Provider env isolation + wording     DONE
 > 5F2E-V2        Structured vLLM Reviewer Output      DONE
+> (token policy) Unlimited-by-default output tokens   DONE
 > → bounded write → verify → supervised review → human
 > ```
 >

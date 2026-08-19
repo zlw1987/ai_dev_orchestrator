@@ -178,7 +178,9 @@ def test_an_existing_v1_config_loads_unchanged():
     # Every accepted default is untouched by V2.
     assert settings.vllm_allow_insecure_http is False
     assert settings.attempt_timeout_seconds == 90.0
-    assert settings.max_output_tokens == 2048
+    # Unlimited by DEFAULT: optional, unset, and therefore no `max_tokens`
+    # on the wire. Not a number, and not a sentinel.
+    assert settings.max_output_tokens is None
     assert settings.compact_retry_on_unusable_output is False
 
 

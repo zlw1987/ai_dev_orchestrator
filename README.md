@@ -17,16 +17,20 @@ changes. The eventual design will:
 
 The emphasis is on **control and review**, not autonomous action.
 
-## Current status: Phase 5F2E-V1-FU1 — AIDO can now write **one** approved file, **verify** it, and have **one** model review it under a bounded request budget, over either of **two** explicitly configured reviewer backends, and that is all
+## Current status: Phase 5F2E-V2 — AIDO can now write **one** approved file, **verify** it, and have **one** model review it under bounded reviewer request-count and wait supervision, over either of **two** explicitly configured reviewer backends, with an optional structured-output constraint on the direct-vLLM path, and that is all
 
-**Phase 5F2E-V1, as corrected by 5F2E-V1-FU1, is the latest completed phase.**
-Phase 5F2E was the first one that sends source-derived code to a model; RS1 (with
-its FU1 and FU2 corrections) bounded how many requests AIDO may issue to that
-reviewer and — via its own monotonic deadline, not httpx's — how long it may
-wait; V1 added a **second explicitly supported reviewer backend** without
-changing any of that; and V1-FU1 made V1's provider-specific environment claim
+**Phase 5F2E-V2, structured vLLM reviewer output, is the latest completed
+phase.** Phase 5F2E was the first one that sends source-derived code to a model;
+RS1 (with its FU1 and FU2 corrections) bounded how many requests AIDO may issue
+to that reviewer and — via its own monotonic deadline, not httpx's — how long it
+may wait; V1 added a **second explicitly supported reviewer backend** without
+changing any of that; V1-FU1 made V1's provider-specific environment claim
 literally true, so a review reads only the configured provider's variables and
-never the other backend's. Three commands now exist where there were none:
+never the other backend's; and V2 added one **generation constraint** —
+`controlled_review.vllm_structured_output` — that asks a direct-vLLM endpoint to
+constrain generation to the reviewer JSON Schema, without changing the strict
+parser or any accepted RS1/V1 semantic. Three commands now exist where there
+were none:
 
 - `l2-apply-approved-file-edit` (Phase 5F2C) applies **one** explicitly
   human-approved modification to **one** existing, Git-tracked, ordinary UTF-8
@@ -649,8 +653,22 @@ occupancy — not an API line item.
 > separately authorized phase in which AIDO gains an observable, trustworthy
 > backend-cancellation acknowledgement.
 
-> **`max_output_tokens` is a requested cap**, not a guarantee about hidden
-> reasoning or backend accounting. Usage is reported as the provider actually
+> **AIDO imposes no model output-token ceiling by default.**
+> `max_output_tokens` is **optional and unset** unless an operator configures it.
+> When it is absent or `null`, AIDO sends **no OpenAI-compatible `max_tokens`
+> field at all** on either semantic attempt, and the packet records
+> `requested_max_output_tokens: null` — null meaning exactly *AIDO did not
+> request `max_tokens`*, never zero and never a sentinel. Setting it to a
+> positive integer sends **exactly that integer** on both attempts (the compact
+> retry deliberately shares it: "compact" is about the input context and the
+> finding cap, not a smaller output budget).
+>
+> Even when set it is a **requested** cap, not a guarantee about hidden reasoning
+> or backend accounting. The provider/model/backend keeps its own native context
+> and output limits in **both** cases; those are **backend capability limits**,
+> never an AIDO-requested cap. So a provider may report a length finish condition
+> even when AIDO requested no cap — that is the backend's own limit, and AIDO
+> does not claim to know which one. Usage is reported as the provider actually
 > returned it; when none is supplied it is recorded as **unknown, never zero**.
 
 **No fallback reviewer.** There is no `fallback_model`, `reviewer_chain`,
@@ -773,7 +791,7 @@ returned separately and `message.content` holding the intended review JSON
 
 The next trial changed exactly one thing: it added a JSON-Schema
 `response_format` generated from `ModelReviewResult.model_json_schema()`. Same
-prompt, same context, same model, same temperature, same `max_tokens`. The
+prompt, same context, same model, same temperature, same token settings. The
 endpoint returned HTTP 200, reasoning still separate, and `message.content`
 became **one bare JSON object** that `parse_model_review_response` accepted
 **unmodified** — verdict `changes_requested`, with a blocker correctness finding
@@ -2614,7 +2632,11 @@ controlled_review:
   model: "qwen3-coder-next"    # the exact reviewer model — the ONLY place one may be named
   attempt_timeout_seconds: 90  # AIDO's OWN wall-clock wait deadline for ONE
                                # attempt (finite, > 0)
-  max_output_tokens: 2048      # REQUESTED output cap, not a guarantee
+  # max_output_tokens is OPTIONAL and UNSET by default: AIDO then sends no
+  # `max_tokens` field at all. Set a positive integer only to explicitly REQUEST
+  # a finite output cap; it is still a request, never a guarantee, and the
+  # backend keeps its own native limits either way.
+  # max_output_tokens: 8192
   compact_retry_on_unusable_output: false  # ONE compact retry after a COMPLETED
                                            # but unusable response. Never after
                                            # a timeout.
@@ -2632,7 +2654,9 @@ controlled_review:
   provider: "vllm"
   model: "my-served-model-name"   # must match what the endpoint serves
   attempt_timeout_seconds: 90
-  max_output_tokens: 2048
+  # max_output_tokens omitted — no AIDO-requested output cap. Identical policy on
+  # both providers; the vLLM path has no separate default and no
+  # AIDO_VLLM_DEFAULT_MODEL.
   compact_retry_on_unusable_output: false
   vllm_allow_insecure_http: false
 ```

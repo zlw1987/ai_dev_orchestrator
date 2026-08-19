@@ -125,7 +125,8 @@ fix the reviewer configuration and run the same command again.
 
 Phase 5F2E-RS1 changed exactly one thing about that: a project may opt into
 **one** bounded compact second semantic request after a **completed but unusable**
-first response — an exhausted output budget, or output the strict parser rejected
+first response — a provider-reported output length limit, or output the strict
+parser rejected
 (see :mod:`~ai_dev_orchestrator.review.supervision`). That is a *separate,
 smaller review request*, not a repair — attempt 1's reply is discarded whole,
 never patched, never mined for partial findings, and never quoted back to the

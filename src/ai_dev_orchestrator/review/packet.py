@@ -134,6 +134,24 @@ Deliberately still absent: the JSON Schema document, the ``response_format``
 request JSON, the prompt, the raw model response, and the provider's separate
 ``message.reasoning`` field, which this phase does not read, log, transmit,
 parse, store, or expose.
+
+Why the optional output cap did NOT bump the version
+-----------------------------------------------------
+
+AIDO's model output-token limits are **unlimited by default**: unless an operator
+configures ``controlled_review.max_output_tokens``, no OpenAI-compatible
+``max_tokens`` field is sent and ``reviewer_supervision.requested_max_output_tokens``
+— top-level and per attempt — serializes as ``null``.
+
+That widened an existing field's value set; it did **not** add provenance an
+older packet silently lacks. The bumps above exist for one reason only: an
+archived packet would otherwise become **ambiguous** about a fact it never
+recorded. Nothing here becomes ambiguous. Every archived ``v1``–``v4`` packet
+carries an integer in that field, and an integer still means exactly what it
+always meant — *AIDO requested this exact cap*. ``null`` is a distinguishable new
+value meaning *AIDO requested no cap at all*, never a sentinel, never zero, and
+never "unknown". So ``v4`` is widened rather than superseded, and no reader of an
+archived packet has to revise anything.
 """
 
 from __future__ import annotations
@@ -250,8 +268,8 @@ REVIEWER_REQUEST_POLICY = (
     f"max_retries={REVIEWER_TRANSPORT_MAX_RETRIES}, so each semantic attempt is "
     "exactly one HTTP/model request. The second request exists only when the "
     "project enabled controlled_review.compact_retry_on_unusable_output AND the "
-    "first response was COMPLETED but unusable — it exhausted its output budget "
-    "or was rejected by the strict parser. A TIMEOUT IS TERMINAL: AIDO stops "
+    "first response was COMPLETED but unusable — the provider reported an output "
+    "length limit, or the strict parser rejected it. A TIMEOUT IS TERMINAL: AIDO stops "
     "waiting but does not observe whether the backend released its inference "
     "slot, so it never issues a second request that could run concurrently with "
     "the first. The compact request is a separate, smaller review using the SAME "

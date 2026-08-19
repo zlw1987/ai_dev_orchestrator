@@ -263,7 +263,12 @@ ReviewAttemptOutcome = Literal[
     # inference state is NOT observed and is never claimed — which is exactly why
     # this outcome is TERMINAL and never buys a second request.
     "review_stalled",
-    # The provider said the output budget ran out and no valid review resulted.
+    # The PROVIDER reported a length/output-limit finish condition and no valid
+    # review resulted. The token is retained for artifact compatibility, but it
+    # names the provider's report, NOT proof that an AIDO-requested cap was hit:
+    # when `requested_max_output_tokens` is null AIDO requested no cap at all and
+    # the limit reached was the provider/model/backend's own. AIDO never claims
+    # to know which native limit that was.
     "review_output_budget_exhausted",
     # A response came back and the strict parser rejected it. Not repaired.
     "review_unusable_output",
@@ -304,8 +309,12 @@ ATTEMPT_OUTCOME_LABELS: dict[str, str] = {
         "observed: both may still be running, so this outcome is TERMINAL and no "
         "second request is issued"
     ),
+    # Deliberately worded from the PROVIDER's report rather than from AIDO's
+    # request, because AIDO may not have requested any cap. Callers that know
+    # `requested_max_output_tokens` should prefer
+    # `output_budget_outcome_label()`, which says which of the two happened.
     "review_output_budget_exhausted": (
-        "output budget exhausted — the provider reported a length finish_reason "
+        "output length limit reported by the provider — a length finish_reason "
         "and no valid review resulted"
     ),
     "review_unusable_output": (
@@ -323,6 +332,41 @@ ATTEMPT_OUTCOME_LABELS: dict[str, str] = {
     ),
     "reviewer_transport_failed": "a connection/transport failure",
 }
+
+# Which AIDO-requested output cap was in force, said in words. Kept next to the
+# labels so the CLI, the packet and the error message cannot drift into claiming
+# that an AIDO cap was exhausted when AIDO requested no cap at all.
+NO_AIDO_OUTPUT_CAP_CLAUSE = (
+    "AIDO requested NO output-token cap (no max_tokens was sent), so this is the "
+    "provider/model/backend's own native output limit, not an AIDO-requested "
+    "budget; AIDO does not claim to know which native limit was reached"
+)
+
+
+def attempt_outcome_label(
+    outcome: str, requested_max_output_tokens: int | None
+) -> str:
+    """The human-facing label for one attempt outcome, told truthfully.
+
+    Every outcome but ``review_output_budget_exhausted`` reads the same either
+    way. That one is ambiguous on its own — the classification token records only
+    that the **provider** reported a length/output-limit finish condition — so
+    the label states which of the two actually happened:
+
+    - ``requested_max_output_tokens is None`` — AIDO sent no ``max_tokens`` at
+      all, and the limit reached belongs to the provider/model/backend;
+    - an integer — AIDO requested exactly that cap, and the provider reported a
+      length finish condition against it.
+    """
+    label = ATTEMPT_OUTCOME_LABELS[outcome]
+    if outcome != "review_output_budget_exhausted":
+        return label
+    if requested_max_output_tokens is None:
+        return f"{label} ({NO_AIDO_OUTPUT_CAP_CLAUSE})"
+    return (
+        f"{label} (AIDO requested max_tokens="
+        f"{requested_max_output_tokens})"
+    )
 
 # The notes that keep the packet honest. Each states a limit rather than a
 # reassurance, and none of them may be softened.
@@ -396,11 +440,21 @@ SUPERVISION_COMPACT_RETRY_NOTE = (
 )
 
 SUPERVISION_OUTPUT_CAP_NOTE = (
-    "max_output_tokens is a REQUESTED model-output cap, sent as the "
-    "OpenAI-compatible 'max_tokens' field. It is not a guarantee: provider "
-    "semantics differ, and it says nothing about hidden reasoning or backend "
-    "accounting. Reported usage is whatever the provider actually returned; when "
-    "a provider returned none, usage is recorded as unknown rather than zero."
+    "AIDO imposes NO model output-token ceiling by default. "
+    "requested_max_output_tokens is null exactly when AIDO sent no "
+    "OpenAI-compatible 'max_tokens' field at all on either semantic attempt; it "
+    "is an integer exactly when the operator configured "
+    "controlled_review.max_output_tokens and that exact value was sent on every "
+    "attempt. Null is not a sentinel for a number and never means zero. "
+    "Even when set it is only a REQUEST: provider semantics differ, and it says "
+    "nothing about hidden reasoning or backend accounting. The "
+    "provider/model/backend keeps its own native output and context limits in "
+    "BOTH cases; those are backend capability limits, not an AIDO-requested cap, "
+    "so a provider may report a length finish_reason even when "
+    "requested_max_output_tokens is null — that is the backend's own limit and "
+    "AIDO does not claim to know which one. Reported usage is whatever the "
+    "provider actually returned; when a provider returned none, usage is "
+    "recorded as unknown rather than zero."
 )
 
 SUPERVISION_OBSERVABILITY_NOTE = (
@@ -439,6 +493,10 @@ class ReviewAttemptRecord(_Strict):
     API key, a base URL, an absolute path, or any timing claim finer than the
     elapsed wall time this process measured.
 
+    ``requested_max_output_tokens`` is ``None`` exactly when AIDO requested no
+    output-token cap for this attempt — no OpenAI-compatible ``max_tokens`` field
+    was sent. It is never a sentinel number and never means zero.
+
     ``usage_reported`` exists so a missing usage block reads as *unknown* rather
     than as zero tokens. ``elapsed_seconds`` is measured with a monotonic clock
     around AIDO's own call; it is **not** a claim about backend inference time.
@@ -455,7 +513,11 @@ class ReviewAttemptRecord(_Strict):
     kind: ReviewAttemptKind
     outcome: ReviewAttemptOutcome
     transport_requests: Literal[TRANSPORT_REQUESTS_PER_ATTEMPT]  # type: ignore[valid-type]
-    requested_max_output_tokens: int
+    # None means AIDO requested NO output-token cap for this attempt: no
+    # OpenAI-compatible `max_tokens` field was sent at all. It is never a
+    # sentinel — 0, -1 and the string "unlimited" would each be a lie about what
+    # AIDO asked for. An integer is the exact cap AIDO requested.
+    requested_max_output_tokens: int | None
     finish_reason: str | None
     usage_reported: bool
     usage: LLMUsage | None
@@ -525,7 +587,9 @@ class ReviewSupervisionBlock(_Strict):
     ]
 
     configured_attempt_timeout_seconds: float
-    requested_max_output_tokens: int
+    # See ReviewAttemptRecord.requested_max_output_tokens: None means AIDO
+    # requested no output-token cap; an integer is the exact requested cap.
+    requested_max_output_tokens: int | None
 
     first_attempt_outcome: ReviewAttemptOutcome
     final_attempt_outcome: ReviewAttemptOutcome
@@ -776,7 +840,7 @@ def run_one_review_attempt(
     client: "LLMClient",
     attempt: int,
     kind: ReviewAttemptKind,
-    requested_max_output_tokens: int,
+    requested_max_output_tokens: int | None,
     attempt_timeout_seconds: float,
     monotonic: Callable[[], float] = time.monotonic,
 ) -> _AttemptResult:
@@ -894,7 +958,7 @@ def _build_supervision_block(
     records: list[ReviewAttemptRecord],
     compact_retry_enabled: bool,
     attempt_timeout_seconds: float,
-    max_output_tokens: int,
+    max_output_tokens: int | None,
 ) -> ReviewSupervisionBlock:
     return ReviewSupervisionBlock(
         supervision_enabled=True,
@@ -935,7 +999,7 @@ def run_supervised_review(
     client: "LLMClient",
     model: str,
     attempt_timeout_seconds: float,
-    max_output_tokens: int,
+    max_output_tokens: int | None,
     compact_retry_on_unusable_output: bool,
     response_format: LLMJSONSchemaResponseFormat | None = None,
     on_event: Callable[[ReviewSupervisionEvent], None] | None = None,
@@ -944,7 +1008,7 @@ def run_supervised_review(
     """Issue at most two supervised semantic reviewer requests.
 
     Attempt 1 is the accepted Phase 5F2E full request, unchanged except for the
-    configured ``max_tokens``. Attempt 2 exists only when the project enabled it
+    optional configured ``max_tokens``. Attempt 2 exists only when the project enabled it
     **and** attempt 1 returned a **completed but unusable response** — an
     exhausted output budget, or output the strict parser rejected. It is the
     bounded compact request, using the **same** configured model and a strict
@@ -969,7 +1033,13 @@ def run_supervised_review(
             ``client.chat`` call. The reviewer's client was separately configured
             with the same value as a network-inactivity timeout; that is a useful
             secondary bound and is explicitly not what establishes this one.
-        max_output_tokens: The requested output cap placed on each request.
+        max_output_tokens: The OPTIONAL operator-requested output cap placed on
+            each request. ``None`` — the default — means AIDO requests no
+            output-token ceiling and the serialized payload carries no
+            ``max_tokens`` key at all; a positive integer is sent verbatim on
+            **both** possible attempts. The compact retry deliberately shares it:
+            "compact" is about the input context and the finding cap, never a
+            smaller output budget.
         compact_retry_on_unusable_output: The project opt-in for the one compact
             retry after a completed but unusable response.
         response_format: The optional Phase 5F2E-V2 generation constraint. When
@@ -1044,7 +1114,9 @@ def run_supervised_review(
             attempt=1,
             max_attempts=MAX_SEMANTIC_REVIEW_ATTEMPTS,
             outcome=first.record.outcome,
-            outcome_label=ATTEMPT_OUTCOME_LABELS[first.record.outcome],
+            outcome_label=attempt_outcome_label(
+                first.record.outcome, first.record.requested_max_output_tokens
+            ),
             attempts_used=1,
             compact_retry_enabled=compact_retry_on_unusable_output,
         ),
@@ -1116,6 +1188,9 @@ def _exhausted(
     """
     final = records[-1].outcome
     attempts_used = len(records)
+    final_label = attempt_outcome_label(
+        final, records[-1].requested_max_output_tokens
+    )
 
     if final == "review_stalled":
         _emit(
@@ -1126,7 +1201,7 @@ def _exhausted(
                 attempt=attempts_used,
                 max_attempts=MAX_SEMANTIC_REVIEW_ATTEMPTS,
                 outcome=final,
-                outcome_label=ATTEMPT_OUTCOME_LABELS[final],
+                outcome_label=final_label,
                 attempts_used=attempts_used,
                 compact_retry_enabled=compact_retry_enabled,
             ),
@@ -1140,7 +1215,7 @@ def _exhausted(
             attempt=attempts_used,
             max_attempts=MAX_SEMANTIC_REVIEW_ATTEMPTS,
             outcome=final,
-            outcome_label=ATTEMPT_OUTCOME_LABELS[final],
+            outcome_label=final_label,
             attempts_used=attempts_used,
             compact_retry_enabled=compact_retry_enabled,
         ),
@@ -1162,7 +1237,7 @@ def _exhausted(
         )
     return ReviewerAttemptExhaustedError(
         "reviewer unavailable for this review: final classification "
-        f"{final!r} ({ATTEMPT_OUTCOME_LABELS[final]}) after "
+        f"{final!r} ({final_label}) after "
         f"{attempts_used} of at most {MAX_SEMANTIC_REVIEW_ATTEMPTS} supervised "
         f"semantic attempts, each exactly one HTTP/model request. No further "
         "semantic request, no transport retry, and no fallback reviewer model "

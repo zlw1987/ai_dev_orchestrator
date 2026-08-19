@@ -449,9 +449,12 @@ change_type, model, provider, endpoint, verification, verification_outcome,
 approved_by, approval, branch, commit, push, pr, pull_request, command,
 executable, args, patch, diff, unified_diff, file_contents, schema_version, mode.
 
-Your reply is parsed strictly and is never repaired. There is no second attempt
-and no follow-up prompt: a malformed reply is a reviewer failure reported to a
-human.
+This reply is parsed strictly and is never repaired, merged, or quoted back to
+you: do not rely on a follow-up to fix, extend, or clarify it. If project policy
+separately authorizes one bounded second review after a completed but unusable
+response, that is a NEW, independent semantic review attempt with its own
+instructions — never a repair of this one. Do not assume a second attempt will
+happen: treat this reply as final and get it right the first time.
 
 ================ 4. WHAT YOU HAVE AND HAVE NOT BEEN GIVEN ================
 
@@ -586,8 +589,16 @@ def build_model_review_request(
     ``max_output_tokens`` is the project's ``controlled_review.max_output_tokens``
     and is placed on the **existing** :attr:`LLMRequest.max_tokens` field, which
     the existing client already serializes — no second transport abstraction was
-    introduced for it. It is a *requested* cap: the provider decides what it
-    actually does, and neither this builder nor the packet claims otherwise.
+    introduced for it.
+
+    It is **optional, and unset by default**. When it is ``None`` the request
+    carries no ``max_tokens``, and the shipped client omits the key from the
+    serialized payload entirely: AIDO imposes no output-token ceiling. When it is
+    a positive integer that exact integer is sent — a *requested* cap, which the
+    provider decides what to do with, and neither this builder nor the packet
+    claims otherwise. Either way the provider/model/backend keeps its own native
+    output and context limits, which are backend capability limits and never an
+    AIDO-requested cap.
 
     ``response_format`` (Phase 5F2E-V2) is ``None`` unless the project runs a
     direct-vLLM reviewer with ``controlled_review.vllm_structured_output``. When
@@ -645,8 +656,9 @@ def _build_compact_system_message() -> str:
 You are a code reviewer for the AI Dev Orchestrator.
 
 This is a BOUNDED SECOND ATTEMPT. A previous attempt produced no usable review,
-so you are being given a reduced context and a strict length budget. There will
-be no third attempt.
+so you are being given reduced context and stricter review-shape constraints:
+return at most five concrete findings, with no generic checklist enumeration and
+no padding. There will be no third attempt.
 
 Your ONLY job is to REVIEW one already-applied, human-approved single-file
 change and report your assessment as one strict JSON object. You are not
@@ -859,6 +871,12 @@ def build_compact_model_review_request(
       and adds nothing at all — no full target file, no unrelated source, no
       absolute path, no workspace path, no credential, no raw environment, no raw
       artifact, and no approval text.
+
+    ``max_output_tokens`` is the **same** optional operator-requested cap the
+    full attempt used — the same ``None`` (no ``max_tokens`` sent at all) or the
+    same exact integer. "Compact" describes the INPUT context and the finding
+    count, never a smaller output-token budget, so there is deliberately no
+    separate retry cap here.
 
     ``response_format`` (Phase 5F2E-V2) is the **same** generation constraint the
     full attempt used, carrying the **same** schema. Both attempts expect exactly

@@ -255,9 +255,24 @@ controlled_verification:
 #     Default 90.
 #
 # max_output_tokens
-#     the REQUESTED model-output cap (the existing OpenAI-compatible
-#     `max_tokens`). A request to the provider, not a guarantee, and it says
-#     nothing about hidden reasoning or backend accounting. Default 2048.
+#     OPTIONAL. AIDO imposes NO model output-token ceiling by default.
+#
+#     Omitted or null (the default) => AIDO sends NO OpenAI-compatible
+#     `max_tokens` field at all, on either semantic attempt, and the packet
+#     records requested_max_output_tokens: null.
+#
+#     A positive integer => an explicit operator-requested cap, sent verbatim as
+#     `max_tokens` on BOTH attempts (the compact retry deliberately shares it:
+#     "compact" is about input context and the finding cap, never a smaller
+#     output budget). Zero and negatives are refused — they are not a way to
+#     spell "unlimited".
+#
+#     Either way it is only a REQUEST, not a guarantee, and it says nothing about
+#     hidden reasoning or backend accounting. The provider/model/backend keeps
+#     its own native output and context limits in BOTH cases; those are backend
+#     capability limits, NOT an AIDO-requested cap, so a provider may report a
+#     length finish_reason even when AIDO requested no cap. Reported token usage
+#     is whatever the provider actually returned.
 #
 # compact_retry_on_unusable_output
 #     whether ONE bounded compact second semantic request may be issued after a
@@ -370,7 +385,10 @@ controlled_review:
   provider: "litellm"
   model: "nemotron-3-super"
   attempt_timeout_seconds: 90
-  max_output_tokens: 2048
+  # max_output_tokens is deliberately OMITTED: AIDO's operator token policy is
+  # UNLIMITED BY DEFAULT, so no `max_tokens` field is sent. Uncomment and set a
+  # positive integer only to explicitly request a finite output cap.
+  # max_output_tokens: 8192
   compact_retry_on_unusable_output: false
   # vLLM only. Refuses plaintext HTTP unless explicitly set to true, and true is
   # an acknowledgement of unencrypted transport, never a security claim.

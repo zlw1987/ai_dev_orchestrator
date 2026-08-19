@@ -675,16 +675,20 @@ def real_llm_smoke_test(
 ) -> None:
     """Gated REAL model connectivity smoke test (opens a real socket).
 
-    **This is the only command that can contact a real model.** It requires the
-    explicit ``--real-model`` flag *and* a project config whose
-    ``real_model_planning`` block enables real model use and allowlists
-    ``--model``; either alone is not enough, and every precondition is checked
-    before the environment is read or a client is built.
+    One of several separately gated commands that may contact a real model —
+    ``generate-model-plan`` and ``l2-review-approved-file-edit`` are the others,
+    each with its own opt-in and its own model authority. **What is unique to
+    this one is its scope**: it is a bounded **connectivity probe**, not a
+    planner or a reviewer. It requires the explicit ``--real-model`` flag *and*
+    a project config whose ``real_model_planning`` block enables real model use
+    and allowlists ``--model``; either alone is not enough, and every
+    precondition is checked before the environment is read or a client is
+    built.
 
-    It is a **connectivity check, not a planner**: it sends a fixed, harmless
-    prompt and never issue text, never file or workspace contents, and never
-    project data. It fetches nothing from GitHub, writes nothing to GitHub,
-    generates no plan, edits no file, runs no command, and writes no audit file.
+    It sends a **fixed, harmless prompt** and nothing else: never issue text,
+    never file or workspace contents, and never project data. It fetches
+    nothing from GitHub, writes nothing to GitHub, generates no plan, edits no
+    file, runs no command, and writes no audit file.
 
     Only the five ``AIDO_LITELLM_*`` variables are read, and only after the gate
     passes. The API key is never printed; the endpoint is reported as a **host**
@@ -4066,7 +4070,7 @@ def _echo_supervision_event(event) -> None:
       same model. An ``unavailable`` block always follows, and attempts used
       stays at what was actually issued;
     - ``unusable`` — a response **came back** and was rejected by the strict
-      parser, or the provider said the output budget ran out. Announced as
+      parser, or the provider reported an output length limit. Announced as
       ``REVIEW UNUSABLE``, because calling a parse error a stall would
       misdescribe it. This is the only notice that precedes a compact retry;
     - ``unavailable`` — the terminal notice, printed once no further request is
@@ -4644,8 +4648,8 @@ def l2_review_approved_file_edit(
     is exactly one HTTP/model request. AIDO issues at most **two** semantic
     requests: the second exists only when the project set
     ``controlled_review.compact_retry_on_unusable_output`` **and** the first
-    response was *completed but unusable* — it exhausted its output budget or was
-    rejected by the strict parser. A **timeout is terminal**: AIDO stops waiting
+    response was *completed but unusable* — the provider reported an output
+    length limit, or the strict parser rejected it. A **timeout is terminal**: AIDO stops waiting
     but cannot observe whether the backend released its inference slot, so it
     never issues a second request that could run concurrently with the first. The
     retry uses the **same** configured model with a reduced context; there is no
@@ -4656,9 +4660,17 @@ def l2_review_approved_file_edit(
     rather than by httpx timeout semantics (a network-inactivity timeout a busy
     peer can outlive). When that deadline wins, the worker performing the call is
     **abandoned, not stopped** — AIDO never claims the request was cancelled or
-    that a backend stopped inference. ``controlled_review.max_output_tokens`` is a
-    *requested* output cap, not a guarantee. This bounds AIDO's request issuance
-    and wait budget only; the abandoned worker's lifetime, backend inference
+    that a backend stopped inference.
+
+    ``controlled_review.max_output_tokens`` is **optional, and unset by
+    default**: AIDO then imposes no output-token ceiling and sends no
+    ``max_tokens`` field at all, so ``requested_max_output_tokens`` is recorded
+    as ``null``. Setting it to a positive integer sends exactly that value on
+    both possible attempts — still a *request*, never a guarantee. The
+    provider/model/backend keeps its own native output and context limits in both
+    cases, so a provider may report a length finish condition even when AIDO
+    requested no cap; that is the backend's own limit, and AIDO does not claim to
+    know which one. This bounds AIDO's request issuance and wait budget only; the abandoned worker's lifetime, backend inference
     lifetime and GPU occupancy after a stall are **not** bounded here.
 
     Exit codes are distinct on purpose. **1** refused before any process started.

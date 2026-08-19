@@ -67,24 +67,32 @@ providers:
     default_headers:
       User-Agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 
+# DORMANT SHAPE ONLY. Nothing reads this block: there is no model-backed
+# implementer and no fixer, and the controlled reviewer takes its model authority
+# from `controlled_review.model` alone — never from here.
+#
+# `max_tokens` is OPTIONAL here for the same reason it is optional under
+# `controlled_review`: AIDO imposes NO model output-token ceiling by default.
+# Omitted or null => no AIDO-requested cap. A positive integer => an explicit
+# operator-requested cap. There is no numeric default to inherit.
 ai_roles:
   implementer:
     provider: litellm_local
     model: minimax-m2.7
     temperature: 0.2
-    max_tokens: 8192
+    # max_tokens: 8192   # optional; omitted means no AIDO-requested cap
     can_edit_files: true
   reviewer:
     provider: litellm_local
     model: qwen3.6-27b
     temperature: 0.1
-    max_tokens: 8192
+    # max_tokens: 8192   # optional; omitted means no AIDO-requested cap
     can_edit_files: false
   fixer:
     provider: litellm_local
     model: minimax-m2.7
     temperature: 0.15
-    max_tokens: 8192
+    # max_tokens: 8192   # optional; omitted means no AIDO-requested cap
     can_edit_files: true
 
 # External integrations are OPTIONAL and disabled by default.
@@ -272,9 +280,24 @@ controlled_verification:
 #     Default 90.
 #
 # max_output_tokens
-#     the REQUESTED model-output cap (the existing OpenAI-compatible
-#     `max_tokens`). A request to the provider, not a guarantee, and it says
-#     nothing about hidden reasoning or backend accounting. Default 2048.
+#     OPTIONAL. AIDO imposes NO model output-token ceiling by default.
+#
+#     Omitted or null (the default) => AIDO sends NO OpenAI-compatible
+#     `max_tokens` field at all, on either semantic attempt, and the packet
+#     records requested_max_output_tokens: null.
+#
+#     A positive integer => an explicit operator-requested cap, sent verbatim as
+#     `max_tokens` on BOTH attempts (the compact retry deliberately shares it:
+#     "compact" is about input context and the finding cap, never a smaller
+#     output budget). Zero and negatives are refused — they are not a way to
+#     spell "unlimited".
+#
+#     Either way it is only a REQUEST, not a guarantee, and it says nothing about
+#     hidden reasoning or backend accounting. The provider/model/backend keeps
+#     its own native output and context limits in BOTH cases; those are backend
+#     capability limits, NOT an AIDO-requested cap, so a provider may report a
+#     length finish_reason even when AIDO requested no cap. Reported token usage
+#     is whatever the provider actually returned.
 #
 # compact_retry_on_unusable_output
 #     whether ONE bounded compact second semantic request may be issued after a
@@ -388,7 +411,10 @@ controlled_review:
   # provider: "vllm"
   # model: "qwen3-coder-next"
   attempt_timeout_seconds: 90
-  max_output_tokens: 2048
+  # max_output_tokens is deliberately OMITTED: AIDO's operator token policy is
+  # UNLIMITED BY DEFAULT, so no `max_tokens` field is sent. Uncomment and set a
+  # positive integer only to explicitly request a finite output cap.
+  # max_output_tokens: 8192
   compact_retry_on_unusable_output: false
   # vLLM only. Refuses plaintext HTTP unless explicitly set to true, and true is
   # an acknowledgement of unencrypted transport, never a security claim.

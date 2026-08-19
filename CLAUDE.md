@@ -447,8 +447,9 @@ exactly:
   rejection. Attempt 1's reply is discarded whole — never patched, never mined
   for partial findings, never quoted into attempt 2, never merged;
 - three config fields with safe defaults (`attempt_timeout_seconds`,
-  `max_output_tokens`, `compact_retry_on_unusable_output` — the last defaults to
-  `false`), so every existing 5F2E config loads unchanged. The unaccepted draft
+  `max_output_tokens` — **optional, `int | None`, defaulting to `None`** — and
+  `compact_retry_on_unusable_output`, the last defaulting to `false`), so every
+  existing 5F2E config loads unchanged. The unaccepted draft
   name `compact_retry_on_stall` is **rejected**, never aliased;
 - the packet carries a `reviewer_supervision` block. It was
   **`review-packet.v2`** when RS1 shipped; Phase 5F2E-V1 bumped it to
@@ -476,9 +477,33 @@ exactly:
 > completed-but-unusable response only. A parse error is never called a stall,
 > and a run that stalled on its first attempt must report attempts used = 1.
 >
-> **`max_output_tokens` is a REQUESTED cap**, not a guarantee about hidden
-> reasoning or backend accounting. Record the usage a provider actually reported;
-> when none is supplied, report it as **unknown, never zero**.
+> **AIDO imposes NO model output-token ceiling by default.**
+> `max_output_tokens` is **optional and unset**. Absent or `null` means AIDO
+> sends **no OpenAI-compatible `max_tokens` field at all** on either semantic
+> attempt, and the packet records `requested_max_output_tokens: null` — meaning
+> exactly *AIDO did not request `max_tokens`*, never `0`, `-1`, or `"unlimited"`.
+> Never substitute a large number, a context size, or a per-model guess for the
+> unset state. A positive integer is an explicit operator-requested cap, sent
+> verbatim on **both** attempts (the compact retry shares it: "compact" is input
+> context and finding count, never a smaller output budget); `0`, negatives and
+> booleans are refused.
+>
+> Even when set it is a **REQUESTED** cap, not a guarantee about hidden reasoning
+> or backend accounting. The provider/model/backend keeps its own native context
+> and output limits in **both** cases — **backend capability limits, never an
+> AIDO-requested cap** — so a provider may report a length `finish_reason` even
+> when AIDO requested none. The classification token
+> `review_output_budget_exhausted` is retained for artifact compatibility, but
+> **never write human-facing text claiming an AIDO-requested budget was exhausted
+> when `requested_max_output_tokens` is null**, and never invent which native
+> limit was reached. Record the usage a provider actually reported; when none is
+> supplied, report it as **unknown, never zero**.
+>
+> The dormant `AIRoleConfig.max_tokens` follows the same shape (`int | None`,
+> default `None`) so a future phase cannot inherit a ceiling by accident;
+> `ai_roles` remains **unwired**. The real smoke test's fixed
+> `_REAL_SMOKE_MAX_TOKENS = 512` is a deliberate connectivity-probe bound and is
+> **not** the ordinary token policy — do not "correct" it.
 >
 > **Only supervise what is observable.** RS1 may classify on: response returned,
 > typed client error, `finish_reason`, reported `usage`, empty/non-empty content,

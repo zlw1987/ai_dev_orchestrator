@@ -17,6 +17,41 @@ class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+# -- The operator token policy, in one place ----------------------------------
+#
+# AIDO model output-token limits are UNLIMITED BY DEFAULT. For an ordinary model
+# request that means exactly one thing on the wire: **no OpenAI-compatible
+# ``max_tokens`` field is sent**. It does NOT mean a large substituted number, a
+# model-context-derived value, or a per-model guess — none of which AIDO has any
+# basis to invent.
+#
+# A provider/model/backend still has its own native context and output limits.
+# Those are backend capability limits, NOT an AIDO-requested token limit, and
+# must never be represented as one.
+#
+# The optional interface below exists so an operator can explicitly REQUEST a
+# finite cap. Absent or null means no AIDO cap; a positive integer means exactly
+# that integer. Zero, negatives and booleans are refused, the last because
+# Pydantic would otherwise coerce ``true`` into ``1`` and silently impose a
+# one-token ceiling.
+def _validate_optional_output_token_cap(value: object, field: str) -> object:
+    """Shape check for an optional operator-requested output-token cap."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError(
+            f"{field} must be omitted/null (no AIDO output-token cap) or a "
+            "positive integer; a boolean is not a token count."
+        )
+    if isinstance(value, int) and value <= 0:
+        raise ValueError(
+            f"{field} must be a POSITIVE integer when set. Omit it (or set it to "
+            "null) to request no AIDO output-token cap at all; 0 and negative "
+            "values are not a way to say 'unlimited'."
+        )
+    return value
+
+
 class RepoConfig(_Strict):
     """Where the project lives and how branches are named."""
 
@@ -65,13 +100,36 @@ class ProviderConfig(_Strict):
 
 
 class AIRoleConfig(_Strict):
-    """Configuration for one AI role (implementer / reviewer / fixer)."""
+    """Configuration for one AI role (implementer / reviewer / fixer).
+
+    **Dormant shape only.** No runtime reads this block: the controlled reviewer
+    takes its model authority from ``controlled_review`` alone, and there is no
+    model-backed implementer or fixer. The shape is kept truthful anyway, so a
+    future phase that does read it cannot silently inherit a token ceiling AIDO's
+    product policy never intended.
+
+    ``max_tokens`` follows the same operator token policy as
+    :attr:`ControlledReviewConfig.max_output_tokens`: absent/``None`` means AIDO
+    requests **no** output-token cap, and a positive integer is an explicit
+    operator-configured cap. There is no arbitrary numeric default.
+    """
 
     provider: str = Field(description="Key into the providers map.")
     model: str = Field(description="Model name exposed by the provider.")
     temperature: float = Field(default=0.2, ge=0.0)
-    max_tokens: int = Field(default=8192, gt=0)
+    max_tokens: int | None = Field(
+        default=None,
+        description="OPTIONAL requested model-output cap. Absent or null means "
+        "AIDO imposes no output-token ceiling for this role; a positive integer "
+        "is an explicit operator-requested cap. Provider/model/backend native "
+        "limits still exist independently and are not an AIDO-requested cap.",
+    )
     can_edit_files: bool = Field(default=False)
+
+    @field_validator("max_tokens", mode="before")
+    @classmethod
+    def _check_max_tokens(cls, value: object) -> object:
+        return _validate_optional_output_token_cap(value, "ai_roles.*.max_tokens")
 
 
 class ExternalIntegrationConfig(_Strict):
@@ -90,17 +148,25 @@ class RunLimitsConfig(_Strict):
 
 
 class RealModelPlanningConfig(_Strict):
-    """Per-project opt-in for a future **real** model-backed L1 planner.
+    """Per-project opt-in gating real model use for planning-adjacent commands.
 
-    Phase 4I ships the typed shape only — see
-    ``docs/PHASE_4H_GATED_REAL_MODEL_PLANNER_DESIGN.md`` §4. Nothing reads this
-    block yet: there is no gate function, no environment read, no client, no
-    CLI command, and no model call. It fails closed by construction — an absent
-    block is identical to an explicitly disabled one.
+    See ``docs/PHASE_4H_GATED_REAL_MODEL_PLANNER_DESIGN.md`` §4 for the original
+    design. This block is now **read**, by
+    :func:`~ai_dev_orchestrator.plan.real_model_gate.check_real_model_planning_gate`,
+    to gate the ``real-llm-smoke-test`` and ``generate-model-plan`` CLI commands:
+    a real model call from either requires ``enabled: true`` **and** the exact
+    requested model name to appear in ``allowed_models``. It fails closed by
+    construction — an absent block is identical to an explicitly disabled one,
+    and an empty ``allowed_models`` permits no model even when enabled.
 
     It holds **no credentials**: no api key, no base URL, no endpoint. Those are
     named by environment-variable *name* on :class:`ProviderConfig`, per the
     Phase 1 rule, and unknown fields here are rejected.
+
+    This block is **not** authorization for the separate `controlled_review`
+    capability (Phase 5F2E): the controlled reviewer takes its own opt-in, its
+    own gate, and its model exclusively from ``controlled_review.model`` — never
+    from here.
     """
 
     enabled: bool = Field(
@@ -495,22 +561,26 @@ class ControlledReviewConfig(_Strict):
         "request or the backend's inference stopped. Because neither release is "
         "observed, a stalled attempt is TERMINAL: no second request is issued.",
     )
-    max_output_tokens: int = Field(
-        default=2048,
-        gt=0,
-        le=32_000,
-        description="The REQUESTED model-output cap, sent as the existing "
-        "OpenAI-compatible 'max_tokens' field on each reviewer attempt. It is a "
-        "request to the provider, not a guarantee about hidden reasoning, "
-        "backend accounting, or provider-specific semantics.",
+    max_output_tokens: int | None = Field(
+        default=None,
+        description="OPTIONAL operator-requested model-output cap. Absent or "
+        "null — the default — means AIDO imposes NO output-token ceiling: no "
+        "OpenAI-compatible 'max_tokens' field is sent on either semantic "
+        "reviewer attempt. A positive integer is an explicit operator-requested "
+        "cap, sent verbatim as 'max_tokens' on BOTH attempts. Either way it is "
+        "only a request: the provider/model/backend still has its own native "
+        "context and output limits, which are backend capability limits rather "
+        "than an AIDO-requested cap, and it says nothing about hidden reasoning "
+        "or backend accounting. Zero and negative values are refused; they are "
+        "not a way to spell 'unlimited'.",
     )
     compact_retry_on_unusable_output: bool = Field(
         default=False,
         description="Whether ONE bounded compact second semantic attempt may be "
         "made after a COMPLETED but unusable first response — that is, a "
-        "response AIDO actually received, which either exhausted its output "
-        "budget or was rejected by the strict parser. It deliberately does NOT "
-        "cover a timeout: a client timeout is not evidence that the backend "
+        "response AIDO actually received, where either the provider reported an "
+        "output-length limit or the strict parser rejected it. It deliberately "
+        "does NOT cover a timeout: a client timeout is not evidence that the backend "
         "released its inference slot, so a second request could put a second "
         "concurrent job on the same model. Defaults to false, so a project "
         "keeps exactly one semantic attempt until it opts in. Even when true "
@@ -553,6 +623,13 @@ class ControlledReviewConfig(_Strict):
         if not value.strip():
             raise ValueError("controlled_review.provider must be a non-blank string")
         return value
+
+    @field_validator("max_output_tokens", mode="before")
+    @classmethod
+    def _check_max_output_tokens(cls, value: object) -> object:
+        return _validate_optional_output_token_cap(
+            value, "controlled_review.max_output_tokens"
+        )
 
     @field_validator("model")
     @classmethod

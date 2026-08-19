@@ -214,7 +214,9 @@ def test_an_existing_5f2e_config_without_the_new_fields_still_loads():
     settings = ControlledReviewConfig(enabled=True, model=REVIEWER_MODEL)
 
     assert settings.attempt_timeout_seconds == 90.0
-    assert settings.max_output_tokens == 2048
+    # AIDO imposes NO output-token ceiling by default: the field is optional and
+    # unset, so no `max_tokens` is sent at all. It is deliberately NOT a number.
+    assert settings.max_output_tokens is None
     # Defaults to OFF: an existing Phase 5F2E project keeps exactly one semantic
     # attempt until it explicitly opts into the compact retry.
     assert settings.compact_retry_on_unusable_output is False
@@ -234,7 +236,7 @@ def test_a_project_config_yaml_without_the_block_still_loads():
     )
 
     assert project.controlled_review.attempt_timeout_seconds == 90.0
-    assert project.controlled_review.max_output_tokens == 2048
+    assert project.controlled_review.max_output_tokens is None
     assert project.controlled_review.compact_retry_on_unusable_output is False
 
 
@@ -277,12 +279,62 @@ def test_a_nonpositive_or_nonfinite_attempt_timeout_is_rejected(value):
         )
 
 
-@pytest.mark.parametrize("value", [0, -1, -2048, 32_001])
-def test_a_nonpositive_or_unbounded_max_output_tokens_is_rejected(value):
+@pytest.mark.parametrize("value", [0, -1, -2048, True, False])
+def test_a_nonpositive_or_boolean_max_output_tokens_is_rejected(value):
+    """Zero and negatives are not a way to spell "unlimited"; omit the field.
+
+    Booleans are rejected explicitly because Pydantic would otherwise coerce
+    ``true`` into ``1`` and silently impose a ONE-token ceiling.
+    """
     with pytest.raises(ValidationError):
         ControlledReviewConfig(
             enabled=True, model=REVIEWER_MODEL, max_output_tokens=value
         )
+
+
+@pytest.mark.parametrize("value", [1, 512, 2048, 32_001, 131_072, 1_000_000])
+def test_any_positive_max_output_tokens_is_accepted_exactly(value):
+    """The old artificial ``le=32_000`` ceiling was an AIDO policy artifact only.
+
+    It expressed no provider-independent truth — a backend's real output limit is
+    the backend's, and AIDO has no basis to guess it — so it is gone. A configured
+    cap is stored exactly as written.
+    """
+    settings = ControlledReviewConfig(
+        enabled=True, model=REVIEWER_MODEL, max_output_tokens=value
+    )
+    assert settings.max_output_tokens == value
+
+
+def test_an_explicit_null_max_output_tokens_loads_as_no_cap():
+    """YAML ``max_output_tokens: null`` is the same as omitting it."""
+    project = ProjectConfig.model_validate(
+        {
+            "project_id": "demo_project",
+            "display_name": "Demo",
+            "repo": {
+                "workspace_path": "C:/never/touched",
+                "github_repo": "demo/widgets",
+                "branch_prefix": "ai/demo",
+            },
+            "controlled_review": {
+                "enabled": True,
+                "model": REVIEWER_MODEL,
+                "max_output_tokens": None,
+            },
+        }
+    )
+
+    assert project.controlled_review.max_output_tokens is None
+
+
+def test_no_arbitrary_upper_ceiling_survives_in_the_field_schema():
+    """Nothing in the field metadata still caps a configured value."""
+    field = ControlledReviewConfig.model_fields["max_output_tokens"]
+    assert field.default is None
+    rendered = repr(field.metadata) + repr(field.annotation)
+    for artifact in ("32000", "32_000", "le=", "Le("):
+        assert artifact not in rendered
 
 
 def test_the_block_still_has_no_fallback_model_or_reviewer_list():
