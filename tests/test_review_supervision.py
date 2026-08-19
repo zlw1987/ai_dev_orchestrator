@@ -1167,27 +1167,32 @@ def _packet(script: list, *, compact: bool = True):
         model=REVIEWER_MODEL,
         endpoint_host=FAKE_HOST,
         endpoint_scheme="http",
+        # Phase 5F2E-V2: LiteLLM never carries the generation constraint.
+        structured_output_mode="none",
         usage=outcome.usage,
         supervision=outcome.supervision,
     )
 
 
-def test_the_packet_is_v3_and_preserves_v1_and_v2_meaning_as_history():
-    """RS1 supervision is unchanged by Phase 5F2E-V1; only the version moved."""
+def test_the_packet_is_v4_and_preserves_v1_v2_and_v3_meaning_as_history():
+    """RS1 supervision is unchanged by V1 and V2; only the version moved."""
     from ai_dev_orchestrator.review import (
         REVIEW_PACKET_SCHEMA_VERSION,
         REVIEW_PACKET_SCHEMA_VERSION_V1,
         REVIEW_PACKET_SCHEMA_VERSION_V2,
+        REVIEW_PACKET_SCHEMA_VERSION_V3,
     )
 
     packet = _packet([_ok(VALID_REVIEW_JSON)])
 
-    assert REVIEW_PACKET_SCHEMA_VERSION == "review-packet.v3"
+    assert REVIEW_PACKET_SCHEMA_VERSION == "review-packet.v4"
     assert REVIEW_PACKET_SCHEMA_VERSION_V1 == "review-packet.v1"
     assert REVIEW_PACKET_SCHEMA_VERSION_V2 == "review-packet.v2"
-    assert packet.schema_version == "review-packet.v3"
+    assert REVIEW_PACKET_SCHEMA_VERSION_V3 == "review-packet.v3"
+    assert packet.schema_version == "review-packet.v4"
     assert "review-packet.v1" in packet.superseded_schema_version_note
     assert "review-packet.v2" in packet.superseded_schema_version_note
+    assert "review-packet.v3" in packet.superseded_schema_version_note
 
 
 def test_the_packet_preserves_every_accepted_v1_block():

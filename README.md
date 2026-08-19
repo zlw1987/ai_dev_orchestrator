@@ -44,10 +44,11 @@ never the other backend's. Three commands now exist where there were none:
   approved unified diff, selected approved-plan prose, and the bounded, redacted
   verification output to **one** project-configured reviewer model — issuing at
   most **two** semantic requests, each exactly one HTTP/model request — and
-  prints **one** structured `review-packet.v3` for a human to read. Since Phase
+  prints **one** structured `review-packet.v4` for a human to read. Since Phase
   5F2E-V1 that model may be reached over either of two explicitly configured
   backends: the existing internal LiteLLM path, or a direct OpenAI-compatible
-  vLLM endpoint.
+  vLLM endpoint; since Phase 5F2E-V2 a direct-vLLM review may additionally ask
+  the server to constrain generation to the reviewer JSON Schema.
 
 They are **separately invokable**. The writer has no verification flag, the
 verifier writes nothing and calls no model, and the reviewer command writes
@@ -493,7 +494,8 @@ One command, `l2-review-approved-file-edit`, and it is deliberately narrow:
   registry, and no failover;
 - **the reply must be exactly one strict JSON object.** It is **rejected, never
   repaired**: no parser repair, no "fix your JSON" round trip, no merging of two
-  replies;
+  replies. Phase 5F2E-V2 addressed an observed fenced-JSON incompatibility by
+  constraining **generation** with a JSON Schema rather than by loosening this;
 - **AIDO's request issuance is bounded** (5F2E-RS1, below): at most two semantic
   requests, each exactly one HTTP/model request.
 
@@ -601,7 +603,8 @@ occupancy — not an API line item.
   unusable response; and `REVIEWER UNAVAILABLE FOR THIS REVIEW` at the end. None
   prints a prompt, a diff, a completion, a credential, a base URL, or an absolute
   path;
-- **`review-packet.v2`** (now superseded by `v3` — see below), which preserves
+- **`review-packet.v2`** (now superseded by `v3` and then `v4` — see below),
+  which preserves
   every `v1` block and adds a `reviewer_supervision` block: requests issued of a maximum of two, transport
   retries per attempt (`0`), compact-retry enabled/used,
   `timeout_attempt_is_terminal`, `attempt_wait_bound` (the AIDO-owned monotonic
@@ -726,12 +729,14 @@ and the **transport**, and an unencrypted transport is announced unmistakably as
 `NOT TLS-ENCRYPTED`. The base URL, the API key, the placeholder, the prompt, the
 diff and every absolute path remain absent from it.
 
-**`review-packet.v3`** carries the reviewer provenance this needs: `provider`,
+**`review-packet.v3`** carried the reviewer provenance this needs: `provider`,
 `model`, `model_source`, `endpoint_host`, `endpoint_scheme` (`http` or `https`)
 and `transport_tls`. `transport_tls` is a statement about the configured URL
 scheme and nothing more — not a certificate, cipher, peer-identity, or
 network-privacy claim. There is still no `base_url`, `api_key`, header, full
-path, query, fragment, or workspace absolute path field.
+path, query, fragment, or workspace absolute path field. (Phase 5F2E-V2 has
+since bumped the current version to **`review-packet.v4`**, which keeps all of
+that unchanged and adds structured-generation provenance — see below.)
 
 > **`v1` and `v2` keep their original meanings.** Both were LiteLLM-only and
 > reported no transport scheme. The version was bumped rather than `v2`
@@ -753,6 +758,149 @@ an agent loop, not RS2 reviewer failover, not a fallback or second reviewer, not
 fixer, not a review/fix loop, not backend cancellation, and not a generic provider
 framework.
 
+### Structured vLLM reviewer output (Phase 5F2E-V2)
+
+V2 exists because of **observed evidence**, not a theory about model behavior.
+
+Controlled synthetic real-model trials against a direct vLLM endpoint serving a
+local Qwen-family reviewer kept classifying full reviews as
+`review_unusable_output` — and the accepted compact retry produced the same
+thing. Then one trial isolated it. With the shipped full AIDO review prompt the
+endpoint returned **HTTP 200**, `finish_reason=stop`, and a review that
+**correctly identified a seeded semantic bug** — with the provider's reasoning
+returned separately and `message.content` holding the intended review JSON
+**wrapped in a markdown ```json fence**. The strict parser rejected it.
+
+The next trial changed exactly one thing: it added a JSON-Schema
+`response_format` generated from `ModelReviewResult.model_json_schema()`. Same
+prompt, same context, same model, same temperature, same `max_tokens`. The
+endpoint returned HTTP 200, reasoning still separate, and `message.content`
+became **one bare JSON object** that `parse_model_review_response` accepted
+**unmodified** — verdict `changes_requested`, with a blocker correctness finding
+that correctly named the seeded inclusive-boundary regression.
+
+Two things follow, and both are the design:
+
+- **the reviewer's reasoning was never the failure.** The model found the bug
+  either way. What failed was the **envelope**;
+- **the strict parser was right to reject it.** A parser that stripped the fence
+  would have "fixed" the problem by becoming exactly the tolerant, repairing
+  parser this project refuses to have.
+
+So the fix goes where the problem is — on the **generation** side:
+
+```text
+generation constraint → raw returned content → existing strict parser → valid or rejected
+```
+
+**The strict parser did not change.** No markdown-fence stripping, no prose
+stripping, no JSON extraction, no tolerant parsing, no parser repair, no field
+renaming, no type coercion, no extra-field deletion, no verdict repair, and no
+model-response normalization. Invalid content is still **rejected, never
+repaired** — the test suite tokenizes the parser module, strips comments and
+string literals, and asserts that no repair-shaped token appears in the code that
+actually runs.
+
+**One narrow opt-in.** `controlled_review.vllm_structured_output` is a boolean
+that ships `false` and applies to `provider: "vllm"` only:
+
+```yaml
+controlled_review:
+  enabled: true
+  provider: "vllm"
+  model: "my-served-model-name"
+  vllm_structured_output: true          # V2; vLLM only; ships false
+```
+
+Setting it with any other provider is **refused at the review gate** with a clear
+config error, never silently ignored — quietly dropping a setting an operator
+wrote would make the packet's provenance disagree with the config that produced
+it. Every existing Phase 5F2E-V1 config and every accepted direct-vLLM deployment
+keeps exactly its accepted behavior, because the default is `false`.
+
+**The schema is generated, never hand-maintained.** When the opt-in is on, the
+request carries the OpenAI-compatible shape:
+
+```json
+{"response_format": {"type": "json_schema",
+                     "json_schema": {"name": "aido_controlled_review",
+                                     "schema": "<ModelReviewResult.model_json_schema()>"}}}
+```
+
+There is exactly **one** `model_json_schema()` call site in the repository and no
+duplicate schema anywhere, so the schema and the parser cannot drift apart.
+Nothing simplifies or weakens the generated document: `additionalProperties:
+false`, the required fields, the severity enum, the category enum, the finding
+object and the nullable `line` shape all reach the server exactly as Pydantic
+produced them.
+
+> **A JSON Schema is not a Pydantic model, and the parser stays final.** The
+> generated schema cannot express the string length caps, the non-blank rules,
+> `line > 0`, the count bounds, or the verdict/finding consistency rules.
+> `parse_model_review_response` remains the **final authority** for all of them,
+> unchanged: a schema-valid reply that violates an AIDO-only validator is still
+> rejected. Recording `structured_output_mode: "json_schema"` says what AIDO
+> **requested** — never that the server honored the schema, and never that the
+> reply was therefore valid.
+
+**Both semantic requests carry the same schema.** The full attempt and the one
+bounded RS1 compact retry expect the same `ModelReviewResult`, so there is no
+smaller second schema; the compact retry's five-finding cap remains an AIDO rule
+enforced by rejection after parsing. Neither review prompt changed.
+
+**There is no fallback.** A structured-output server rejection — an HTTP 400
+"response_format unsupported", a structured-decoding 5xx — is a **terminal**
+reviewer-stage failure (exit 4). AIDO never issues `request 1: structured`
+followed by `request 2: unstructured`: that would be an unauthorized fallback and
+would violate RS1's retry ownership. There is no provider capability detection and
+no provider registry.
+
+**The existing client is reused.** V2 added one optional typed field,
+`LLMRequest.response_format`, expressing **only** this exact JSON-schema shape —
+no generic `extra_body`, no arbitrary kwargs, no provider body dictionary — and
+it is **omitted entirely** from the serialized payload when unset. No
+`response_format` appears for planning, either smoke test, a LiteLLM controlled
+review, or a vLLM review with the opt-in off; for a structured run, the added key
+is the **only** payload difference.
+
+**RS1 is unchanged and applies identically.** Transport retries forced to `0`, at
+most two semantic requests, one HTTP/model request each, a terminal stall, the
+compact retry only for a completed-but-unusable response, the same model, and
+AIDO's own monotonic wait deadline.
+
+**The reasoning field is deliberately not captured.** The trials observed that
+vLLM returns Qwen's reasoning separately from `content`, and V2 does not need it:
+`message.reasoning` is not read, logged, transmitted, parsed, stored, or exposed
+anywhere. The controlled reviewer still uses only assistant `content`, and **no
+chain-of-thought observability was added**.
+
+**The human notice gains one safe line** — `Structured output: json_schema` or
+`Structured output: none` — carrying the mode token only, never the schema body.
+
+**The CLI is unchanged:** no new command, and specifically no
+`--structured-output`, `--response-format`, `--json-schema`, or `--guided-json`.
+Authority is project config only.
+
+**`review-packet.v4`** adds the provenance this needs — `structured_output_mode`
+(`"none"` or `"json_schema"`), `structured_output_schema_source` (`null` or
+`ai_dev_orchestrator.review.models.ModelReviewResult`), and a note stating the
+JSON-Schema-versus-Pydantic authority boundary. The schema **document**, the
+`response_format` request JSON, the prompt, the raw model response, the reasoning,
+the base URL and the API key all remain absent, because there is no field for any
+of them. The provenance is orchestrator-owned: a reply whose *prose* claims a
+schema was enforced changes nothing.
+
+> **`v1`, `v2` and `v3` keep their original meanings, and none of them recorded
+> structured-generation provenance.** The version was bumped rather than `v3`
+> redefined, precisely so that no archived packet becomes ambiguous about whether
+> a `response_format`/`json_schema` constraint was used. An archived `v3` packet
+> must **never** be read as proving that it was — or that it was not.
+
+**Still not here.** V2 is not Pi integration, not a model-backed implementer, not
+a fixer, not a review/fix loop, not RS2 reviewer failover, not a fallback or
+second reviewer, not backend cancellation, not a structured-output framework, and
+not parser repair.
+
 **L2 as originally defined is still not complete.** There is no model-backed
 implementer, no automatic fixer, no local branch creation, no local commit, no
 push, no PR, and no generalized writer.
@@ -766,6 +914,7 @@ push, no PR, and no generalized writer.
 5F2E-RS1-FU2   AIDO-owned reviewer wait deadline    DONE
 5F2E-V1        Direct vLLM Reviewer Provider        DONE
 5F2E-V1-FU1    Provider env isolation + wording     DONE
+5F2E-V2        Structured vLLM Reviewer Output      DONE
 → bounded write → verify → supervised review → human
 ```
 
@@ -2593,7 +2742,7 @@ notice appears: `REVIEW STALLED` (a client timeout or an expired AIDO deadline �
 compact retry authorized` (a completed but unusable response), or `REVIEWER
 UNAVAILABLE FOR THIS REVIEW`.
 
-On success stdout is one `review-packet.v3` artifact: orchestrator-owned
+On success stdout is one `review-packet.v4` artifact: orchestrator-owned
 identity, the target, the **embedded validated verification result**, safe
 reviewer provenance (provider, exact model, endpoint host, endpoint scheme,
 `transport_tls`, `real_call: true`, semantic requests used of a maximum of two,
@@ -2911,6 +3060,23 @@ reviewer connection-failure category provider-neutral and corrected stale
 `v2`/LiteLLM-only prose in live docstrings and examples. **No accepted V1 or RS1
 behavior was reopened.**
 
+**Phase 5F2E-V2** then added **structured vLLM reviewer output**, on evidence. A
+controlled trial returned HTTP 200, `finish_reason=stop`, and a review that
+**correctly identified a seeded semantic bug** — wrapped in a markdown JSON fence
+the strict parser rejected; the identical prompt with a JSON-Schema
+`response_format` produced one bare JSON object the *unmodified* parser accepted.
+The reasoning was never the failure — the envelope was — so V2 constrains
+**generation** and changes the parser not at all.
+`controlled_review.vllm_structured_output` (vLLM only, ships `false`, refused for
+any other provider) sends the **generated** `ModelReviewResult` schema on **both**
+possible semantic requests; a server that rejects it is a terminal reviewer-stage
+failure, because there is **no structured → unstructured fallback**. The output
+evolved to `review-packet.v4` so archived `v1`, `v2` and `v3` packets keep their
+meanings — none of which recorded structured-generation provenance. The
+provider's separate `message.reasoning` field is deliberately **not** captured,
+and no command, flag, role, loop, fallback, second reviewer, fixer, implementer,
+or cancellation was added.
+
 **L2 as originally defined is not complete.** The sequence now reads:
 
 ```text
@@ -2922,6 +3088,7 @@ behavior was reopened.**
 5F2E-RS1-FU2   AIDO-owned reviewer wait deadline    DONE
 5F2E-V1        Direct vLLM Reviewer Provider        DONE
 5F2E-V1-FU1    Provider env isolation + wording     DONE
+5F2E-V2        Structured vLLM Reviewer Output      DONE
 → bounded write → verify → supervised review → human
 ```
 
@@ -2933,7 +3100,8 @@ pushes, and PRs. Project verification execution remains available only in the
 single, config-authorized, bounded form Phase 5F2D describes, and model-backed
 review only in the single, config-authorized form Phase 5F2E describes under the
 bounded attempt policy Phase 5F2E-RS1 adds, over the two explicitly configured
-backends Phase 5F2E-V1 allows. A future **RS2 — Explicit Reviewer Failover** is
+backends Phase 5F2E-V1 allows, with the optional vLLM-only generation constraint
+Phase 5F2E-V2 adds. A future **RS2 — Explicit Reviewer Failover** is
 documented as a candidate and is **not authorized or implemented**; two selectable
 providers is not failover, and nothing selects a provider automatically. Pi
 integration and a model-backed implementer likewise remain separate, unauthorized

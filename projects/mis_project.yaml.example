@@ -353,8 +353,35 @@ controlled_verification:
 # per-attempt wait deadline, and a TERMINAL stall. There is no fallback model, no
 # reviewer chain, no provider failover, and no automatic provider selection.
 #
-# The successful output artifact is now `review-packet.v3`, which additionally
-# records the reviewer provider and the transport scheme truthfully.
+# vllm_structured_output  (Phase 5F2E-V2)
+#     Applies to provider "vllm" ONLY. Setting it with any other provider is
+#     REFUSED at the review gate, not silently ignored. Default false, so every
+#     accepted Phase 5F2E-V1 config and deployment keeps exactly its behavior.
+#
+#     When true, the request carries the ModelReviewResult JSON Schema in the
+#     OpenAI-compatible response_format/json_schema field, so the SERVER
+#     constrains generation. It exists because a controlled real-model trial
+#     returned HTTP 200 with finish_reason=stop and a review that correctly
+#     identified a seeded semantic bug — wrapped in a markdown JSON fence the
+#     strict parser rejected. The identical prompt with a JSON-Schema
+#     response_format produced one bare JSON object the UNMODIFIED parser
+#     accepted. The reasoning was never the failure; the envelope was.
+#
+#     The schema is GENERATED from the shipped ModelReviewResult, never
+#     hand-maintained. The strict parser is UNCHANGED and remains the final
+#     authority: a JSON Schema cannot express AIDO's Pydantic validators (string
+#     length caps, line > 0, count bounds, verdict/finding consistency), so a
+#     schema-valid reply that violates one is still REJECTED, never repaired.
+#
+#     Both possible semantic requests — the full attempt and the one bounded RS1
+#     compact retry — carry the same schema. A server that rejects the schema
+#     (HTTP 400, structured-decoding 5xx) is a TERMINAL reviewer-stage failure:
+#     there is NO fallback to an unstructured request, no provider capability
+#     detection, and no provider registry.
+#
+# The successful output artifact is now `review-packet.v4`, which records the
+# reviewer provider, the transport scheme, and whether generation was requested
+# under a JSON Schema — all truthfully.
 controlled_review:
   enabled: false
   provider: "litellm"
@@ -366,6 +393,10 @@ controlled_review:
   # vLLM only. Refuses plaintext HTTP unless explicitly set to true, and true is
   # an acknowledgement of unencrypted transport, never a security claim.
   vllm_allow_insecure_http: false
+  # vLLM only. Constrains GENERATION with the generated ModelReviewResult JSON
+  # Schema. It never relaxes the strict parser, and there is no fallback to an
+  # unstructured request.
+  vllm_structured_output: false
 
 run_limits:
   max_model_calls_per_issue: 20

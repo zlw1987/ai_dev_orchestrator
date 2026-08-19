@@ -174,7 +174,12 @@ from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from ai_dev_orchestrator.llm.models import LLMRequest, LLMResponse, LLMUsage
+from ai_dev_orchestrator.llm.models import (
+    LLMJSONSchemaResponseFormat,
+    LLMRequest,
+    LLMResponse,
+    LLMUsage,
+)
 from ai_dev_orchestrator.review.models import (
     ModelReviewResult,
     ReviewerAttemptExhaustedError,
@@ -932,6 +937,7 @@ def run_supervised_review(
     attempt_timeout_seconds: float,
     max_output_tokens: int,
     compact_retry_on_unusable_output: bool,
+    response_format: LLMJSONSchemaResponseFormat | None = None,
     on_event: Callable[[ReviewSupervisionEvent], None] | None = None,
     monotonic: Callable[[], float] = time.monotonic,
 ) -> SupervisedReviewOutcome:
@@ -966,6 +972,13 @@ def run_supervised_review(
         max_output_tokens: The requested output cap placed on each request.
         compact_retry_on_unusable_output: The project opt-in for the one compact
             retry after a completed but unusable response.
+        response_format: The optional Phase 5F2E-V2 generation constraint. When
+            supplied it is placed on **both** possible requests, unchanged and
+            carrying the same schema, because both expect exactly the same
+            ``ModelReviewResult`` output. It changes no prompt, no attempt
+            budget, no classification, and no retry rule: a server that rejects
+            the schema is an ordinary reviewer-stage request failure, and AIDO
+            never re-issues the request without it.
         on_event: Optional sink for the human-facing circuit-breaker signals.
         monotonic: Injectable monotonic clock, so attempt timing is deterministic
             in tests. It measures AIDO's own wait, not backend inference time.
@@ -985,7 +998,10 @@ def run_supervised_review(
 
     first = run_one_review_attempt(
         build_model_review_request(
-            context, model=model, max_output_tokens=max_output_tokens
+            context,
+            model=model,
+            max_output_tokens=max_output_tokens,
+            response_format=response_format,
         ),
         client=client,
         attempt=1,
@@ -1036,7 +1052,12 @@ def run_supervised_review(
 
     second = run_one_review_attempt(
         build_compact_model_review_request(
-            context, model=model, max_output_tokens=max_output_tokens
+            context,
+            model=model,
+            # The SAME schema as attempt 1: both attempts expect exactly one
+            # ModelReviewResult, so there is no smaller second schema.
+            max_output_tokens=max_output_tokens,
+            response_format=response_format,
         ),
         client=client,
         attempt=2,

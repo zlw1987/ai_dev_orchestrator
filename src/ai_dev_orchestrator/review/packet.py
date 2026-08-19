@@ -1,4 +1,4 @@
-"""The human-facing review packet (``review-packet.v3``) — Phase 5F2E / RS1 / V1.
+"""The human-facing review packet (``review-packet.v4``) — 5F2E / RS1 / V1 / V2.
 
 One structured artifact per successful controlled review, assembled from five
 sources that are kept strictly separate:
@@ -12,7 +12,9 @@ sources that are kept strictly separate:
 - **reviewer provenance**, built from the project config and the validated
   connection settings — the configured provider (``litellm`` or ``vllm``), the
   exact configured model, the endpoint **host only**, the transport scheme and
-  whether it was TLS, and token usage if the endpoint reported any;
+  whether it was TLS, whether generation was constrained by the
+  ``ModelReviewResult`` JSON Schema and which class that schema was generated
+  from, and token usage if the endpoint reported any;
 - **reviewer supervision** (Phase 5F2E-RS1) — how many semantic requests AIDO
   issued, of a hard maximum of two; that each was exactly one HTTP/model request
   because reviewer transport retries are forced to zero; whether the one compact
@@ -103,6 +105,35 @@ with, and nothing more. It does not certify a certificate, a cipher, a peer
 identity, or a network. A ``false`` here means the material was sent
 unencrypted — and, for the vLLM provider, that the project had to explicitly opt
 in for that to be possible at all.
+
+Why this is now ``v4`` and not a redefined ``v3`` (Phase 5F2E-V2)
+------------------------------------------------------------------
+
+Phase 5F2E-V2 changed **how the reviewer response was generated**: a direct-vLLM
+review may now carry the ``ModelReviewResult`` JSON Schema in the
+OpenAI-compatible ``response_format``/``json_schema`` field, so the server
+constrains generation. That is provenance a reader materially needs — a reply
+produced under a schema constraint and one produced freely are not the same
+evidence — and no ``v1``, ``v2`` or ``v3`` packet records it.
+
+Redefining ``v3`` in place would have made every archived ``v3`` packet ambiguous
+about whether a constraint was used. So the version was bumped again. ``v3``'s
+meaning is preserved verbatim in
+:data:`REVIEW_PACKET_SCHEMA_VERSION_V3_SEMANTICS`, and the whole history stays in
+:data:`REVIEW_PACKET_SCHEMA_VERSION_HISTORY`.
+
+**Nothing else changed.** ``v4`` records exactly the accepted RS1 supervision
+policy and exactly the accepted V1 provider/transport provenance. The strict
+reviewer parser is unchanged and remains the final authority: a JSON Schema
+cannot express AIDO's Pydantic model validators, and
+:data:`~ai_dev_orchestrator.review.request.STRUCTURED_OUTPUT_PARSER_AUTHORITY_NOTE`
+— carried in the packet as ``reviewer.structured_output_note`` — says so in the
+artifact itself.
+
+Deliberately still absent: the JSON Schema document, the ``response_format``
+request JSON, the prompt, the raw model response, and the provider's separate
+``message.reasoning`` field, which this phase does not read, log, transmit,
+parse, store, or expose.
 """
 
 from __future__ import annotations
@@ -118,7 +149,15 @@ from ai_dev_orchestrator.review.models import (
     ReviewerStageError,
     _summarize_validation_error,
 )
-from ai_dev_orchestrator.review.request import REDACTION_NOTE, ReviewContext
+from ai_dev_orchestrator.review.request import (
+    REDACTION_NOTE,
+    REVIEW_RESPONSE_SCHEMA_SOURCE,
+    STRUCTURED_OUTPUT_MODE_JSON_SCHEMA,
+    STRUCTURED_OUTPUT_MODE_NONE,
+    STRUCTURED_OUTPUT_MODES,
+    STRUCTURED_OUTPUT_PARSER_AUTHORITY_NOTE,
+    ReviewContext,
+)
 from ai_dev_orchestrator.review.supervision import (
     MAX_SEMANTIC_REVIEW_ATTEMPTS,
     REVIEWER_TRANSPORT_MAX_RETRIES,
@@ -126,7 +165,7 @@ from ai_dev_orchestrator.review.supervision import (
 )
 from ai_dev_orchestrator.verification import VerificationResultReport
 
-REVIEW_PACKET_SCHEMA_VERSION = "review-packet.v3"
+REVIEW_PACKET_SCHEMA_VERSION = "review-packet.v4"
 REVIEW_PACKET_MODE = "controlled-review"
 
 # The superseded versions, kept so an archived packet's meaning stays legible.
@@ -143,7 +182,8 @@ REVIEW_PACKET_SCHEMA_VERSION_V1_SEMANTICS = (
     "forces transport max_retries=0, so one semantic attempt is exactly one "
     "HTTP/model request, and a project may authorize at most one bounded "
     "compact second semantic attempt. A v1 packet keeps its original meaning and "
-    "is not reinterpreted under v2 or v3 rules."
+    "is not reinterpreted under v2, v3, or v4 rules — in particular it makes no "
+    "claim about the transport scheme and none about structured generation."
 )
 
 REVIEW_PACKET_SCHEMA_VERSION_V2 = "review-packet.v2"
@@ -156,9 +196,28 @@ REVIEW_PACKET_SCHEMA_VERSION_V2_SEMANTICS = (
     "provider a v2 packet could have been produced by, and v2 carried no "
     "endpoint_scheme and no transport_tls field. A v2 packet must NOT be read "
     "as though it may have come from a direct vLLM endpoint, and it must not be "
-    "read as making any claim about transport encryption. review-packet.v3 "
-    "(Phase 5F2E-V1) supersedes it for new runs, with identical supervision "
-    "semantics."
+    "read as making any claim about transport encryption. A v2 packet also "
+    "carried NO structured-generation provenance and must not be read as "
+    "proving whether a response_format/json_schema constraint was used; V2 did "
+    "not exist, so no v2 run ever sent one. review-packet.v3 (Phase 5F2E-V1) "
+    "superseded it, and review-packet.v4 (Phase 5F2E-V2) supersedes v3 for new "
+    "runs, with identical supervision semantics throughout."
+)
+
+REVIEW_PACKET_SCHEMA_VERSION_V3 = "review-packet.v3"
+REVIEW_PACKET_SCHEMA_VERSION_V3_SEMANTICS = (
+    "review-packet.v3 (Phase 5F2E-V1, with FU1) recorded the same accepted "
+    "Phase 5F2E-RS1 supervision as v2, plus explicit LiteLLM/vLLM reviewer "
+    "provenance and truthful transport-scheme reporting (endpoint_scheme and "
+    "transport_tls). It carried NO structured-generation provenance: it has no "
+    "structured_output_mode and no structured_output_schema_source field, and "
+    "an archived v3 packet must NOT be read as proving whether a "
+    "response_format/json_schema generation constraint was used. Phase "
+    "5F2E-V2 did not exist when v3 shipped, so no v3 run ever sent one — but "
+    "the packet itself does not record that, which is exactly why the version "
+    "was bumped rather than v3 redefined. review-packet.v4 (Phase 5F2E-V2) "
+    "supersedes it for new runs, retaining every accepted v3 and RS1 semantic "
+    "unchanged."
 )
 
 REVIEW_PACKET_SCHEMA_VERSION_HISTORY = (
@@ -172,9 +231,16 @@ REVIEW_PACKET_SCHEMA_VERSION_HISTORY = (
     "reviewer provenance and still no transport-scheme reporting. "
     "review-packet.v3 = the SAME accepted RS1 supervision semantics as v2, now "
     "with explicit LiteLLM/vLLM reviewer provenance and truthful "
-    "transport-scheme reporting (endpoint_scheme and transport_tls). The version "
-    "was bumped rather than v2 redefined, so no archived v2 packet becomes "
-    "ambiguous about which provider produced it."
+    "transport-scheme reporting (endpoint_scheme and transport_tls), and NO "
+    "structured-generation provenance. The version was bumped rather than v2 "
+    "redefined, so no archived v2 packet becomes ambiguous about which provider "
+    "produced it. "
+    "review-packet.v4 = the SAME accepted RS1 supervision semantics and the "
+    "SAME v3 provider/transport provenance, plus structured-generation "
+    "provenance (structured_output_mode and structured_output_schema_source). "
+    "The version was bumped rather than v3 redefined, so no archived v1, v2 or "
+    "v3 packet may be read as recording whether a response_format/json_schema "
+    "constraint was used — none of them carried that fact."
 )
 
 # What the reviewer request policy actually is, stated exactly.
@@ -279,6 +345,28 @@ class ReviewerProvenanceBlock(_Strict):
     CLI option, and no code path. Automatic model failover would send the
     approved source-derived diff to a second model, which is a separate authority
     decision and is deliberately not taken here.
+
+    ``structured_output_mode`` and ``structured_output_schema_source`` were
+    added by Phase 5F2E-V2 and are the whole reason this is ``v4``. They record
+    whether the reviewer requests carried the ``ModelReviewResult`` JSON Schema
+    in the OpenAI-compatible ``response_format``/``json_schema`` field, and — when
+    they did — the dotted path of the class the schema was **generated** from.
+    ``"json_schema"`` appears only for a direct-vLLM review whose project set
+    ``controlled_review.vllm_structured_output``; a LiteLLM review and a vLLM
+    review without that opt-in both report ``"none"`` with a ``None`` source.
+
+    Both are **orchestrator-owned and cannot be forged by model output**: they
+    come from the review gate's reading of trusted project config, the strict
+    reviewer schema has no such field, and this block is assembled entirely from
+    orchestrator-owned values. The schema **document** is deliberately absent —
+    there is no field for it, for the ``response_format`` request JSON, for the
+    prompt, for the raw model response, or for the provider's ``reasoning``
+    field, which Phase 5F2E-V2 does not capture at all.
+
+    Recording ``"json_schema"`` is a statement about what AIDO **requested**, not
+    a claim that generation was in fact constrained, that the server honored the
+    schema, or that the reply was therefore valid. The strict parser remains the
+    final authority and is unchanged.
     """
 
     provider: Literal["litellm", "vllm"]
@@ -287,6 +375,13 @@ class ReviewerProvenanceBlock(_Strict):
     endpoint_host: str
     endpoint_scheme: Literal["http", "https"]
     transport_tls: bool
+    structured_output_mode: Literal[
+        STRUCTURED_OUTPUT_MODE_NONE, STRUCTURED_OUTPUT_MODE_JSON_SCHEMA  # type: ignore[valid-type]
+    ]
+    structured_output_schema_source: (
+        Literal[REVIEW_RESPONSE_SCHEMA_SOURCE] | None  # type: ignore[valid-type]
+    )
+    structured_output_note: str
     operation: Literal["code-review"]
     real_call: Literal[True]
     # RS1: no longer pinned to 1 — one or two, and the exact number is a fact
@@ -442,6 +537,7 @@ def build_review_packet(
     model: str,
     endpoint_host: str,
     endpoint_scheme: str,
+    structured_output_mode: str,
     usage: LLMUsage | None,
     supervision: ReviewSupervisionBlock,
 ) -> ReviewPacket:
@@ -462,11 +558,28 @@ def build_review_packet(
     ``transport_tls`` is derived here rather than passed, so it can never
     disagree with the scheme beside it.
 
+    ``structured_output_mode`` is required for exactly the same reason at ``v4``:
+    the version exists to record whether generation was constrained by the
+    ``ModelReviewResult`` JSON Schema, so it may not default to the quieter
+    answer. ``structured_output_schema_source`` is **derived** here from it
+    rather than passed, so the two can never disagree — a ``"json_schema"``
+    packet always names the one generating class, and a ``"none"`` packet always
+    reports ``None``.
+
     Raises:
         ReviewerStageError: The assembled packet failed its own validation. That
             is defensive — reaching it would mean this function built something
             its own schema forbids.
     """
+    if structured_output_mode not in STRUCTURED_OUTPUT_MODES:  # pragma: no cover
+        # Defensive: the review gate produces one of exactly two tokens. Failing
+        # closed here keeps an unrecognized value out of a packet rather than
+        # letting pydantic's message be the only record of it.
+        raise ReviewerStageError(
+            "packet error: unknown structured output mode; the packet records "
+            "only orchestrator-owned provenance and refuses to invent one."
+        )
+
     payload = {
         "schema_version": REVIEW_PACKET_SCHEMA_VERSION,
         "mode": REVIEW_PACKET_MODE,
@@ -492,6 +605,18 @@ def build_review_packet(
             "endpoint_host": endpoint_host,
             "endpoint_scheme": endpoint_scheme,
             "transport_tls": endpoint_scheme == "https",
+            # Phase 5F2E-V2 provenance. Orchestrator-owned: it comes from the
+            # review gate's reading of trusted project config, and the strict
+            # reviewer schema has no field a model could forge it with. The
+            # schema source is derived from the mode, never passed, so the two
+            # cannot disagree. The schema DOCUMENT is deliberately not carried.
+            "structured_output_mode": structured_output_mode,
+            "structured_output_schema_source": (
+                REVIEW_RESPONSE_SCHEMA_SOURCE
+                if structured_output_mode == STRUCTURED_OUTPUT_MODE_JSON_SCHEMA
+                else None
+            ),
+            "structured_output_note": STRUCTURED_OUTPUT_PARSER_AUTHORITY_NOTE,
             "operation": "code-review",
             "real_call": True,
             "semantic_requests": supervision.semantic_attempts_used,

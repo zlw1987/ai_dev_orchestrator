@@ -88,11 +88,16 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 from ai_dev_orchestrator.file_editing.models import ApprovedDiffProposalArtifact
-from ai_dev_orchestrator.llm.models import LLMMessage, LLMRequest
+from ai_dev_orchestrator.llm.models import (
+    LLMJSONSchemaResponseFormat,
+    LLMMessage,
+    LLMRequest,
+)
 from ai_dev_orchestrator.redaction import redact_secret_like_text
 from ai_dev_orchestrator.review.models import (
     MAX_REVIEW_FINDINGS,
     MAX_REVIEW_NOTES,
+    ModelReviewResult,
     ReviewerStageError,
 )
 from ai_dev_orchestrator.verification import VerificationResultReport
@@ -103,6 +108,76 @@ from ai_dev_orchestrator.verification import VerificationResultReport
 UNTRUSTED_BEGIN = "<<<UNTRUSTED_PROJECT_TEXT>>>"
 UNTRUSTED_END = "<<<END_UNTRUSTED_PROJECT_TEXT>>>"
 UNTRUSTED_NEUTRALIZED = "<<<NEUTRALIZED_MARKER>>>"
+
+# -- Phase 5F2E-V2: the structured-output generation constraint ----------------
+#
+# The two structured-output modes, as tokens rather than only as prose, because
+# the review packet reports one of them as provenance.
+#
+#   "none"        — no `response_format` is sent at all. This is the LiteLLM
+#                   path, and the direct-vLLM path when the project did not opt
+#                   in. It is exactly the accepted Phase 5F2E-V1 behavior.
+#   "json_schema" — the OpenAI-compatible `response_format`/`json_schema` field
+#                   carries the ModelReviewResult schema, so the SERVER
+#                   constrains generation.
+#
+# There is deliberately no third mode, no `json_object`, no grammar, no regex,
+# and no `guided_json`.
+STRUCTURED_OUTPUT_MODE_NONE = "none"
+STRUCTURED_OUTPUT_MODE_JSON_SCHEMA = "json_schema"
+STRUCTURED_OUTPUT_MODES: tuple[str, ...] = (
+    STRUCTURED_OUTPUT_MODE_NONE,
+    STRUCTURED_OUTPUT_MODE_JSON_SCHEMA,
+)
+
+# The schema's `name` member. A fixed, non-secret label the server echoes back in
+# some deployments; it names nothing about the project, the repo, or the target.
+REVIEW_RESPONSE_FORMAT_NAME = "aido_controlled_review"
+
+# The SINGLE source of the schema, recorded in the packet so a reader can check
+# it. There is deliberately no hand-maintained second copy of this schema
+# anywhere in the repository: it is generated from the same class the strict
+# parser validates against, so the two cannot drift.
+REVIEW_RESPONSE_SCHEMA_SOURCE = "ai_dev_orchestrator.review.models.ModelReviewResult"
+
+# What a JSON Schema can and cannot say about a reviewer reply. Stated once, as a
+# constant, so no message or document can quietly upgrade the claim.
+STRUCTURED_OUTPUT_PARSER_AUTHORITY_NOTE = (
+    "A JSON-Schema response_format constrains GENERATION; it does not validate "
+    "the reply and it does not replace the strict parser. The generated schema "
+    "expresses the closed key set, the required fields, the severity and "
+    "category enums, the finding object shape and the nullable line — but it "
+    "cannot express AIDO's Pydantic model validators: the string length caps, "
+    "the non-blank rules, the 'line must be > 0' rule, the finding/notes count "
+    "bounds, and the verdict/finding consistency rules. "
+    "parse_model_review_response remains the FINAL authority, is unchanged by "
+    "Phase 5F2E-V2, and still rejects rather than repairs. A schema-valid reply "
+    "that violates an AIDO-only validator is still rejected."
+)
+
+
+def build_review_response_format() -> LLMJSONSchemaResponseFormat:
+    """Build the one JSON-Schema ``response_format`` a controlled review may send.
+
+    Pure and deterministic: no environment read, no file IO, no network, and no
+    client. The schema document is **generated** by
+    :meth:`ModelReviewResult.model_json_schema`, which is the same class
+    :func:`~ai_dev_orchestrator.review.models.parse_model_review_response`
+    validates against — so there is no hand-maintained duplicate schema to drift,
+    and nothing here simplifies, weakens, or post-processes what Pydantic
+    produced. ``additionalProperties: false``, the required-field list, the
+    severity and category enums, the finding object and the nullable ``line``
+    all reach the server exactly as generated.
+
+    See :data:`STRUCTURED_OUTPUT_PARSER_AUTHORITY_NOTE` for the boundary this
+    does **not** cross: model-level validators the JSON Schema cannot express
+    remain the parser's business, and the parser is unchanged.
+    """
+    return LLMJSONSchemaResponseFormat(
+        name=REVIEW_RESPONSE_FORMAT_NAME,
+        json_schema=ModelReviewResult.model_json_schema(),
+    )
+
 
 _NONE_PLACEHOLDER = "(none)"
 _NO_OUTPUT_PLACEHOLDER = "(the verification process produced no output)"
@@ -491,7 +566,11 @@ def _build_user_message(context: ReviewContext) -> str:
 
 
 def build_model_review_request(
-    context: ReviewContext, *, model: str, max_output_tokens: int | None = None
+    context: ReviewContext,
+    *,
+    model: str,
+    max_output_tokens: int | None = None,
+    response_format: LLMJSONSchemaResponseFormat | None = None,
 ) -> LLMRequest:
     """Build the one chat request for a controlled code review.
 
@@ -509,6 +588,13 @@ def build_model_review_request(
     the existing client already serializes — no second transport abstraction was
     introduced for it. It is a *requested* cap: the provider decides what it
     actually does, and neither this builder nor the packet claims otherwise.
+
+    ``response_format`` (Phase 5F2E-V2) is ``None`` unless the project runs a
+    direct-vLLM reviewer with ``controlled_review.vllm_structured_output``. When
+    it is ``None`` no ``response_format`` key is serialized at all, so the
+    request is byte-for-byte the accepted Phase 5F2E-V1 one. **The prompt is
+    identical either way** — structured output constrains generation and changes
+    nothing about what is asked or what is transmitted.
     """
     return LLMRequest(
         model=model,
@@ -520,6 +606,7 @@ def build_model_review_request(
         # still the provider's business.
         temperature=0.0,
         max_tokens=max_output_tokens,
+        response_format=response_format,
     )
 
 
@@ -749,7 +836,11 @@ def _build_compact_user_message(context: ReviewContext) -> str:
 
 
 def build_compact_model_review_request(
-    context: ReviewContext, *, model: str, max_output_tokens: int | None = None
+    context: ReviewContext,
+    *,
+    model: str,
+    max_output_tokens: int | None = None,
+    response_format: LLMJSONSchemaResponseFormat | None = None,
 ) -> LLMRequest:
     """Build the ONE bounded compact retry request (Phase 5F2E-RS1).
 
@@ -768,6 +859,13 @@ def build_compact_model_review_request(
       and adds nothing at all — no full target file, no unrelated source, no
       absolute path, no workspace path, no credential, no raw environment, no raw
       artifact, and no approval text.
+
+    ``response_format`` (Phase 5F2E-V2) is the **same** generation constraint the
+    full attempt used, carrying the **same** schema. Both attempts expect exactly
+    one :class:`~ai_dev_orchestrator.review.models.ModelReviewResult`, so there
+    is deliberately no smaller second schema for the compact retry — the
+    retry-only maximum of :data:`COMPACT_RETRY_MAX_FINDINGS` findings stays an
+    AIDO rule enforced by rejection after parsing, exactly as accepted.
     """
     return LLMRequest(
         model=model,
@@ -777,4 +875,5 @@ def build_compact_model_review_request(
         ],
         temperature=0.0,
         max_tokens=max_output_tokens,
+        response_format=response_format,
     )

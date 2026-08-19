@@ -32,7 +32,11 @@ Five modules, and the split is the design:
   environment names, load them, and contact the reviewer. Phase 5F2E-V1 made the
   provider an explicit two-way choice — the existing internal LiteLLM path, or a
   direct OpenAI-compatible vLLM endpoint — with the model still coming only from
-  project config.
+  project config. Phase 5F2E-V2 added one **generation constraint** to the
+  direct-vLLM path: the request may carry the ``ModelReviewResult`` JSON Schema
+  in the OpenAI-compatible ``response_format``/``json_schema`` field. The strict
+  parser is unchanged and remains the final authority, and there is no fallback
+  to an unstructured request.
 
 A reviewer verdict is advisory. ``approve``, ``changes_requested`` and
 ``needs_human_review`` all end with a human: there is no fixer, no re-review of a
@@ -73,6 +77,8 @@ from ai_dev_orchestrator.review.packet import (
     REVIEW_PACKET_SCHEMA_VERSION_V1_SEMANTICS,
     REVIEW_PACKET_SCHEMA_VERSION_V2,
     REVIEW_PACKET_SCHEMA_VERSION_V2_SEMANTICS,
+    REVIEW_PACKET_SCHEMA_VERSION_V3,
+    REVIEW_PACKET_SCHEMA_VERSION_V3_SEMANTICS,
     VERIFICATION_CHILD_PROCESS_NOTE,
     ReviewCapabilityBoundaries,
     ReviewPacket,
@@ -85,6 +91,12 @@ from ai_dev_orchestrator.review.request import (
     COMPACT_RETRY_MAX_FINDINGS,
     COMPACT_RETRY_OMITTED_CONTEXT,
     REDACTION_NOTE,
+    REVIEW_RESPONSE_FORMAT_NAME,
+    REVIEW_RESPONSE_SCHEMA_SOURCE,
+    STRUCTURED_OUTPUT_MODE_JSON_SCHEMA,
+    STRUCTURED_OUTPUT_MODE_NONE,
+    STRUCTURED_OUTPUT_MODES,
+    STRUCTURED_OUTPUT_PARSER_AUTHORITY_NOTE,
     UNTRUSTED_BEGIN,
     UNTRUSTED_END,
     UNTRUSTED_NEUTRALIZED,
@@ -92,6 +104,7 @@ from ai_dev_orchestrator.review.request import (
     build_compact_model_review_request,
     build_model_review_request,
     build_review_context,
+    build_review_response_format,
 )
 from ai_dev_orchestrator.review.reviewer import (
     LITELLM_REVIEWER_ENV_NAMES,
@@ -174,8 +187,12 @@ __all__ = [
     "REVIEW_PACKET_SCHEMA_VERSION_V1_SEMANTICS",
     "REVIEW_PACKET_SCHEMA_VERSION_V2",
     "REVIEW_PACKET_SCHEMA_VERSION_V2_SEMANTICS",
+    "REVIEW_PACKET_SCHEMA_VERSION_V3",
+    "REVIEW_PACKET_SCHEMA_VERSION_V3_SEMANTICS",
     "REVIEW_PROVIDER_LITELLM",
     "REVIEW_PROVIDER_VLLM",
+    "REVIEW_RESPONSE_FORMAT_NAME",
+    "REVIEW_RESPONSE_SCHEMA_SOURCE",
     "ReviewAttemptRecord",
     "ReviewCapabilityBoundaries",
     "ReviewContext",
@@ -204,6 +221,10 @@ __all__ = [
     "SUPERVISION_TIMEOUT_NOTE",
     "SUPERVISION_WAIT_BOUND_NOTE",
     "SUPPORTED_ENDPOINT_SCHEMES",
+    "STRUCTURED_OUTPUT_MODES",
+    "STRUCTURED_OUTPUT_MODE_JSON_SCHEMA",
+    "STRUCTURED_OUTPUT_MODE_NONE",
+    "STRUCTURED_OUTPUT_PARSER_AUTHORITY_NOTE",
     "SUPPORTED_REVIEW_PROVIDERS",
     "SupervisedReviewOutcome",
     "TRANSPORT_REQUESTS_PER_ATTEMPT",
@@ -220,6 +241,7 @@ __all__ = [
     "build_model_review_request",
     "build_review_context",
     "build_review_packet",
+    "build_review_response_format",
     "build_reviewer_client_config",
     "check_controlled_review_gate",
     "endpoint_scheme_from_base_url",

@@ -103,6 +103,25 @@
 >   FU1 also made the CLI's reviewer-environment failure category
 >   provider-neutral and corrected stale `v2`/LiteLLM-only prose in live
 >   docstrings and examples. **No accepted V1 or RS1 behavior was reopened.**
+> - **Phase 5F2E-V2 is DONE** (§33): **structured vLLM reviewer output.** A
+>   controlled real-model trial returned HTTP 200, `finish_reason=stop`, and a
+>   review that **correctly identified a seeded semantic bug** — wrapped in a
+>   ```json fence, which the strict parser rejected. The identical prompt with a
+>   JSON-Schema `response_format` produced one bare JSON object the *unmodified*
+>   parser accepted. **The reasoning was never the failure; the envelope was**,
+>   so V2 adds one **generation constraint** and changes the parser not at all.
+>   `controlled_review.vllm_structured_output` (vLLM only, ships `false`) sends
+>   the `ModelReviewResult` schema — **generated**, never hand-maintained — on
+>   **both** possible semantic requests. A server that rejects the schema is a
+>   terminal reviewer-stage failure: there is **no structured → unstructured
+>   fallback**. The output artifact is now **`review-packet.v4`**, so statements
+>   in §30–§32 that the packet is `review-packet.v1`/`v2`/`v3` are **superseded**
+>   and preserved only as history — and `v1`, `v2` and `v3` all keep their
+>   original meanings, none of which record structured-generation provenance.
+>   **Every accepted RS1 and V1 semantic is unchanged**, the provider's separate
+>   `message.reasoning` field is deliberately **not** captured, and no command,
+>   flag, role, loop, fallback, second reviewer, fixer, implementer, or
+>   cancellation was added.
 > - **The first controlled write → verify → supervised review → human path now
 >   exists.**
 > - **L2 as originally defined is still NOT complete.** There is no model-backed
@@ -126,6 +145,7 @@
 > 5F2E-RS1-FU2   AIDO-owned reviewer wait deadline    DONE
 > 5F2E-V1        Direct vLLM Reviewer Provider        DONE
 > 5F2E-V1-FU1    Provider env isolation + wording     DONE
+> 5F2E-V2        Structured vLLM Reviewer Output      DONE
 > → bounded write → verify → supervised review → human
 > ```
 >
@@ -7561,3 +7581,365 @@ wired-in** reader rather than an injected one.
   sent to the one model "once"; `.env.example`'s "read ONLY when provider is
   vllm" claim is now literally true and says why. Sections explicitly marked as
   design history were left alone.
+
+## 33. Phase 5F2E-V2 — structured vLLM reviewer output (DONE)
+
+> **Status:** DONE. This section describes the accepted implementation.
+>
+> **Scope, stated exactly:** V2 adds **one controlled generation constraint** for
+> direct-vLLM reviewers, and nothing else. It is **not** parser repair, output
+> normalization, tolerant parsing, a structured-output framework, Pi integration,
+> a model-backed implementer, a fixer, a review/fix loop, RS2 reviewer failover,
+> a second reviewer, a provider registry, backend cancellation, or
+> branch/commit/push/PR work. None of those were added, and none may be added
+> under this section's authority.
+
+### 33.1 Why — the observed evidence
+
+V2 exists because controlled synthetic real-model trials established a specific
+compatibility problem and a specific solution. The trials used a direct vLLM
+endpoint serving a local Qwen-family reviewer model; no endpoint, address, or
+port appears in this document or in runtime code.
+
+| trial | what happened |
+| --- | --- |
+| **RT1** | Full review completed. Classified `review_unusable_output`. |
+| **RT1-C1** | Full review completed → `review_unusable_output`; the accepted compact retry completed → `review_unusable_output` again. |
+| **RT1-D1** | Same shipped full AIDO review prompt. HTTP 200, `finish_reason=stop`. **The semantic bug was correctly identified.** The provider returned `message.reasoning` separately, and `message.content` was the intended review JSON **wrapped in a ```json fence**. `parse_model_review_response` rejected the unmodified content. |
+| **RT1-D2** | Same exact prompt, context, model, temperature and `max_tokens`. **Only request delta: `response_format` = JSON Schema**, generated from `ModelReviewResult.model_json_schema()`. HTTP 200; reasoning still returned separately; `message.content` became **one bare JSON object**; `parse_model_review_response` accepted it **unmodified**; verdict `changes_requested`, with a blocker correctness finding that correctly identified the seeded inclusive-boundary regression. |
+
+Two conclusions follow, and both shaped the design:
+
+- **the reviewer's reasoning was never the failure.** The model found the seeded
+  bug in D1 as well as in D2. What failed was the **envelope** — a markdown
+  fence around otherwise correct JSON;
+- **the strict parser was right to reject it.** A parser that stripped the fence
+  would have "fixed" the problem by becoming exactly the tolerant, repairing
+  parser this repository refuses to have.
+
+So the fix belongs where the problem is: on the **generation** side, as a server
+constraint, leaving the parser untouched.
+
+```text
+generation constraint  →  raw returned content  →  existing strict
+(response_format)         (never modified)          parse_model_review_response()
+                                                          ↓
+                                                    valid  or  rejected
+```
+
+**Invalid content remains rejected, never repaired.**
+
+### 33.2 The core rule: the strict parser did not change
+
+`review/models.py` is byte-identical in behavior. V2 added **no**:
+
+markdown-fence stripping; prose stripping; JSON extraction; tolerant parsing;
+parser repair; field renaming; type coercion; extra-field deletion; verdict
+repair; or model-response normalization.
+
+The test suite proves this structurally, not just by assertion: it tokenizes the
+parser module, strips every comment and string literal, and asserts that no
+repair-shaped token (`repair`, `normalize`, `coerce`, `partition`, `splitlines`,
+`replace`, `re`, `removeprefix`, …) appears in the code that actually runs. It
+also asserts that the whole `review` package exports no callable whose name
+contains `repair`, `fence`, `extract`, `normalize`, or `salvage`.
+
+### 33.3 Configuration contract
+
+Exactly one narrow field was added to `ControlledReviewConfig`:
+
+```yaml
+controlled_review:
+  enabled: true
+  provider: "vllm"                        # exactly "litellm" or "vllm"
+  model: "my-served-model-name"
+  attempt_timeout_seconds: 90
+  max_output_tokens: 2048
+  compact_retry_on_unusable_output: false
+  vllm_allow_insecure_http: false
+  vllm_structured_output: false           # V2; vLLM only; ships false
+```
+
+- **`vllm_structured_output: bool = False`.** When it is `true` **and**
+  `provider == "vllm"`, AIDO requests the `ModelReviewResult` JSON Schema through
+  the OpenAI-compatible `response_format`/`json_schema` request field.
+- **The default is `false`**, so every existing Phase 5F2E-V1 project config and
+  every accepted direct-vLLM deployment keeps exactly its accepted behavior.
+- **`provider != "vllm"` with the field `true` FAILS CLOSED at the review
+  gate**, with a clear config error naming the configured provider. It is
+  deliberately **not** silently ignored for LiteLLM: quietly dropping a setting an
+  operator wrote would make the packet's provenance disagree with the config that
+  produced it.
+
+Nothing else was broadened. The block still has **no** field for an arbitrary
+`response_format`, a schema path, a schema string, a schema file, a
+structured-output *mode*, `guided_json`, a grammar, a regex, provider
+capabilities, or fallback transport behavior — and `extra="forbid"` rejects every
+one of them at load.
+
+### 33.4 The generation constraint, exactly
+
+For `provider == "vllm"` **and** `vllm_structured_output == true`, and only then,
+the request carries:
+
+```json
+{
+  "response_format": {
+    "type": "json_schema",
+    "json_schema": {
+      "name": "aido_controlled_review",
+      "schema": "<ModelReviewResult.model_json_schema()>"
+    }
+  }
+}
+```
+
+The schema is **generated from the current shipped `ModelReviewResult`** by
+`review.request.build_review_response_format()`. There is exactly **one**
+`model_json_schema()` call site in the repository and **no hand-maintained second
+JSON schema anywhere** — the tests assert both, so the schema and the parser
+cannot drift apart.
+
+Nothing simplifies or weakens what Pydantic produced. The generated document
+reaches the server with `additionalProperties: false`, the full top-level
+`required` list, the severity enum, the category enum, the `ReviewFinding`
+object and its own `additionalProperties: false`, the `$ref`-based finding list,
+and the nullable `line` shape (`anyOf: [integer, null]`) all intact.
+
+### 33.5 JSON Schema is not Pydantic — and the parser stays final
+
+It is accepted and truthful that Pydantic **model-level validators are not fully
+expressible in JSON Schema**. The generated schema states the closed key set, the
+required fields, the scalar types, the two enums, the finding object shape and
+the nullable line — and states nothing at all about:
+
+- the string length caps (`summary`, `message`, `suggested_action`, note
+  entries);
+- the non-blank rules;
+- `line > 0`;
+- the finding-count and note-count bounds;
+- the verdict/finding consistency rules (`changes_requested` requires a
+  blocking finding; `approve` must carry none);
+- the compact retry's five-finding cap.
+
+**`parse_model_review_response` remains the final authority for all of them**,
+and is unchanged. The tests supply five payloads that satisfy everything the
+generated schema can express and are still rejected — including the
+verdict/finding inconsistency case and an `approve` carrying a blocker.
+
+This is stated once as a constant,
+`review.request.STRUCTURED_OUTPUT_PARSER_AUTHORITY_NOTE`, and carried into every
+successful packet as `reviewer.structured_output_note`, so no message or
+document can quietly upgrade the claim. Recording `structured_output_mode:
+"json_schema"` says what AIDO **requested** — never that generation was in fact
+constrained, that the server honored the schema, or that the reply was therefore
+valid.
+
+### 33.6 Request model and client
+
+The existing `LLMClient` is reused. **No** direct-vLLM HTTP client, second
+reviewer transport, vLLM SDK, `requests`, `aiohttp`, or `curl` subprocess
+transport was added.
+
+The smallest typed capability was added instead:
+
+- `LLMJSONSchemaResponseFormat` — a model that can express **only** this exact
+  JSON-schema shape. Its `type` is the closed literal `"json_schema"`, so there
+  is no `json_object` mode, no grammar, no regex, and no `guided_json`;
+- `LLMRequest.response_format: LLMJSONSchemaResponseFormat | None = None`.
+
+There is deliberately **no** generic `extra_body`, arbitrary kwargs, or arbitrary
+provider body dictionary, so no caller can smuggle a provider payload through it.
+
+**Omission is total.** When `response_format` is `None`, `_build_payload` emits no
+`response_format` key at all, so every existing caller's payload is exactly what
+it was. The wire member is `"schema"` while the field is `json_schema` — `schema`
+shadows a `BaseModel` attribute and cannot be a field name — and the client owns
+that one explicit mapping.
+
+Verified with no `response_format` in the serialized request:
+
+- planning (`build_model_l1_plan_request`);
+- the dry-run and real smoke tests;
+- a LiteLLM controlled review;
+- a vLLM review with `vllm_structured_output` absent or `false`.
+
+And verified for a structured run: the **only** payload-key difference is the
+added `response_format`; every other key is byte-equal.
+
+### 33.7 Full and compact attempts
+
+When structured output is enabled, **both** possible semantic reviewer requests
+carry the **same** `response_format` with the **same** schema, because both
+expect exactly the same `ModelReviewResult` output.
+
+There is deliberately **no smaller second schema** for the compact retry. The
+compact retry's maximum of five findings remains an **AIDO** rule, enforced by
+rejection after parsing, exactly as RS1 accepted it.
+
+Neither review prompt changed.
+
+### 33.8 RS1 is unchanged — and there is NO fallback
+
+Preserved exactly:
+
+```text
+REVIEWER_TRANSPORT_MAX_RETRIES = 0
+maximum two semantic attempts
+one HTTP/model request per semantic attempt
+terminal timeout / stall
+compact retry only for COMPLETED unusable output
+same model for the retry
+AIDO-owned monotonic wait deadline
+```
+
+A **structured-output server rejection is an ordinary reviewer-stage
+request/response failure**, and it is terminal:
+
+```text
+HTTP 400 "response_format unsupported"  →  terminal reviewer-stage failure (exit 4)
+structured decoding 5xx                 →  terminal reviewer-stage failure (exit 4)
+```
+
+AIDO must **never** issue:
+
+```text
+request 1: structured
+request 2: unstructured      ← FORBIDDEN
+```
+
+That would be an unauthorized fallback and would violate RS1's retry ownership.
+The tests drive a 400, a 422 and a 503 with the compact retry **enabled**, and
+assert one HTTP request, exit 4, and that every request issued carried the
+schema.
+
+### 33.9 Provider behavior
+
+| provider | `vllm_structured_output` | request |
+| --- | --- | --- |
+| `litellm` | absent / `false` | no `response_format` — accepted behavior, unchanged |
+| `litellm` | `true` | **refused at the review gate** |
+| `vllm` | absent / `false` | no `response_format` — accepted V1 behavior, unchanged |
+| `vllm` | `true` | `response_format`/`json_schema` with the generated schema |
+
+There is no automatic provider capability detection, no fallback, and no provider
+registry.
+
+### 33.10 `review-packet.v4`
+
+`review-packet.v3` is **not** redefined. V2 changes a provenance fact that
+materially affects **how the reviewer response was generated**, and no `v1`, `v2`
+or `v3` packet records it — so silently widening `v3` would have made every
+archived `v3` packet ambiguous about whether a constraint was used.
+
+Preserved historical meanings:
+
+- **`review-packet.v1`** — original Phase 5F2E semantics: exactly one semantic
+  reviewer attempt, unreported generic transport retries, no attempt accounting,
+  LiteLLM-only reviewer provenance, no transport-scheme reporting, **no
+  structured-generation provenance**.
+- **`review-packet.v2`** — Phase 5F2E-RS1 supervision semantics, still
+  LiteLLM-only, still no transport-scheme reporting, **no structured-generation
+  provenance**.
+- **`review-packet.v3`** — RS1 supervision **plus** LiteLLM/vLLM provider and
+  transport provenance, **but no structured-generation provenance**. An archived
+  `v3` packet must **not** be interpreted as proving whether
+  `response_format`/`json_schema` was used.
+- **`review-packet.v4`** — every accepted `v3` and RS1 semantic retained
+  unchanged, plus structured-generation provenance.
+
+`v4` reviewer provenance adds:
+
+```text
+structured_output_mode:           "none" | "json_schema"
+structured_output_schema_source:  null | "ai_dev_orchestrator.review.models.ModelReviewResult"
+structured_output_note:           the JSON-Schema-vs-Pydantic authority boundary
+```
+
+- `vllm_structured_output: true` → `structured_output_mode = "json_schema"` and
+  the schema-source identifier;
+- LiteLLM, **or** `vllm_structured_output: false` → `structured_output_mode =
+  "none"` and a `null` source.
+
+The schema source is **derived** from the mode inside the builder rather than
+passed, so the two cannot disagree.
+
+Deliberately **not** included, because there is no field for any of them: the
+full JSON schema, the `response_format` request JSON, the prompt, the raw model
+response, the reasoning, the base URL, the API key, and the `Authorization`
+header.
+
+The structured-output provenance is **orchestrator-owned, not model output**. It
+comes from the review gate's reading of trusted project config; the strict
+reviewer schema has no such field; and a reply whose *prose* claims a schema was
+enforced changes nothing in the packet.
+
+### 33.11 The reasoning field is deliberately NOT captured
+
+D1 and D2 both observed that vLLM returns Qwen's reasoning separately from
+`content`. V2 does **not** need that field to solve the compatibility problem, so
+it adds **no** support for it: `message.reasoning` is not read, logged,
+transmitted, parsed, stored, or exposed anywhere. The controlled reviewer
+continues to use only the assistant `content`. **No chain-of-thought
+observability was added**, which keeps RS1's observability boundary exactly where
+it was accepted.
+
+### 33.12 Human-facing notice
+
+The existing pre-call stderr banner gains **one** safe line, carrying the mode
+token only:
+
+```text
+Structured output: json_schema
+Structured output: none
+```
+
+No schema body is printed, and no new sensitive value is exposed.
+
+### 33.13 CLI
+
+Unchanged. No new command, and `l2-review-approved-file-edit` keeps its exact
+option surface — specifically **no** `--structured-output`, `--response-format`,
+`--json-schema`, or `--guided-json`. Authority remains project config only.
+
+### 33.14 Verification checklist
+
+- [x] Existing `ControlledReviewConfig` blocks load unchanged;
+  `vllm_structured_output` defaults `false`; every V1/RS1 default is untouched.
+- [x] `provider: "vllm"` with the opt-in is accepted at the gate;
+  `provider: "litellm"` with it is **refused** there, before any workspace
+  access, verification launch, environment read, client construction, or model
+  contact.
+- [x] Arbitrary structured-output config (`response_format`, `schema_path`,
+  `guided_json`, `grammar`, `regex`, `extra_body`, `provider_capabilities`, a
+  mode string in place of the bool, …) is rejected at load.
+- [x] The schema is generated from `ModelReviewResult.model_json_schema()`;
+  exactly one generating call site exists; no hand-written duplicate schema
+  exists.
+- [x] The generated schema retains `additionalProperties: false`, all required
+  top-level fields, the severity and category enums, the finding shape, and the
+  nullable line.
+- [x] The JSON-Schema-vs-Pydantic-validator boundary is documented, carried in
+  the packet, and asserted by tests that reject schema-valid replies.
+- [x] No `response_format` appears for planning, the smoke tests, a LiteLLM
+  review, or a vLLM review with the opt-in off; a structured run's only payload
+  delta is the added key.
+- [x] Full and compact attempts send the identical schema; no third request.
+- [x] A structured-output 400/422/503 is terminal at one HTTP request, with no
+  unstructured re-issue, even with the compact retry enabled.
+- [x] A timeout remains terminal at one request; `REVIEW STALLED` never says a
+  compact retry was authorized.
+- [x] The strict parser is unchanged: fenced JSON is still rejected, bare JSON is
+  still accepted, and no repair helper exists in the executable source.
+- [x] `REVIEW_PACKET_SCHEMA_VERSION == "review-packet.v4"`; `v1`/`v2`/`v3`
+  semantics constants remain present and truthful; each is documented as
+  carrying **no** structured-generation provenance.
+- [x] Structured vLLM packets report `provider: "vllm"`,
+  `structured_output_mode: "json_schema"` and the correct schema-source
+  identifier; LiteLLM and unstructured vLLM packets report `"none"` and `null`.
+- [x] A model reply cannot forge structured-output provenance.
+- [x] No Pi import or invocation, no implementer, no fixer, no provider failover,
+  no model fallback, no parser repair, no reasoning-field capture, no CLI
+  expansion, and no backend cancellation.
+- [x] Every reviewer test uses `httpx.MockTransport`. No socket, no real API key,
+  and no real endpoint appears in the suite.

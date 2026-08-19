@@ -19,6 +19,7 @@ from ai_dev_orchestrator.llm.config import (
 )
 from ai_dev_orchestrator.llm.models import (
     LLMClientConfig,
+    LLMJSONSchemaResponseFormat,
     LLMMessage,
     LLMRequest,
     LLMResponse,
@@ -31,6 +32,7 @@ __all__ = [
     "LLMClientConfig",
     "LLMClientError",
     "LLMConfigError",
+    "LLMJSONSchemaResponseFormat",
     "LLMMessage",
     "LLMRequest",
     "LLMResponse",

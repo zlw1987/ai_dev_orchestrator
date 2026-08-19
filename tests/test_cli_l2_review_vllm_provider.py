@@ -20,8 +20,10 @@ safe is unchanged, and most of this file exists to prove that it is unchanged:
 5. **RS1 invariants** — transport retries forced to zero, one HTTP request per
    semantic attempt, a terminal stall, at most two semantic requests, and no
    fallback model, all applied identically to the vLLM path.
-6. **The packet** — ``review-packet.v3``, with truthful provider and transport
-   provenance, and ``v1``/``v2`` semantics preserved as history.
+6. **The packet** — currently ``review-packet.v4`` (Phase 5F2E-V2 bumped it
+   from the ``v3`` this phase shipped, for structured-generation provenance
+   only), with truthful provider and transport provenance, and ``v1``/``v2``/
+   ``v3`` semantics preserved as history.
 
 **Every repository here is a synthetic Git repository created under pytest's own
 ``tmp_path``, and every verification program is a small synthetic Python script
@@ -51,6 +53,8 @@ from ai_dev_orchestrator.review import (
     REVIEW_PACKET_SCHEMA_VERSION_V1_SEMANTICS,
     REVIEW_PACKET_SCHEMA_VERSION_V2,
     REVIEW_PACKET_SCHEMA_VERSION_V2_SEMANTICS,
+    REVIEW_PACKET_SCHEMA_VERSION_V3,
+    REVIEW_PACKET_SCHEMA_VERSION_V3_SEMANTICS,
     REVIEW_PROVIDER_LITELLM,
     REVIEW_PROVIDER_VLLM,
     LITELLM_REVIEWER_ENV_NAMES,
@@ -732,7 +736,7 @@ def test_an_https_vllm_review_succeeds_and_records_tls_truthfully(tmp_path, caps
     assert len(seen) == 1
 
     packet = ReviewPacket.model_validate(_stdout_json(capsys))
-    assert packet.schema_version == "review-packet.v3"
+    assert packet.schema_version == "review-packet.v4"
     assert packet.reviewer.provider == "vllm"
     assert packet.reviewer.model == VLLM_REVIEWER_MODEL
     assert packet.reviewer.endpoint_host == VLLM_HTTPS_HOST
@@ -888,7 +892,7 @@ def test_a_litellm_review_now_records_provider_and_scheme_truthfully(
 
     assert code == 0
     packet = ReviewPacket.model_validate(_stdout_json(capsys))
-    assert packet.schema_version == "review-packet.v3"
+    assert packet.schema_version == "review-packet.v4"
     assert packet.reviewer.provider == "litellm"
     assert packet.reviewer.model == REVIEWER_MODEL
     assert packet.reviewer.endpoint_scheme == "http"
@@ -1033,15 +1037,27 @@ def test_the_rs1_retry_policy_itself_is_unchanged():
 # =============================================================================
 
 
-def test_the_current_schema_version_is_v3():
-    """Requirement 34."""
-    assert REVIEW_PACKET_SCHEMA_VERSION == "review-packet.v3"
+def test_the_current_schema_version_is_v4():
+    """Requirement 34, as moved on by Phase 5F2E-V2.
+
+    V1 shipped ``review-packet.v3``. Phase 5F2E-V2 bumped it to ``v4`` for
+    structured-generation provenance only, leaving every V1 provider/transport
+    field and every RS1 supervision field exactly as accepted — which the
+    assertions further down this file still prove.
+    """
+    assert REVIEW_PACKET_SCHEMA_VERSION == "review-packet.v4"
 
 
-def test_v1_and_v2_semantics_remain_present_and_truthful():
+def test_v1_v2_and_v3_semantics_remain_present_and_truthful():
     """Requirements 35 and 36."""
     assert REVIEW_PACKET_SCHEMA_VERSION_V1 == "review-packet.v1"
     assert REVIEW_PACKET_SCHEMA_VERSION_V2 == "review-packet.v2"
+    assert REVIEW_PACKET_SCHEMA_VERSION_V3 == "review-packet.v3"
+
+    # v3 keeps ITS meaning too: provider/transport provenance, and explicitly
+    # no structured-generation provenance.
+    assert "LiteLLM/vLLM reviewer" in REVIEW_PACKET_SCHEMA_VERSION_V3_SEMANTICS
+    assert "NO structured-generation" in REVIEW_PACKET_SCHEMA_VERSION_V3_SEMANTICS
 
     # v2 is documented as LiteLLM-only, and explicitly NOT as vLLM-capable.
     assert "LiteLLM-SPECIFIC" in REVIEW_PACKET_SCHEMA_VERSION_V2_SEMANTICS
@@ -1053,7 +1069,12 @@ def test_v1_and_v2_semantics_remain_present_and_truthful():
     assert "not reinterpreted" in REVIEW_PACKET_SCHEMA_VERSION_V1_SEMANTICS
 
     history = REVIEW_PACKET_SCHEMA_VERSION_HISTORY
-    for version in ("review-packet.v1", "review-packet.v2", "review-packet.v3"):
+    for version in (
+        "review-packet.v1",
+        "review-packet.v2",
+        "review-packet.v3",
+        "review-packet.v4",
+    ):
         assert version in history
     assert "SAME accepted RS1 supervision semantics" in history
 
@@ -1101,7 +1122,7 @@ def test_a_forged_provider_in_the_reply_does_not_reach_the_packet(tmp_path, caps
     assert code == 0
     packet = ReviewPacket.model_validate(_stdout_json(capsys))
     assert packet.reviewer.provider == "vllm"
-    assert packet.schema_version == "review-packet.v3"
+    assert packet.schema_version == "review-packet.v4"
 
 
 # =============================================================================

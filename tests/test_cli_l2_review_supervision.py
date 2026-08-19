@@ -648,7 +648,7 @@ def test_the_packet_validates_as_v3_and_records_the_attempt_history(
 
     # Phase 5F2E-V1 bumped the version for reviewer provenance only; the RS1
     # attempt history this test asserts is unchanged.
-    assert packet.schema_version == "review-packet.v3"
+    assert packet.schema_version == "review-packet.v4"
     assert packet.reviewer.provider == "litellm"
     supervision = packet.reviewer_supervision
 

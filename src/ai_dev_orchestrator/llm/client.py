@@ -204,6 +204,22 @@ class LLMClient:
             payload["temperature"] = request.temperature
         if request.max_tokens is not None:
             payload["max_tokens"] = request.max_tokens
+        # Phase 5F2E-V2. Omitted ENTIRELY when unset, so every caller that does
+        # not ask for structured generation serializes exactly what it did
+        # before this field existed. The mapping is explicit rather than a
+        # `model_dump`, because the wire member is "schema" while the field is
+        # `json_schema` — `schema` shadows a `BaseModel` attribute and cannot be
+        # a field name. Only this fixed shape can be expressed: there is no
+        # `extra_body`, no arbitrary kwargs, and no provider body dictionary.
+        response_format = request.response_format
+        if response_format is not None:
+            payload["response_format"] = {
+                "type": response_format.type,
+                "json_schema": {
+                    "name": response_format.name,
+                    "schema": response_format.json_schema,
+                },
+            }
         return payload
 
     def _headers(self) -> dict[str, str]:

@@ -75,6 +75,42 @@ acknowledgement, not a security property — see
 :data:`VLLM_INSECURE_HTTP_OPT_IN_MEANING`. The rule is **not** applied to the
 LiteLLM provider, whose accepted deployments predate it.
 
+Structured vLLM output (Phase 5F2E-V2)
+---------------------------------------
+
+``controlled_review.vllm_structured_output`` adds one **generation constraint**
+to the direct-vLLM path: the request carries the ``ModelReviewResult`` JSON
+Schema in the OpenAI-compatible ``response_format``/``json_schema`` field, so the
+server constrains what the model may emit.
+
+It exists because of an observed compatibility failure, not a theory. A
+controlled trial against a direct vLLM endpoint returned HTTP 200 with
+``finish_reason="stop"`` and a review that correctly identified a seeded semantic
+bug — wrapped in a ```` ```json ```` markdown fence, which the strict parser
+rejected. **The reasoning was not the problem; the envelope was.** The identical
+prompt with a JSON-Schema ``response_format`` produced one bare JSON object the
+*unmodified* parser accepted.
+
+Four properties are load-bearing:
+
+- **the parser is unchanged and final.** Nothing strips a fence, extracts JSON,
+  renames a field, coerces a type, or repairs a verdict. A schema-valid reply
+  that violates an AIDO-only Pydantic validator is still rejected;
+- **the schema is generated, never hand-maintained**, from the same class the
+  parser validates against — see
+  :func:`~ai_dev_orchestrator.review.request.build_review_response_format`;
+- **both possible requests carry it.** The full attempt and the one bounded RS1
+  compact retry expect the same output shape, so they send the same schema;
+  there is no smaller second schema;
+- **there is no fallback.** A server that rejects the schema — an HTTP 400, a
+  structured-decoding 5xx — is an ordinary reviewer-stage request failure.
+  AIDO never re-issues the request without ``response_format``: that would be an
+  unauthorized fallback and would break RS1's retry ownership.
+
+The opt-in applies to ``provider: "vllm"`` only. Setting it with any other
+provider is **refused at the gate**, never silently ignored. LiteLLM sends no
+``response_format`` from this feature at all.
+
 Reviewer failure semantics
 --------------------------
 
@@ -123,7 +159,10 @@ from pydantic import ValidationError
 
 from ai_dev_orchestrator.file_editing.models import ApprovedDiffProposalArtifact
 from ai_dev_orchestrator.llm.config import LLMConfigError, load_llm_client_config_from_env
-from ai_dev_orchestrator.llm.models import LLMClientConfig
+from ai_dev_orchestrator.llm.models import (
+    LLMClientConfig,
+    LLMJSONSchemaResponseFormat,
+)
 from ai_dev_orchestrator.models import ProjectConfig
 from ai_dev_orchestrator.plan.real_model_gate import (
     RealModelPlanningGateError,
@@ -139,9 +178,12 @@ from ai_dev_orchestrator.review.models import (
 )
 from ai_dev_orchestrator.review.packet import ReviewPacket, build_review_packet
 from ai_dev_orchestrator.review.request import (
+    STRUCTURED_OUTPUT_MODE_JSON_SCHEMA,
+    STRUCTURED_OUTPUT_MODE_NONE,
     ReviewContext,
     build_model_review_request,
     build_review_context,
+    build_review_response_format,
 )
 from ai_dev_orchestrator.review.supervision import (
     REVIEWER_TRANSPORT_MAX_RETRIES,
@@ -266,6 +308,12 @@ class ReviewerCallNotice:
     never from the base URL's path, query or userinfo, none of which is carried
     here.
 
+    Phase 5F2E-V2 added ``structured_output_mode`` for the same reason at a
+    smaller scale: it names whether the request will carry a JSON-Schema
+    generation constraint. It is a **mode token** (``"none"`` or
+    ``"json_schema"``) and never the schema document, so nothing large or
+    surprising can reach the terminal through it.
+
     That is a statement about *provenance*, not about validation. ``RepoConfig``
     does **not** currently enforce an ``owner/repo`` shape, and ``ProjectConfig``
     does not constrain ``project_id`` beyond requiring the field; an earlier
@@ -281,6 +329,7 @@ class ReviewerCallNotice:
         "endpoint_host",
         "endpoint_scheme",
         "transport_tls",
+        "structured_output_mode",
         "project_id",
         "repo",
         "issue_number",
@@ -294,6 +343,7 @@ class ReviewerCallNotice:
         endpoint_host: str,
         endpoint_scheme: str,
         transport_tls: bool,
+        structured_output_mode: str = STRUCTURED_OUTPUT_MODE_NONE,
         project_id: str,
         repo: str,
         issue_number: int,
@@ -303,6 +353,7 @@ class ReviewerCallNotice:
         self.endpoint_host = endpoint_host
         self.endpoint_scheme = endpoint_scheme
         self.transport_tls = transport_tls
+        self.structured_output_mode = structured_output_mode
         self.project_id = project_id
         self.repo = repo
         self.issue_number = issue_number
@@ -330,23 +381,38 @@ class ControlledReviewOutcome:
 
 
 class ReviewerAuthority:
-    """What trusted project config authorizes: exactly one provider, one model.
+    """What trusted project config authorizes: one provider, one model, one mode.
 
-    Both halves are established **before** verification runs, so an unsupported
-    provider or a missing model refuses before this command causes any workspace
+    All three halves are established **before** verification runs, so an
+    unsupported provider, a missing model, or a structured-output setting that
+    contradicts the provider refuses before this command causes any workspace
     access, launches repository-controlled code, reads an environment value,
     builds a client, or contacts a model.
 
     Deliberately not a config object: it carries no endpoint, no credential, no
     environment-variable name, and no timeout. It answers "may this project be
-    reviewed, by which backend, with which exact model", and nothing else.
+    reviewed, by which backend, with which exact model, and under which
+    generation constraint", and nothing else.
+
+    ``structured_output_mode`` (Phase 5F2E-V2) is
+    :data:`~ai_dev_orchestrator.review.request.STRUCTURED_OUTPUT_MODE_NONE` or
+    :data:`~ai_dev_orchestrator.review.request.STRUCTURED_OUTPUT_MODE_JSON_SCHEMA`.
+    It is **orchestrator-owned provenance**, derived here from trusted project
+    config alone — never from model output, an environment value, or a CLI flag.
     """
 
-    __slots__ = ("provider", "model")
+    __slots__ = ("provider", "model", "structured_output_mode")
 
-    def __init__(self, *, provider: str, model: str) -> None:
+    def __init__(
+        self,
+        *,
+        provider: str,
+        model: str,
+        structured_output_mode: str = STRUCTURED_OUTPUT_MODE_NONE,
+    ) -> None:
         self.provider = provider
         self.model = model
+        self.structured_output_mode = structured_output_mode
 
 
 def check_controlled_review_gate(project: ProjectConfig) -> ReviewerAuthority:
@@ -401,7 +467,30 @@ def check_controlled_review_gate(project: ProjectConfig) -> ReviewerAuthority:
             "select one, and there is no CLI override. Nothing was contacted."
         )
 
-    return ReviewerAuthority(provider=settings.provider, model=model)
+    # Phase 5F2E-V2. The structured-output opt-in is vLLM-specific, and a
+    # contradiction is REFUSED rather than silently ignored: quietly dropping a
+    # setting an operator wrote would make the packet's provenance disagree with
+    # the config that produced it.
+    structured_output_mode = STRUCTURED_OUTPUT_MODE_NONE
+    if settings.vllm_structured_output:
+        if settings.provider != REVIEW_PROVIDER_VLLM:
+            raise ReviewRefusedError(
+                "structured output error: "
+                "controlled_review.vllm_structured_output is true, but "
+                f"controlled_review.provider is {settings.provider!r}. The "
+                "JSON-Schema generation constraint applies to the "
+                f"{REVIEW_PROVIDER_VLLM!r} provider only and is refused rather "
+                "than ignored for any other. Either set the provider to "
+                f"{REVIEW_PROVIDER_VLLM!r} or remove the structured-output "
+                "opt-in. Nothing was contacted."
+            )
+        structured_output_mode = STRUCTURED_OUTPUT_MODE_JSON_SCHEMA
+
+    return ReviewerAuthority(
+        provider=settings.provider,
+        model=model,
+        structured_output_mode=structured_output_mode,
+    )
 
 
 def reviewer_env_names_for_provider(provider: str) -> tuple[str, ...]:
@@ -709,6 +798,7 @@ def request_model_review(
     client: "LLMClient",
     model: str,
     max_output_tokens: int | None = None,
+    response_format: LLMJSONSchemaResponseFormat | None = None,
 ) -> tuple[ModelReviewResult, object]:
     """Send **one** semantic reviewer request and parse the reply strictly.
 
@@ -733,7 +823,10 @@ def request_model_review(
     from ai_dev_orchestrator.llm.client import LLMClientError
 
     request = build_model_review_request(
-        context, model=model, max_output_tokens=max_output_tokens
+        context,
+        model=model,
+        max_output_tokens=max_output_tokens,
+        response_format=response_format,
     )
     try:
         response = client.chat(request)
@@ -813,6 +906,10 @@ def run_controlled_review(
     authority = check_controlled_review_gate(project)
     provider = authority.provider
     model = authority.model
+    # Phase 5F2E-V2, orchestrator-owned provenance: which generation constraint
+    # trusted project config authorized. Resolved here, before verification, so
+    # a provider/opt-in contradiction refuses before anything runs.
+    structured_output_mode = authority.structured_output_mode
     # The Phase 5F2E-RS1 supervision settings come from the same trusted block and
     # were bounds-checked at load. They are plain policy numbers — no credential,
     # no endpoint — so reading them here does not breach the credential ordering.
@@ -874,6 +971,7 @@ def run_controlled_review(
                 endpoint_host=endpoint_host,
                 endpoint_scheme=endpoint_scheme,
                 transport_tls=transport_tls,
+                structured_output_mode=structured_output_mode,
                 project_id=verification.project_id,
                 repo=verification.repo,
                 issue_number=verification.issue_number,
@@ -884,6 +982,16 @@ def run_controlled_review(
     #    HTTP/model request, each strictly parsed and never repaired. A second
     #    request is issued ONLY after a completed but unusable first response —
     #    never after a timeout, whose backend state AIDO cannot observe.
+    #    When structured output is authorized, BOTH possible requests carry the
+    #    same generated schema. A server that rejects it is an ordinary
+    #    reviewer-stage failure: AIDO never re-issues the request unstructured,
+    #    because that would be an unauthorized fallback and would break the
+    #    accepted retry-ownership rule.
+    response_format = (
+        build_review_response_format()
+        if structured_output_mode == STRUCTURED_OUTPUT_MODE_JSON_SCHEMA
+        else None
+    )
     client = client_factory(config)
     supervised: SupervisedReviewOutcome = run_supervised_review(
         context,
@@ -894,6 +1002,7 @@ def run_controlled_review(
         compact_retry_on_unusable_output=(
             review_settings.compact_retry_on_unusable_output
         ),
+        response_format=response_format,
         on_event=on_supervision_event,
         **({} if monotonic is None else {"monotonic": monotonic}),
     )
@@ -906,6 +1015,7 @@ def run_controlled_review(
         model=model,
         endpoint_host=endpoint_host,
         endpoint_scheme=endpoint_scheme,
+        structured_output_mode=structured_output_mode,
         usage=supervised.usage,
         supervision=supervised.supervision,
     )

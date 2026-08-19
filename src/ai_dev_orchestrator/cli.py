@@ -89,13 +89,21 @@ and the L1 plan's `required_verification` is never command authority.
 **deliberately sends source-derived code to a model**. It runs the Phase 5F2D
 verification internally — there is no `--verification-result` input, and no saved
 report is trusted as authority — and only after a `verified` outcome does it read
-the `AIDO_LITELLM_*` environment and contact the project-configured reviewer. It
+the **configured provider's** environment (the `AIDO_LITELLM_*` names, or the
+`AIDO_VLLM_*` names, never both) and contact the project-configured reviewer. It
 transmits one approved unified diff, selected approved-plan prose, and the
 bounded, redacted verification output, all as delimited untrusted data; it never
 transmits the full target file, unrelated source, a directory listing, git
 history, an absolute path, or a credential. The reviewer's verdict is advisory:
 `approve`, `changes_requested` and `needs_human_review` all end with a human, and
 no fixer, re-review, patch, file edit, branch, commit, push or PR follows.
+
+Phase 5F2E-V2 added one optional **generation constraint** to the direct-vLLM
+path — `controlled_review.vllm_structured_output` sends the reviewer JSON Schema
+in the OpenAI-compatible `response_format` field — because an observed trial
+returned a semantically correct review wrapped in a markdown fence. The strict
+parser is unchanged and still rejects rather than repairs, there is no fallback to
+an unstructured request, and no CLI option was added for any of it.
 """
 
 from __future__ import annotations
@@ -4147,6 +4155,10 @@ def _echo_reviewer_banner(notice) -> None:
     Host only — never the base URL (which may embed userinfo or a query string),
     never the API key, and never the diff itself.
 
+    Phase 5F2E-V2 added one safe line: whether the request carries a JSON-Schema
+    generation constraint. It prints the **mode token** (``none`` or
+    ``json_schema``) and never the schema document itself.
+
     The issue **title** is deliberately absent. It is free-form third-party text
     that may contain newlines and banner-shaped lines, and this block is a
     non-suppressible human-facing safety notice: a hostile title could forge
@@ -4163,6 +4175,9 @@ def _echo_reviewer_banner(notice) -> None:
         f"Endpoint host: {notice.endpoint_host}",
         f"Transport:     {_reviewer_transport_line(notice)}",
         f"Model:         {notice.model}",
+        # Phase 5F2E-V2. The MODE token only — never the schema document, the
+        # response_format request JSON, the prompt, or the diff.
+        f"Structured output: {notice.structured_output_mode}",
         f"Project:       {notice.project_id}",
         f"Repo:          {notice.repo}",
         f"Issue:         #{notice.issue_number}",

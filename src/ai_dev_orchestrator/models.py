@@ -425,6 +425,24 @@ class ControlledReviewConfig(_Strict):
     transport is secure. There is still no provider list, provider priority,
     failover, registry, or endpoint field here.
 
+    Phase 5F2E-V2 — structured vLLM reviewer output
+    -----------------------------------------------
+
+    ``vllm_structured_output`` is the only field V2 added. It applies to the
+    vLLM provider only, ships ``false``, and asks the server to constrain
+    **generation** to the ``ModelReviewResult`` JSON Schema. It exists because a
+    controlled real-model trial produced a semantically correct review whose
+    ``content`` was wrapped in a markdown fence — which the strict parser
+    rejects, correctly — and the identical prompt with a JSON-Schema
+    ``response_format`` produced one bare JSON object the *unmodified* parser
+    accepted.
+
+    Setting it with ``provider`` other than ``"vllm"`` is **refused at the
+    review gate**, never silently ignored. There is deliberately no field for an
+    arbitrary ``response_format``, a schema path, a schema string, a schema
+    file, a structured-output *mode*, ``guided_json``, a grammar, or a regex,
+    and no CLI flag reaches any of it.
+
     Phase 5F2E-RS1 — bounded reviewer runtime supervision
     -----------------------------------------------------
 
@@ -510,6 +528,20 @@ class ControlledReviewConfig(_Strict):
         "NOT make the transport secure, encrypted, private, authenticated, "
         "company-approved, or safe for secrets — it records only that the "
         "project accepted an unencrypted reviewer transport.",
+    )
+
+    vllm_structured_output: bool = Field(
+        default=False,
+        description="Whether a direct-vLLM reviewer request carries the "
+        "ModelReviewResult JSON Schema in the OpenAI-compatible "
+        "response_format/json_schema field. Applies to provider 'vllm' only: "
+        "setting it with any other provider is REFUSED at the review gate "
+        "rather than silently ignored. Defaults to false, so every existing "
+        "Phase 5F2E-V1 config and direct-vLLM deployment keeps exactly its "
+        "accepted behavior. It constrains GENERATION only — the strict "
+        "reviewer parser is unchanged and remains the final authority, and "
+        "there is no fallback to an unstructured request if the server "
+        "rejects the schema.",
     )
 
     @field_validator("provider")
