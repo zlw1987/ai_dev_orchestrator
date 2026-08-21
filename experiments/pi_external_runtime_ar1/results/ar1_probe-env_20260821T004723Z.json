@@ -1,0 +1,38 @@
+{
+  "phase": "probe-env",
+  "question": "AR0 U-2/U-3/U-4: can HOME/USERPROFILE/APPDATA be withheld, and does a narrowed PATH work?",
+  "attempts": [
+    {
+      "profile_names_included": [],
+      "extension_handshake_passed": true,
+      "model_handshake_passed": true,
+      "extension_handshake_outcome": "runtime_response_received",
+      "model_handshake_outcome": "runtime_response_received",
+      "stdout_state": {
+        "bytes_seen": 1290,
+        "records_ingested": 2,
+        "byte_cap_exceeded": false,
+        "event_cap_exceeded": false,
+        "protocol_violation": null,
+        "read_error": null,
+        "eof": false
+      },
+      "stderr": {
+        "captured": true,
+        "bytes_seen": 0,
+        "bytes_retained": 0,
+        "cap_exceeded": false,
+        "eof": false,
+        "read_error": null,
+        "text_tail": ""
+      },
+      "startup_seconds": 4.639,
+      "started_successfully": true
+    }
+  ],
+  "minimum_profile_names_required": [],
+  "home_userprofile_appdata_withheld": true,
+  "path_narrowed": true,
+  "model_calls_made": 0,
+  "prompts_sent": 0
+}

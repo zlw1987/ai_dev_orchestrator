@@ -1,0 +1,7 @@
+{
+  "name": "aido-ar1-confinement",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Phase 5F3A-AR1 experiment-only Pi extension. Not published, not installed, no dependencies."
+}

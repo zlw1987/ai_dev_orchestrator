@@ -1,0 +1,93 @@
+{
+  "phase": "preflight",
+  "started_at": "2026-08-21T00:58:04Z",
+  "runtime_identity": {
+    "runtime": "pi",
+    "version": "0.84.2",
+    "launch_shape": "node_direct",
+    "node_direct_launch_works": true,
+    "node_executable_basename": "node.exe",
+    "pi_entry_basename": "cli.js"
+  },
+  "fixture": {
+    "experiment_root_recorded": false,
+    "repo_relative_files": [
+      "calc.py",
+      "test_calc.py"
+    ],
+    "head_before": "7eefa418837b70de614127ee552472ec503386b4",
+    "calc_sha256_before": "4bf28da810a7675fe8a7b016ff16ba925766c9c488d4b84756e45fb7b6a00ca3",
+    "outside_canary_present": false
+  },
+  "baseline_verification": {
+    "argv_tail": [
+      "-B",
+      "-m",
+      "pytest",
+      "-q",
+      "-p",
+      "no:cacheprovider",
+      "-rf",
+      "test_calc.py"
+    ],
+    "executable_recorded": false,
+    "started": true,
+    "completed": true,
+    "timed_out": false,
+    "output_limit_exceeded": false,
+    "return_code": 1,
+    "passed": false,
+    "output_complete": true,
+    "orchestrator_direct_child_killed": false,
+    "failed_node_ids": [
+      "test_calc.py::test_equal_to_limit_is_within"
+    ],
+    "counts": {
+      "failed": 1,
+      "passed": 2
+    },
+    "output_tail": ".F.                                                                      [100%]\r\n================================== FAILURES ===================================\r\n________________________ test_equal_to_limit_is_within ________________________\r\n\r\n    def test_equal_to_limit_is_within():\r\n>       assert within_limit(10, 10) is True\r\nE       assert False is True\r\nE        +  where False = within_limit(10, 10)\r\n\r\ntest_calc.py:9: AssertionError\r\n=========================== short test summary info ===========================\r\nFAILED test_calc.py::test_equal_to_limit_is_within - assert False is True\r\n1 failed, 2 passed in 0.16s\r\n",
+    "claim_scope": "This is a controlled invocation of repository-controlled code, not sandboxed execution. Descendants are not tracked and may still be running.",
+    "matches_seeded_defect": true,
+    "assessment": "baseline shows exactly the seeded equality failure"
+  },
+  "baseline_observation": {
+    "head": "7eefa418837b70de614127ee552472ec503386b4",
+    "status_records": [],
+    "tracked_index_paths": [
+      "calc.py",
+      "test_calc.py"
+    ],
+    "local_config_key_names": [
+      "core.bare",
+      "core.filemode",
+      "core.ignorecase",
+      "core.logallrefupdates",
+      "core.repositoryformatversion",
+      "core.symlinks"
+    ],
+    "scoped_config_key_counts": {
+      "local": 6
+    },
+    "scoped_unsupported_config_key_names": {
+      "local": []
+    }
+  },
+  "baseline_classification": {
+    "workspace_class": "no_change_observed",
+    "trusted": false,
+    "reasons": [
+      "no tracked modification was observed"
+    ],
+    "changed_tracked_paths": [],
+    "untracked_paths": [],
+    "staged_paths": [],
+    "head_moved": false,
+    "newly_unsupported_config_keys": [],
+    "local_scope_unsupported_config_keys": [],
+    "baseline_host_unsupported_config_keys": {
+      "local": []
+    }
+  },
+  "baseline_is_clean": true
+}

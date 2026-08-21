@@ -1,0 +1,92 @@
+{
+  "phase": "probe-env",
+  "question": "AR0 U-2/U-3/U-4: can HOME/USERPROFILE/APPDATA be withheld, and does a narrowed PATH work?",
+  "attempts": [
+    {
+      "profile_names_included": [],
+      "extension_handshake_passed": true,
+      "model_handshake_passed": true,
+      "handshake_extension": {
+        "command": "get_commands",
+        "wait_outcome": "runtime_response_received",
+        "response_success": true,
+        "sentinel_command_name": "aido_confinement_active",
+        "sentinel_present_from_extension_source": true,
+        "sentinel_extension_path_matched_expected": true,
+        "sentinel_source_kind": "cli",
+        "extension_command_count": 2,
+        "other_extension_command_names": [
+          "llama"
+        ],
+        "non_extension_command_count": 0,
+        "proves": "the intended extension loaded",
+        "does_not_prove": "the exact contents of the active tool registry; Pi 0.84.2 has no RPC command that enumerates tools",
+        "passed": true
+      },
+      "handshake_model": {
+        "command": "get_state",
+        "wait_outcome": "runtime_response_received",
+        "response_success": true,
+        "expected_provider": "aido-ar1-qwen36-direct-vllm",
+        "expected_model": "Qwen3.6-27B-131K",
+        "reported_provider": "aido-ar1-qwen36-direct-vllm",
+        "reported_model": "Qwen3.6-27B-131K",
+        "reported_api": "openai-completions",
+        "reported_base_url_recorded": false,
+        "runtime_native_max_tokens_reported": 16384,
+        "provider_matches": true,
+        "model_matches": true,
+        "triggered_inference": false,
+        "passed": true
+      },
+      "environment_variable_names": [
+        "AR1_ROUTE_PLACEHOLDER_KEY",
+        "ComSpec",
+        "NUMBER_OF_PROCESSORS",
+        "PATH",
+        "PATHEXT",
+        "PI_CODING_AGENT_DIR",
+        "PI_OFFLINE",
+        "PI_SKIP_VERSION_CHECK",
+        "PI_TELEMETRY",
+        "PROCESSOR_ARCHITECTURE",
+        "SystemDrive",
+        "SystemRoot",
+        "TEMP",
+        "TMP",
+        "windir"
+      ],
+      "withheld_audit": {
+        "sensitive_process_env_names_detected_count": 9,
+        "sensitive_names_forwarded_to_runtime": [],
+        "sensitive_names_forwarded_count": 0,
+        "note": "Names only. No environment value was read, recorded, or printed. The single route variable carries a fixed non-secret placeholder, never a credential."
+      },
+      "stdout_state": {
+        "bytes_seen": 1290,
+        "records_ingested": 2,
+        "byte_cap_exceeded": false,
+        "event_cap_exceeded": false,
+        "protocol_violation": null,
+        "read_error": null,
+        "eof": false
+      },
+      "stderr": {
+        "captured": true,
+        "bytes_seen": 0,
+        "bytes_retained": 0,
+        "cap_exceeded": false,
+        "eof": false,
+        "read_error": null,
+        "text_tail": ""
+      },
+      "startup_seconds": 3.179,
+      "started_successfully": true
+    }
+  ],
+  "minimum_profile_names_required": [],
+  "home_userprofile_appdata_withheld": true,
+  "path_narrowed": true,
+  "model_calls_made": 0,
+  "prompts_sent": 0
+}
