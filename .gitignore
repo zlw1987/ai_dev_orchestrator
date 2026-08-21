@@ -13,7 +13,7 @@ __pycache__/
 .claude/
 # Orchestrator run artifacts
 .ai_runs/
-
+experiment_config.json
 # Build artifacts
 *.egg-info/
 build/

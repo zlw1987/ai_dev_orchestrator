@@ -1,6 +1,0 @@
-{
-  "provider_id": "aido-ar1-qwen36-direct-vllm",
-  "model_id": "Qwen3.6-27B-131K",
-  "base_url_env_name": "AIDO_VLLM_BASE_URL",
-  "python_executable": "C:\\dev\\ai_dev_orchestrator\\.venv\\Scripts\\python.exe"
-}
