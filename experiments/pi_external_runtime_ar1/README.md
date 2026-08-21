@@ -69,7 +69,7 @@ was touched in any sense", or "the Node/Pi process lacked host permissions".
 experiments/pi_external_runtime_ar1/
   README.md
   run_ar1.py                     harness entry point (NOT a CLI command)
-  experiment_config.example.json  template; the real file ships ABSENT
+  experiment_config.example.json  template; see the note below on the real file
   ar1/
     ascii_json.py      ASCII-safe emission for Windows legacy consoles
     fixture.py         the disposable synthetic Git repository + seeded bug
@@ -95,8 +95,21 @@ experiments/pi_external_runtime_ar1/
 
 Nothing runs by accident, and there is no production gate:
 
-1. an explicitly-named config file, `experiment_config.json`, which **ships
-   absent** — an absent file is a refusal;
+1. an explicitly-named config file, `experiment_config.json` — an absent file is
+   a refusal.
+
+   > **Repository-state correction (recorded by 5F3A-AR2D; status updated by
+   > 5F3A-AR2D-FU1).** The intent was that this operator-local file ship
+   > **absent**. It was in fact committed in `331174d`, and a separate operator
+   > action untracked it in `30d54b7`. It carried no credential and no endpoint
+   > value — only a provider id, a model id, an environment variable *name*, and
+   > a local interpreter path — so nothing secret was published; but an
+   > operator-local runtime config is exactly the class the evidence-retention
+   > policy says not to commit. The remaining step is the operator's to perform
+   > deliberately: add the file to an experiment-local `.gitignore`, leaving
+   > `experiment_config.example.json` as the only committed template. Neither
+   > AR2D nor AR2D-FU1 performs a git operation.
+
 2. two explicit flags for the live phase:
    `--run-pi-external-runtime-experiment` and `--send-one-real-model-prompt`.
 
@@ -116,9 +129,17 @@ python experiments/pi_external_runtime_ar1/run_ar1.py --phase live --run-pi-exte
 
 ## Live-run gate
 
-The one real prompt is authorized only if every one of these holds:
+The one real prompt is authorized only if every one of these holds.
 
-- every offline test is green;
+**One of them is an operator/execution prerequisite rather than a mechanically
+attested condition, and the distinction matters:** `phase_live()` does not
+execute the pytest suite and does not attest it. "The offline suite is green"
+was required by the execution procedure and was satisfied by the operator before
+the run; it is **not** one of the gate booleans recorded in `live_run_gate`.
+Every other item below *is* evaluated inside `phase_live()`.
+
+- **(operator/execution prerequisite, not attested by `phase_live()`)** every
+  offline test is green;
 - `pi --version` resolves to exactly `0.84.2`, via the pinned Node-direct launch;
 - **H1, the extension identity handshake** (`get_commands`) proves, together:
   a command named `aido_confinement_active` exists; its reported `source` is

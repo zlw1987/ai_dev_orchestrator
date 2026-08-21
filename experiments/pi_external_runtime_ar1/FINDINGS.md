@@ -56,7 +56,7 @@ independently, and authoritative verification passed.
 | Turn outcome | `runtime_settled` in 9.5 s |
 | Termination rung | `exited_after_stdin_close`, exit status 0 |
 | Protocol violations | 0 (269 records, 81,878 bytes, all strict JSONL) |
-| Tools the model called | `aido_read` x2, `aido_edit` x1 — nothing else exists |
+| Tools the model called | `aido_read` x2, `aido_edit` x1, and **no other tool call was observed**. Stated exactly (5F3A-AR2D): the *configured* registry allowlist was `aido_read,aido_edit`; the *observed* live tool calls were those three; and the extension identity was independently handshaken. Pi 0.84.2 has no RPC command that enumerates tools, so this is **not** an RPC-registry query proving the active runtime registry contained only those two entries. |
 | Non-allowlisted access attempts | 0 during the live run |
 | AIDO-observed class | `clean_expected` — exactly ` M calc.py`, HEAD unchanged, index clean |
 | Verification | 3 passed, exit 0 |
