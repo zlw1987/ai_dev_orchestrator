@@ -1,0 +1,16 @@
+diff --git a/src/dedupe/ordered.py b/src/dedupe/ordered.py
+index 0f63107..b85cdcd 100644
+--- a/src/dedupe/ordered.py
++++ b/src/dedupe/ordered.py
+@@ -7,10 +7,4 @@ def dedupe_preserve_order(values):
+     The caller-provided ordering of first occurrences MUST be preserved; this
+     is not a sorting function.
+     """
+-    seen = set()
+-    result = []
+-    for v in values:
+-        if v not in seen:
+-            seen.add(v)
+-            result.append(v)
+-    return result
++    return sorted(set(values))

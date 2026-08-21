@@ -1,0 +1,26 @@
+=== REAL REVIEWER MODEL CALL â€” a real network call is about to be made ===
+Provider:      litellm
+Endpoint host: 127.0.0.1:18080
+Transport:     HTTP â€” NOT TLS-ENCRYPTED. Source-derived code will be sent UNENCRYPTED over this network path. Being internal, colleague-hosted, or on a particular network does NOT make it private.
+Model:         nemotron-3-super
+Structured output: none
+Project:       b300_v2_case_c
+Repo:          local/aido_rs1_rt1_sandbox
+Issue:         #3
+SOURCE-DERIVED CODE WILL BE TRANSMITTED to the model above:
+  - the ONE human-approved unified diff for the one approved file;
+  - selected approved-plan prose (summary, scope, non-goals, proposed steps, risks, open questions);
+  - the redacted output of the verification run that just passed.
+NOT transmitted: the full target file, any unrelated repository source, any directory listing, repository tree or git history, the workspace absolute path, the verification or git executable path, the approval text, the raw input artifact, any environment value, the GitHub token, the endpoint base URL, or the API key.
+Redaction was applied to project-controlled text before transmission. It is a best-effort backstop, NOT a guarantee that the material is secret-free.
+AIDO will issue at most TWO semantic requests to this same model, exactly one HTTP/model request each, each waited on to AIDO's own monotonic deadline. A stalled request is terminal and gets no retry. No fallback reviewer model exists. This bounds AIDO's request issuance and wait â€” NOT the request's own lifetime, and NOT backend inference time.
+The reviewer's verdict is advisory: no fixer, re-review of a completed verdict, patch, file edit, branch, commit, push, or PR follows it.
+==========================================================================
+=== REAL REVIEWER MODEL CALL COMPLETED ===
+Provider:      litellm
+Endpoint host: 127.0.0.1:18080
+Transport:     HTTP â€” NOT TLS-ENCRYPTED
+Model:         nemotron-3-super
+Verdict:       changes_requested
+Requests:      1 of at most 2 semantic requests AIDO may issue (one HTTP/model request each)
+The verdict is advisory and ends here: a human decides what happens next. No fixer, re-review of this verdict, patch, file edit, branch, commit, push, or PR followed it.

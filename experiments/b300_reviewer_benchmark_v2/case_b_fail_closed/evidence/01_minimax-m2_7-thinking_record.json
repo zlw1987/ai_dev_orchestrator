@@ -1,0 +1,13 @@
+{
+  "case": "case_b_fail_closed",
+  "model": "minimax-m2.7-thinking",
+  "execution_ordinal": 1,
+  "provider": "litellm",
+  "exit_code": 1,
+  "wall_clock_seconds": 8.057,
+  "stdout_path": "case_b_fail_closed\\evidence\\01_minimax-m2_7-thinking_stdout.json",
+  "stderr_path": "case_b_fail_closed\\evidence\\01_minimax-m2_7-thinking_stderr.txt",
+  "sandbox_unchanged_after_run": true,
+  "post_run_head": "ad5431356dcee626bf1c90fcbc43b7cf282e5ef6",
+  "post_run_dirty_path_count": 1
+}

@@ -1,0 +1,33 @@
+=== REAL REVIEWER MODEL CALL â€” a real network call is about to be made ===
+Provider:      litellm
+Endpoint host: 127.0.0.1:18080
+Transport:     HTTP â€” NOT TLS-ENCRYPTED. Source-derived code will be sent UNENCRYPTED over this network path. Being internal, colleague-hosted, or on a particular network does NOT make it private.
+Model:         minimax-m2.7-thinking
+Structured output: none
+Project:       b300_v2_case_d
+Repo:          local/aido_rs1_rt1_sandbox
+Issue:         #4
+SOURCE-DERIVED CODE WILL BE TRANSMITTED to the model above:
+  - the ONE human-approved unified diff for the one approved file;
+  - selected approved-plan prose (summary, scope, non-goals, proposed steps, risks, open questions);
+  - the redacted output of the verification run that just passed.
+NOT transmitted: the full target file, any unrelated repository source, any directory listing, repository tree or git history, the workspace absolute path, the verification or git executable path, the approval text, the raw input artifact, any environment value, the GitHub token, the endpoint base URL, or the API key.
+Redaction was applied to project-controlled text before transmission. It is a best-effort backstop, NOT a guarantee that the material is secret-free.
+AIDO will issue at most TWO semantic requests to this same model, exactly one HTTP/model request each, each waited on to AIDO's own monotonic deadline. A stalled request is terminal and gets no retry. No fallback reviewer model exists. This bounds AIDO's request issuance and wait â€” NOT the request's own lifetime, and NOT backend inference time.
+The reviewer's verdict is advisory: no fixer, re-review of a completed verdict, patch, file edit, branch, commit, push, or PR follows it.
+==========================================================================
+=== REVIEWER UNAVAILABLE FOR THIS REVIEW ===
+Model:            minimax-m2.7-thinking
+Attempts used:    1 of at most 2 semantic requests AIDO may issue (one HTTP/model request each)
+Final category:   reviewer_response_error â€” the endpoint returned an error status or a malformed body
+No fallback reviewer model was contacted, no further semantic request was made, and no transport retry was performed.
+A HUMAN DECISION IS REQUIRED. Nothing was fixed, patched, reverted, committed, or pushed by AIDO's review stage.
+==========================================================================
+=== REAL REVIEWER MODEL CALL FAILED (verification had already passed) ===
+Error: ReviewerAttemptExhaustedError: reviewer unavailable â€” the bounded supervised attempt budget produced no valid review. reviewer unavailable for this review: final classification 'reviewer_response_error' (the endpoint returned an error status or a malformed body) after 1 of at most 2 supervised semantic attempts, each exactly one HTTP/model request. No further semantic request, no transport retry, and no fallback reviewer model were attempted; a human decision is required.
+The raw model response is not echoed, and no API key, base URL, prompt, or approved diff appears in this message.
+AIDO's review stage: repaired nothing, restored nothing, wrote no file into the target workspace, performed no Git mutation, and created no branch, commit, push or PR.
+AIDO issued at most two semantic requests to the same configured model, exactly one HTTP/model request each (reviewer transport retries are forced to zero), with no request after a timeout, no third request, no fallback reviewer model, and no parser repair or merging of a rejected reply. That bounds AIDO's request issuance and wait, not backend inference time.
+The workspace state that IS established comes from the verification that had already passed: the approved target's exact bytes, a HEAD object id equal to the one the run started from, and a Git-visible dirty state of exactly that one unstaged path.
+Beyond that boundary nothing is claimed. The verification child was NOT sandboxed, and effects outside Phase 5F2D's documented detection boundary â€” Git-ignored files, anything outside this repository, network activity, remote operations such as a push, additional refs that leave HEAD and the worktree unchanged, and descendants still running â€” are not observed by AIDO.
+Correct the reviewer configuration and run this command again.

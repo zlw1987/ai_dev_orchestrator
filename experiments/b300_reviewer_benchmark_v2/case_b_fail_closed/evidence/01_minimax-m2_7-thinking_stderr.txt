@@ -1,0 +1,69 @@
+=== REAL REVIEWER MODEL CALL — a real network call is about to be made ===
+Provider:      litellm
+Endpoint host: 127.0.0.1:18080
+Transport:     HTTP — NOT TLS-ENCRYPTED. Source-derived code will be sent UNENCRYPTED over this network path. Being internal, colleague-hosted, or on a particular network does NOT make it private.
+Model:         minimax-m2.7-thinking
+Structured output: none
+Project:       b300_v2_case_b
+Repo:          local/aido_rs1_rt1_sandbox
+Issue:         #2
+SOURCE-DERIVED CODE WILL BE TRANSMITTED to the model above:
+  - the ONE human-approved unified diff for the one approved file;
+  - selected approved-plan prose (summary, scope, non-goals, proposed steps, risks, open questions);
+  - the redacted output of the verification run that just passed.
+NOT transmitted: the full target file, any unrelated repository source, any directory listing, repository tree or git history, the workspace absolute path, the verification or git executable path, the approval text, the raw input artifact, any environment value, the GitHub token, the endpoint base URL, or the API key.
+Redaction was applied to project-controlled text before transmission. It is a best-effort backstop, NOT a guarantee that the material is secret-free.
+AIDO will issue at most TWO semantic requests to this same model, exactly one HTTP/model request each, each waited on to AIDO's own monotonic deadline. A stalled request is terminal and gets no retry. No fallback reviewer model exists. This bounds AIDO's request issuance and wait — NOT the request's own lifetime, and NOT backend inference time.
+The reviewer's verdict is advisory: no fixer, re-review of a completed verdict, patch, file edit, branch, commit, push, or PR follows it.
+==========================================================================
+=== REAL REVIEWER MODEL CALL COMPLETED ===
+Provider:      litellm
+Endpoint host: 127.0.0.1:18080
+Transport:     HTTP — NOT TLS-ENCRYPTED
+Model:         minimax-m2.7-thinking
+Verdict:       changes_requested
+Requests:      1 of at most 2 semantic requests AIDO may issue (one HTTP/model request each)
+The verdict is advisory and ends here: a human decides what happens next. No fixer, re-review of this verdict, patch, file edit, branch, commit, push, or PR followed it.
++--------------------- Traceback (most recent call last) ---------------------+
+| C:\dev\ai_dev_orchestrator\src\ai_dev_orchestrator\cli.py:4693 in           |
+| l2_review_approved_file_edit                                                |
+|                                                                             |
+|   4690     retry after findings, no patch generation, no file edit, no      |
+|        revert or                                                            |
+|   4691     restore, no branch, no commit, no push, and no PR. The human     |
+|        decides.                                                             |
+|   4692     """                                                              |
+| > 4693     _run_l2_review_approved_file_edit(                               |
+|   4694         project_config=project_config,                               |
+|   4695         approved_diff_proposal=approved_diff_proposal,               |
+|   4696         verify_approved_file_edit_flag=verify_approved_file_edit_fla |
+|        g,                                                                   |
+|                                                                             |
+| C:\dev\ai_dev_orchestrator\src\ai_dev_orchestrator\cli.py:4549 in           |
+| _run_l2_review_approved_file_edit                                           |
+|                                                                             |
+|   4546         "commit, push, or PR followed it.",                          |
+|   4547         err=True,                                                    |
+|   4548     )                                                                |
+| > 4549     typer.echo(packet.model_dump_json(indent=2))                     |
+|   4550                                                                      |
+|   4551                                                                      |
+|   4552 @app.command("l2-review-approved-file-edit")                         |
+|                                                                             |
+| C:\dev\ai_dev_orchestrator\.venv\Lib\site-packages\typer\_click\utils.py:26 |
+| 8 in echo                                                                   |
+|                                                                             |
+| C:\Users\LEVIN-Z\AppData\Local\Python\pythoncore-3.14-64\Lib\encodings\cp12 |
+| 52.py:19 in encode                                                          |
+|                                                                             |
+|    16                                                                       |
+|    17 class IncrementalEncoder(codecs.IncrementalEncoder):                  |
+|    18     def encode(self, input, final=False):                             |
+| >  19         return                                                        |
+|       codecs.charmap_encode(input,self.errors,encoding_table)[0]            |
+|    20                                                                       |
+|    21 class IncrementalDecoder(codecs.IncrementalDecoder):                  |
+|    22     def decode(self, input, final=False):                             |
++-----------------------------------------------------------------------------+
+UnicodeEncodeError: 'charmap' codec can't encode character '\u2192' in position
+19125: character maps to <undefined>

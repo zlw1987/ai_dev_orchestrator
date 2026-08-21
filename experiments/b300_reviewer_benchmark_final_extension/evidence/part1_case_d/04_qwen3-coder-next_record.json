@@ -1,0 +1,18 @@
+{
+  "part": 1,
+  "case": "case_d_clean_control",
+  "model": "qwen3-coder-next",
+  "provider": "litellm",
+  "prior_recovery_observation": "reviewer_response_error; exit_code=4 (guardrail false-positive on benign strip() diff)",
+  "exit_code": 0,
+  "wall_clock_seconds": 2.191,
+  "reviewer_response_error_reappeared": false,
+  "strict_parser_accepted_reply": true,
+  "verdict": "approve",
+  "attempts_line": null,
+  "expected_verdict": "approve",
+  "semantic_false_positive": false,
+  "sandbox_unchanged_after_run": true,
+  "stdout_path": "evidence\\part1_case_d\\04_qwen3-coder-next_stdout.json",
+  "stderr_path": "evidence\\part1_case_d\\04_qwen3-coder-next_stderr.txt"
+}

@@ -1,0 +1,103 @@
+{
+  "schema_version": "approved-diff-proposal.v2",
+  "mode": "file-edit-approval-only",
+  "approval": {
+    "approved_by": "MIS_USER1@amax.com",
+    "approved_at": "2026-08-19T17:35:00+00:00",
+    "approval_text": "I approve this diff proposal for workspace file editing",
+    "source": "manual"
+  },
+  "diff_proposal": {
+    "schema_version": "diff-proposal.v2",
+    "mode": "proposal-only",
+    "provenance": {
+      "engine": "deterministic",
+      "operation": "diff-proposal",
+      "real_call": false,
+      "model": null,
+      "generated_at": null,
+      "project_id": "b300_v2_case_d",
+      "repo": "local/aido_rs1_rt1_sandbox",
+      "issue_number": 4,
+      "title": "RT1 synthetic clean negative control (V2 benchmark fixture)"
+    },
+    "approved_plan": {
+      "approval": {
+        "approved_by": "MIS_USER1@amax.com",
+        "approved_at": "2026-08-19T17:30:00+00:00",
+        "approval_text": "I approve this L1 plan for L2 implementation",
+        "source": "manual"
+      },
+      "plan_provenance": {
+        "engine": "deterministic",
+        "operation": "l1-plan",
+        "real_call": false,
+        "model": null,
+        "endpoint_host": null,
+        "generated_at": "2026-08-19T17:00:00+00:00",
+        "project_id": "b300_v2_case_d",
+        "repo": "local/aido_rs1_rt1_sandbox",
+        "issue_number": 4,
+        "title": "RT1 synthetic clean negative control (V2 benchmark fixture)"
+      },
+      "plan": {
+        "issue_number": 4,
+        "repo": "local/aido_rs1_rt1_sandbox",
+        "title": "RT1 synthetic clean negative control (V2 benchmark fixture)",
+        "summary": "Simplify the boolean expression in is_nonempty_name() without changing its behavior for any input.",
+        "scope_summary": "Only src/text/name_check.py.",
+        "non_goals": [
+          "No change to is_nonempty_name()'s observable behavior."
+        ],
+        "proposed_steps": [
+          "Replace the explicit length comparison with an equivalent boolean coercion of the stripped string."
+        ],
+        "files_likely_to_change": [
+          "src/text/name_check.py"
+        ],
+        "files_forbidden_or_out_of_scope": [],
+        "required_verification": [
+          "Run the name-check unit tests for is_nonempty_name(), including normal non-empty text, an empty string, and a whitespace-only string."
+        ],
+        "risks": [
+          "None expected: bool(value.strip()) and len(value.strip()) > 0 are equivalent for all str inputs."
+        ],
+        "open_questions": [],
+        "automation_level": "L1",
+        "requires_human_approval": true
+      },
+      "project_id": "b300_v2_case_d",
+      "repo": "local/aido_rs1_rt1_sandbox",
+      "issue_number": 4
+    },
+    "patch_proposal": null,
+    "changes": [
+      {
+        "path": "src/text/name_check.py",
+        "change_type": "modify",
+        "unified_diff": "--- a/src/text/name_check.py\n+++ b/src/text/name_check.py\n@@ -3,4 +3,4 @@\n \n def is_nonempty_name(value: str) -> bool:\n     \"\"\"True iff value contains at least one non-whitespace character.\"\"\"\n-    return len(value.strip()) > 0\n+    return bool(value.strip())",
+        "pre_image_sha256": "2f875a133e07ede5fddc5b5f25c4fe6b6ac18cf88272b51477b7a06647826849",
+        "post_image_sha256": "38acebaec202d18ab62866de07e95741c424a9a8339332d558b3b246cbd8259a",
+        "rationale": "Behavior-preserving cleanup: bool(value.strip()) is equivalent to len(value.strip()) > 0 for all str inputs, and is simpler to read.",
+        "risks": [],
+        "requires_human_review": true
+      }
+    ],
+    "omitted_paths": [],
+    "assumptions": [],
+    "risks": [],
+    "open_questions": [],
+    "source_contents_read": true,
+    "diffs_generated": true,
+    "files_edited": false,
+    "commands_run": false,
+    "applies_cleanly_checked": false,
+    "requires_human_review": true,
+    "next_authorization_required": "A writer must be authorized separately."
+  },
+  "project_id": "b300_v2_case_d",
+  "repo": "local/aido_rs1_rt1_sandbox",
+  "issue_number": 4,
+  "title": "RT1 synthetic clean negative control (V2 benchmark fixture)",
+  "next_authorization_required": "Reviewer integration remains unauthorized."
+}

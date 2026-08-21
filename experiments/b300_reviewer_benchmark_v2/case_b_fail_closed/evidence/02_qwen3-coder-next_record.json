@@ -1,0 +1,13 @@
+{
+  "case": "case_b_fail_closed",
+  "model": "qwen3-coder-next",
+  "execution_ordinal": 2,
+  "provider": "litellm",
+  "exit_code": 0,
+  "wall_clock_seconds": 2.989,
+  "stdout_path": "case_b_fail_closed\\evidence\\02_qwen3-coder-next_stdout.json",
+  "stderr_path": "case_b_fail_closed\\evidence\\02_qwen3-coder-next_stderr.txt",
+  "sandbox_unchanged_after_run": true,
+  "post_run_head": "ad5431356dcee626bf1c90fcbc43b7cf282e5ef6",
+  "post_run_dirty_path_count": 1
+}

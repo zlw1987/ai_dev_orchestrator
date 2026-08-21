@@ -1,0 +1,88 @@
+# EXPERIMENT-ONLY project config for the B300 reviewer benchmark V2.
+# NOT production config. Do not commit. Targets the synthetic sandbox at
+# C:/dev/aido_rs1_rt1_sandbox, never a real project workspace.
+project_id: b300_v2_case_a
+display_name: B300 V2 case_a_boundary (minimax-m2.7)
+
+repo:
+  workspace_path: "C:/dev/aido_rs1_rt1_sandbox"
+  github_repo: "local/aido_rs1_rt1_sandbox"
+  default_base_branch: "master"
+  branch_prefix: "ai/bench"
+
+workspace_policy:
+  deny_outside_workspace: true
+  allow_symlinks: false
+  max_changed_files: 20
+
+allowed_paths:
+  - "src/**"
+
+protected_paths: []
+
+forbidden_paths:
+  - ".git"
+  - ".git/**"
+
+providers:
+  litellm_local:
+    type: openai_compatible
+    base_url_env: AIDO_LITELLM_BASE_URL
+    api_key_env: AIDO_LITELLM_API_KEY
+    timeout_seconds: 600
+
+external_integrations:
+  openai_api:
+    enabled: false
+  anthropic_api:
+    enabled: false
+  github_copilot_review:
+    enabled: false
+  codex_review:
+    enabled: false
+
+real_model_planning:
+  enabled: false
+  allowed_models: []
+  allow_prompt_audit_files: false
+
+read_only_workspace_inspection:
+  enabled: false
+  max_inspected_files: 20
+  allow_protected_paths: false
+
+read_only_workspace_content:
+  enabled: false
+  max_files: 10
+  max_file_bytes: 50000
+  max_total_bytes: 200000
+  allow_protected_paths: false
+
+workspace_write:
+  enabled: false
+  max_file_bytes: 200000
+
+controlled_verification:
+  enabled: true
+  executable: "C:/dev/ai_dev_orchestrator/.venv/Scripts/python.exe"
+  args:
+    - "-B"
+    - "C:/dev/ai_dev_orchestrator/experiments/b300_reviewer_benchmark_v2/case_a_boundary/scripts/verify_case_a.py"
+    - "src"
+  timeout_seconds: 120
+  max_output_bytes: 200000
+
+controlled_review:
+  enabled: true
+  provider: "litellm"
+  model: "minimax-m2.7"
+  attempt_timeout_seconds: 90
+  compact_retry_on_unusable_output: false
+  vllm_allow_insecure_http: false
+  vllm_structured_output: false
+
+run_limits:
+  max_model_calls_per_issue: 20
+  max_review_loops: 3
+  max_ci_fix_loops: 2
+  max_total_runtime_minutes: 60

@@ -1,0 +1,35 @@
+{
+  "note": "Constructed by hand from evidence files already on disk under experiments/b300_reviewer_benchmark_v2/evidence/ (original), experiments/b300_reviewer_benchmark_v2_recovery/b300_recovery/ (recovery), and experiments/b300_reviewer_benchmark_v2_recovery/qwen36_extension/ (extension). A valid original observation is never replaced by a later run; a recovery observation is used ONLY where the original slot was infrastructure-invalid.",
+  "candidates": {
+    "nemotron-3-super": {
+      "case_a_boundary": {"source": "original_v2", "verdict": "changes_requested", "severity": "blocker", "gap_recognized": true},
+      "case_b_fail_closed": {"source": "original_v2", "verdict": "changes_requested", "severity": "blocker", "gap_recognized": true},
+      "case_c_order_preservation": {"source": "original_v2", "verdict": "changes_requested", "severity": "blocker", "gap_recognized": true},
+      "case_d_clean_control": {"source": "recovery", "outcome": "reviewer_response_error", "usable": false, "note": "recovery attempt reproduced the identical endpoint failure; still no usable Case D observation for this candidate"}
+    },
+    "minimax-m2.7-thinking": {
+      "case_a_boundary": {"source": "original_v2", "verdict": "changes_requested", "severity": "blocker", "gap_recognized": true},
+      "case_b_fail_closed": {"source": "recovery", "verdict": "changes_requested", "severity": "blocker", "gap_recognized": true, "note": "original observation was a completed+parsed changes_requested review lost to a stdout-serialization crash; recovery captured the full packet"},
+      "case_c_order_preservation": {"source": "original_v2", "verdict": "changes_requested", "severity": "blocker", "gap_recognized": true},
+      "case_d_clean_control": {"source": "recovery", "outcome": "reviewer_response_error", "usable": false}
+    },
+    "minimax-m2.7": {
+      "case_a_boundary": {"source": "original_v2", "verdict": "changes_requested", "severity": "blocker", "gap_recognized": true},
+      "case_b_fail_closed": {"source": "recovery", "verdict": "changes_requested", "severity": "blocker", "gap_recognized": true, "note": "original observation was a completed+parsed changes_requested review lost to a stdout-serialization crash; recovery captured the full packet"},
+      "case_c_order_preservation": {"source": "original_v2", "verdict": "changes_requested", "severity": "blocker", "gap_recognized": true},
+      "case_d_clean_control": {"source": "recovery", "outcome": "reviewer_response_error", "usable": false}
+    },
+    "qwen3-coder-next": {
+      "case_a_boundary": {"source": "original_v2", "verdict": "changes_requested", "severity": "blocker", "gap_recognized": true},
+      "case_b_fail_closed": {"source": "original_v2", "verdict": "approve", "false_negative": true, "note": "DO NOT RERUN per instructions; original valid observation, kept exactly as-is"},
+      "case_c_order_preservation": {"source": "original_v2", "verdict": "changes_requested", "severity": "blocker", "gap_recognized": true},
+      "case_d_clean_control": {"source": "recovery", "outcome": "reviewer_response_error", "usable": false}
+    },
+    "Qwen3.6-27B-131K (direct-vLLM, structured)": {
+      "case_a_boundary": {"source": "qwen36_extension", "verdict": "changes_requested", "severity": "blocker", "gap_recognized": true},
+      "case_b_fail_closed": {"source": "qwen36_extension", "verdict": "changes_requested", "severity": "blocker", "category": "security", "gap_recognized": true},
+      "case_c_order_preservation": {"source": "qwen36_extension", "verdict": "changes_requested", "severity": "blocker", "gap_recognized": true},
+      "case_d_clean_control": {"source": "qwen36_extension", "verdict": "approve", "findings": 0, "false_positive": false}
+    }
+  }
+}

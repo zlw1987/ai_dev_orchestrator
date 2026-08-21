@@ -1,0 +1,11 @@
+=== REAL MODEL SMOKE TEST — a real network call is about to be made ===
+Endpoint host: 127.0.0.1:18080
+Model:         gpt-oss-20b
+Project:       b300_final_gpt_oss_20b_smoke
+No issue text is sent: the prompt is a fixed connectivity check.
+No files, workspaces, or GitHub data are read or written.
+No plan is generated. The API key is never printed.
+=======================================================================
+=== REAL MODEL SMOKE TEST COMPLETED ===
+Endpoint host: 127.0.0.1:18080
+Model:         gpt-oss-20b

@@ -1,0 +1,10 @@
+diff --git a/src/text/name_check.py b/src/text/name_check.py
+index 90a0690..5f7add9 100644
+--- a/src/text/name_check.py
++++ b/src/text/name_check.py
+@@ -3,4 +3,4 @@
+ 
+ def is_nonempty_name(value: str) -> bool:
+     """True iff value contains at least one non-whitespace character."""
+-    return len(value.strip()) > 0
++    return bool(value.strip())

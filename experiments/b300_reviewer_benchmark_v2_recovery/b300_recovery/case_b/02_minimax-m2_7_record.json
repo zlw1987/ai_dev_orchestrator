@@ -1,0 +1,15 @@
+{
+  "recovery": true,
+  "case": "case_b_fail_closed",
+  "model": "minimax-m2.7",
+  "provider": "litellm",
+  "original_v2_observation": "reviewer call completed; strict parser accepted; verdict=changes_requested; CLI then crashed serializing the packet to stdout under a cp1252 console (UnicodeEncodeError on U+2192); packet lost, exit_code=1",
+  "recovery_reason": "infrastructure/output-serialization failure invalidated the original observation",
+  "exit_code": 0,
+  "wall_clock_seconds": 8.814,
+  "stdout_ascii_safe": true,
+  "stdout_contains_unicode_escape": true,
+  "sandbox_unchanged_after_run": true,
+  "stdout_path": "b300_recovery\\case_b\\02_minimax-m2_7_stdout.json",
+  "stderr_path": "b300_recovery\\case_b\\02_minimax-m2_7_stderr.txt"
+}

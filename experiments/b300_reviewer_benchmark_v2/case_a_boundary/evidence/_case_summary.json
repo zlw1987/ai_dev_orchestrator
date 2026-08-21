@@ -1,0 +1,63 @@
+{
+  "case": "case_a_boundary",
+  "execution_order": [
+    "nemotron-3-super",
+    "minimax-m2.7-thinking",
+    "qwen3-coder-next",
+    "minimax-m2.7"
+  ],
+  "results": [
+    {
+      "case": "case_a_boundary",
+      "model": "nemotron-3-super",
+      "execution_ordinal": 1,
+      "provider": "litellm",
+      "exit_code": 0,
+      "wall_clock_seconds": 21.752,
+      "stdout_path": "case_a_boundary\\evidence\\01_nemotron-3-super_stdout.json",
+      "stderr_path": "case_a_boundary\\evidence\\01_nemotron-3-super_stderr.txt",
+      "sandbox_unchanged_after_run": true,
+      "post_run_head": "f33b2337042c34e22df9090b79400224e70c1581",
+      "post_run_dirty_path_count": 1
+    },
+    {
+      "case": "case_a_boundary",
+      "model": "minimax-m2.7-thinking",
+      "execution_ordinal": 2,
+      "provider": "litellm",
+      "exit_code": 0,
+      "wall_clock_seconds": 10.252,
+      "stdout_path": "case_a_boundary\\evidence\\02_minimax-m2_7-thinking_stdout.json",
+      "stderr_path": "case_a_boundary\\evidence\\02_minimax-m2_7-thinking_stderr.txt",
+      "sandbox_unchanged_after_run": true,
+      "post_run_head": "f33b2337042c34e22df9090b79400224e70c1581",
+      "post_run_dirty_path_count": 1
+    },
+    {
+      "case": "case_a_boundary",
+      "model": "qwen3-coder-next",
+      "execution_ordinal": 3,
+      "provider": "litellm",
+      "exit_code": 0,
+      "wall_clock_seconds": 3.163,
+      "stdout_path": "case_a_boundary\\evidence\\03_qwen3-coder-next_stdout.json",
+      "stderr_path": "case_a_boundary\\evidence\\03_qwen3-coder-next_stderr.txt",
+      "sandbox_unchanged_after_run": true,
+      "post_run_head": "f33b2337042c34e22df9090b79400224e70c1581",
+      "post_run_dirty_path_count": 1
+    },
+    {
+      "case": "case_a_boundary",
+      "model": "minimax-m2.7",
+      "execution_ordinal": 4,
+      "provider": "litellm",
+      "exit_code": 0,
+      "wall_clock_seconds": 9.919,
+      "stdout_path": "case_a_boundary\\evidence\\04_minimax-m2_7_stdout.json",
+      "stderr_path": "case_a_boundary\\evidence\\04_minimax-m2_7_stderr.txt",
+      "sandbox_unchanged_after_run": true,
+      "post_run_head": "f33b2337042c34e22df9090b79400224e70c1581",
+      "post_run_dirty_path_count": 1
+    }
+  ]
+}

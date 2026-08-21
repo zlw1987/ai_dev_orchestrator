@@ -1,0 +1,15 @@
+{
+  "recovery": true,
+  "case": "case_d_clean_control",
+  "model": "qwen3-coder-next",
+  "provider": "litellm",
+  "original_v2_observation": "reviewer_response_error (endpoint returned an error status or a malformed body); 0 usable semantic review captured; exit_code=4",
+  "recovery_reason": "infrastructure/output-serialization failure invalidated the original observation",
+  "exit_code": 4,
+  "wall_clock_seconds": 1.803,
+  "stdout_ascii_safe": null,
+  "stdout_contains_unicode_escape": null,
+  "sandbox_unchanged_after_run": true,
+  "stdout_path": "b300_recovery\\case_d\\04_qwen3-coder-next_stdout.json",
+  "stderr_path": "b300_recovery\\case_d\\04_qwen3-coder-next_stderr.txt"
+}

@@ -1,0 +1,6 @@
+{
+  "label": "pre-qwen36-baseline",
+  "head": "7b017a7cfb2d4ec2569db9c1e92ecdb9677a3111",
+  "status_short": "M src/quota/limits.py",
+  "dirty_path_count": 1
+}

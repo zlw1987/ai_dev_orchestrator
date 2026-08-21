@@ -1,0 +1,7 @@
+{
+  "label": "pre-reviewer-baseline",
+  "head": "616a494cb12e3e0cb78cc55bc2a04a17a49665b0",
+  "status_short": "M src/dedupe/ordered.py",
+  "dirty_path_count": 1,
+  "diff_sha256_len": 507
+}

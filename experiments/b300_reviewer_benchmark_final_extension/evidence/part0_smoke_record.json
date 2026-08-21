@@ -1,0 +1,9 @@
+{
+  "part": 0,
+  "purpose": "gpt-oss-20b connectivity precheck (not a benchmark score)",
+  "exit_code": 0,
+  "wall_clock_seconds": 1.972,
+  "usable_result": true,
+  "stdout_path": "evidence/part0_smoke_stdout.json",
+  "stderr_path": "evidence/part0_smoke_stderr.txt"
+}

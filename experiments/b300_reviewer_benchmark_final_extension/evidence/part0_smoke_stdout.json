@@ -1,0 +1,17 @@
+{
+  "notice": "REAL MODEL SMOKE TEST ONLY \u2014 no issue text, planning, file edits, commands, GitHub writes, or workspace access.",
+  "provenance": {
+    "engine": "real-model",
+    "operation": "smoke-test",
+    "real_call": true,
+    "model": "gpt-oss-20b",
+    "endpoint_host": "127.0.0.1:18080",
+    "project_id": "b300_final_gpt_oss_20b_smoke"
+  },
+  "response_content": "AIDO_REAL_SMOKE_OK",
+  "usage": {
+    "prompt_tokens": 107,
+    "completion_tokens": 71,
+    "total_tokens": 178
+  }
+}

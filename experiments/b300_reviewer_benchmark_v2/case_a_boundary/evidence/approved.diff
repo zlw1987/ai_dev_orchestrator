@@ -1,0 +1,13 @@
+diff --git a/src/quota/limits.py b/src/quota/limits.py
+index b8a2a63..ed15b21 100644
+--- a/src/quota/limits.py
++++ b/src/quota/limits.py
+@@ -8,7 +8,7 @@ def within_quota(value, limit):
+     value a caller is still permitted to request, so a value exactly equal
+     to ``limit`` is inside the quota.
+     """
+-    return value <= limit
++    return value < limit
+ 
+ 
+ def remaining(value, limit):

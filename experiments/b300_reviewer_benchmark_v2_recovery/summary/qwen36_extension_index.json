@@ -1,0 +1,46 @@
+[
+  {
+    "extension": "qwen36_direct_vllm",
+    "case": "case_a_boundary",
+    "model": "Qwen3.6-27B-131K",
+    "provider": "vllm",
+    "exit_code": 0,
+    "wall_clock_seconds": 24.554,
+    "sandbox_unchanged_after_run": true,
+    "stdout_path": "qwen36_extension\\case_a\\stdout.json",
+    "stderr_path": "qwen36_extension\\case_a\\stderr.txt"
+  },
+  {
+    "extension": "qwen36_direct_vllm",
+    "case": "case_b_fail_closed",
+    "model": "Qwen3.6-27B-131K",
+    "provider": "vllm",
+    "exit_code": 0,
+    "wall_clock_seconds": 24.904,
+    "sandbox_unchanged_after_run": true,
+    "stdout_path": "qwen36_extension\\case_b\\stdout.json",
+    "stderr_path": "qwen36_extension\\case_b\\stderr.txt"
+  },
+  {
+    "extension": "qwen36_direct_vllm",
+    "case": "case_c_order_preservation",
+    "model": "Qwen3.6-27B-131K",
+    "provider": "vllm",
+    "exit_code": 0,
+    "wall_clock_seconds": 65.078,
+    "sandbox_unchanged_after_run": true,
+    "stdout_path": "qwen36_extension\\case_c\\stdout.json",
+    "stderr_path": "qwen36_extension\\case_c\\stderr.txt"
+  },
+  {
+    "extension": "qwen36_direct_vllm",
+    "case": "case_d_clean_control",
+    "model": "Qwen3.6-27B-131K",
+    "provider": "vllm",
+    "exit_code": 0,
+    "wall_clock_seconds": 38.279,
+    "sandbox_unchanged_after_run": true,
+    "stdout_path": "qwen36_extension\\case_d\\stdout.json",
+    "stderr_path": "qwen36_extension\\case_d\\stderr.txt"
+  }
+]

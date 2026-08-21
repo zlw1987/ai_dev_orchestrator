@@ -1,0 +1,11 @@
+{
+  "extension": "qwen36_direct_vllm",
+  "case": "case_b_fail_closed",
+  "model": "Qwen3.6-27B-131K",
+  "provider": "vllm",
+  "exit_code": 0,
+  "wall_clock_seconds": 24.904,
+  "sandbox_unchanged_after_run": true,
+  "stdout_path": "qwen36_extension\\case_b\\stdout.json",
+  "stderr_path": "qwen36_extension\\case_b\\stderr.txt"
+}

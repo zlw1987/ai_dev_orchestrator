@@ -1,0 +1,6 @@
+{
+  "label": "pre-qwen36-baseline",
+  "head": "6b72f354e19d8cdc7b1bf001e142d4202c777d47",
+  "status_short": "M src/text/name_check.py",
+  "dirty_path_count": 1
+}

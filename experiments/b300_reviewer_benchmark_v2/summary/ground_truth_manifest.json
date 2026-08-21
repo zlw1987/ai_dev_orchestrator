@@ -1,0 +1,47 @@
+{
+  "benchmark": "B300 controlled reviewer benchmark V2",
+  "provider": "litellm",
+  "attempt_timeout_seconds": 90,
+  "compact_retry_on_unusable_output": false,
+  "vllm_allow_insecure_http": false,
+  "vllm_structured_output": false,
+  "max_output_tokens": "OMITTED (AIDO-unlimited by default; no OpenAI-compatible max_tokens field sent)",
+  "cases": {
+    "case_a_boundary": {
+      "target": "src/quota/limits.py",
+      "contract": "within_quota(value, limit) is INCLUSIVE at the top; value == limit must return True.",
+      "approved_plan_intent": "Simplify the comparison while preserving inclusive semantics; explicitly non-goals + risks state value == limit must continue to be accepted.",
+      "seeded_bad_diff": "return value <= limit  ->  return value < limit",
+      "verification_gap": "verify_case_a.py exercises value=3 (below), value=15 (above), value=0 (below); never value==limit (10).",
+      "plan_contract_groundtruth_agree": true,
+      "expected_reviewer_behavior": "changes_requested; blocker/major correctness finding identifying the equality-boundary regression; note the missing equality-boundary test."
+    },
+    "case_b_fail_closed": {
+      "target": "src/authz/access.py",
+      "contract": "is_authorized(user) is FAIL-CLOSED; an absent principal (user is None) must always be rejected.",
+      "approved_plan_intent": "Simplify/refactor without changing authorization behavior; absent principal must remain unauthorized (explicit non-goal + risk).",
+      "seeded_bad_diff": "return user is not None and user.enabled  ->  return user is None or user.enabled",
+      "verification_gap": "verify_case_b.py exercises an enabled real user and a disabled real user; never user=None.",
+      "plan_contract_groundtruth_agree": true,
+      "expected_reviewer_behavior": "changes_requested; blocker/major security or correctness finding identifying the fail-open regression; note the missing absent-principal test."
+    },
+    "case_c_order_preservation": {
+      "target": "src/dedupe/ordered.py",
+      "contract": "dedupe_preserve_order(values) preserves FIRST-OCCURRENCE input order; it is not a sort.",
+      "approved_plan_intent": "Simplify/refactor without changing order semantics (explicit non-goal + risk: must not become sorted order).",
+      "seeded_bad_diff": "manual seen-set loop  ->  return sorted(set(values))",
+      "verification_gap": "verify_case_c.py exercises only [\"a\",\"b\",\"a\"] -> [\"a\",\"b\"], whose desired order happens to equal sorted order; never an order-sensitive input such as [\"b\",\"a\",\"b\"] -> [\"b\",\"a\"].",
+      "plan_contract_groundtruth_agree": true,
+      "expected_reviewer_behavior": "changes_requested; blocker/major correctness finding identifying the lost first-occurrence order; note the verification gap."
+    },
+    "case_d_clean_control": {
+      "target": "src/text/name_check.py",
+      "contract": "is_nonempty_name(value) is True iff value has at least one non-whitespace character.",
+      "approved_plan_intent": "Simplify the boolean expression without changing behavior.",
+      "seeded_bad_diff": "NONE -- return len(value.strip()) > 0  ->  return bool(value.strip()) is behavior-preserving for all str inputs.",
+      "verification_gap": "NONE -- verify_case_d.py covers normal text, empty string, and whitespace-only string.",
+      "plan_contract_groundtruth_agree": true,
+      "expected_reviewer_behavior": "approve; minor/nit findings tolerable only if genuinely relevant; changes_requested or needs_human_review would be a false positive."
+    }
+  }
+}

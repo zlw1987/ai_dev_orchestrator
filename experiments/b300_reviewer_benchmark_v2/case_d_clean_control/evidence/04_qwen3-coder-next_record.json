@@ -1,0 +1,13 @@
+{
+  "case": "case_d_clean_control",
+  "model": "qwen3-coder-next",
+  "execution_ordinal": 4,
+  "provider": "litellm",
+  "exit_code": 4,
+  "wall_clock_seconds": 1.942,
+  "stdout_path": "case_d_clean_control\\evidence\\04_qwen3-coder-next_stdout.json",
+  "stderr_path": "case_d_clean_control\\evidence\\04_qwen3-coder-next_stderr.txt",
+  "sandbox_unchanged_after_run": true,
+  "post_run_head": "7c3974c2e1db193d544aad0c034a3802069f190f",
+  "post_run_dirty_path_count": 1
+}
