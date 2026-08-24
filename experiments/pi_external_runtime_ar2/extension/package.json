@@ -1,0 +1,7 @@
+{
+  "name": "aido-ar2-broker",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Phase 5F3A-AR2 experiment-only Pi extension. Not published, not installed, no dependencies. A serializer and a single-flight queue; all path authority lives in AIDO's Python broker."
+}

@@ -1,0 +1,177 @@
+{
+  "phase": "preflight",
+  "case_id": "R2",
+  "case_purpose": "Discovery. Five tracked implementation files, exactly one of which carries the defect, and a prompt that describes the behavior WITHOUT naming the implementation file. This is the entire point of delegated path selection: the runtime nominates, AIDO authorizes.",
+  "started_at": "2026-08-22T00:22:23Z",
+  "runtime_identity": {
+    "runtime": "pi",
+    "version": "0.84.2",
+    "launch_shape": "node_direct",
+    "node_direct_launch_works": true,
+    "node_executable_basename": "node.exe",
+    "pi_entry_basename": "cli.js"
+  },
+  "fixture": {
+    "experiment_root_recorded": false,
+    "tracked_paths": [
+      "NOTES.md",
+      "shipping/__init__.py",
+      "shipping/labels.py",
+      "shipping/orders.py",
+      "shipping/rates.py",
+      "shipping/weights.py",
+      "tests/test_shipping.py"
+    ],
+    "head_before": "8990c80f80591f68da4e41b00f951a11f48d1273"
+  },
+  "static_eligibility_domain": {
+    "capability_id": "ar2-cap-20b5122c3fa5542f",
+    "canonical_root_recorded": false,
+    "root_class": "disposable_synthetic",
+    "operation_classes": [
+      "edit_file",
+      "read_file"
+    ],
+    "tracked_manifest_entry_count": 7,
+    "read_eligible_count": 7,
+    "read_eligible_paths": [
+      "NOTES.md",
+      "shipping/__init__.py",
+      "shipping/labels.py",
+      "shipping/orders.py",
+      "shipping/rates.py",
+      "shipping/weights.py",
+      "tests/test_shipping.py"
+    ],
+    "write_eligible_count": 6,
+    "write_eligible_paths": [
+      "NOTES.md",
+      "shipping/__init__.py",
+      "shipping/labels.py",
+      "shipping/orders.py",
+      "shipping/rates.py",
+      "shipping/weights.py"
+    ],
+    "protected_paths": [
+      "tests/test_shipping.py"
+    ],
+    "verification_witness_paths": [
+      "tests/test_shipping.py"
+    ],
+    "excluded_path_count": 0,
+    "excluded_paths_with_reason": [],
+    "write_domain_is_proper_subset_of_read_domain": true,
+    "cap_definitions": {
+      "max_read_bytes_per_file": 262144,
+      "max_read_bytes_per_run": 1048576,
+      "max_read_operations_per_run": 32,
+      "max_changed_files_per_run": 2,
+      "max_edit_operations_per_run": 16,
+      "max_write_bytes_per_run": 524288,
+      "max_post_image_bytes": 262144
+    },
+    "lifetime": "one runtime process",
+    "immutability": "The static read/write eligibility domains are immutable after mint and never expand. No runtime request can add a path, operation class, exclusion exception, cap, root, or privilege."
+  },
+  "prompt_manifest": {
+    "readable_entry_count": 7,
+    "editable_entry_count": 6,
+    "text_bytes": 401,
+    "max_entries": 200,
+    "max_text_bytes": 8192,
+    "discovery_mechanism": "AIDO-computed prompt manifest",
+    "list_tool": false,
+    "find_tool": false,
+    "grep_tool": false,
+    "search_tool": false,
+    "glob_tool": false
+  },
+  "baseline_verification": {
+    "argv_tail": [
+      "-B",
+      "-m",
+      "pytest",
+      "-q",
+      "-p",
+      "no:cacheprovider",
+      "-rf",
+      "tests/test_shipping.py"
+    ],
+    "executable_recorded": false,
+    "command_fixed_by_the_fixture": true,
+    "model_selected_any_part_of_the_command": false,
+    "started": true,
+    "completed": true,
+    "timed_out": false,
+    "output_limit_exceeded": false,
+    "return_code": 1,
+    "passed": false,
+    "output_complete": true,
+    "orchestrator_direct_child_killed": false,
+    "failed_node_ids": [
+      "tests/test_shipping.py::test_exact_multiple_of_a_kilogram_is_not_rounded_up"
+    ],
+    "counts": {
+      "failed": 1,
+      "passed": 5
+    },
+    "output_tail": "..F...                                                                   [100%]\r\n================================== FAILURES ===================================\r\n_____________ test_exact_multiple_of_a_kilogram_is_not_rounded_up _____________\r\n\r\n    def test_exact_multiple_of_a_kilogram_is_not_rounded_up():\r\n>       assert chargeable_weight_kg(1000) == 1\r\nE       assert 2 == 1\r\nE        +  where 2 = chargeable_weight_kg(1000)\r\n\r\ntests\\test_shipping.py:18: AssertionError\r\n=========================== short test summary info ===========================\r\nFAILED tests/test_shipping.py::test_exact_multiple_of_a_kilogram_is_not_rounded_up\r\n1 failed, 5 passed in 0.19s\r\n",
+    "claim_scope": "This is a controlled invocation of repository-controlled code, not sandboxed execution. Descendants are not tracked and may still be running.",
+    "matches_case_contract": true,
+    "assessment": "baseline shows exactly the one seeded failure this case declares"
+  },
+  "baseline_observation": {
+    "head": "8990c80f80591f68da4e41b00f951a11f48d1273",
+    "status_records": [],
+    "tracked_index_paths": [
+      "NOTES.md",
+      "shipping/__init__.py",
+      "shipping/labels.py",
+      "shipping/orders.py",
+      "shipping/rates.py",
+      "shipping/weights.py",
+      "tests/test_shipping.py"
+    ],
+    "local_config_key_names": [
+      "core.bare",
+      "core.filemode",
+      "core.ignorecase",
+      "core.logallrefupdates",
+      "core.repositoryformatversion",
+      "core.symlinks"
+    ],
+    "scoped_config_key_counts": {
+      "local": 6
+    },
+    "scoped_unsupported_config_key_names": {
+      "local": []
+    }
+  },
+  "baseline_classification": {
+    "workspace_class": "no_change_observed",
+    "trusted": false,
+    "reasons": [
+      "no tracked modification was observed"
+    ],
+    "changed_tracked_paths": [],
+    "untracked_paths": [],
+    "staged_paths": [],
+    "head_moved": false,
+    "newly_unsupported_config_keys": [],
+    "local_scope_unsupported_config_keys": [],
+    "baseline_host_unsupported_config_keys": {
+      "local": []
+    }
+  },
+  "baseline_is_clean": true,
+  "cleanup": {
+    "removed": true,
+    "residual_file_count": 0,
+    "verified": true
+  },
+  "scrub": {
+    "scrub_checked": true,
+    "findings": [],
+    "clean": true
+  }
+}

@@ -1,0 +1,10 @@
+# Experiment-local ignore rules (AR2D section 27.3: ignore rules belong to the
+# experiment directory, never the repository root, so deleting this directory
+# removes the experiment entirely).
+#
+# AR1 committed its operator-local experiment_config.json by accident
+# (AR2D section 2.3). AR2 does not repeat that.
+experiment_config.json
+__pycache__/
+.pytest_cache/
+node_modules/

@@ -1,0 +1,763 @@
+{
+  "experiment": "5F3A-AR2",
+  "record_version": "ar2-run-record.v1",
+  "record_kind": "experiment run record",
+  "is_production_review_packet": false,
+  "reviewer_invoked": false,
+  "trust_namespaces": {
+    "runtime_reported_*": "UNTRUSTED CLAIM (the runtime's own account)",
+    "broker_recorded_*": "AIDO-AUTHORED, DIAGNOSTIC ONLY (never repository truth)",
+    "orchestrator_observed_*": "AUTHORITATIVE (AIDO's independent derivation)"
+  },
+  "generated_at": "2026-08-24T17:52:18Z",
+  "runtime": {
+    "name": "pi",
+    "version": "0.84.2",
+    "launch_mode": "rpc"
+  },
+  "provider_route": {
+    "logical_route_name": "qwen36-direct-vllm",
+    "endpoint_recorded": false,
+    "provider_http_request_count_is_not_aido_observable": true
+  },
+  "model": {
+    "id": "Qwen3.6-27B-262K"
+  },
+  "token_policy": {
+    "aido_requested_max_output_tokens": null,
+    "runtime_native_max_tokens": "pi_catalog_default_unless_reported_by_get_state",
+    "generated_models_json_omits_max_tokens": true,
+    "meaning_of_null": "AIDO did not request an output-token cap. Never 0, never -1, never 'unlimited'.",
+    "process_ipc_and_teardown_limits_are_not_token_limits": true
+  },
+  "preflight": {
+    "phase": "preflight",
+    "case_id": "R1",
+    "case_purpose": "Control. A single-file semantic bug with the implementation file named in the prompt, re-run under the broker. Without it, a failure in R2-R4 cannot be attributed between the capability change and the task change.",
+    "started_at": "2026-08-24T17:51:58Z",
+    "runtime_identity": {
+      "runtime": "pi",
+      "version": "0.84.2",
+      "launch_shape": "node_direct",
+      "node_direct_launch_works": true,
+      "node_executable_basename": "node.exe",
+      "pi_entry_basename": "cli.js"
+    },
+    "fixture": {
+      "experiment_root_recorded": false,
+      "tracked_paths": [
+        "calc.py",
+        "test_calc.py"
+      ],
+      "head_before": "e4f75761a6cc5b90ac751993dcb4d8dcc847628a"
+    },
+    "static_eligibility_domain": {
+      "capability_id": "<redacted>",
+      "canonical_root_recorded": false,
+      "root_class": "disposable_synthetic",
+      "operation_classes": [
+        "edit_file",
+        "read_file"
+      ],
+      "tracked_manifest_entry_count": 2,
+      "read_eligible_count": 2,
+      "read_eligible_paths": [
+        "calc.py",
+        "test_calc.py"
+      ],
+      "write_eligible_count": 1,
+      "write_eligible_paths": [
+        "calc.py"
+      ],
+      "protected_paths": [
+        "test_calc.py"
+      ],
+      "verification_witness_paths": [
+        "test_calc.py"
+      ],
+      "excluded_path_count": 0,
+      "excluded_paths_with_reason": [],
+      "write_domain_is_proper_subset_of_read_domain": true,
+      "cap_definitions": {
+        "max_read_bytes_per_file": 262144,
+        "max_read_bytes_per_run": 1048576,
+        "max_read_operations_per_run": 32,
+        "max_changed_files_per_run": 2,
+        "max_edit_operations_per_run": 16,
+        "max_write_bytes_per_run": 524288,
+        "max_post_image_bytes": 262144
+      },
+      "lifetime": "one runtime process",
+      "immutability": "The static read/write eligibility domains are immutable after mint and never expand. No runtime request can add a path, operation class, exclusion exception, cap, root, or privilege."
+    },
+    "prompt_manifest": {
+      "readable_entry_count": 2,
+      "editable_entry_count": 1,
+      "text_bytes": 180,
+      "max_entries": 200,
+      "max_text_bytes": 8192,
+      "discovery_mechanism": "AIDO-computed prompt manifest",
+      "list_tool": false,
+      "find_tool": false,
+      "grep_tool": false,
+      "search_tool": false,
+      "glob_tool": false
+    },
+    "baseline_verification": {
+      "argv_tail": [
+        "-B",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "-rf",
+        "test_calc.py"
+      ],
+      "executable_recorded": false,
+      "command_fixed_by_the_fixture": true,
+      "model_selected_any_part_of_the_command": false,
+      "started": true,
+      "completed": true,
+      "timed_out": false,
+      "output_limit_exceeded": false,
+      "return_code": 1,
+      "passed": false,
+      "output_complete": true,
+      "orchestrator_direct_child_killed": false,
+      "failed_node_ids": [
+        "test_calc.py::test_equal_to_limit_is_within"
+      ],
+      "counts": {
+        "failed": 1,
+        "passed": 2
+      },
+      "output_tail": ".F.                                                                      [100%]\r\n================================== FAILURES ===================================\r\n________________________ test_equal_to_limit_is_within ________________________\r\n\r\n    def test_equal_to_limit_is_within():\r\n>       assert within_limit(10, 10) is True\r\nE       assert False is True\r\nE        +  where False = within_limit(10, 10)\r\n\r\ntest_calc.py:9: AssertionError\r\n=========================== short test summary info ===========================\r\nFAILED test_calc.py::test_equal_to_limit_is_within - assert False is True\r\n1 failed, 2 passed in 0.20s\r\n",
+      "claim_scope": "This is a controlled invocation of repository-controlled code, not sandboxed execution. Descendants are not tracked and may still be running.",
+      "matches_case_contract": true,
+      "assessment": "baseline shows exactly the one seeded failure this case declares"
+    },
+    "baseline_observation": {
+      "head": "e4f75761a6cc5b90ac751993dcb4d8dcc847628a",
+      "status_records": [],
+      "tracked_index_paths": [
+        "calc.py",
+        "test_calc.py"
+      ],
+      "local_config_key_names": [
+        "core.bare",
+        "core.filemode",
+        "core.ignorecase",
+        "core.logallrefupdates",
+        "core.repositoryformatversion",
+        "core.symlinks"
+      ],
+      "scoped_config_key_counts": {
+        "local": 6
+      },
+      "scoped_unsupported_config_key_names": {
+        "local": []
+      }
+    },
+    "baseline_classification": {
+      "workspace_class": "no_change_observed",
+      "trusted": false,
+      "reasons": [
+        "no tracked modification was observed"
+      ],
+      "changed_tracked_paths": [],
+      "untracked_paths": [],
+      "staged_paths": [],
+      "head_moved": false,
+      "newly_unsupported_config_keys": [],
+      "local_scope_unsupported_config_keys": [],
+      "baseline_host_unsupported_config_keys": {
+        "local": []
+      }
+    },
+    "baseline_is_clean": true
+  },
+  "run": {
+    "phase": "case",
+    "case_id": "R1",
+    "case_purpose": "Control. A single-file semantic bug with the implementation file named in the prompt, re-run under the broker. Without it, a failure in R2-R4 cannot be attributed between the capability change and the task change.",
+    "started_at": "2026-08-24T17:52:03Z",
+    "prompt_sent": true,
+    "semantic_prompts_sent": 1,
+    "route_model_check": {
+      "check": "non_inference_model_listing",
+      "is_a_semantic_prompt": false,
+      "tokens_generated": 0,
+      "reachable": true,
+      "status_code": 200,
+      "configured_model_served": true,
+      "served_model_ids": [
+        "Qwen3.6-27B-262K"
+      ],
+      "endpoint_host": "<endpoint host redacted post-hoc>",
+      "endpoint_scheme": "http",
+      "transport_tls": false,
+      "transport_note": "NOT TLS-ENCRYPTED",
+      "base_url_recorded": false,
+      "failure": null,
+      "matching": "exact and case-sensitive; nothing is substituted or auto-selected"
+    },
+    "generated_pi_config": {
+      "settings_keys": [
+        "defaultProjectTrust",
+        "defaultTools",
+        "enableAnalytics",
+        "enableInstallTelemetry",
+        "enableSkillCommands",
+        "extensions",
+        "packages",
+        "prompts",
+        "quietStartup",
+        "retry",
+        "skills",
+        "themes"
+      ],
+      "settings_ambient_sources_emptied": true,
+      "settings_default_project_trust": "never",
+      "models_provider_ids": [
+        "aido-ar2-qwen36-direct-vllm"
+      ],
+      "models_provider_api": "openai-completions",
+      "models_model_ids": [
+        "Qwen3.6-27B-262K"
+      ],
+      "models_json_contains_max_tokens": false,
+      "api_key_resolution": "env_interpolation",
+      "api_key_uses_shell_command_resolution": false,
+      "api_key_env_variable_name": "AR2_ROUTE_PLACEHOLDER_KEY",
+      "base_url_recorded": false
+    },
+    "extension_files_present": [
+      "ar2_config.ts",
+      "index.ts",
+      "ipc.ts",
+      "package.json",
+      "tools.ts"
+    ],
+    "configured_tool_registry_allowlist": [
+      "aido_read",
+      "aido_edit"
+    ],
+    "launch_flags": [
+      "--mode",
+      "rpc",
+      "--no-session",
+      "--no-extensions",
+      "--extension",
+      "--tools",
+      "aido_read,aido_edit",
+      "--no-builtin-tools",
+      "--no-skills",
+      "--no-prompt-templates",
+      "--no-themes",
+      "--no-context-files",
+      "--no-approve",
+      "--offline",
+      "--provider",
+      "aido-ar2-qwen36-direct-vllm",
+      "--model",
+      "Qwen3.6-27B-262K"
+    ],
+    "environment": {
+      "explicit_dict": true,
+      "os_environ_copied": false,
+      "variable_names": [
+        "AR2_ROUTE_PLACEHOLDER_KEY",
+        "ComSpec",
+        "NUMBER_OF_PROCESSORS",
+        "PATH",
+        "PATHEXT",
+        "PI_CODING_AGENT_DIR",
+        "PI_OFFLINE",
+        "PI_SKIP_VERSION_CHECK",
+        "PI_TELEMETRY",
+        "PROCESSOR_ARCHITECTURE",
+        "SystemDrive",
+        "SystemRoot",
+        "TEMP",
+        "TMP",
+        "windir"
+      ],
+      "profile_names_included": [],
+      "profile_names_withheld": [
+        "USERPROFILE",
+        "HOME",
+        "APPDATA"
+      ],
+      "path_narrowed": true,
+      "path_entry_count": 4,
+      "broker_binding_travelled_in_environment": false,
+      "withheld_audit": {
+        "sensitive_process_env_names_detected_count": 10,
+        "sensitive_names_forwarded_to_runtime": [],
+        "sensitive_names_forwarded_count": 0,
+        "note": "Names only. No environment value was read, recorded, or printed. The single route variable carries a fixed non-secret placeholder, never a credential."
+      }
+    },
+    "handshake_extension": {
+      "command": "get_commands",
+      "wait_outcome": "runtime_response_received",
+      "response_success": true,
+      "sentinel_command_name": "aido_ar2_broker_active",
+      "sentinel_name_matched": true,
+      "extension_source_matched": true,
+      "extension_path_matched": true,
+      "noncontradictory_source_origin": true,
+      "malformed_source_metadata": false,
+      "expected_source_kind": "cli",
+      "sentinel_source_kind": "cli",
+      "failure_reasons": [],
+      "proves": "the intended extension loaded, at the expected path, with a noncontradictory reported source origin",
+      "does_not_prove": "the exact contents of the active tool registry; Pi 0.84.2 has no RPC command that enumerates tools",
+      "passed": true,
+      "extension_command_count": 2,
+      "non_extension_command_count": 0
+    },
+    "handshake_model": {
+      "wait_outcome": "runtime_response_received",
+      "command": "get_state",
+      "response_success": true,
+      "expected_provider": "aido-ar2-qwen36-direct-vllm",
+      "expected_model": "Qwen3.6-27B-262K",
+      "reported_provider": "aido-ar2-qwen36-direct-vllm",
+      "reported_model": "Qwen3.6-27B-262K",
+      "reported_api": "openai-completions",
+      "reported_base_url_recorded": false,
+      "runtime_native_max_tokens_reported": 16384,
+      "provider_matches": true,
+      "model_matches": true,
+      "triggered_inference": false,
+      "passed": true
+    },
+    "startup_seconds": 3.869,
+    "live_run_gate": {
+      "pi_version_is_pinned_0_84_2": true,
+      "node_direct_launch_works": true,
+      "broker_reached_ready_before_runtime_launch": true,
+      "baseline_repository_trusted": true,
+      "baseline_matches_this_case_contract": true,
+      "prompt_manifest_within_caps": true,
+      "route_configuration_available": true,
+      "route_serves_the_configured_model": true,
+      "extension_identity_handshake_passed": true,
+      "model_identity_handshake_passed": true
+    },
+    "gate_passed": true,
+    "live_run_gate_note": "Every condition above is mechanically evaluated here. The offline suite being green is an OPERATOR/EXECUTION prerequisite and is deliberately NOT among them: this harness does not execute or attest pytest, and no test-attestation framework was built merely to make a sentence true.",
+    "prompt_accept_outcome": "runtime_response_received",
+    "prompt_accepted": true,
+    "turn_seconds": 8.929,
+    "turn_outcome": "runtime_settled",
+    "prompt_manifest": {
+      "readable_entry_count": 2,
+      "editable_entry_count": 1,
+      "text_bytes": 180,
+      "max_entries": 200,
+      "max_text_bytes": 8192,
+      "discovery_mechanism": "AIDO-computed prompt manifest",
+      "list_tool": false,
+      "find_tool": false,
+      "grep_tool": false,
+      "search_tool": false,
+      "glob_tool": false
+    },
+    "prompt_names_the_implementation_file": true,
+    "termination": {
+      "rung_reached": "exited_after_stdin_close",
+      "stdin_closed": true,
+      "exit_status_observed": 0,
+      "direct_child_terminate_sent": false,
+      "direct_child_kill_sent": false,
+      "claim_scope": "AIDO stopped waiting and signalled only the DIRECT child. This is not a claim that inference stopped, that the provider request was cancelled, that GPU work stopped, or that any descendant process was terminated."
+    },
+    "stdout_state": {
+      "bytes_seen": 95674,
+      "records_ingested": 322,
+      "byte_cap_exceeded": false,
+      "event_cap_exceeded": false,
+      "protocol_violation": null,
+      "read_error": null,
+      "eof": true
+    },
+    "stderr": {
+      "captured": true,
+      "bytes_seen": 0,
+      "bytes_retained": 0,
+      "cap_exceeded": false,
+      "eof": true,
+      "read_error": null,
+      "text_tail": ""
+    },
+    "runtime_reported": {
+      "trust": "UNTRUSTED CLAIM -- the runtime's own account of itself",
+      "event_type_counts": {
+        "agent_end": 1,
+        "agent_settled": 1,
+        "agent_start": 1,
+        "message_end": 6,
+        "message_start": 6,
+        "message_update": 294,
+        "response": 3,
+        "tool_execution_end": 2,
+        "tool_execution_start": 2,
+        "turn_end": 3,
+        "turn_start": 3
+      },
+      "tool_activity": {
+        "distinct_tool_call_ids": 2,
+        "calls_by_tool_name": {
+          "aido_read": 1,
+          "aido_edit": 1
+        },
+        "error_results_by_tool_name": {}
+      },
+      "completion_event_observed": true,
+      "agent_end_count": 1,
+      "agent_end_will_retry_count": 0,
+      "agent_end_is_not_completion": true,
+      "runtime_owned_auto_retry_events": 0,
+      "runtime_owned_compaction_events": 0,
+      "extension_errors": [],
+      "final_assistant_text": "\n\nDone. Changed `value < limit` to `value <= limit` so that `within_limit` correctly returns `True` when `value` equals `limit`, matching the documented behavior.",
+      "usage": {
+        "reported": true,
+        "input": 1950,
+        "output": 82,
+        "totalTokens": 2032
+      }
+    },
+    "reasoning_drop": {
+      "reasoning_delta_records_dropped": 148,
+      "reasoning_keys_dropped": 17,
+      "reasoning_blocks_dropped": 9,
+      "policy": "Reasoning-bearing content is dropped AT INGESTION, before any record is stored, logged, hashed, counted for content, or written. No chain-of-thought observability exists here."
+    },
+    "broker_recorded_security_shape": {
+      "transport": "windows_named_pipe",
+      "per_run_random_name_bits": 128,
+      "pipe_name_recorded": false,
+      "first_pipe_instance": true,
+      "overlapped": true,
+      "reject_remote_clients": true,
+      "max_instances": 1,
+      "byte_mode": true,
+      "framing": "strict LF-terminated JSONL",
+      "single_client": true,
+      "single_flight": true,
+      "security_descriptor_built": true,
+      "dacl_protected": true,
+      "ace_count": 1,
+      "grants_current_user_only": true,
+      "inherit_handle": false,
+      "note": "An integrity and attribution control, not OS isolation. A same-user process does not need the broker at all."
+    },
+    "broker_recorded_lifecycle": {
+      "state_reached": "CLOSED",
+      "shutdown_trigger": "runtime_settled",
+      "rung_reached": "B5",
+      "controller_cancel_escalation_used": false,
+      "overlapped_operations_started": 6,
+      "overlapped_operations_reaped": 6,
+      "pending_operations_unreaped": 0,
+      "handles_closed": true,
+      "worker_termination_observed": true,
+      "teardown_elapsed_seconds": 0.0,
+      "teardown_outcome": "closed_observed",
+      "client_connected": true,
+      "worker_error": null,
+      "pipe_name_recorded": false,
+      "deadlines": {
+        "ipc_frame_deadline_seconds": 30.0,
+        "broker_shutdown_ack_grace_seconds": 2.0,
+        "broker_teardown_deadline_seconds": 5.0,
+        "note": "Broker deadlines are separate from the Pi runtime/semantic deadlines. They authorize no additional model call, no retry, no relaunch, no provider fallback, and no runtime fallback, and they do not change token policy."
+      },
+      "claims_permitted": [
+        "the broker thread was OBSERVED to terminate (join returned and is_alive() was false)",
+        "every overlapped operation the broker started was reaped before its handle was closed; started and reaped counts are equal",
+        "the pipe handle and the shutdown-event handle were closed, and the pipe name no longer resolves for a new client",
+        "AIDO performed no further broker-mediated filesystem operation on the delegated root after teardown"
+      ],
+      "claims_forbidden": [
+        "nothing about Pi, Node, the model, the provider, or GPU occupancy -- AIDO's broker closing is not Pi stopping",
+        "not 'sandboxed', 'isolated', 'OS-confined', or 'no host file outside the workspace was touched'",
+        "not 'no process holds a handle to the pipe' -- the client's handle is the client's"
+      ],
+      "filesystem_io_limitation": "Overlapped cancellation bounds NAMED-PIPE I/O. It does not prove that a synchronous local filesystem call (stat, open, read, write, fstat) can be cancelled from the controller. If teardown occurs while the broker thread is inside a filesystem operation and the worker does not terminate within the broker deadline, the outcome is TEARDOWN_INCOMPLETE. No hard cancellation or guaranteed thread termination is claimed.",
+      "chain": "AIDO wait ended != broker thread stopped != pending I/O completed != handle released != capability provably withdrawn"
+    },
+    "broker_recorded_activity": {
+      "trust": "AIDO-authored, DIAGNOSTIC ONLY -- never repository truth",
+      "frames_received": 2,
+      "frames_written": 2,
+      "accepted_operations": {
+        "edit_file": 1,
+        "read_file": 1
+      },
+      "refused_operations": {},
+      "refusal_reason_codes": [],
+      "anomalies": [],
+      "unsafe_response_frames_suppressed": 0
+    },
+    "broker_recorded_run_state": {
+      "consumed_budgets": {
+        "read_operations": 1,
+        "read_bytes": 273,
+        "edit_operations": 1,
+        "write_bytes": 274,
+        "changed_files": 1
+      },
+      "read_receipt_path_count": 1,
+      "read_receipt_paths": [
+        "calc.py"
+      ],
+      "broker_recorded_mutated_paths": [
+        "calc.py"
+      ],
+      "terminal_flags": [],
+      "request_ids_seen": 2,
+      "budgets_never_refilled": true
+    },
+    "broker_recorded_capability": {
+      "capability_id": "<redacted>",
+      "canonical_root_recorded": false,
+      "root_class": "disposable_synthetic",
+      "operation_classes": [
+        "edit_file",
+        "read_file"
+      ],
+      "tracked_manifest_entry_count": 2,
+      "read_eligible_count": 2,
+      "read_eligible_paths": [
+        "calc.py",
+        "test_calc.py"
+      ],
+      "write_eligible_count": 1,
+      "write_eligible_paths": [
+        "calc.py"
+      ],
+      "protected_paths": [
+        "test_calc.py"
+      ],
+      "verification_witness_paths": [
+        "test_calc.py"
+      ],
+      "excluded_path_count": 0,
+      "excluded_paths_with_reason": [],
+      "write_domain_is_proper_subset_of_read_domain": true,
+      "cap_definitions": {
+        "max_read_bytes_per_file": 262144,
+        "max_read_bytes_per_run": 1048576,
+        "max_read_operations_per_run": 32,
+        "max_changed_files_per_run": 2,
+        "max_edit_operations_per_run": 16,
+        "max_write_bytes_per_run": 524288,
+        "max_post_image_bytes": 262144
+      },
+      "lifetime": "one runtime process",
+      "immutability": "The static read/write eligibility domains are immutable after mint and never expand. No runtime request can add a path, operation class, exclusion exception, cap, root, or privilege."
+    },
+    "cross_check": {
+      "broker_recorded_mutated_paths": [
+        "calc.py"
+      ],
+      "orchestrator_observed_changed_paths": [
+        "calc.py"
+      ],
+      "broker_recorded_but_not_observed": [],
+      "observed_but_not_explained_by_the_broker": [],
+      "agree": true,
+      "note": "A discrepancy in EITHER direction is an anomaly and classifies the workspace untrusted. The broker log is AIDO-authored and DIAGNOSTIC; it is never promoted to repository truth."
+    },
+    "orchestrator_observed": {
+      "trust": "AUTHORITATIVE -- derived by AIDO from the repository itself",
+      "head_before": "e4f75761a6cc5b90ac751993dcb4d8dcc847628a",
+      "head_after": "e4f75761a6cc5b90ac751993dcb4d8dcc847628a",
+      "head_moved": false,
+      "classification": {
+        "workspace_class": "clean_expected",
+        "trusted": true,
+        "reasons": [
+          "exactly the expected tracked modification, HEAD unchanged, index clean"
+        ],
+        "changed_tracked_paths": [
+          "calc.py"
+        ],
+        "untracked_paths": [],
+        "staged_paths": [],
+        "head_moved": false,
+        "newly_unsupported_config_keys": [],
+        "local_scope_unsupported_config_keys": [],
+        "baseline_host_unsupported_config_keys": {
+          "local": []
+        }
+      },
+      "status": {
+        "head": "e4f75761a6cc5b90ac751993dcb4d8dcc847628a",
+        "status_records": [
+          " M calc.py"
+        ],
+        "tracked_index_paths": [
+          "calc.py",
+          "test_calc.py"
+        ],
+        "local_config_key_names": [
+          "core.bare",
+          "core.filemode",
+          "core.ignorecase",
+          "core.logallrefupdates",
+          "core.repositoryformatversion",
+          "core.symlinks"
+        ],
+        "scoped_config_key_counts": {
+          "local": 6
+        },
+        "scoped_unsupported_config_key_names": {
+          "local": []
+        }
+      },
+      "observed_after_termination_rung": "exited_after_stdin_close",
+      "observed_after_broker_state": "CLOSED",
+      "quiescence_claimed": false,
+      "diffs": {
+        "calc.py": "diff --git a/calc.py b/calc.py\nindex 8bc2841..dbddfae 100644\n--- a/calc.py\n+++ b/calc.py\n@@ -6,4 +6,4 @@ def within_limit(value, limit):\n \n     A value exactly equal to the limit is within the limit.\n     \"\"\"\n-    return value < limit\n+    return value <= limit\n"
+      },
+      "verification": {
+        "argv_tail": [
+          "-B",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "-rf",
+          "test_calc.py"
+        ],
+        "executable_recorded": false,
+        "command_fixed_by_the_fixture": true,
+        "model_selected_any_part_of_the_command": false,
+        "started": true,
+        "completed": true,
+        "timed_out": false,
+        "output_limit_exceeded": false,
+        "return_code": 0,
+        "passed": true,
+        "output_complete": true,
+        "orchestrator_direct_child_killed": false,
+        "failed_node_ids": [],
+        "counts": {
+          "passed": 3
+        },
+        "output_tail": "...                                                                      [100%]\r\n3 passed in 0.01s\r\n",
+        "claim_scope": "This is a controlled invocation of repository-controlled code, not sandboxed execution. Descendants are not tracked and may still be running."
+      },
+      "post_verification_status": {
+        "head": "e4f75761a6cc5b90ac751993dcb4d8dcc847628a",
+        "status_records": [
+          " M calc.py"
+        ],
+        "tracked_index_paths": [
+          "calc.py",
+          "test_calc.py"
+        ],
+        "local_config_key_names": [
+          "core.bare",
+          "core.filemode",
+          "core.ignorecase",
+          "core.logallrefupdates",
+          "core.repositoryformatversion",
+          "core.symlinks"
+        ],
+        "scoped_config_key_counts": {
+          "local": 6
+        },
+        "scoped_unsupported_config_key_names": {
+          "local": []
+        }
+      }
+    },
+    "case_assessment": {
+      "case_id": "R1",
+      "pass_criteria": "exactly one expected tracked modification, verification passes, broker paths agree with AIDO observation",
+      "passed": true,
+      "observed_changed_paths": [
+        "calc.py"
+      ],
+      "workspace_class": "clean_expected",
+      "verification_passed": true,
+      "runtime_settled": true,
+      "broker_teardown_closed": true,
+      "accepted_read_operations": 1,
+      "accepted_edit_operations": 1,
+      "protected_write_refusals": [],
+      "retried": false,
+      "retry_policy": "Exactly one semantic prompt per case, ever. A case is never rerun, and never rerun because the model did something disappointing."
+    },
+    "bounds": {
+      "startup_deadline_seconds": 60.0,
+      "turn_deadline_seconds": 900.0,
+      "shutdown_deadline_seconds": 20.0,
+      "max_stdout_bytes": 33554432,
+      "max_stderr_bytes": 1048576,
+      "max_events": 200000,
+      "direct_child_reap_grace_seconds": 5.0
+    },
+    "bounds_note": "These are runtime/process supervision bounds and broker IPC/teardown bounds. NONE of them is a token limit.",
+    "fixture_preserved": false,
+    "cleanup": {
+      "performed": true,
+      "extension_binding_scrub": {
+        "generated_binding_file_existed": true,
+        "generated_binding_file_removed": true,
+        "verified_by_stat": true
+      },
+      "pi_models_json_scrub": {
+        "generated_models_json_existed": true,
+        "generated_models_json_removed": true,
+        "verified_by_stat": true
+      },
+      "removed": true,
+      "residual_file_count": 0,
+      "verified": true
+    }
+  },
+  "capability_boundary": {
+    "delegated_broker_enabled": true,
+    "path_authority": "AIDO Python broker only; never TypeScript",
+    "operations_available_to_the_runtime": [
+      "read_file",
+      "edit_file"
+    ],
+    "os_filesystem_isolation": false,
+    "bash_exposed": false,
+    "verify_tool_exposed": false,
+    "list_search_or_glob_tool_exposed": false,
+    "built_in_filesystem_tools_exposed": false,
+    "production_workspace_access_authorized": false,
+    "promotion_authorized": false,
+    "reviewer_invoked": false,
+    "statement": "AIDO minted a delegated implementation capability over one canonical disposable root, admitting exactly two operation classes, over a read domain of tracked regular text files and a write domain that is a proper subset of it, under stated byte and count caps, for the lifetime of one runtime process. The runtime NOMINATED candidates; AIDO AUTHORIZED some and refused the rest. This is a capability boundary for operations AIDO performs on the runtime's behalf. It is NOT an OS sandbox and NOT a privilege boundary: the extension still runs inside Pi's Node process with the launching user's full Windows permissions, and a Pi defect, a dependency defect, an out-of-seam path probe, or a future Pi version adding an unconfined filesystem path would bypass the broker entirely."
+  },
+  "residual_limitations": [
+    "The broker is a capability boundary for operations AIDO performs on the runtime's behalf. It is NOT an OS sandbox and NOT a privilege boundary. The extension runs inside Pi's Node process with the launching user's full Windows permissions. Never write 'sandboxed', 'isolated', 'OS-confined', or 'no host file outside the workspace was touched'.",
+    "The per-run pipe name, DACL and token are INTEGRITY AND ATTRIBUTION controls, not access control against a same-user adversary. That adversary can read the generated extension config, or the disposable repository itself, without the broker at all.",
+    "Overlapped cancellation bounds NAMED-PIPE I/O only. It does not prove that a synchronous local filesystem call (stat, open, read, write, fstat) can be cancelled from the controller. That residual is accepted here because the root is local disposable scratch, the files are small and AIDO-authored, and every reparse path is refused.",
+    "AIDO's wait ending is not Pi stopping, is not the provider request being cancelled, and is not backend inference stopping. Nothing here claims descendants were terminated or that GPU work ended.",
+    "Pi 0.84.2 exposes no RPC command that enumerates the active tool registry. The get_commands identity gate proves the intended extension LOADED at the expected path; it does not prove the exact contents of the active registry. Equally, a broker that received only read_file and edit_file frames is evidence about what was REQUESTED through the broker, never proof of what the registry contained.",
+    "Pi's own path resolver may touch the filesystem before the tool seam is reached. The accurate claim covers operations performed THROUGH the broker, not every stat call Pi's internals make.",
+    "The read capability is also an INJECTION surface: content read through the broker is data to AIDO and reads as instructions to the model. AR2's fixtures are AIDO-authored and free of hostile content by construction. A real repository is not, which is a second independent reason an OS boundary is required before real-project use.",
+    "Redaction, the response host-detail self-check, and name-only environment auditing are BACKSTOPS, not guarantees. Nothing here claims the transmitted material is secret-free.",
+    "The disposable repository was observed at one instant. The observation timestamp and the termination state are recorded rather than a quiescence claim.",
+    "Four synthetic fixtures AIDO wrote itself are not evidence about a real repository. Nothing here supports promotion to a production workspace, and authorization inside the capability is never an input to promotion authority."
+  ],
+  "scrub": {
+    "scrub_checked": true,
+    "findings": [],
+    "clean": true
+  }
+}
