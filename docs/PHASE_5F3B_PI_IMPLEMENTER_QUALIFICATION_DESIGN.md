@@ -785,10 +785,13 @@ If a fixture or prompt defect is discovered mid-round, the affected historical
 records are **never deleted, overwritten, or silently replaced** — emitted
 artifacts are immutable (§26). Instead:
 
-- each affected task record, for **both** candidates, is marked
-  `run_validity: INVALIDATED_BY_FIXTURE_DEFECT` and `scoring_eligible: false`
-  (§17.5) — the original record stands, unmodified, as the historical account
-  of what actually happened against the defective fixture;
+- for **both** candidates, the original emitted record is left byte-for-byte
+  unmodified, and a **separate, new** invalidation evidence item is created
+  that references it and declares `run_validity: INVALIDATED_BY_FIXTURE_DEFECT`
+  and `scoring_eligible: false` (§17.3) — this is new linked evidence ABOUT the
+  original record, never an edit to the record itself, which stands unmodified
+  as the historical account of what actually happened against the defective
+  fixture;
 - the task is then re-run for **both** candidates under a corrected, re-frozen
   fixture, producing **new** records;
 - each new record is explicitly **linked** to the invalidated task revision it
@@ -801,7 +804,7 @@ artifacts are immutable (§26). Instead:
 The corrected task's hard-bar and ranking evidence (§16–§18) is drawn from the
 new, `VALID` records; the invalidated originals remain in the historical record
 for audit but are excluded from scoring by their `scoring_eligible: false`
-flag, the same mechanism §17.5 uses for infrastructure-contaminated and
+flag, the same mechanism §17.3 uses for infrastructure-contaminated and
 attribution-undetermined runs.
 
 ## 14. Runtime / Pi compatibility policy
