@@ -1,0 +1,9 @@
+# Experiment-local ignore rules (deleting this directory removes the
+# experiment entirely; nothing here belongs at the repository root).
+#
+# Scrub-checked result records under results/ ARE tracked evidence, exactly
+# like experiments/pi_external_runtime_ar2/results/ -- they are NOT ignored.
+experiment_config.json
+__pycache__/
+.pytest_cache/
+node_modules/

@@ -1,0 +1,20 @@
+{
+  "_comment": [
+    "TEMPLATE ONLY. Copy to experiment_config.json to run anything.",
+    "The real file ships ABSENT on purpose: an absent config is a refusal.",
+    "experiment_config.json is listed in this directory's .gitignore and must",
+    "NEVER be committed.",
+    "No credential and no endpoint value belongs in this file. The endpoint is",
+    "read from the named environment variable at run time and is never recorded.",
+    "The broker pipe name, capability id and token appear nowhere in config: AIDO",
+    "generates them per run and delivers them only through the generated,",
+    "disposable extension configuration.",
+    "provider_id/model_id/base_url_env_name are the SAME accepted AR2 pin",
+    "(qwen36-direct-vllm / Qwen3.6-27B-262K). run_o1.py refuses to run any",
+    "other model_id."
+  ],
+  "provider_id": "aido-ar2-qwen36-direct-vllm",
+  "model_id": "Qwen3.6-27B-262K",
+  "base_url_env_name": "AIDO_VLLM_BASE_URL",
+  "python_executable": "C:\\dev\\ai_dev_orchestrator\\.venv\\Scripts\\python.exe"
+}

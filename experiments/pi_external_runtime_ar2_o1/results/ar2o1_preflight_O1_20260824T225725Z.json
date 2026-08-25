@@ -1,0 +1,181 @@
+{
+  "phase": "preflight",
+  "case_id": "O1",
+  "case_purpose": "AR2D qualification follow-up. Can the same Pi + broker architecture complete ONE task that genuinely requires coordinated changes to TWO implementation files, under the unmodified accepted AR2 two-file changed-file cap? The implementation file paths are never named in the prompt; the model must discover both from the bounded manifest and the task description.",
+  "started_at": "2026-08-24T22:57:25Z",
+  "runtime_identity": {
+    "runtime": "pi",
+    "observed_version": "0.84.3",
+    "version_recorded_as_provenance": true,
+    "exact_version_is_authorization_gate": false,
+    "launch_shape": "node_direct",
+    "node_direct_launch_works": true,
+    "node_executable_basename": "node.exe",
+    "pi_entry_basename": "cli.js"
+  },
+  "fixture": {
+    "experiment_root_recorded": false,
+    "tracked_paths": [
+      "NOTES.md",
+      "subscription/__init__.py",
+      "subscription/labels.py",
+      "subscription/normalize.py",
+      "subscription/quote.py",
+      "subscription/rates.py",
+      "tests/test_subscription.py"
+    ],
+    "head_before": "9ccad7de6ce064addee4dfa56261ce98835de5a6"
+  },
+  "static_eligibility_domain": {
+    "capability_id": "ar2-cap-7ef83c38cae6255b",
+    "canonical_root_recorded": false,
+    "root_class": "disposable_synthetic",
+    "operation_classes": [
+      "edit_file",
+      "read_file"
+    ],
+    "tracked_manifest_entry_count": 7,
+    "read_eligible_count": 7,
+    "read_eligible_paths": [
+      "NOTES.md",
+      "subscription/__init__.py",
+      "subscription/labels.py",
+      "subscription/normalize.py",
+      "subscription/quote.py",
+      "subscription/rates.py",
+      "tests/test_subscription.py"
+    ],
+    "write_eligible_count": 6,
+    "write_eligible_paths": [
+      "NOTES.md",
+      "subscription/__init__.py",
+      "subscription/labels.py",
+      "subscription/normalize.py",
+      "subscription/quote.py",
+      "subscription/rates.py"
+    ],
+    "protected_paths": [
+      "tests/test_subscription.py"
+    ],
+    "verification_witness_paths": [
+      "tests/test_subscription.py"
+    ],
+    "excluded_path_count": 0,
+    "excluded_paths_with_reason": [],
+    "write_domain_is_proper_subset_of_read_domain": true,
+    "cap_definitions": {
+      "max_read_bytes_per_file": 262144,
+      "max_read_bytes_per_run": 1048576,
+      "max_read_operations_per_run": 32,
+      "max_changed_files_per_run": 2,
+      "max_edit_operations_per_run": 16,
+      "max_write_bytes_per_run": 524288,
+      "max_post_image_bytes": 262144
+    },
+    "lifetime": "one runtime process",
+    "immutability": "The static read/write eligibility domains are immutable after mint and never expand. No runtime request can add a path, operation class, exclusion exception, cap, root, or privilege."
+  },
+  "prompt_manifest": {
+    "readable_entry_count": 7,
+    "editable_entry_count": 6,
+    "text_bytes": 447,
+    "max_entries": 200,
+    "max_text_bytes": 8192,
+    "discovery_mechanism": "AIDO-computed prompt manifest",
+    "list_tool": false,
+    "find_tool": false,
+    "grep_tool": false,
+    "search_tool": false,
+    "glob_tool": false
+  },
+  "baseline_verification": {
+    "argv_tail": [
+      "-B",
+      "-m",
+      "pytest",
+      "-q",
+      "-p",
+      "no:cacheprovider",
+      "-rf",
+      "tests/test_subscription.py"
+    ],
+    "executable_recorded": false,
+    "command_fixed_by_the_fixture": true,
+    "model_selected_any_part_of_the_command": false,
+    "started": true,
+    "completed": true,
+    "timed_out": false,
+    "output_limit_exceeded": false,
+    "return_code": 1,
+    "passed": false,
+    "output_complete": true,
+    "orchestrator_direct_child_killed": false,
+    "failed_node_ids": [
+      "tests/test_subscription.py::test_normalize_enterprise_variants",
+      "tests/test_subscription.py::test_rate_enterprise",
+      "tests/test_subscription.py::test_quote_enterprise"
+    ],
+    "counts": {
+      "failed": 3,
+      "passed": 6
+    },
+    "output_tail": "..F..F..F                                                                [100%]\r\n================================== FAILURES ===================================\r\n_____________________ test_normalize_enterprise_variants ______________________\r\n\r\n    def test_normalize_enterprise_variants():\r\n>       assert normalize_tier(\"Enterprise\") == \"enterprise\"\r\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\r\n\r\ntests\\test_subscription.py:17: \r\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _\r\n\r\nraw = 'Enterprise'\r\n\r\n    def normalize_tier(raw):\r\n        \"\"\"Return the canonical spelling of a subscription tier name.\r\n    \r\n        Matching ignores surrounding whitespace and letter case, so \" Pro \",\r\n        \"pro\" and \"PRO\" all normalize to \"pro\". Raises ValueError for a spelling\r\n        with no known canonical tier.\r\n        \"\"\"\r\n        key = str(raw).strip().lower()\r\n        if key in _CANONICAL_TIERS:\r\n            return _CANONICAL_TIERS[key]\r\n>       raise ValueError(\"unknown subscription tier: \" + str(raw))\r\nE       ValueError: unknown subscription tier: Enterprise\r\n\r\nsubscription\\normalize.py:21: ValueError\r\n____________________________ test_rate_enterprise _____________________________\r\n\r\ntier = 'enterprise'\r\n\r\n    def rate_cents_per_seat(tier):\r\n        \"\"\"Return the per-seat monthly rate in cents for a canonical tier name.\"\"\"\r\n        try:\r\n>           return RATE_CENTS_PER_SEAT[tier]\r\n                   ^^^^^^^^^^^^^^^^^^^^^^^^^\r\nE           KeyError: 'enterprise'\r\n\r\nsubscription\\rates.py:12: KeyError\r\n\r\nDuring handling of the above exception, another exception occurred:\r\n\r\n    def test_rate_enterprise():\r\n>       assert rate_cents_per_seat(\"enterprise\") == 6000\r\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\r\n\r\ntests\\test_subscription.py:30: \r\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _\r\n\r\ntier = 'enterprise'\r\n\r\n    def rate_cents_per_seat(tier):\r\n        \"\"\"Return the per-seat monthly rate in cents for a canonical tier name.\"\"\"\r\n        try:\r\n            return RATE_CENTS_PER_SEAT[tier]\r\n        except KeyError:\r\n>           raise ValueError(\"no rate configured for tier: \" + str(tier))\r\nE           ValueError: no rate configured for tier: enterprise\r\n\r\nsubscription\\rates.py:14: ValueError\r\n____________________________ test_quote_enterprise ____________________________\r\n\r\n    def test_quote_enterprise():\r\n>       assert quote_cents(\"enterprise\", 2) == 2 * 6000\r\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\r\n\r\ntests\\test_subscription.py:42: \r\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _\r\nsubscription\\quote.py:9: in quote_cents\r\n    tier = normalize_tier(raw_tier)\r\n           ^^^^^^^^^^^^^^^^^^^^^^^^\r\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _\r\n\r\nraw = 'enterprise'\r\n\r\n    def normalize_tier(raw):\r\n        \"\"\"Return the canonical spelling of a subscription tier name.\r\n    \r\n        Matching ignores surrounding whitespace and letter case, so \" Pro \",\r\n        \"pro\" and \"PRO\" all normalize to \"pro\". Raises ValueError for a spelling\r\n        with no known canonical tier.\r\n        \"\"\"\r\n        key = str(raw).strip().lower()\r\n        if key in _CANONICAL_TIERS:\r\n            return _CANONICAL_TIERS[key]\r\n>       raise ValueError(\"unknown subscription tier: \" + str(raw))\r\nE       ValueError: unknown subscription tier: enterprise\r\n\r\nsubscription\\normalize.py:21: ValueError\r\n=========================== short test summary info ===========================\r\nFAILED tests/test_subscription.py::test_normalize_enterprise_variants - Value...\r\nFAILED tests/test_subscription.py::test_rate_enterprise - ValueError: no rate...\r\nFAILED tests/test_subscription.py::test_quote_enterprise - ValueError: unknow...\r\n3 failed, 6 passed in 0.19s\r\n",
+    "claim_scope": "This is a controlled invocation of repository-controlled code, not sandboxed execution. Descendants are not tracked and may still be running.",
+    "matches_case_contract": true,
+    "assessment": "baseline shows exactly the three expected failures: both independent missing-behavior tests and the integration test that depends on both"
+  },
+  "baseline_observation": {
+    "head": "9ccad7de6ce064addee4dfa56261ce98835de5a6",
+    "status_records": [],
+    "tracked_index_paths": [
+      "NOTES.md",
+      "subscription/__init__.py",
+      "subscription/labels.py",
+      "subscription/normalize.py",
+      "subscription/quote.py",
+      "subscription/rates.py",
+      "tests/test_subscription.py"
+    ],
+    "local_config_key_names": [
+      "core.bare",
+      "core.filemode",
+      "core.ignorecase",
+      "core.logallrefupdates",
+      "core.repositoryformatversion",
+      "core.symlinks"
+    ],
+    "scoped_config_key_counts": {
+      "local": 6
+    },
+    "scoped_unsupported_config_key_names": {
+      "local": []
+    }
+  },
+  "baseline_classification": {
+    "workspace_class": "no_change_observed",
+    "trusted": false,
+    "reasons": [
+      "no tracked modification was observed"
+    ],
+    "changed_tracked_paths": [],
+    "untracked_paths": [],
+    "staged_paths": [],
+    "head_moved": false,
+    "newly_unsupported_config_keys": [],
+    "local_scope_unsupported_config_keys": [],
+    "baseline_host_unsupported_config_keys": {
+      "local": []
+    }
+  },
+  "baseline_is_clean": true,
+  "cleanup": {
+    "removed": true,
+    "residual_file_count": 0,
+    "verified": true
+  },
+  "scrub": {
+    "scrub_checked": true,
+    "findings": [],
+    "clean": true
+  }
+}
