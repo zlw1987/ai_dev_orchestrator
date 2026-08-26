@@ -100,11 +100,65 @@ Per `docs/PHASE_5F3B_I2A_B300_PI_ROUTE_CREDENTIAL_BOUNDARY_DESIGN.md` Section
   and finalization is one-shot (a second finalization for an already-
   finalized token is refused, never silently overwriting a trusted digest).
 
+## What I2B adds (offline wiring only)
+
+**I2B CONTROLLER WIRED OFFLINE. CATEGORY-B LIVE EXECUTION NOT RUN. NO
+CANDIDATE MODEL RUN. Q1/Q2 NO-GO.**
+
+`qualification/i2b_controller.py` implements the state-machine / orchestration
+SHAPE for the future Category-B zero-prompt live gates (I2A Sec. 15) -- it
+does not run any of them. Every future live boundary (Node-direct RPC launch,
+H1, `get_commands`, `get_state`, the B300 `/models` route check, broker
+`READY`, teardown) is represented ONLY as an injected callable; every offline
+test supplies a synthetic double for each, never a real subprocess, socket,
+or model call. The controller:
+
+- consumes I2's already-accepted, frozen offline objects
+  (`ConnectionValues`, `QualificationRouteSecretContext`,
+  `GeneratedQualificationConfig`, `RouteDescriptor`, `LaunchEnvironment`) and
+  their cross-object binding (`i2_composition.verify_i2_identity_binding`)
+  UNCHANGED -- no new raw `api_key`/config-path/provider-id/model-id
+  parameter is introduced anywhere;
+- reuses `i2_credentials.resolve_connection_after_preflight` unmodified for
+  the credential-read-ordering proof: the injected connection reader is
+  never called until every non-secret gate has passed;
+- reuses `i2_route.run_offline_route_check` unmodified for the future
+  `/models` exact-model-served gate;
+- reuses `i2_cleanup.scrub_generated_qualification_config` and
+  `classify_cleanup_failure(semantic_prompts_sent=0)` unmodified for
+  generated-config teardown -- the only prompt count this controller can
+  ever supply, since Category-B never sends one;
+- attributes every possible failure to a bounded `INFRASTRUCTURE_REFUSAL`
+  with `semantic_prompts_sent == 0` -- never `AUTONOMOUS_FAIL`, never a
+  candidate classification, never a scoring result. It imports no
+  candidate-scoring machinery (`outcomes`, `hard_bar`, `ranking`, or
+  `records`'s record builder) at all;
+- always attempts teardown once a live resource creation was attempted, and
+  always attempts generated-config cleanup once the disposable config was
+  created, on every path -- a later failure or the fully-passed case alike;
+- builds a bounded, credential-free Category-B evidence shape (candidate,
+  model/provider/gateway identity, `observed_pi_version` as provenance only,
+  per-gate statuses, the fixed token-policy fields, teardown/cleanup status)
+  and scrub-checks it through the existing `safety.qualification_scrub_check`
+  with an explicit `ArtifactSafetyContext` before calling it retention-ready
+  -- it does not write anything to disk.
+
+Candidate A and Candidate B run through the identical controller function,
+differing only in the `candidate` argument. 32 new, fully offline tests
+(`tests/test_i2b_controller.py`) prove gate ordering, the credential-read
+boundary, every individual gate refusal (H1, H2, tool registry, route
+unavailable, wrong served model, broker-not-ready, protocol/extension error,
+an unexpected exception), teardown/cleanup truthful attribution, evidence
+safety, and -- by source-level regression test -- that no semantic-prompt API
+and no live/network/process primitive exists anywhere in this module.
+
 ## What is explicitly NOT here
 
 Per the design's Section 24/23 roadmaps:
 
-- Any live Pi/Node process launch, RPC broker, or compatibility handshake.
+- Any live Pi/Node process launch, RPC broker, or compatibility handshake --
+  including via `i2b_controller.py`, whose every live boundary is an
+  injected callable this package never supplies a real implementation for.
 - Any real credential value read, anywhere, at any point.
 - A live qualification executor -- nothing here can run a candidate model.
 - Any model comparison result. The Section 26 comparison table in the design
@@ -142,6 +196,7 @@ experiments/pi_implementer_qualification/
         i2_identity.py           5F3B-I2-FU3: the leaf module for CREDENTIAL_ENV_VAR_NAME/PROVIDER_ID
         i2_composition.py        5F3B-I2-FU3: config/secret/route identity binding
         i2_issuance.py           5F3B-I2-FU3A/FU3B: the leaf module for the process-local issuance registry (internal-only API)
+        i2b_controller.py        5F3B-I2B: the Category-B zero-prompt live-gate controller (offline wiring only)
     tests/
         conftest.py              sys.path wiring, git_executable fixture, thread-leak check
         test_iq1_fixture.py      IQ-1 fixture, baseline, correct-repair proof
@@ -166,6 +221,7 @@ experiments/pi_implementer_qualification/
         test_safety_repr.py      5F3B-I2-FU1: ArtifactSafetyContext repr-safety proof
         test_i2_composition.py   5F3B-I2-FU3: config/secret/route identity binding
         test_i2_issuance.py      5F3B-I2-FU3A/FU3B: process-local issuance registry contract (white-boxes internal-only API)
+        test_i2b_controller.py   5F3B-I2B: Category-B controller state-machine/gate-ordering/teardown/evidence (offline doubles only)
 ```
 
 **All qualification evidence is written by exactly one function**
@@ -321,6 +377,15 @@ for an already-finalized token is refused
 See `FINDINGS.md`'s `5F3B-I2-FU3B` section for the full closure record.
 This closes the accepted 5F3B-I2 scope; no further FU is anticipated absent
 a new independent-review finding.
+
+**5F3B-I2B (Category-B Zero-Prompt Live-Gate Controller) is offline wiring
+only.** `qualification/i2b_controller.py` implements the state-machine shape
+that will LATER execute the accepted Category-B gates -- gate ordering, the
+credential-read boundary, failure attribution, teardown/cleanup discipline,
+and evidence safety -- entirely through injected callables and synthetic
+offline doubles. **I2B CONTROLLER WIRED OFFLINE. CATEGORY-B LIVE EXECUTION
+NOT RUN. NO CANDIDATE MODEL RUN. Q1/Q2 NO-GO.** See the "What I2B adds"
+section above for the full closure record.
 
 **This is still an offline-only implementation.** No zero-prompt live gate
 (I2A Sec. 15) has run, no candidate model has run, and 5F3B-Q1/Q2 (the first

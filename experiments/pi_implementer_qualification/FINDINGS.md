@@ -1746,3 +1746,184 @@ policy all unchanged).
   in-process security sandbox.
 - Redaction/scrubbing, and every trusted-value-object check in this
   closure, remain correctness/integrity controls -- not an OS sandbox.
+
+---
+
+# 5F3B-I2B -- Category-B Zero-Prompt Live-Gate Controller (Offline Wiring Only)
+
+> **I2B CONTROLLER WIRED OFFLINE. CATEGORY-B LIVE EXECUTION NOT RUN. NO
+> CANDIDATE MODEL RUN. Q1/Q2 NO-GO.**
+
+I2-1 through I2-6 (hardened through FU1/FU2/FU3/FU3A/FU3B) built the offline
+objects a future live qualification run would need. Nothing before this slice
+assembled them into an actual orchestration SHAPE for the Category-B
+zero-prompt gates (I2A design Sec. 15) themselves. I2B is that shape --
+and only that shape. It is a NEW slice, authorized directly by its own
+implementation prompt rather than by a prior section of I2A's design
+document, because I2A's own Sec. 23 slice table stops at I2-5.
+
+## What was built
+
+One new module, `qualification/i2b_controller.py`, and one new test module,
+`tests/test_i2b_controller.py` (32 tests). No existing I1/I2 module, test, or
+public API was modified.
+
+`run_category_b_controller()` drives, in one linear, mechanically-provable
+sequence: the reused `i2_credentials` non-secret-preflight/credential-read
+boundary, `i2_route.route_descriptor_for_candidate`, `i2_secret_context.build_secret_context`,
+`i2_pi_config.write_qualification_pi_config`, `i2_composition.verify_i2_identity_binding`,
+`i2_environment.build_child_environment`, then seven INJECTED future-live
+callables (`launch_rpc`, `h1_check`, `get_commands`, `get_state`, a
+`route_checker` fed through the reused, unmodified `i2_route.run_offline_route_check`,
+`broker_ready`, `teardown`), with two purely-computed content checks (H2
+provider/model identity, and exact tool-registry membership against the
+fixed `AUTHORIZED_TOOL_NAMES = {"aido_read", "aido_edit"}`) interleaved
+between them. Every injected callable is a required, no-default parameter;
+every offline test supplies a synthetic double.
+
+## Offline suite result
+
+```text
+546 passed, 0 failed
+python -m pytest experiments/pi_implementer_qualification/tests -q
+```
+
+(514 before this slice: I1 plus I2 through FU3B. I2B adds 32 new, fully
+offline tests in one new file; no existing test was modified, weakened, or
+removed.) No network call, socket, model call, Pi/Node process, or
+credential lookup occurred anywhere in the run.
+
+The frozen `experiments/pi_external_runtime_ar2/tests` suite was also re-run,
+unmodified, since I2B structurally reuses `i2_route.run_offline_route_check`'s
+call shape against that suite's own `check_route_serves_model` contract:
+**290 passed, 0 failed**, no `ar2/` file touched.
+
+## Facts proven offline
+
+**Gate ordering and failure containment.** For every one of H1 mismatch, H2
+mismatch, an exact-tool-registry mismatch, route-unreachable, wrong-served-model,
+broker-not-ready, and a `PROTOCOL_OR_EXTENSION_ERROR` reported by either
+`get_commands` or `broker_ready`: the failing gate's own bounded
+`CategoryBFailureCode` is recorded, every later gate is left `"NOT_REACHED"`,
+and no later injected callable is ever invoked (proven with an
+order-recording double whose call list is asserted exactly). A failing
+non-secret preflight gate leaves ALL later gates -- including the injected
+connection reader -- uncalled, proven with a call-counting double whose count
+stays exactly `0`. A second non-secret gate is proven never to run once an
+earlier one in the same list fails.
+
+**Credential-read ordering.** Reuses `i2_credentials.resolve_connection_after_preflight`
+unmodified; the connection reader is called at most once, and only after
+every non-secret gate reports `passed=True`. A malformed/missing connection
+value (raised as `InvalidBaseUrlError`/`ConnectionValueError` from the
+injected reader) is caught and re-attributed to the SAME bounded
+`InfrastructureRefusal` shape I2-4 already established, mapped here to
+`CategoryBGateName.CONNECTION_VALUES` / `CategoryBFailureCode.CONNECTION_VALUES_UNAVAILABLE`.
+
+**Candidate symmetry.** Candidate A and Candidate B are proven to produce
+byte-identical gate-status sequences and call orders through the SAME
+`run_category_b_controller` function, differing only in the `candidate`
+argument and the resulting `model_id`/`provider_id` values recorded in
+evidence.
+
+**Version is provenance only.** `observed_pi_version` (from the injected
+`launch_rpc` result) is proven to influence NOTHING about gate pass/fail --
+two otherwise-identical runs differing only in that string produce identical
+`gate_statuses` and outcomes, differing only in the recorded evidence field.
+
+**Unexpected exceptions are bounded.** An injected callable (`launch_rpc`,
+`h1_check`, `teardown`) raising an arbitrary exception -- including one whose
+message contains a synthetic secret-shaped literal -- is proven to produce
+only the bounded `CategoryBFailureCode.UNEXPECTED_EXCEPTION` code; the
+exception's `str()`/`repr()` text is proven absent from both the returned
+result's `repr()` and the built evidence.
+
+**Zero-prompt proof.** `semantic_prompts_sent` is proven `0` on every failing
+path AND on the fully-passed path alike (parametrized across representative
+failure points, plus the happy path). A source-level regression test greps
+the module for `IQ-1`/`IQ-2`/`IQ-3`/`task_prompt`/`send_prompt`/`agent_start`/
+`semantic_request`/a `.prompt(` call, and for `import subprocess`/`import
+socket`/`import httpx`/`import requests` -- none exist. A second regression
+test proves no public name on the module contains the substring `"prompt"`.
+A third proves this module's own `import`/`from` statements (not its
+explanatory prose) never reach `qualification.outcomes`, `.hard_bar`,
+`.ranking`, or `.records`'s record builder, and that
+`build_qualification_record` is never referenced.
+
+**Teardown/cleanup truthful attribution.** A gate failure BEFORE the
+disposable Pi config is ever created (e.g. an unwritable `experiment_root`)
+leaves `pi_config_created=False`, `live_resource_created=False`, and both
+`teardown.attempted`/`cleanup.attempted` `False` -- nothing to tear down. A
+gate failure AFTER config generation but before the RPC launch is attempted
+(e.g. an identity-binding mismatch) leaves `cleanup.attempted=True` (and
+verified) while `teardown.attempted` stays `False`. A gate failure AFTER the
+RPC launch is attempted (e.g. H1, H2, tool registry, route, or broker-READY)
+leaves BOTH `teardown.attempted` and `cleanup.attempted` `True`, and both are
+proven attempted on the fully-passed path too -- Category-B's job is to
+CONFIRM compatibility, never to leave a live process or a disposable config
+behind. `live_resource_created` is set as soon as the RPC launch is
+ATTEMPTED (not only on a confirmed pass), so a launch call that itself
+reports failure still triggers a teardown attempt. An injected `teardown`
+that itself raises is proven to produce a bounded, reported
+`UNEXPECTED_EXCEPTION` teardown outcome, never silently swallowed and never
+claimed as a successful stop.
+
+**Evidence safety.** `build_category_b_evidence` is proven to build a full
+`ArtifactSafetyContext` (populated from the run's secret context when one
+exists, `none_declared()` otherwise) and pass the payload through the
+existing `qualification.safety.qualification_scrub_check` -- reused
+unmodified -- before declaring it retention-ready. A direct test forces a
+synthetic credential-shaped value into the `observed_pi_version` provenance
+field (simulating a hypothetical future bug) and proves the scrub boundary,
+not this module's own discipline, refuses it (`retention_ready=False`,
+`evidence=None`). On the happy path, the emitted evidence dict is proven to
+contain none of `api_key`/`base_url`/`endpoint_host`/`broker_token`/
+`pipe_name`/`capability_id`/`workspace_absolute_path` as keys, and the
+synthetic API key and base URL used to build the run are proven absent from
+the evidence's JSON-serialized form. Nothing is written to disk by this
+module.
+
+**Token policy preserved.** Every evidence dict carries
+`aido_requested_max_output_tokens: null`, `models_json_omits_max_tokens:
+true`, `provider_request_count_observation_available: false`, and
+`wire_level_max_tokens_observation_available: false` unconditionally -- I2B
+introduces no `maxTokens`, no finite implementer output cap, and no new
+token-budget concept.
+
+## Reuse, not duplication
+
+I2B imports and reuses, UNMODIFIED, exactly:
+`i2_credentials.resolve_connection_after_preflight`,
+`i2_route.route_descriptor_for_candidate`/`run_offline_route_check`,
+`i2_secret_context.build_secret_context`,
+`i2_pi_config.write_qualification_pi_config`,
+`i2_composition.verify_i2_identity_binding`,
+`i2_environment.build_child_environment`,
+`i2_cleanup.scrub_generated_qualification_config`/`classify_cleanup_failure`,
+and `safety.ArtifactSafetyContext`/`qualification_scrub_check`. No I2 module
+was edited. No new raw `api_key`, config path, provider id, or model id
+parameter was introduced anywhere in the new module -- every identity value
+flows through the already-accepted trusted objects.
+
+## What this does NOT establish
+
+- No zero-prompt live gate has ever run. No Pi/Node process was launched, no
+  RPC call was made, no broker was created, and no real credential was read
+  -- every one of the seven live boundaries is an injected callable this
+  module never supplies a real implementation for.
+- No candidate model has ever run. No PASS/FAIL, no ranking, no
+  qualification verdict exists for Candidate A or Candidate B, and this
+  module cannot produce one: it imports no candidate-scoring machinery at
+  all.
+- 5F3B-Q1/Q2 (the first live candidate sweeps) remain **NOT authorized** and
+  cannot execute until a future, separately authorized phase supplies real
+  implementations for `launch_rpc`/`h1_check`/`get_commands`/`get_state`/
+  `route_checker`/`broker_ready`/`teardown` and receives its own explicit
+  go-ahead.
+- This module's own gate ORDERING (H1 before `get_commands`, tool-registry
+  content check after H2) is this slice's own documented, reasoned choice
+  where I2A Sec. 15's checklist ordering could not be a literal call
+  sequence -- it is not a reinterpretation of any I2A-accepted fact, and it
+  changes no I2A design text.
+- Redaction/scrubbing remain **backstops, not guarantees**, exactly as every
+  earlier I1/I2 closure states.
