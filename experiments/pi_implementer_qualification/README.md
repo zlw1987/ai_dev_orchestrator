@@ -1,9 +1,19 @@
-# Phase 5F3B-I1 -- Pi Implementer Qualification Corpus + Offline Harness
+# Phase 5F3B-I1 / I2 -- Pi Implementer Qualification Corpus + Offline Harness
 
 > **OFFLINE QUALIFICATION HARNESS ONLY.**
 > **NO MODEL QUALIFICATION HAS OCCURRED.**
 > **NO CANDIDATE PASS/FAIL EXISTS YET.**
-> **5F3B-I2 / Q1 / Q2 ARE NOT AUTHORIZED.**
+> **NO ZERO-PROMPT LIVE GATE HAS RUN.**
+> **5F3B-Q1 / Q2 ARE NOT AUTHORIZED.**
+
+**5F3B-I2 (route/credential offline machinery, slices I2-1 through I2-5) is
+now implemented, fully offline, per
+[`docs/PHASE_5F3B_I2A_B300_PI_ROUTE_CREDENTIAL_BOUNDARY_DESIGN.md`](../../docs/PHASE_5F3B_I2A_B300_PI_ROUTE_CREDENTIAL_BOUNDARY_DESIGN.md).**
+This establishes that the future live qualification route CAN be constructed
+safely -- it does NOT authorize using it. No Pi/Node process has ever been
+launched from this package, no HTTP/socket call has ever been made, no real
+`AIDO_LITELLM_*` value has ever been read, and no candidate model has ever
+been run.
 
 **EXPERIMENT ONLY.** Not production code. Not a CLI command. Lives outside
 `src/`, adds no `ProjectConfig` field, and this whole directory may be
@@ -38,12 +48,64 @@ defect. Building the corpus and the classifier first, and proving them
 correct against synthetic evidence, is exactly what the accepted O1
 offline-suite-before-live-run precedent already established.
 
+## What I2 adds (offline only)
+
+Per `docs/PHASE_5F3B_I2A_B300_PI_ROUTE_CREDENTIAL_BOUNDARY_DESIGN.md` Section
+23's slices I2-1 through I2-5:
+
+- **I2-1** (`qualification/i2_environment.py`) -- the qualification-owned
+  positive-allowlist child-environment builder: Windows baseline names,
+  narrowed `PATH`, Pi-owned `PI_*` variables, and exactly ONE credential
+  carrier (`PI_QUALIFICATION_B300_ROUTE_KEY`). No profile names, no keyless
+  placeholder. Also `qualification/i2_secret_context.py`, the run-scoped
+  secret context whose secret-bearing fields cannot leak through `repr()`.
+- **I2-2** (`qualification/i2_pi_config.py`) -- the disposable
+  `settings.json` (`maxRetries: 0`) + `models.json` (`apiKey:
+  "$PI_QUALIFICATION_B300_ROUTE_KEY"`, `maxTokens` omitted) generator.
+  **Since 5F3B-I2-FU1, `write_qualification_pi_config` takes only
+  `model_id`/`base_url`** -- the provider id and the credential carrier are
+  fixed internal constants, not caller-supplied parameters, so an arbitrary
+  provider (`"openai"`) or credential carrier (`OPENAI_API_KEY`) cannot be
+  requested through this API at all, and `model_id` is validated against
+  the frozen candidate pairing before any file is written.
+- **I2-3** (`qualification/i2_route.py`) -- route descriptors for Candidate A
+  (`qwen3-coder-next`) / Candidate B (`minimax-m2.7`), always
+  `b300_litellm_proxy`, never direct vLLM, plus the offline-only,
+  dependency-injected wiring shape for the future `check_route_serves_model`
+  zero-prompt gate.
+- **I2-4** (`qualification/i2_credentials.py`) -- the credential-read-ordering
+  contract: non-secret gates must ALL pass before the injected connection
+  reader is ever called, proven with a call-counting double, never a real
+  environment read.
+- **I2-5** (`qualification/i2_cleanup.py`) -- generated-config teardown
+  verified by `stat`, the phase-aware cleanup-failure classification
+  (`semantic_prompts_sent == 0` -> `INFRASTRUCTURE_REFUSAL`;
+  `== 1` -> `INFRASTRUCTURE_CONTAMINATED` / `scoring_eligible = False`), and
+  the pre-persistence raw-diagnostic safety boundary that reuses I1's
+  existing scrub primitive rather than a second secret scanner.
+- **I2-6** (`qualification/i2_issuance.py`, 5F3B-I2-FU3A, encapsulated in
+  FU3B) -- the process-local, in-memory-only registry that proves a
+  disposable config's authority token was genuinely issued by this package,
+  for that exact directory, in this process -- closing the gap where a
+  caller-forged token with a correctly-computed FU3 marker could still
+  authorize construction/cleanup. Also backs the cleanup-authority-vs-
+  complete-content-integrity split
+  (`i2_pi_config.verify_cleanup_authority` / `verify_generated_config_integrity`)
+  that every launch-capable consumption path (`build_child_environment`,
+  `describe_generated_config`, `verify_i2_identity_binding`) now requires.
+  **Since 5F3B-I2-FU3B, every registry function is package-internal
+  (underscore-prefixed)** -- only `i2_pi_config`/`i2_cleanup` call it; there
+  is no public `register_issuance`/`finalize_issuance`/`discard_issuance`/
+  `lookup_issuance` anywhere. Its `IssuanceRecord` is frozen and repr-safe,
+  and finalization is one-shot (a second finalization for an already-
+  finalized token is refused, never silently overwriting a trusted digest).
+
 ## What is explicitly NOT here
 
-Per the design's Section 24 roadmap and Section 23:
+Per the design's Section 24/23 roadmaps:
 
-- B300 routing, a Pi provider config, or a live Pi compatibility handshake.
-- Any credential of any kind.
+- Any live Pi/Node process launch, RPC broker, or compatibility handshake.
+- Any real credential value read, anywhere, at any point.
 - A live qualification executor -- nothing here can run a candidate model.
 - Any model comparison result. The Section 26 comparison table in the design
   document is deliberately unfilled, and nothing in this package fills it.
@@ -71,6 +133,15 @@ experiments/pi_implementer_qualification/
         safety.py                THE evidence safety + exclusive-create emission choke point
         records.py               pi-implementer-qualification.v1 schema + invariant gate
         lineage.py               Sec. 13/26 immutable invalidation/replacement evidence
+        i2_environment.py        I2-1 child-environment builder (offline)
+        i2_secret_context.py     I2-1 run-scoped secret context (repr-safe, no evidence helper)
+        i2_pi_config.py          I2-2 disposable settings.json/models.json generator (offline)
+        i2_route.py              I2-3 route descriptors + offline route-check wiring
+        i2_credentials.py        I2-4 credential read ordering + connection contract (offline)
+        i2_cleanup.py            I2-5 cleanup, phase-aware failure classification, diagnostic safety
+        i2_identity.py           5F3B-I2-FU3: the leaf module for CREDENTIAL_ENV_VAR_NAME/PROVIDER_ID
+        i2_composition.py        5F3B-I2-FU3: config/secret/route identity binding
+        i2_issuance.py           5F3B-I2-FU3A/FU3B: the leaf module for the process-local issuance registry (internal-only API)
     tests/
         conftest.py              sys.path wiring, git_executable fixture, thread-leak check
         test_iq1_fixture.py      IQ-1 fixture, baseline, correct-repair proof
@@ -86,6 +157,15 @@ experiments/pi_implementer_qualification/
         test_ranking.py          categorical ranking
         test_records.py          record invariant gate + safe/exclusive-create emission
         test_lineage.py          immutable invalidation/replacement lineage
+        test_i2_environment.py   I2-1 child-environment builder
+        test_i2_secret_context.py I2-1 run-scoped secret context safety
+        test_i2_pi_config.py     I2-2 disposable config generator
+        test_i2_route.py         I2-3 route descriptors + offline route-check wiring
+        test_i2_credentials.py   I2-4 credential read ordering
+        test_i2_cleanup.py       I2-5 cleanup, classification, diagnostic safety
+        test_safety_repr.py      5F3B-I2-FU1: ArtifactSafetyContext repr-safety proof
+        test_i2_composition.py   5F3B-I2-FU3: config/secret/route identity binding
+        test_i2_issuance.py      5F3B-I2-FU3A/FU3B: process-local issuance registry contract (white-boxes internal-only API)
 ```
 
 **All qualification evidence is written by exactly one function**
@@ -112,6 +192,16 @@ AR2's live-runtime machinery (`broker`, `supervisor`, `launch`, `handshakes`,
 `operations`, `observation`) -- there is no live runtime to integrate with
 here at all.
 
+**I2's own `i2_environment.py` / `i2_pi_config.py` / `i2_route.py` are
+structurally modeled on** `ar2/environment.py`, `ar2/pi_config.py`, and
+`ar2/route_check.py` (I2A design Sec. 9/10/15) -- the accepted VALUES
+(Windows baseline names, forbidden-fragment list, generated-config shape,
+the `check_route_serves_model` call shape) are duplicated as new I2-owned
+data and wiring, never imported as a dependency. `i2_route.py`'s offline
+route-check wiring is exercised only against an INJECTED synthetic checker;
+the real, unmodified `ar2.route_check.check_route_serves_model` function is
+never imported or called by anything in this package.
+
 ## Running the offline suite
 
 ```bash
@@ -123,8 +213,117 @@ and friends are not on the ambient interpreter's path.)
 
 ## Status
 
-Corpus, classifier, hard-bar and ranking machinery are ready offline. Per
-the design's Section 26 verdict: 5F3B-I2 (route integration, which touches
-credential handling) requires its own separate approval, and 5F3B-Q1/Q2
-(the first live candidate sweeps) cannot execute until I2 ships. Neither is
-authorized by this package.
+Corpus, classifier, hard-bar and ranking machinery (I1) are ready offline.
+**I2's offline machinery (slices I2-1 through I2-5) is implemented and
+green** -- the child-environment builder, the run-scoped secret context, the
+disposable Pi config generator, the route descriptors, the credential
+read-ordering contract, and the phase-aware cleanup-failure classification.
+
+**5F3B-I2-FU1 (Credential/Route Boundary Integrity Closure) closed seven
+implementation gaps** an independent review found in I2's source: every
+secret-bearing object (`ConnectionValues`, `LaunchEnvironment`, and the
+narrowly-authorized `ArtifactSafetyContext`) is now repr-safe; the
+`narrow_path` PATH-inheritance bypass is removed; the config generator no
+longer accepts a caller-supplied `provider_id`/`credential_env_var_name`;
+raw route-check failure text is no longer retained; a missing/blank/
+malformed connection value is now a true bounded `InfrastructureRefusal`;
+preflight failure detail is a bounded code, not free prose; and the B300
+base URL is structurally validated before it can become safety-context
+data. See `FINDINGS.md`'s `5F3B-I2-FU1` section for the full closure record.
+None of it reopens the accepted I2A architecture.
+
+**5F3B-I2-FU2 (Authority + Trusted-Value Closure) closed a further class of
+gaps**: a safe factory existed, but its public value object could still be
+forged by direct construction, or a destructive API trusted an unproven
+path. `GeneratedQualificationConfig` required creation-time authority
+before it could even be constructed, and `scrub_generated_qualification_config`
+took that typed object -- never a raw path -- re-verifying the same
+authority immediately before deleting anything.
+`ConnectionValues`/`RouteDescriptor`/`QualificationRouteSecretContext` became
+valid by construction (`__post_init__` enforces every field), with
+`run_offline_route_check` additionally revalidating the descriptor at the
+consumption boundary; the config generator's `base_url` went through the
+one shared validator; `PreflightGateResult` could no longer express an
+impossible `passed`/`failure_code` combination; and an exception a route
+checker raises was reduced to a bounded `RouteFailureCode.ROUTE_CHECK_ERROR`,
+never retaining `str(exc)`/`repr(exc)`/traceback text. See `FINDINGS.md`'s
+`5F3B-I2-FU2` section for the full closure record.
+
+**5F3B-I2-FU3 (Run Authority and Cross-Boundary Binding Closure) closed the
+next class of gaps**, mainly in FU2's own authority mechanism and in two
+remaining "raw value instead of trusted object" boundaries. FU2's
+directory-deletion authority was a FIXED, PUBLIC marker string -- forgeable
+by copying it into any directory. It is now a fresh, unpredictable, per-run
+128-bit token (`secrets.token_hex(16)`), held only in memory
+(`field(repr=False)`, never written to disk), with the on-disk marker
+carrying only a path-keyed SHA-256 binding -- copying the marker to a
+different directory no longer authorizes it. The generator now cleans up
+its own partial failure (an injected internal write failure triggers a
+verified delete using the authority it just established, never leaving an
+endpoint-bearing partial config behind). `build_child_environment` no
+longer accepts a raw `pi_config_dir`/`credential_value` string -- it
+consumes an authority-reverified `GeneratedQualificationConfig` and a
+`QualificationRouteSecretContext`, so the child's `PI_CODING_AGENT_DIR` and
+credential can never disagree with the run's own trusted objects.
+`LaunchEnvironment.environment` is now a read-only `MappingProxyType` view
+(assignment raises `TypeError`); a fresh mutable copy is available only via
+`as_launch_snapshot()`. `PreflightGateResult.passed` and the route
+checker's `reachable`/`configured_model_served` now require `type(...) is
+bool` exactly -- `"false"`/`1`/`0` no longer coerce through Python's own
+truthiness. A new `i2_composition.verify_i2_identity_binding` binds
+config/secret/route identity so the three cannot silently disagree once
+composed for one run. See `FINDINGS.md`'s `5F3B-I2-FU3` section for the
+full closure record. None of FU1/FU2/FU3 reopens the accepted I2A
+architecture.
+
+**5F3B-I2-FU3A (Issuance Authority, Content Integrity, Mandatory Binding
+Closure) is the final offline-only closure.** FU3's marker still never
+required the token itself to be genuinely I2-issued -- a caller could mint
+its own token, hand-compute the same public binding formula, and forge a
+marker into an arbitrary directory. A new process-local, in-memory-only
+registry (`qualification/i2_issuance.py`) now records every token I2 itself
+issues, for the exact directory it issued it for, and authority requires
+BOTH the marker binding AND registry presence
+(`i2_pi_config.verify_cleanup_authority`). A stricter
+`verify_generated_config_integrity` additionally requires the issuance to be
+FINALIZED and the on-disk `settings.json`/`models.json` bytes to still match
+the SHA-256 digests recorded when I2 wrote them -- used by every
+launch-capable consumption path, so a config edited after generation (a
+relabeled model id, a substituted literal secret, an added `maxTokens`, a
+changed `baseUrl`, a retry/trust policy edit) is refused, while cleanup of a
+tampered-but-genuinely-issued config remains possible. `build_child_environment`
+and `run_offline_route_check` now each independently refuse a
+generated-config/secret-context or route-descriptor/secret-context identity
+mismatch themselves, rather than relying on a caller remembering to call
+`verify_i2_identity_binding` first. `LaunchEnvironment.__post_init__` now
+copies its input dict before validating, closing an external-mutable-alias
+gap independent review reproduced. See `FINDINGS.md`'s `5F3B-I2-FU3A`
+section for the full closure record.
+
+**5F3B-I2-FU3B (Issuance Registry Encapsulation Closure) is the final
+offline-only correction.** FU3A's own registry mutation functions
+(`register_issuance`/`finalize_issuance`/`discard_issuance`) were PUBLIC.
+Independent review used ONLY that public surface -- no `object.__new__`, no
+private-global mutation, no live activity -- to self-issue authority for an
+arbitrary victim directory (call `register_issuance` for its own chosen
+token/path/identity, then satisfy every other check normally), and
+separately to overwrite an already-trusted digest with a tampered one by
+calling `finalize_issuance` a second time. `qualification/i2_issuance.py`
+now exposes only underscore-prefixed functions
+(`_register_issuance`/`_finalize_issuance`/`_lookup_issuance`/
+`_discard_issuance`); `i2_pi_config`/`i2_cleanup` remain its only callers.
+`IssuanceRecord` is now `@dataclass(frozen=True)` with a bounded custom
+`__repr__` (never the token or the canonical path), the registry is keyed by
+token alone (one token = one issued config; a token already registered for
+any path is refused), and finalization is one-shot -- a second finalization
+for an already-finalized token is refused
+(`ISSUANCE_ALREADY_FINALIZED`), never silently replacing trusted digests.
+See `FINDINGS.md`'s `5F3B-I2-FU3B` section for the full closure record.
+This closes the accepted 5F3B-I2 scope; no further FU is anticipated absent
+a new independent-review finding.
+
+**This is still an offline-only implementation.** No zero-prompt live gate
+(I2A Sec. 15) has run, no candidate model has run, and 5F3B-Q1/Q2 (the first
+live candidate sweeps) remain **NOT authorized** and cannot execute until a
+future, separately authorized phase runs the Category B live gates on top of
+this machinery.

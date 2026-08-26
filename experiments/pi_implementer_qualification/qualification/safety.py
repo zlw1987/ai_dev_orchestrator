@@ -41,7 +41,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from ar2.record import scrub_check
@@ -68,15 +68,24 @@ class ArtifactSafetyContext:
     handling. No field here is ever read from the environment, and no value
     placed in one is ever transmitted anywhere -- these values exist only to
     be searched for and refused.
+
+    **5F3B-I2-FU1 narrow repr fix.** I2 is the first phase that populates
+    this context with a REAL future credential/endpoint/broker/path value
+    (I1's own offline suite only ever declared synthetic needles). Every
+    field is therefore ``field(repr=False)`` *and* the class defines its own
+    bounded ``__repr__`` -- two independent reasons the default dataclass
+    repr can never print a populated value. This is a repr-only change:
+    ``forbidden_needles()``, ``none_declared()``, and every other I1
+    scrub/emission semantic are unchanged.
     """
 
-    endpoint_host: str | None = None
-    api_key: str | None = None
-    bearer_token: str | None = None
-    broker_token: str | None = None
-    pipe_name: str | None = None
-    capability_id: str | None = None
-    workspace_absolute_path: str | None = None
+    endpoint_host: str | None = field(default=None, repr=False)
+    api_key: str | None = field(default=None, repr=False)
+    bearer_token: str | None = field(default=None, repr=False)
+    broker_token: str | None = field(default=None, repr=False)
+    pipe_name: str | None = field(default=None, repr=False)
+    capability_id: str | None = field(default=None, repr=False)
+    workspace_absolute_path: str | None = field(default=None, repr=False)
 
     @classmethod
     def none_declared(cls) -> "ArtifactSafetyContext":
@@ -86,6 +95,22 @@ class ArtifactSafetyContext:
         caller states the fact, instead of inheriting it by omission.
         """
         return cls()
+
+    def __repr__(self) -> str:  # noqa: D105 - see class docstring
+        declared = tuple(
+            name
+            for name, value in (
+                ("endpoint_host", self.endpoint_host),
+                ("api_key", self.api_key),
+                ("bearer_token", self.bearer_token),
+                ("broker_token", self.broker_token),
+                ("pipe_name", self.pipe_name),
+                ("capability_id", self.capability_id),
+                ("workspace_absolute_path", self.workspace_absolute_path),
+            )
+            if value
+        )
+        return f"{type(self).__name__}(declared_fields={declared!r})"
 
     def forbidden_needles(self) -> tuple[tuple[str, str], ...]:
         """``(finding_code, needle)`` pairs for ``ar2.record.scrub_check``.

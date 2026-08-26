@@ -8,20 +8,31 @@ repository built under a fresh AIDO-created root (reusing
 structure describing externally-observed facts, fed directly to a pure
 policy function.
 
-This package implements exactly the slice authorized by
+This package implements the slice authorized by
 ``docs/PHASE_5F3B_PI_IMPLEMENTER_QUALIFICATION_DESIGN.md`` Section 24,
 5F3B-I1: the frozen IQ-1/IQ-2/IQ-3 corpus, baseline contract validation, the
 autonomous outcome classifier, the run-validity model, refusal attribution
 and scope metrics, a conservative report-accuracy comparator, the hard
 qualification bar, categorical ranking, a versioned record schema with a
 fail-closed safe-emission choke point, and immutable invalidation/
-replacement lineage evidence.
+replacement lineage evidence -- PLUS 5F3B-I2's offline B300 route/credential
+machinery (``docs/PHASE_5F3B_I2A_B300_PI_ROUTE_CREDENTIAL_BOUNDARY_DESIGN.md``,
+slices I2-1 through I2-6, hardened through FU1/FU2/FU3/FU3A/FU3B): the
+positive-allowlist child-environment builder, the run-scoped secret context,
+the disposable Pi ``settings.json``/``models.json`` generator with genuine,
+process-local issuance authority, route descriptors and offline route-check
+wiring, credential-read ordering, generated-config cleanup with cleanup-
+authority/complete-content-integrity separation, and config/secret/route
+cross-object identity binding enforced at every consumption boundary. Every
+one of these is fully offline -- no Pi/Node process, no HTTP/socket call, no
+real credential read, anywhere in this package.
 
-**Not implemented here, and not authorized by this package:** B300 routing,
-credentials, a Pi provider config, a live compatibility handshake, a live
-qualification executor, any model comparison result, a reviewer, real
-workspace authority, automatic continuation, or a production stall circuit
-breaker. No candidate has been run. No PASS/FAIL verdict exists.
+**Not implemented here, and not authorized by this package:** any live
+Pi/Node process launch, a live compatibility handshake, a live zero-prompt
+qualification gate or executor (5F3B-Q1/Q2 remain **NOT authorized**), any
+model comparison result, a reviewer, real workspace authority, automatic
+continuation, or a production stall circuit breaker. No candidate model has
+ever been run. No PASS/FAIL verdict exists for Candidate A or Candidate B.
 
 Reused, unmodified, from the sibling frozen experiments:
 
