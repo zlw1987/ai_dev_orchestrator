@@ -6,7 +6,7 @@
 > **NO ZERO-PROMPT LIVE GATE HAS RUN.**
 > **5F3B-Q1 / Q2 ARE NOT AUTHORIZED.**
 
-**5F3B-I2 (route/credential offline machinery, slices I2-1 through I2-5) is
+**5F3B-I2 (route/credential offline machinery, slices I2-1 through I2-6) is
 now implemented, fully offline, per
 [`docs/PHASE_5F3B_I2A_B300_PI_ROUTE_CREDENTIAL_BOUNDARY_DESIGN.md`](../../docs/PHASE_5F3B_I2A_B300_PI_ROUTE_CREDENTIAL_BOUNDARY_DESIGN.md).**
 This establishes that the future live qualification route CAN be constructed
@@ -51,7 +51,8 @@ offline-suite-before-live-run precedent already established.
 ## What I2 adds (offline only)
 
 Per `docs/PHASE_5F3B_I2A_B300_PI_ROUTE_CREDENTIAL_BOUNDARY_DESIGN.md` Section
-23's slices I2-1 through I2-5:
+23's slices I2-1 through I2-6 (I2-6 was added by 5F3B-I2-FU3A and is part of
+the accepted, frozen I2 scope):
 
 - **I2-1** (`qualification/i2_environment.py`) -- the qualification-owned
   positive-allowlist child-environment builder: Windows baseline names,
@@ -105,60 +106,176 @@ Per `docs/PHASE_5F3B_I2A_B300_PI_ROUTE_CREDENTIAL_BOUNDARY_DESIGN.md` Section
 **I2B CONTROLLER WIRED OFFLINE. CATEGORY-B LIVE EXECUTION NOT RUN. NO
 CANDIDATE MODEL RUN. Q1/Q2 NO-GO.**
 
-`qualification/i2b_controller.py` implements the state-machine / orchestration
-SHAPE for the future Category-B zero-prompt live gates (I2A Sec. 15) -- it
-does not run any of them. Every future live boundary (Node-direct RPC launch,
-H1, `get_commands`, `get_state`, the B300 `/models` route check, broker
-`READY`, teardown) is represented ONLY as an injected callable; every offline
-test supplies a synthetic double for each, never a real subprocess, socket,
-or model call. The controller:
+`qualification/i2b_controller.py` (the state machine) and
+`qualification/i2b_session.py` (the run-scoped resource authority and the
+bounded live observations) implement the SHAPE the future Category-B
+zero-prompt live gate will execute -- they do not run any of it. Every
+future live boundary is an INJECTED adapter; every offline test supplies a
+synthetic double, never a real subprocess, socket, or model call.
 
-- consumes I2's already-accepted, frozen offline objects
-  (`ConnectionValues`, `QualificationRouteSecretContext`,
-  `GeneratedQualificationConfig`, `RouteDescriptor`, `LaunchEnvironment`) and
-  their cross-object binding (`i2_composition.verify_i2_identity_binding`)
-  UNCHANGED -- no new raw `api_key`/config-path/provider-id/model-id
-  parameter is introduced anywhere;
-- reuses `i2_credentials.resolve_connection_after_preflight` unmodified for
-  the credential-read-ordering proof: the injected connection reader is
-  never called until every non-secret gate has passed;
-- reuses `i2_route.run_offline_route_check` unmodified for the future
-  `/models` exact-model-served gate;
-- reuses `i2_cleanup.scrub_generated_qualification_config` and
-  `classify_cleanup_failure(semantic_prompts_sent=0)` unmodified for
-  generated-config teardown -- the only prompt count this controller can
-  ever supply, since Category-B never sends one;
-- attributes every possible failure to a bounded `INFRASTRUCTURE_REFUSAL`
-  with `semantic_prompts_sent == 0` -- never `AUTONOMOUS_FAIL`, never a
-  candidate classification, never a scoring result. It imports no
-  candidate-scoring machinery (`outcomes`, `hard_bar`, `ranking`, or
-  `records`'s record builder) at all;
-- always attempts teardown once a live resource creation was attempted, and
-  always attempts generated-config cleanup once the disposable config was
-  created, on every path -- a later failure or the fully-passed case alike;
-- builds a bounded, credential-free Category-B evidence shape (candidate,
-  model/provider/gateway identity, `observed_pi_version` as provenance only,
-  per-gate statuses, the fixed token-policy fields, teardown/cleanup status)
-  and scrub-checks it through the existing `safety.qualification_scrub_check`
-  with an explicit `ArtifactSafetyContext` before calling it retention-ready
-  -- it does not write anything to disk.
+### 5F3B-I2B-FU1 -- what the first I2B controller could not actually prove
+
+The initial I2B was rebuilt in FU1 against the frozen AR2/O1 lifecycle
+rather than against I2A Sec. 15's narrative checklist. Five corrections:
+
+1. **Broker first, launch second.** The initial controller confirmed
+   `broker_ready` LAST. Frozen O1 (`run_o1.py`) mints the broker binding,
+   reaches `STATE_READY`, and only THEN calls `launch_and_handshake(...,
+   pipe_name=..., capability_id=..., token=...)` -- the launch writes that
+   binding into the disposable extension, so it cannot precede a ready
+   broker. The ordering is now enforced by the type: a
+   `RuntimeLaunchRequest` is unconstructible from a broker session that is
+   not `reached_ready`, or that belongs to another run.
+2. **Every observation is bound to the SAME runtime.** The initial
+   controller's no-argument `h1_check()` / `get_state()` / `teardown()`
+   callbacks could each return a valid result describing a DIFFERENT
+   runtime, undetectably. Each adapter now takes the run's `RuntimeSession`
+   (or `BrokerSession`) and returns an observation carrying the session id
+   it came from; a mismatch is refused.
+3. **H1 and the tool registry come from ONE `get_commands` response.**
+   Frozen AR2's own H1 evaluator takes that response's command list as its
+   argument, so modelling H1 as an unrelated observation was never faithful
+   to the seam. They stay two DISTINCT gate facts, derived from one
+   `GetCommandsObservation`. `get_state`/H2 follow the same rule.
+4. **The terminal pass rule includes lifecycle closure.** The initial
+   controller decided `CATEGORY_B_GATE_PASSED` from the last compatibility
+   gate BEFORE teardown, cleanup and the evidence scrub ran -- so a run
+   whose teardown failed still passed, and its evidence still said
+   `compatibility_gate_passed: true`.
+5. **The safety context carries the run's REAL sensitive values.** The
+   initial controller hard-coded `broker_token=None, pipe_name=None,
+   capability_id=None, workspace_absolute_path=None` -- silently
+   substituting `None` for values a live run genuinely has.
+
+### What a Category-B PASS now mechanically requires
+
+Thirteen INDEPENDENTLY established compatibility facts (`CompatibilityFacts`,
+one exact-`bool` field each -- never one caller-supplied "passed" boolean):
+Pi version observable (**provenance only**, never an exact-version
+authorization); RPC launch shape valid; required launch flags accepted; LF
+JSONL request/response correlation; `get_commands` response shape
+understood; H1 exact extension identity; exactly the authorized tool
+registry; `get_state` response shape understood; H2 exact provider/model
+identity; no protocol violation observed; no extension error observed; the
+exact candidate model served (via the unmodified `i2_route` route-check
+wiring); and the broker's required READY state.
+
+**PLUS** all of: `semantic_prompts_sent == 0`; every required teardown
+closed truthfully (runtime first, then broker -- frozen O1's order);
+generated-config cleanup VERIFIED; and retention-ready, scrub-clean
+evidence. Anything else -- including all thirteen facts alongside a failed
+teardown, an unclosed broker, an unverified cleanup, or a refused evidence
+scrub -- is `INFRASTRUCTURE_REFUSAL` with `semantic_prompts_sent = 0`.
+`compatibility_gate_passed = true` is structurally unable to appear
+alongside a failed closure.
+
+### Fail-closed properties, stated precisely
+
+- an adapter that RAISES, returns `None`, returns a wrong type, or returns a
+  SUBCLASS of an observation type is a bounded refusal -- never a crash, and
+  never a pass;
+- the tool-registry comparison is over the SORTED OBSERVED NAME SEQUENCE,
+  not a set, so a duplicated or missing entry cannot compare equal;
+- a command entry, a Pi version, or a provider/model identity that is not a
+  bounded, well-formed value is refused at construction, so no raw stdout,
+  stderr, RPC body, path, URL or exception text can reach a retained
+  observation;
+- an observation cannot describe an incoherent state -- a failed call that
+  also reports a matched identity, a "clean" scrub carrying findings, or a
+  teardown claiming closure for a resource that was never created are all
+  unconstructible;
+- a failed launch must either hand back a `RuntimeSession` (so AIDO retains
+  authority to close it) or declare it closed its own partial resource
+  internally; the third, stranding state is unconstructible. A launch
+  adapter that RAISES leaves AIDO no authority at all, which is reported as
+  `RUNTIME_TEARDOWN_AUTHORITY_UNAVAILABLE` and can never pass;
+- AIDO's own arguments (`candidate`, `experiment_root`, `workspace_root`,
+  `node_executable`) are validated FIRST, so a run that could never produce
+  provably safe evidence never causes a credential read at all.
+
+### What is deliberately NOT claimed
+
+- **Not** "every possible failure maps to `INFRASTRUCTURE_REFUSAL`". Every
+  bounded adapter/gate failure does. A caller-programming error in AIDO's
+  own arguments raises `CategoryBControllerInputError` before any gate runs,
+  deliberately -- that is not a Category-B outcome at all.
+- **Not** that teardown stopped anything beyond AIDO's own direct child. The
+  evidence records `backend_inference_lifetime_after_teardown: "not
+  observed"` and `descendant_process_lifetime_after_teardown: "not
+  observed"`, and its `claim_scope` says so explicitly. A returned local
+  teardown call is never a claim that backend inference stopped.
+- **Not** that the per-run `run_id` nonce authenticates an adapter. It is a
+  CORRELATION control -- it catches a stale or foreign session object. The
+  adapter necessarily receives the nonce in order to echo it, and is AIDO's
+  own future live code, inside the trust boundary.
+- **Not** that redaction/scrubbing guarantees secret-free evidence. The
+  scrub is a backstop, as I1 already states.
+
+### The FULL artifact safety context
+
+`build_run_safety_context` populates every field I1's `ArtifactSafetyContext`
+declares, from the run's real value when that value exists: `endpoint_host`
+and `api_key` from the run's secret context; `broker_token`, `pipe_name` and
+`capability_id` from the live broker session; `workspace_absolute_path` from
+the controller's required `workspace_root`. `bearer_token` is `None` as a
+DERIVED, proven absence -- I2A's frozen credential mechanism for this route
+is `models_json_env_interpolation`, which mints no separate bearer value at
+all; a descriptor reporting any other mechanism refuses rather than
+guessing. A run that failed before a secret context existed still declares
+whatever it does have, rather than falling back to `none_declared()`.
+
+### Immutable results and evidence
+
+`CategoryBControllerResult.gate_statuses` is a `MappingProxyType` over a
+throwaway dict, so neither it nor a copy taken from it can rewrite a
+validated result. `CategoryBEvidence` holds one canonical,
+already-scrub-checked JSON string; each `as_dict()` returns a FRESHLY
+deserialized copy, so no caller ever receives a reference into the object --
+mutating a returned dict (including the `gate_statuses` and
+`compatibility_facts` nested inside it) cannot rewrite the evidence or a
+later reader's view. The scrub result is an immutable `tuple` of bounded
+finding codes plus a `bool`, never a mutable dict whose `clean` key could be
+flipped after validation. A refused evidence body is not retained in any
+form.
+
+### Reused unmodified
+
+`i2_credentials.resolve_connection_after_preflight` (the credential-read
+ordering proof), `i2_route.run_offline_route_check` (the future `/models`
+exact-model gate), `i2_cleanup.scrub_generated_qualification_config` plus
+`classify_cleanup_failure(semantic_prompts_sent=0)`,
+`i2_composition.verify_i2_identity_binding`, `i2_pi_config`,
+`i2_environment.build_child_environment`, and
+`safety.qualification_scrub_check`. I2B introduces no new raw
+`api_key`/`base_url`/config-path/provider-id/model-id parameter anywhere.
+
+### Zero-prompt authority
+
+`SEMANTIC_PROMPTS_SENT` is a module constant `0`. Neither I2B module defines
+any function that accepts, sends or forwards a prompt, and a source-level
+AST regression test asserts that no NAME in either module (identifier,
+attribute, parameter, function or class) contains a prompt-shaped fragment
+apart from the zero-valued counter itself, and that neither module imports a
+live-I/O primitive. There is no candidate classification, no hard bar, no
+ranking, and no `AUTONOMOUS_PASS`/`AUTONOMOUS_FAIL` reachable from here.
 
 Candidate A and Candidate B run through the identical controller function,
-differing only in the `candidate` argument. 32 new, fully offline tests
-(`tests/test_i2b_controller.py`) prove gate ordering, the credential-read
-boundary, every individual gate refusal (H1, H2, tool registry, route
-unavailable, wrong served model, broker-not-ready, protocol/extension error,
-an unexpected exception), teardown/cleanup truthful attribution, evidence
-safety, and -- by source-level regression test -- that no semantic-prompt API
-and no live/network/process primitive exists anywhere in this module.
+differing only in the `candidate` argument. 124 fully offline tests
+(`tests/test_i2b_controller.py`) cover the frozen-O1 lifecycle order,
+resource authority binding, one-observation H1/registry and H2/state
+derivation, every individual gate refusal, the terminal closure rule,
+partial-resource accounting, malformed/duplicate/foreign/subclassed adapter
+results, filesystem tampering, repeated invocation, result/evidence
+immutability, the full safety context, and zero-prompt authority.
 
 ## What is explicitly NOT here
 
 Per the design's Section 24/23 roadmaps:
 
 - Any live Pi/Node process launch, RPC broker, or compatibility handshake --
-  including via `i2b_controller.py`, whose every live boundary is an
-  injected callable this package never supplies a real implementation for.
+  including via `i2b_controller.py`/`i2b_session.py`, whose every live
+  boundary is an injected adapter this package never supplies a real
+  implementation for. No real live adapter exists anywhere in this package.
 - Any real credential value read, anywhere, at any point.
 - A live qualification executor -- nothing here can run a candidate model.
 - Any model comparison result. The Section 26 comparison table in the design
@@ -196,7 +313,8 @@ experiments/pi_implementer_qualification/
         i2_identity.py           5F3B-I2-FU3: the leaf module for CREDENTIAL_ENV_VAR_NAME/PROVIDER_ID
         i2_composition.py        5F3B-I2-FU3: config/secret/route identity binding
         i2_issuance.py           5F3B-I2-FU3A/FU3B: the leaf module for the process-local issuance registry (internal-only API)
-        i2b_controller.py        5F3B-I2B: the Category-B zero-prompt live-gate controller (offline wiring only)
+        i2b_session.py           5F3B-I2B-FU1: run-scoped Category-B resource authority + bounded live observations (offline)
+        i2b_controller.py        5F3B-I2B-FU1: the Category-B zero-prompt live-gate controller (offline wiring only)
     tests/
         conftest.py              sys.path wiring, git_executable fixture, thread-leak check
         test_iq1_fixture.py      IQ-1 fixture, baseline, correct-repair proof
@@ -221,7 +339,7 @@ experiments/pi_implementer_qualification/
         test_safety_repr.py      5F3B-I2-FU1: ArtifactSafetyContext repr-safety proof
         test_i2_composition.py   5F3B-I2-FU3: config/secret/route identity binding
         test_i2_issuance.py      5F3B-I2-FU3A/FU3B: process-local issuance registry contract (white-boxes internal-only API)
-        test_i2b_controller.py   5F3B-I2B: Category-B controller state-machine/gate-ordering/teardown/evidence (offline doubles only)
+        test_i2b_controller.py   5F3B-I2B-FU1: Category-B lifecycle/authority/closure/evidence-immutability (offline doubles only)
 ```
 
 **All qualification evidence is written by exactly one function**
@@ -270,7 +388,7 @@ and friends are not on the ambient interpreter's path.)
 ## Status
 
 Corpus, classifier, hard-bar and ranking machinery (I1) are ready offline.
-**I2's offline machinery (slices I2-1 through I2-5) is implemented and
+**I2's offline machinery (slices I2-1 through I2-6) is implemented and
 green** -- the child-environment builder, the run-scoped secret context, the
 disposable Pi config generator, the route descriptors, the credential
 read-ordering contract, and the phase-aware cleanup-failure classification.
@@ -378,14 +496,19 @@ See `FINDINGS.md`'s `5F3B-I2-FU3B` section for the full closure record.
 This closes the accepted 5F3B-I2 scope; no further FU is anticipated absent
 a new independent-review finding.
 
-**5F3B-I2B (Category-B Zero-Prompt Live-Gate Controller) is offline wiring
-only.** `qualification/i2b_controller.py` implements the state-machine shape
-that will LATER execute the accepted Category-B gates -- gate ordering, the
-credential-read boundary, failure attribution, teardown/cleanup discipline,
-and evidence safety -- entirely through injected callables and synthetic
-offline doubles. **I2B CONTROLLER WIRED OFFLINE. CATEGORY-B LIVE EXECUTION
-NOT RUN. NO CANDIDATE MODEL RUN. Q1/Q2 NO-GO.** See the "What I2B adds"
-section above for the full closure record.
+**5F3B-I2B, as corrected by 5F3B-I2B-FU1 (Category-B Runtime Authority +
+Lifecycle Closure), is offline wiring only.**
+`qualification/i2b_controller.py` and `qualification/i2b_session.py`
+implement the state machine and the run-scoped resource authority that will
+LATER execute the accepted Category-B gates -- the frozen-O1 lifecycle
+order, session-bound observations, thirteen independently established
+compatibility facts, a terminal pass rule that includes teardown/broker/
+cleanup/evidence closure, the full artifact safety context, and immutable
+results -- entirely through injected adapters and synthetic offline doubles.
+**I2B CONTROLLER WIRED OFFLINE. CATEGORY-B LIVE EXECUTION NOT RUN. NO
+CANDIDATE MODEL RUN. Q1/Q2 NO-GO.** See the "What I2B adds" section above
+for the full closure record, including what it deliberately does NOT
+claim.
 
 **This is still an offline-only implementation.** No zero-prompt live gate
 (I2A Sec. 15) has run, no candidate model has run, and 5F3B-Q1/Q2 (the first

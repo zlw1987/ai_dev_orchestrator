@@ -59,6 +59,23 @@ is a pre-prompt `INFRASTRUCTURE_REFUSAL` (§16.A), never a silent
 placeholder branch. See the FU2 correction record at the end of this
 document.
 
+**Phase 5F3B-I2A-DESIGN-FU3 superseded exactly ONE statement in this
+document: §15 item 6.** That item claimed the zero-prompt `get_commands` gate
+proves "exactly `aido_read`/`aido_edit` registered, nothing else" — a claim
+about the **active tool registry**, which frozen AR0-FU1 §4.1j records
+(source-verified) that Pi exposes no RPC command to enumerate, and which
+AR2D §2.2's *mandated* truthfulness correction already ruled must never be
+made. It is additionally unsatisfiable, because `get_commands` enumerates
+`pi.registerCommand` slash commands while those two names are
+`pi.registerTool` tools. The item's original text is preserved verbatim, in
+place, under an explicit `SUPERSEDED BY` marker; the corrected observability
+contract, the H1 proof contract, the credential-read ordering invariant, the
+synthetic-workspace authority rule and the creator partial-failure contract
+live in
+[`docs/PHASE_5F3B_I2A_DESIGN_FU3_CATEGORY_B_OBSERVABILITY_CORRECTION.md`](PHASE_5F3B_I2A_DESIGN_FU3_CATEGORY_B_OBSERVABILITY_CORRECTION.md).
+**No other section, semantic, or verdict of this document is changed by FU3**,
+and §25's GO/NO-GO stands exactly as written.
+
 ## 1. Status / scope
 
 | | |
@@ -804,7 +821,23 @@ phase's own explicit go/no-go — **not performed here**:
 4. LF-framed JSONL request/response correlation (RPC transport sanity).
 5. H1 — exact extension identity (`sourceInfo.source == "cli"`, per the
    AR1-FU1/AR2 precedent).
-6. `get_commands` — exactly `aido_read`/`aido_edit` registered, nothing else.
+6. **[SUPERSEDED BY `docs/PHASE_5F3B_I2A_DESIGN_FU3_CATEGORY_B_OBSERVABILITY_CORRECTION.md` §5. The original text is preserved verbatim below and must NOT be implemented.]**
+   ~~`get_commands` — exactly `aido_read`/`aido_edit` registered, nothing
+   else.~~
+   *Why superseded:* this claims the contents of the **active tool registry**,
+   which frozen AR0-FU1 §4.1j records (source-verified) that Pi exposes no RPC
+   command to enumerate — and which AR2D §2.2's mandated correction already
+   ruled must never be claimed. It is also unsatisfiable: `get_commands`
+   enumerates `pi.registerCommand` **slash commands**, while
+   `aido_read`/`aido_edit` are `pi.registerTool` **tools**, so those two names
+   can never appear in a `get_commands` response. The corrected gate
+   partitions every top-level-`"extension"`-sourced entry by its
+   `sourceInfo.source` — **not** by the top-level `source` field, which both
+   AIDO's sentinel and Pi's own inline commands (e.g. `llama`) share
+   identically: exactly one `sourceInfo.source == "cli"` entry, H1-valid;
+   any `sourceInfo.source == "inline"` entry tolerated by mechanically
+   checked provenance; anything else refused closed — with the active tool
+   registry recorded as an explicit non-observation. See FU3 §5.2/§5.3.
 7. `get_state` — H2, exact candidate provider/model identity echoed back
    matches the configured route descriptor exactly.
 8. Absence of any protocol or extension error.

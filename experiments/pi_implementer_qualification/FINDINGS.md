@@ -1749,181 +1749,375 @@ policy all unchanged).
 
 ---
 
-# 5F3B-I2B -- Category-B Zero-Prompt Live-Gate Controller (Offline Wiring Only)
+# 5F3B-I2B / I2B-FU1 -- Category-B Runtime Authority + Lifecycle Closure (Offline Only)
 
 > **I2B CONTROLLER WIRED OFFLINE. CATEGORY-B LIVE EXECUTION NOT RUN. NO
 > CANDIDATE MODEL RUN. Q1/Q2 NO-GO.**
 
 I2-1 through I2-6 (hardened through FU1/FU2/FU3/FU3A/FU3B) built the offline
-objects a future live qualification run would need. Nothing before this slice
-assembled them into an actual orchestration SHAPE for the Category-B
-zero-prompt gates (I2A design Sec. 15) themselves. I2B is that shape --
-and only that shape. It is a NEW slice, authorized directly by its own
-implementation prompt rather than by a prior section of I2A's design
-document, because I2A's own Sec. 23 slice table stops at I2-5.
+objects a future live qualification run would need. I2B assembles them into
+the orchestration SHAPE for the Category-B zero-prompt gates (I2A design
+Sec. 15) -- and only that shape. **5F3B-I2B-FU1 rebuilt that shape against
+the frozen AR2/O1 runtime lifecycle**, because the initial I2B controller
+could not mechanically prove several things it appeared to claim. This
+section records the corrected slice; the initial controller's API is
+superseded and was not preserved for compatibility.
+
+## Pre-coding adversarial findings against the initial I2B controller
+
+Every one of these was reproduced against the initial controller's source
+before any new code was written.
+
+1. **The terminal outcome ignored lifecycle closure.** `outcome` was decided
+   solely from `gate_statuses["broker_ready"] == "PASSED"`, computed BEFORE
+   teardown, cleanup and the evidence scrub ran. A run whose teardown failed,
+   whose config cleanup was unverified, or whose evidence was refused still
+   returned `CATEGORY_B_GATE_PASSED`, and its evidence still recorded
+   `compatibility_gate_passed: true`.
+2. **The broker was confirmed LAST, contradicting frozen O1.** `broker_ready`
+   sat after the route check, at the end of the sequence. Frozen O1's
+   `run_o1.phase_handshake`/`phase_case` mint `BrokerBinding`, start
+   `BrokerServer`, observe `STATE_READY`, and only THEN call
+   `launch_and_handshake(..., pipe_name=server.pipe_name,
+   capability_id=binding.capability_id, token=binding.token)` -- the launch
+   writes that binding into the disposable extension. Broker readiness is a
+   PRECONDITION of the launch, not a postcondition of the run. I2A Sec. 15's
+   numbered list is a checklist, not a dependency graph; the frozen runtime
+   fact wins.
+3. **No resource authority existed at all.** `h1_check()`, `get_commands()`,
+   `get_state()`, `broker_ready()` and `teardown()` were unrelated
+   NO-ARGUMENT callbacks. Two individually valid observations could describe
+   two different runtime instances; a caller could supply runtime A's
+   launcher and runtime B's teardown; and nothing was structurally
+   detectable.
+4. **H1 and the tool registry came from two unrelated observations.** Frozen
+   AR2 proves H1 FROM the `get_commands` response --
+   `ar2.handshakes.evaluate_extension_identity(commands,
+   extension_entry=...)` takes that response's command list as its argument.
+   Modelling H1 as its own callback was never faithful to the seam.
+5. **A passing run with no observable Pi version passed.**
+   `RpcLaunchOutcome.observed_pi_version` was `str | None` and influenced
+   nothing; `None` (or a blank string) still passed.
+6. **Four independently required facts were collapsed into one caller
+   boolean.** I2A Sec. 15 items 1-4 (Pi installed/version, RPC launch shape,
+   required flags accepted, LF JSONL correlation) were all folded into
+   `RpcLaunchOutcome.gate.passed`, so AIDO could not prove which fact was
+   observed.
+7. **I2A gate 8 was never established.** `PROTOCOL_OR_EXTENSION_ERROR` was a
+   declared failure code that no code path could ever produce.
+8. **The tool registry comparison collapsed duplicates.**
+   `frozenset(observed) == AUTHORIZED_TOOL_NAMES` accepted
+   `("aido_read", "aido_read", "aido_edit")`, and could not distinguish a
+   duplicate from a genuine pair.
+9. **The result and the evidence were mutable after validation.**
+   `gate_statuses` was typed `Mapping[str, str]` but held a real `dict`, so
+   `result.gate_statuses["broker_ready"] = "PASSED"` silently rewrote a
+   validated result. `CategoryBEvidenceResult.evidence` was the very dict
+   that had been scrub-checked, handed out by reference, and `scrub` was a
+   mutable dict whose `clean` key could be flipped.
+10. **The safety context was silently truncated.**
+    `secret_context.to_safety_context(broker_token=None, pipe_name=None,
+    capability_id=None, workspace_absolute_path=None)` was hard-coded, so a
+    live run's real broker binding and workspace path would never be
+    declared as scrub needles -- exactly how a binding survives into a
+    retained artifact. The README's "full `ArtifactSafetyContext`" claim was
+    therefore not established.
+11. **A partial launch could strand a resource with no authority to close
+    it,** and there was no broker teardown anywhere in the controller.
+12. **An adapter returning `None` crashed the controller.** `_safe_call`
+    conflated "raised" with "returned an unexpected value"; an adapter that
+    simply returned `None` recorded no failure at all, left `failed_gate`
+    unset, and then raised an unbounded `ValueError` from
+    `CategoryBControllerResult.__post_init__`. That is a fail-open into a
+    crash, not a refusal.
 
 ## What was built
 
-One new module, `qualification/i2b_controller.py`, and one new test module,
-`tests/test_i2b_controller.py` (32 tests). No existing I1/I2 module, test, or
-public API was modified.
+Two modules and one test module:
 
-`run_category_b_controller()` drives, in one linear, mechanically-provable
-sequence: the reused `i2_credentials` non-secret-preflight/credential-read
-boundary, `i2_route.route_descriptor_for_candidate`, `i2_secret_context.build_secret_context`,
-`i2_pi_config.write_qualification_pi_config`, `i2_composition.verify_i2_identity_binding`,
-`i2_environment.build_child_environment`, then seven INJECTED future-live
-callables (`launch_rpc`, `h1_check`, `get_commands`, `get_state`, a
-`route_checker` fed through the reused, unmodified `i2_route.run_offline_route_check`,
-`broker_ready`, `teardown`), with two purely-computed content checks (H2
-provider/model identity, and exact tool-registry membership against the
-fixed `AUTHORIZED_TOOL_NAMES = {"aido_read", "aido_edit"}`) interleaved
-between them. Every injected callable is a required, no-default parameter;
-every offline test supplies a synthetic double.
+- `qualification/i2b_session.py` -- the narrow, I2B-owned run-scoped
+  authority and bounded observation value objects. Deliberately **not** a
+  generic `AgentRuntime`/`RuntimeAdapter` framework: no registry, no plugin
+  system, no lifecycle base class, no capability negotiation, no reusable
+  transport, and no interface a second runtime could be registered against.
+  A LEAF module -- it imports no other `qualification` module.
+- `qualification/i2b_controller.py` -- the state machine, the terminal
+  rule, the closure sequence and the evidence gate.
+- `tests/test_i2b_controller.py` -- 124 offline tests.
+
+No frozen I1/I2/AR2/O1 module, test, or public API was modified.
+
+## Final resource / lifecycle architecture
+
+```text
+AIDO-supplied argument validation                (BEFORE any credential read)
+  -> non-secret preflight        (reused i2_credentials, unmodified)
+  -> connection-value read       (reused i2_credentials, unmodified)
+  -> route descriptor            (i2_route)
+  -> run-scoped secret context   (i2_secret_context)
+  -> disposable Pi config        (i2_pi_config)          [RESOURCE 1]
+  -> config/secret/route binding (i2_composition)
+  -> positive-allowlist child env(i2_environment)
+  -> broker session created      (injected)              [RESOURCE 2]
+  -> broker reached READY        (from that same session)
+  -> runtime launched WITH the binding (injected)        [RESOURCE 3]
+  -> [4 facts from ONE launch observation]
+  -> [3 facts from ONE get_commands observation]
+  -> [2 facts from ONE get_state observation]
+  -> protocol/extension integrity (injected, session-bound)
+  -> exact model served           (reused i2_route, unmodified)
+  == compatibility facts end ==
+  -> runtime teardown             (frozen O1 order: runtime FIRST)
+  -> broker shutdown              (frozen O1 order: broker SECOND)
+  -> generated-config cleanup     (reused i2_cleanup, unmodified)
+  -> retained-evidence safety gate(reused qualification.safety, unmodified)
+```
+
+## Broker / runtime authority binding
+
+The binding is MECHANICAL, not conventional:
+
+- the controller mints one per-run `run_id` nonce that no adapter supplies;
+  a `BrokerSession` that does not carry it is refused as
+  `BROKER_SESSION_MISMATCH` **before any launch-capable continuation**;
+- `RuntimeLaunchRequest` is CONSTRUCTED BY THE CONTROLLER and is
+  **unconstructible** from a broker session that belongs to a different run
+  or has not `reached_ready`. Frozen O1's ordering is therefore enforced by
+  the type, not by call order alone;
+- the launch request carries the broker's `pipe_name`/`capability_id`/
+  `broker_token` -- the binding the launch actually needs;
+- every post-launch adapter takes the run's `RuntimeSession` and returns an
+  observation carrying the `runtime_session_id` it was produced from; the
+  controller compares it against the session the launch returned. A
+  mismatched `get_commands`, `get_state`, protocol observation, runtime
+  shutdown or broker shutdown is refused;
+- teardown targets exactly those session objects. A session AIDO could not
+  tie to its own run is still shut down (abandoning it would strand a
+  resource) but **never reports closure satisfied**;
+- a failed launch must EITHER hand back a `RuntimeSession` OR declare
+  `partial_resource_cleaned_internally=True`; the third, stranding state is
+  unconstructible. A launch adapter that RAISES leaves AIDO no authority,
+  reported as `RUNTIME_TEARDOWN_AUTHORITY_UNAVAILABLE`, which can never
+  pass.
+
+**Honest scope of the nonce:** `run_id` is a CORRELATION control, not an
+authentication control. It catches a stale, leftover or foreign session
+object. It does not authenticate the adapter, which necessarily receives the
+nonce in order to echo it, and which is AIDO's own future live code inside
+the trust boundary.
+
+## H1 / get_commands and H2 / get_state observation binding
+
+One `GetCommandsObservation` yields THREE distinct gate facts -- the call
+and response shape (`GET_COMMANDS`), H1 exact extension identity
+(`H1_EXTENSION_IDENTITY`), and the exact authorized registry
+(`TOOL_REGISTRY`). They remain distinct facts, but cannot refer to two
+unrelated runtime snapshots. One `GetStateObservation` likewise yields
+`GET_STATE` and `H2_PROVIDER_MODEL_IDENTITY`. There is no `h1_check` adapter
+and no `broker_ready` adapter left in the controller signature at all.
+
+The registry comparison is over the **sorted observed name sequence**, never
+a set, so a duplicate cannot collapse into a match. `ObservedCommand.source`
+is recorded but is deliberately NOT part of the registry rule: I2A Sec. 15
+item 6 defines that gate over the registered command SET, and extension
+provenance is H1's job, proven separately from the same response.
+
+## The thirteen individually established compatibility facts
+
+`CompatibilityFacts`, one exact-`bool` field each: `pi_version_observed`,
+`rpc_launch_shape_valid`, `required_launch_flags_accepted`,
+`lf_jsonl_correlation_succeeded`, `get_commands_response_shape_understood`,
+`h1_extension_identity_matched`, `authorized_tool_registry_exact`,
+`get_state_response_shape_understood`, `h2_provider_model_identity_matched`,
+`no_protocol_violation_observed`, `no_extension_error_observed`,
+`exact_candidate_model_served`, `broker_reached_required_ready_state`.
+
+`pi_version_observed` is **provenance only** -- nothing anywhere compares an
+observed version against a pinned value, proven by a test in which a run
+with `99.0.0-rc1` passes identically. A run with no observable version fails
+closed as `PI_VERSION_NOT_OBSERVED`; a blank or unbounded version string is
+refused at construction.
+
+## Terminal-pass rule
+
+```text
+CATEGORY_B_GATE_PASSED  iff  every compatibility fact established
+                        AND  semantic_prompts_sent == 0
+                        AND  every required teardown closed truthfully
+                        AND  generated-config cleanup VERIFIED
+                        AND  evidence retention-ready (scrub clean)
+```
+
+Anything else is `INFRASTRUCTURE_REFUSAL` with `semantic_prompts_sent = 0`.
+The single boolean the evidence records as `compatibility_gate_passed` is
+computed only after compatibility AND closure are both resolved, so it can
+never be `true` alongside a failed teardown, an unclosed broker or an
+unverified cleanup. `CategoryBControllerResult.__post_init__` refuses to
+construct a pass that violates any of these, so the rule holds even for a
+directly-constructed result.
+
+## Teardown / broker-shutdown behaviour, stated truthfully
+
+Runtime first, then broker -- frozen O1's order. Each is attempted exactly
+once, on the failure path and the passing path alike, for whatever resources
+may exist. `RuntimeTeardownStatus.succeeded` means AIDO's own shutdown call
+returned AND reported that **AIDO's own DIRECT child** exited;
+`BrokerShutdownStatus.reached_closed` is the broker lifecycle's own terminal
+state. Neither is, and neither may be read as, a claim that a descendant
+process was terminated, that Pi/provider inference stopped, or that GPU work
+stopped. The evidence records
+`backend_inference_lifetime_after_teardown: "not observed"` and
+`descendant_process_lifetime_after_teardown: "not observed"`, and its
+`claim_scope` states the negation explicitly.
+
+## Config-cleanup behaviour
+
+Reuses `i2_cleanup.scrub_generated_qualification_config` and, on any failure
+or unverified result, `classify_cleanup_failure(semantic_prompts_sent=0)` --
+the only value this module can ever supply. A `stat`-verified removal is
+required for closure; an unverified one forces `INFRASTRUCTURE_REFUSAL`.
+Proven under filesystem tampering: a test removes the disposable config's
+authority marker mid-run, cleanup can then no longer be authorized, and the
+run refuses rather than reporting a pass.
+
+## The FULL artifact safety context
+
+`build_run_safety_context` populates every field I1's `ArtifactSafetyContext`
+declares, from the run's real value when that value exists: `endpoint_host`
+and `api_key` from the secret context; `broker_token`, `pipe_name` and
+`capability_id` from the live broker session; `workspace_absolute_path` from
+the controller's required `workspace_root` argument. `bearer_token` is
+`None` as a **derived, proven absence** -- I2A's frozen credential mechanism
+for this route is `models_json_env_interpolation`, which mints no separate
+bearer value; a descriptor reporting any other mechanism raises
+`CategoryBSafetyContextError` rather than guessing. A run that failed before
+a secret context existed still declares whatever it does have rather than
+falling back to `none_declared()`. The evidence records
+`safety_context_declared_needle_codes` -- the metadata CODES only, never a
+value -- and a test asserts all six available codes are present on a passing
+run.
+
+## Result / evidence integrity
+
+`gate_statuses` is a `MappingProxyType` over a throwaway dict; assigning
+through it raises `TypeError`, and a copy taken from it is independent.
+`CategoryBEvidence` holds one canonical, already-scrub-checked JSON string;
+each `as_dict()` returns a freshly deserialized copy, so mutating a returned
+dict -- including the nested `gate_statuses` and `compatibility_facts` --
+cannot rewrite the evidence or a later reader's view. The scrub result is an
+immutable `tuple` of bounded finding codes plus a `bool`. A refused evidence
+body is not retained in any form (`as_dict() == {}`, `as_json() == ""`), and
+`CategoryBEvidence.__post_init__` refuses to hold one.
+
+## Second adversarial self-review of the shipped code
+
+Five further defects were found by probing the finished implementation, and
+all five are fixed with regression tests:
+
+1. **A failed compatibility fact did not stop further LIVE calls.** With
+   `observed_pi_version = None`, the `PI_VERSION_OBSERVED` gate failed but
+   the stage gate below it tested only the LAST launch fact, so
+   `get_commands`, `get_state`, `observe_protocol` and the route check all
+   still ran. Stage gating now uses `_all_passed(...)` over every fact
+   established so far. Facts still derivable from an observation already in
+   hand are recorded anyway -- H1 and the registry both come from one
+   response, and neither costs an extra live call.
+2. **A subclass of an observation type passed the adapter boundary.** A
+   subclass could re-declare a validated field as a property returning a
+   different value per read, defeating both the exact-`bool` rule and the
+   session-id comparisons. The boundary now requires `type(value) is
+   expected`, not `isinstance`.
+3. **A "clean" scrub result could carry findings.** `CategoryBEvidence` now
+   requires `scrub_clean == (not scrub_findings)`.
+4. **A teardown/broker status could claim closure for a resource that never
+   existed.** `closed_by_creator` without a launch reported
+   `closure_satisfied = True`; a broker shutdown could be reported with
+   `creation_attempted = False`. Both are now unconstructible.
+5. **A blank `workspace_root` caused a credential read for a run that could
+   never be safe.** It ran the whole preflight/credential/config sequence
+   and only failed at broker creation -- yet the workspace needle it would
+   have declared was empty, so the run could never have produced provably
+   safe evidence. AIDO's own arguments are now validated FIRST, raising
+   `CategoryBControllerInputError` before any gate runs.
+
+A bounded reported-command cap (256) was also added, so an unbounded
+runtime-supplied command list is refused rather than held.
+
+## Additional adversarial tests derived beyond the required regressions
+
+Beyond the ten regressions the prompt required: launch bound to a foreign
+broker session; a protocol observation for an unrelated runtime; a runtime
+teardown or broker shutdown returning a foreign session id; every live
+adapter proven to receive the SAME `RuntimeSession` object; a stale broker
+session replayed from a previous invocation; re-running the controller
+against the same `experiment_root` after cleanup; a subclassed observation
+type; a launch adapter that raises leaving no teardown authority; a broker
+adapter that raises leaving no shutdown authority; an unbounded command
+list; an unexpected credential mechanism refusing rather than guessing;
+teardown/shutdown proven attempted exactly once; `source`-only variation
+proven not to change the registry verdict; and a shutdown call that returned
+but reported no direct-child exit proven NOT to be closure.
 
 ## Offline suite result
 
 ```text
-546 passed, 0 failed
+638 passed, 0 failed
 python -m pytest experiments/pi_implementer_qualification/tests -q
 ```
 
-(514 before this slice: I1 plus I2 through FU3B. I2B adds 32 new, fully
-offline tests in one new file; no existing test was modified, weakened, or
-removed.) No network call, socket, model call, Pi/Node process, or
+(514 = I1 plus I2 through FU3B, unchanged and unmodified; I2B-FU1
+contributes 124.) No network call, socket, model call, Pi/Node process, or
 credential lookup occurred anywhere in the run.
 
-The frozen `experiments/pi_external_runtime_ar2/tests` suite was also re-run,
-unmodified, since I2B structurally reuses `i2_route.run_offline_route_check`'s
-call shape against that suite's own `check_route_serves_model` contract:
-**290 passed, 0 failed**, no `ar2/` file touched.
+Frozen sibling suites re-run unmodified, since I2B reuses their lifecycle
+and interface facts:
 
-## Facts proven offline
+```text
+experiments/pi_external_runtime_ar2/tests        290 passed, 0 failed
+experiments/pi_external_runtime_ar2_o1/tests      89 passed, 0 failed
+```
 
-**Gate ordering and failure containment.** For every one of H1 mismatch, H2
-mismatch, an exact-tool-registry mismatch, route-unreachable, wrong-served-model,
-broker-not-ready, and a `PROTOCOL_OR_EXTENSION_ERROR` reported by either
-`get_commands` or `broker_ready`: the failing gate's own bounded
-`CategoryBFailureCode` is recorded, every later gate is left `"NOT_REACHED"`,
-and no later injected callable is ever invoked (proven with an
-order-recording double whose call list is asserted exactly). A failing
-non-secret preflight gate leaves ALL later gates -- including the injected
-connection reader -- uncalled, proven with a call-counting double whose count
-stays exactly `0`. A second non-secret gate is proven never to run once an
-earlier one in the same list fails.
+No file under `ar2/`, `o1/`, or `src/` was touched.
 
-**Credential-read ordering.** Reuses `i2_credentials.resolve_connection_after_preflight`
-unmodified; the connection reader is called at most once, and only after
-every non-secret gate reports `passed=True`. A malformed/missing connection
-value (raised as `InvalidBaseUrlError`/`ConnectionValueError` from the
-injected reader) is caught and re-attributed to the SAME bounded
-`InfrastructureRefusal` shape I2-4 already established, mapped here to
-`CategoryBGateName.CONNECTION_VALUES` / `CategoryBFailureCode.CONNECTION_VALUES_UNAVAILABLE`.
+## Zero-prompt proof
 
-**Candidate symmetry.** Candidate A and Candidate B are proven to produce
-byte-identical gate-status sequences and call orders through the SAME
-`run_category_b_controller` function, differing only in the `candidate`
-argument and the resulting `model_id`/`provider_id` values recorded in
-evidence.
-
-**Version is provenance only.** `observed_pi_version` (from the injected
-`launch_rpc` result) is proven to influence NOTHING about gate pass/fail --
-two otherwise-identical runs differing only in that string produce identical
-`gate_statuses` and outcomes, differing only in the recorded evidence field.
-
-**Unexpected exceptions are bounded.** An injected callable (`launch_rpc`,
-`h1_check`, `teardown`) raising an arbitrary exception -- including one whose
-message contains a synthetic secret-shaped literal -- is proven to produce
-only the bounded `CategoryBFailureCode.UNEXPECTED_EXCEPTION` code; the
-exception's `str()`/`repr()` text is proven absent from both the returned
-result's `repr()` and the built evidence.
-
-**Zero-prompt proof.** `semantic_prompts_sent` is proven `0` on every failing
-path AND on the fully-passed path alike (parametrized across representative
-failure points, plus the happy path). A source-level regression test greps
-the module for `IQ-1`/`IQ-2`/`IQ-3`/`task_prompt`/`send_prompt`/`agent_start`/
-`semantic_request`/a `.prompt(` call, and for `import subprocess`/`import
-socket`/`import httpx`/`import requests` -- none exist. A second regression
-test proves no public name on the module contains the substring `"prompt"`.
-A third proves this module's own `import`/`from` statements (not its
-explanatory prose) never reach `qualification.outcomes`, `.hard_bar`,
-`.ranking`, or `.records`'s record builder, and that
-`build_qualification_record` is never referenced.
-
-**Teardown/cleanup truthful attribution.** A gate failure BEFORE the
-disposable Pi config is ever created (e.g. an unwritable `experiment_root`)
-leaves `pi_config_created=False`, `live_resource_created=False`, and both
-`teardown.attempted`/`cleanup.attempted` `False` -- nothing to tear down. A
-gate failure AFTER config generation but before the RPC launch is attempted
-(e.g. an identity-binding mismatch) leaves `cleanup.attempted=True` (and
-verified) while `teardown.attempted` stays `False`. A gate failure AFTER the
-RPC launch is attempted (e.g. H1, H2, tool registry, route, or broker-READY)
-leaves BOTH `teardown.attempted` and `cleanup.attempted` `True`, and both are
-proven attempted on the fully-passed path too -- Category-B's job is to
-CONFIRM compatibility, never to leave a live process or a disposable config
-behind. `live_resource_created` is set as soon as the RPC launch is
-ATTEMPTED (not only on a confirmed pass), so a launch call that itself
-reports failure still triggers a teardown attempt. An injected `teardown`
-that itself raises is proven to produce a bounded, reported
-`UNEXPECTED_EXCEPTION` teardown outcome, never silently swallowed and never
-claimed as a successful stop.
-
-**Evidence safety.** `build_category_b_evidence` is proven to build a full
-`ArtifactSafetyContext` (populated from the run's secret context when one
-exists, `none_declared()` otherwise) and pass the payload through the
-existing `qualification.safety.qualification_scrub_check` -- reused
-unmodified -- before declaring it retention-ready. A direct test forces a
-synthetic credential-shaped value into the `observed_pi_version` provenance
-field (simulating a hypothetical future bug) and proves the scrub boundary,
-not this module's own discipline, refuses it (`retention_ready=False`,
-`evidence=None`). On the happy path, the emitted evidence dict is proven to
-contain none of `api_key`/`base_url`/`endpoint_host`/`broker_token`/
-`pipe_name`/`capability_id`/`workspace_absolute_path` as keys, and the
-synthetic API key and base URL used to build the run are proven absent from
-the evidence's JSON-serialized form. Nothing is written to disk by this
-module.
-
-**Token policy preserved.** Every evidence dict carries
-`aido_requested_max_output_tokens: null`, `models_json_omits_max_tokens:
-true`, `provider_request_count_observation_available: false`, and
-`wire_level_max_tokens_observation_available: false` unconditionally -- I2B
-introduces no `maxTokens`, no finite implementer output cap, and no new
-token-budget concept.
-
-## Reuse, not duplication
-
-I2B imports and reuses, UNMODIFIED, exactly:
-`i2_credentials.resolve_connection_after_preflight`,
-`i2_route.route_descriptor_for_candidate`/`run_offline_route_check`,
-`i2_secret_context.build_secret_context`,
-`i2_pi_config.write_qualification_pi_config`,
-`i2_composition.verify_i2_identity_binding`,
-`i2_environment.build_child_environment`,
-`i2_cleanup.scrub_generated_qualification_config`/`classify_cleanup_failure`,
-and `safety.ArtifactSafetyContext`/`qualification_scrub_check`. No I2 module
-was edited. No new raw `api_key`, config path, provider id, or model id
-parameter was introduced anywhere in the new module -- every identity value
-flows through the already-accepted trusted objects.
+`SEMANTIC_PROMPTS_SENT` is a module constant `0`, and nothing binds another
+value to the run's prompt count. Neither I2B module defines any function
+that accepts, sends or forwards a prompt. An AST-based source regression
+test asserts that no NAME in either module (identifier, attribute,
+parameter, function or class) contains `prompt`, `message`, `chat`,
+`completion`, `inference`, `agent_start` or `instruction`, apart from the
+zero-valued counter itself -- checked against names, never against prose, so
+the modules stay free to DOCUMENT what they refuse to do. A second test
+asserts neither module imports `subprocess`, `socket`, `ssl`, `http`,
+`urllib`, `requests`, `httpx`, `asyncio`, `multiprocessing`, `threading`,
+`shutil`, `litellm` or `openai`, and that their code (docstrings stripped)
+contains no `os.environ`, `getenv`, `Popen`, `urlopen` or `open(`. A third
+asserts no candidate-scoring machinery is reachable, and that
+`CategoryBOutcome` has exactly two members. Every Category-B failure is a
+pre-prompt infrastructure refusal: there is no candidate classification, no
+hard bar, no ranking, and no `AUTONOMOUS_PASS`/`AUTONOMOUS_FAIL`.
 
 ## What this does NOT establish
 
 - No zero-prompt live gate has ever run. No Pi/Node process was launched, no
-  RPC call was made, no broker was created, and no real credential was read
-  -- every one of the seven live boundaries is an injected callable this
-  module never supplies a real implementation for.
-- No candidate model has ever run. No PASS/FAIL, no ranking, no
+  RPC call was made, no broker was created, no socket was opened, no
+  `/models` request was issued, and no real credential was read. Every live
+  boundary is an injected adapter this package supplies no real
+  implementation for, and **no real live adapter was added by this phase**.
+- No candidate model has ever run. No PASS/FAIL, no ranking and no
   qualification verdict exists for Candidate A or Candidate B, and this
-  module cannot produce one: it imports no candidate-scoring machinery at
-  all.
-- 5F3B-Q1/Q2 (the first live candidate sweeps) remain **NOT authorized** and
-  cannot execute until a future, separately authorized phase supplies real
-  implementations for `launch_rpc`/`h1_check`/`get_commands`/`get_state`/
-  `route_checker`/`broker_ready`/`teardown` and receives its own explicit
-  go-ahead.
-- This module's own gate ORDERING (H1 before `get_commands`, tool-registry
-  content check after H2) is this slice's own documented, reasoned choice
-  where I2A Sec. 15's checklist ordering could not be a literal call
-  sequence -- it is not a reinterpretation of any I2A-accepted fact, and it
-  changes no I2A design text.
+  module cannot produce one.
+- **Not** "every possible failure maps to `INFRASTRUCTURE_REFUSAL`." Every
+  bounded adapter/gate failure does. A caller-programming error in AIDO's
+  own arguments raises `CategoryBControllerInputError` before any gate runs,
+  deliberately -- that is not a Category-B outcome at all. The earlier,
+  stronger README claim has been corrected.
+- The `run_id` nonce is a correlation control, not authentication against a
+  hostile adapter.
 - Redaction/scrubbing remain **backstops, not guarantees**, exactly as every
   earlier I1/I2 closure states.
+- 5F3B-Q1/Q2 (the first live candidate sweeps) remain **NOT authorized** and
+  cannot execute until a future, separately authorized phase supplies real
+  implementations for the injected adapters and receives its own explicit
+  go-ahead.
