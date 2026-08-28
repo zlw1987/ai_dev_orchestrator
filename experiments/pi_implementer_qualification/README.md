@@ -132,11 +132,15 @@ rather than against I2A Sec. 15's narrative checklist. Five corrections:
    runtime, undetectably. Each adapter now takes the run's `RuntimeSession`
    (or `BrokerSession`) and returns an observation carrying the session id
    it came from; a mismatch is refused.
-3. **H1 and the tool registry come from ONE `get_commands` response.**
-   Frozen AR2's own H1 evaluator takes that response's command list as its
-   argument, so modelling H1 as an unrelated observation was never faithful
-   to the seam. They stay two DISTINCT gate facts, derived from one
+3. **H1 and the second `get_commands` fact come from ONE response.** Frozen
+   AR2's own H1 evaluator takes that response's command list as its argument,
+   so modelling H1 as an unrelated observation was never faithful to the
+   seam. They stay two DISTINCT gate facts, derived from one
    `GetCommandsObservation`. `get_state`/H2 follow the same rule.
+   *(The one-observation discipline stands. FU1's naming of the second fact
+   as "the tool registry" is **superseded** -- see FU2 item 1 below: it is
+   the extension COMMAND-PROVENANCE partition, and `get_commands` proves
+   nothing about the active tool registry.)*
 4. **The terminal pass rule includes lifecycle closure.** The initial
    controller decided `CATEGORY_B_GATE_PASSED` from the last compatibility
    gate BEFORE teardown, cleanup and the evidence scrub ran -- so a run
@@ -147,6 +151,100 @@ rather than against I2A Sec. 15's narrative checklist. Five corrections:
    capability_id=None, workspace_absolute_path=None` -- silently
    substituting `None` for values a live run genuinely has.
 
+### 5F3B-I2B-FU2 -- conformance with the now-frozen I2A/FU3 design family
+
+**I2B-FU1 was never accepted.** The frozen `5F3B-I2A-DESIGN-FU3` family
+(FU3 + FU3A/FU3B/FU3C) names six defects in it. FU2 corrects all six, adds
+`qualification/i2b_workspace.py`, and changes no frozen AR1/AR2/O1/I1/I2 code
+or semantics.
+
+1. **`get_commands` enumerates SLASH COMMANDS, not the active tool
+   registry.** FU1 gated `TOOL_REGISTRY` on `sorted(reported command names)
+   == ("aido_edit", "aido_read")`. That gate was both *unprovable* -- Pi
+   exposes NO RPC command that enumerates the active tool registry (AR0-FU1
+   Sec. 4.1(j), source-verified; repeated in AR1, AR2, and AR2D Sec. 2.2's
+   mandated correction) -- and *unsatisfiable*: `aido_read`/`aido_edit` are
+   registered with `pi.registerTool` while `get_commands` reports
+   `pi.registerCommand` slash commands, so those two names can never appear
+   in a response at all. The gate is now `EXTENSION_COMMAND_NAMESPACE`, a
+   **provenance partition** over the top-level-`"extension"`-sourced
+   entries: exactly ONE `sourceInfo.source == "cli"` entry, which must be
+   the H1-validated sentinel; any number of mechanically-established
+   `"inline"` (Pi-owned) entries, tolerated without further constraint on
+   name, path or count; anything else -- missing, malformed, or unrecognized
+   `sourceInfo` -- fails closed. Both AIDO's sentinel and Pi's own inline
+   `llama` report the SAME top-level `source`, which is exactly why the top
+   level is a selector and `sourceInfo.source` is the discriminator. The
+   evidence records `active_tool_registry_observation_available: false` and
+   carries AR2D Sec. 2.2's three-way distinction. The configured
+   `aido_read`/`aido_edit` allowlist remains an AIDO-owned argv/config fact
+   and is no longer compared against any observation.
+2. **H1 arrives as COMPONENTS; AIDO recomputes the verdict.**
+   `GetCommandsObservation.extension_identity_matched` was a single
+   caller-supplied boolean. The observation now carries the frozen
+   evaluator's own five components plus two bounded origin tokens, and
+   `h1_identity_established` is AIDO's own conjunction over them.
+   `h1_components_from_frozen_evaluation` is the fixed projection a future
+   live adapter must apply to the **frozen, unmodified**
+   `ar2.handshakes.evaluate_extension_identity`, and a **differential
+   conformance test** runs an adversarial corpus -- including the genuine
+   observed sentinel(`cli`) + `llama`(`inline`) shape -- through both,
+   requiring exact agreement on all five components and on the verdict. The
+   sentinel command NAME is AIDO's own declared constant, so an adapter
+   cannot nominate some other reported command as "the sentinel".
+3. **Every deterministic non-secret refusal precedes the credential read.**
+   FU1 called `resolve_connection_after_preflight` FIRST and only then
+   `route_descriptor_for_candidate`, so an unknown candidate caused one real
+   credential read before refusing. The prefix is now `RUN_CORRELATION ->
+   WORKSPACE_AUTHORITY -> ROUTE_DESCRIPTOR -> NON_SECRET_PREFLIGHT`, and
+   only then `CONNECTION_VALUES`. A source-level test pins that ordering,
+   and call-counting doubles prove **zero** reader invocations for every
+   pre-credential refusal.
+4. **Synthetic workspace authority replaces caller-supplied paths.** FU1's
+   `workspace_root: str` / `experiment_root: str` were arbitrary non-blank
+   strings that flowed into a `mkdir`. Both parameters are **removed**. The
+   controller takes one `QualificationRunWorkspace`, obtainable only from
+   `mint_qualification_run_workspace()` -- which takes no argument at all
+   and CREATES a fresh disposable root through the frozen
+   `ar2.fixtures.create_disposable_experiment_root`. **No function anywhere
+   converts an existing path into one.** The same verified identity binds
+   the generated Pi config location, broker creation, runtime launch and
+   `ArtifactSafetyContext.workspace_absolute_path`; authority is re-proved
+   against the filesystem (through the frozen AR2 marker verification) at
+   every consumption boundary; and a single-use claim binds one workspace to
+   one `run_id`, so cross-run reuse, relocation, marker tampering and object
+   substitution all fail closed.
+5. **The creator partial-failure contract (FU3A/FU3B/FU3C).** No
+   authority-bearing partial handle crosses into the controller. Ownership
+   either transfers whole (a trusted, fully correlated session) or stays
+   with the creator, which reports three orthogonal facts --
+   `resource_created`, `cleanup_attempted`, and ONE
+   resource-kind-specific observed postcondition
+   (`direct_child_reported_exit` / `reached_closed`). All four states are
+   constructible, including `PARTIAL_RESOURCE_STRANDED_NO_CLEANUP_ATTEMPT`,
+   for which zero cleanup calls occur by anyone and no controller recovery
+   action is authorized. **`cleanup_verified_success` is not a constructor
+   field at all**: AIDO derives it as
+   `cleanup_attempted and (postcondition is True)`, never bare truthiness
+   and never a "the close call did not raise" shortcut. `create_broker` now
+   returns a `BrokerCreationObservation` rather than a bare `BrokerSession`,
+   so the broker side has the runtime side's partial accounting too.
+6. **Possession is not authority.** FU1 still CALLED the shutdown adapter
+   for a session whose `run_id`/`broker_session_id` did not match this run,
+   and merely withheld `closure_satisfied` -- a live action against a
+   resource the run never proved it owns. The adapter is now **never called
+   at all** for such a session; the outcome is
+   `RUNTIME_SHUTDOWN_REFUSED_FOREIGN_SESSION` /
+   `BROKER_SHUTDOWN_REFUSED_FOREIGN_SESSION` with `attempted=False`,
+   `authority_available=False`, `closure_satisfied=False`. A same-run,
+   same-broker positive control proves ordinary teardown still happens
+   exactly once.
+
+Plus FU3 Sec. 10: a failure to mint the run correlation id is bounded as
+`RUN_CORRELATION_UNAVAILABLE` -- an `INFRASTRUCTURE_REFUSAL` with zero
+credential reads, zero resources, every closure `NOT_REQUIRED`, and no raw
+exception text retained -- instead of escaping as an unbounded exception.
+
 ### What a Category-B PASS now mechanically requires
 
 Thirteen INDEPENDENTLY established compatibility facts (`CompatibilityFacts`,
@@ -154,8 +252,10 @@ one exact-`bool` field each -- never one caller-supplied "passed" boolean):
 Pi version observable (**provenance only**, never an exact-version
 authorization); RPC launch shape valid; required launch flags accepted; LF
 JSONL request/response correlation; `get_commands` response shape
-understood; H1 exact extension identity; exactly the authorized tool
-registry; `get_state` response shape understood; H2 exact provider/model
+understood; H1 exact extension identity (recomputed by AIDO from the frozen
+rule's own components); no unexpected extension command observed (the
+corrected provenance partition -- **never** a claim about the active tool
+registry); `get_state` response shape understood; H2 exact provider/model
 identity; no protocol violation observed; no extension error observed; the
 exact candidate model served (via the unmodified `i2_route` route-check
 wiring); and the broker's required READY state.
@@ -174,8 +274,8 @@ alongside a failed closure.
 - an adapter that RAISES, returns `None`, returns a wrong type, or returns a
   SUBCLASS of an observation type is a bounded refusal -- never a crash, and
   never a pass;
-- the tool-registry comparison is over the SORTED OBSERVED NAME SEQUENCE,
-  not a set, so a duplicated or missing entry cannot compare equal;
+- the extension command partition is over SORTED SEQUENCES, never sets, so a
+  duplicated CLI-sourced entry cannot collapse into the one expected entry;
 - a command entry, a Pi version, or a provider/model identity that is not a
   bounded, well-formed value is refused at construction, so no raw stdout,
   stderr, RPC body, path, URL or exception text can reach a retained
@@ -184,14 +284,20 @@ alongside a failed closure.
   also reports a matched identity, a "clean" scrub carrying findings, or a
   teardown claiming closure for a resource that was never created are all
   unconstructible;
-- a failed launch must either hand back a `RuntimeSession` (so AIDO retains
-  authority to close it) or declare it closed its own partial resource
-  internally; the third, stranding state is unconstructible. A launch
-  adapter that RAISES leaves AIDO no authority at all, which is reported as
-  `RUNTIME_TEARDOWN_AUTHORITY_UNAVAILABLE` and can never pass;
-- AIDO's own arguments (`candidate`, `experiment_root`, `workspace_root`,
-  `node_executable`) are validated FIRST, so a run that could never produce
-  provably safe evidence never causes a credential read at all.
+- a creation that hands back no trusted session reports three orthogonal
+  facts rather than a handle, and the controller has no partial-close
+  callable for that branch at all -- so zero cleanup calls occur, by anyone,
+  and no repeat-close-safety assumption is ever required. A launch or broker
+  adapter that RAISES leaves AIDO no authority at all, reported as
+  `*_AUTHORITY_UNAVAILABLE`, which can never pass;
+- a returned session that does not carry this run's own `run_id` (and, for a
+  runtime session, this run's own `broker_session_id`) is **never passed to
+  the shutdown adapter**; the refusal is an explicit state, not a discounted
+  attempt;
+- AIDO's own arguments (`candidate`, `node_executable`, and the
+  `QualificationRunWorkspace` itself) are validated FIRST, so a run that
+  could never produce provably safe evidence never causes a credential read
+  at all.
 
 ### What is deliberately NOT claimed
 
@@ -216,8 +322,14 @@ alongside a failed closure.
 `build_run_safety_context` populates every field I1's `ArtifactSafetyContext`
 declares, from the run's real value when that value exists: `endpoint_host`
 and `api_key` from the run's secret context; `broker_token`, `pipe_name` and
-`capability_id` from the live broker session; `workspace_absolute_path` from
-the controller's required `workspace_root`. `bearer_token` is `None` as a
+`capability_id` from the live broker session; and `workspace_absolute_path`
+from the run's verified synthetic **experiment root**. That last choice is
+deliberate: the run has three absolute paths (the experiment root, the
+workspace root beneath it, and the generated Pi config directory beside
+that), the scrub matches substrings, and the enclosing root is the one
+needle that refuses an artifact carrying ANY of the three -- declaring only
+the narrower workspace root would leave the generated-config directory
+undeclared. `bearer_token` is `None` as a
 DERIVED, proven absence -- I2A's frozen credential mechanism for this route
 is `models_json_env_interpolation`, which mints no separate bearer value at
 all; a descriptor reporting any other mechanism refuses rather than
@@ -313,8 +425,9 @@ experiments/pi_implementer_qualification/
         i2_identity.py           5F3B-I2-FU3: the leaf module for CREDENTIAL_ENV_VAR_NAME/PROVIDER_ID
         i2_composition.py        5F3B-I2-FU3: config/secret/route identity binding
         i2_issuance.py           5F3B-I2-FU3A/FU3B: the leaf module for the process-local issuance registry (internal-only API)
-        i2b_session.py           5F3B-I2B-FU1: run-scoped Category-B resource authority + bounded live observations (offline)
-        i2b_controller.py        5F3B-I2B-FU1: the Category-B zero-prompt live-gate controller (offline wiring only)
+        i2b_workspace.py         5F3B-I2B-FU2: synthetic, qualification-MINTED Category-B workspace authority (no path parameter anywhere)
+        i2b_session.py           5F3B-I2B-FU2: run-scoped Category-B resource authority + bounded live observations (offline)
+        i2b_controller.py        5F3B-I2B-FU2, hardened by FU2A + FU2B + FU2C + FU2D + FU2E + FU2F: the Category-B zero-prompt live-gate controller (offline wiring only)
     tests/
         conftest.py              sys.path wiring, git_executable fixture, thread-leak check
         test_iq1_fixture.py      IQ-1 fixture, baseline, correct-repair proof
@@ -339,7 +452,7 @@ experiments/pi_implementer_qualification/
         test_safety_repr.py      5F3B-I2-FU1: ArtifactSafetyContext repr-safety proof
         test_i2_composition.py   5F3B-I2-FU3: config/secret/route identity binding
         test_i2_issuance.py      5F3B-I2-FU3A/FU3B: process-local issuance registry contract (white-boxes internal-only API)
-        test_i2b_controller.py   5F3B-I2B-FU1: Category-B lifecycle/authority/closure/evidence-immutability (offline doubles only)
+        test_i2b_controller.py   5F3B-I2B-FU2 + FU2A + FU2B + FU2C + FU2D + FU2E + FU2F: Category-B observability/H1-conformance/credential-ordering/workspace-authority/partial-lifecycle/foreign-session/closure/result-and-evidence-integrity/cross-field-coherence/resource-state-failure-code-domains/first-failure-attribution/cleanup-classification-coherence/refusal-trace-reachability/resource-existence-coherence/observation-availability/protocol-failure-code-mapping/terminal-evidence-state/evidence-safety-origin-attribution/immutability (offline doubles only)
 ```
 
 **All qualification evidence is written by exactly one function**
@@ -496,19 +609,231 @@ See `FINDINGS.md`'s `5F3B-I2-FU3B` section for the full closure record.
 This closes the accepted 5F3B-I2 scope; no further FU is anticipated absent
 a new independent-review finding.
 
-**5F3B-I2B, as corrected by 5F3B-I2B-FU1 (Category-B Runtime Authority +
-Lifecycle Closure), is offline wiring only.**
-`qualification/i2b_controller.py` and `qualification/i2b_session.py`
-implement the state machine and the run-scoped resource authority that will
-LATER execute the accepted Category-B gates -- the frozen-O1 lifecycle
-order, session-bound observations, thirteen independently established
-compatibility facts, a terminal pass rule that includes teardown/broker/
-cleanup/evidence closure, the full artifact safety context, and immutable
-results -- entirely through injected adapters and synthetic offline doubles.
+**5F3B-I2B-FU2A (Terminal Result + Evidence Integrity Closure).**
+Independent review of FU2 found `CategoryBControllerResult` was not valid by
+construction at all -- `runtime_teardown`/`broker_shutdown`/`cleanup` were
+consumed via bare attribute access with **no type check whatsoever**, and
+`facts`/`evidence` used `isinstance`, which a subclass overriding a
+read-only property (`all_established`/`closure_satisfied`/
+`retention_ready`) satisfied while lying about its own state -- plus two
+narrower defects: `CleanupStatus.scrub_verified` accepted any truthy value
+via bare Python truthiness (`scrub_verified="false"` reported
+`VERIFIED_REMOVED`), and `CategoryBEvidence`'s public constructor accepted
+`retention_ready=True` and an arbitrary `_serialized` body directly, with no
+proof either had ever been scrub-checked. All three are closed: every
+nested authority value at the result boundary is now checked by **exact
+type** (`type(x) is ExactType`, never `isinstance`); `CleanupStatus` requires
+`scrub_verified` to be exactly `bool`; and `CategoryBEvidence`'s every field
+is `init=False` (the public constructor takes no arguments at all), with the
+only two populated-instance paths being package-internal classmethods that
+each **derive** `retention_ready` from an actual call to the frozen
+`qualification_scrub_check`, never accept it as an assertion. `_gate_status_pairs`
+is newly validated against a bounded, declared vocabulary, with an explicit
+rule that a `CATEGORY_B_GATE_PASSED` outcome can never carry a
+`NOT_REACHED`/`FAILED:...` entry for any gate. See `FINDINGS.md`'s
+`5F3B-I2B-FU2A` section for the full counterexample-by-counterexample
+closure record. `i2b_session.py`/`i2b_workspace.py` were not touched --  a
+sweep for the same defect classes found nothing else in either module.
+
+**Correction (5F3B-I2B-FU2B).** FU2A's own closing claim that
+`CategoryBControllerResult` was thereby "valid by construction" was itself
+**overstated**. FU2A hardened individual field TYPES but never bound them to
+EACH OTHER: the FU2A test helper's own default kwargs -- reused, unnoticed,
+across roughly twenty test cases -- were themselves the exact contradiction
+(`pi_config_created=True` alongside `cleanup.attempted=False`;
+`runtime_session_established`/`broker_created=True` alongside
+`runtime_teardown`/`broker_shutdown` left at `NOT_REQUIRED`; a single GLOBAL
+vocabulary of gate-status strings that let `route_check = "NOT_REQUIRED"` --
+a text only a CLOSURE gate ever produces -- sit inside an otherwise-passing
+result; and a retention-ready `CategoryBEvidence` scrub-built from a payload
+with no relationship to the result consuming it at all,
+`{"ok": True}`, accepted unconditionally). FU2B closes these; see the
+`5F3B-I2B-FU2B` section in `FINDINGS.md` for the full record, including a
+genuine PRODUCTION bug this phase's own new checks surfaced end to end
+(`CleanupStatus.status_text` embedded a DIFFERENT enum's value than the one
+the controller's own `_fail()` actually records for the same gate) and a
+bypass found in this phase's OWN post-implementation self-review
+(`CompatibilityFacts` fields were not bound to their own compatibility
+gate's status at all).
+
+**5F3B-I2B-FU2B remained HOLD after independent source review.** FU2B's own
+structural checks left three residual gaps, each reproduced against the
+pre-fix code before any change was made:
+
+1. `_ResourceClosureStatus` validated `failure_code` by TYPE only -- ANY
+   `CategoryBFailureCode` was accepted on ANY `ResourceClosureState`, on
+   EITHER resource kind. `RuntimeTeardownStatus(state=SHUTDOWN_FAILED,
+   failure_code=BROKER_SHUTDOWN_INCOMPLETE)` and a foreign-session state
+   carrying the generic teardown-failed code instead of its own
+   foreign-session-specific code both constructed successfully, so the
+   closure gate then trusted that typed object's own `status_text` as
+   internally-consistent but FALSE evidence.
+2. `failed_gate`/`failure_code` were checked for agreement with THAT gate's
+   own recorded text, but nothing verified `failed_gate` was the FIRST
+   failed gate in the controller's own evaluation order -- a hand-built
+   result could name an earlier genuinely-failed gate in `gate_statuses`
+   while nominating a later one as `failed_gate`.
+3. `CleanupStatus` checked `classification`'s TYPE
+   (`CleanupFailureClassification`) but never its FIELDS -- an
+   internally-impossible instance (e.g. `semantic_prompts_sent=1` alongside
+   the pre-prompt classification, a shape `classify_cleanup_failure` itself
+   never returns, since Category-B is structurally pre-prompt) constructed
+   successfully and was accepted.
+
+**5F3B-I2B-FU2C** closes all three. `_ResourceClosureStatus` subclasses
+(`RuntimeTeardownStatus`/`BrokerShutdownStatus`) now each declare their OWN
+per-STATE allowed-failure-code table, read directly off their actual
+`_close_runtime`/`_close_broker` producer -- a code valid for one state, or
+for one resource kind, is refused on any other. `CategoryBControllerResult`
+now additionally scans its gate statuses in the controller's own declared
+evaluation order and requires `failed_gate` to be the FIRST `FAILED:...`
+entry found (and requires a `CATEGORY_B_GATE_PASSED` result to have no
+`FAILED` gate at all). `CleanupStatus` now compares a non-`None`
+`classification` field-by-field against a FRESH call to
+`classify_cleanup_failure(semantic_prompts_sent=0)` -- by identity/exact-type,
+never truthiness -- rather than trusting the wrapping exact-type check alone;
+this reuses the frozen `i2_cleanup` function's own return value for
+comparison rather than importing/naming `AutonomousClassification` inside
+`i2b_controller.py` (which `test_no_candidate_scoring_machinery_is_reachable`
+already forbids). See `FINDINGS.md`'s `5F3B-I2B-FU2C` section for the full
+counterexample-by-counterexample closure record, including the corrected
+`test_every_unsatisfied_closure_state_reports_no_orchestrator_attempt` test,
+which had itself been asserting a code/state pairing the real controller
+never produces.
+
+**Correction (5F3B-I2B-FU2D): FU2C's "READY FOR INDEPENDENT REVIEW" verdict
+was premature.** FU2C closed *which* failure code a resource or gate may
+carry and *which* gate may be nominated as `failed_gate`, but stopped one
+layer short: individually valid resource and gate objects could still
+describe an **execution trace the controller could never have produced**.
+The suite's own launch-facts "positive control" was exactly such a trace --
+it asserted as legitimate a result claiming `PI_CONFIG_GENERATION = PASSED`
+alongside `pi_config_created=False` and a `NOT_REQUIRED` cleanup, and
+`RUNTIME_LAUNCH = FAILED:RUNTIME_SESSION_MISMATCH` alongside
+`runtime_session_established=False`. Both are impossible: the controller
+assigns `generated_config` exactly on that gate's success path, and a
+session-mismatch refusal is reached only *after* a session object was
+returned. **Refusing to shut a foreign session down is not the same fact as
+no session having been returned.**
+
+FU2D closes this with three narrow, source-transcribed additions: each
+existence boolean is bound to the gate status that determines it and to a
+per-status map of the closure states that status can actually produce; and
+`_require_reachable_gate_trace` requires every compatibility gate to be
+reached **exactly** when the controller's own `if` condition for that stage
+was satisfied (a biconditional, so a gate claiming `NOT_REACHED` when its
+prerequisite passed is refused too). Both intentional multi-fact observation
+groups survive untouched -- the four launch-fact gates still fail
+independently, and H1 and the namespace gate still both fail from one
+`get_commands` response. Nine existing tests that encoded impossible traces
+were corrected, and the old `_all_not_reached_pairs` test helper (whose
+premise was itself an impossible-trace generator) was replaced by one that
+derives every field from a reachable trace. A further bypass found in this
+phase's own second adversarial review -- creator-retained runtime closure
+states surviving on a trace where the launch adapter was never called -- was
+fixed and regressed. See the `5F3B-I2B-FU2D` section in `FINDINGS.md`,
+including the 29-real-controller-trace test that proves the new rules are
+derived from the source rather than merely plausible.
+
+**Correction (5F3B-I2B-FU2E): FU2D's own "READY FOR FINAL FREEZE REVIEW"
+verdict was premature.** FU2D closed *whether a gate trace is reachable*, but
+a gate trace being reachable does not by itself prove every `CompatibilityFacts`
+field on it is honest: the fact-vs-gate binding **skipped the check entirely**
+whenever a fact's own gate read `NOT_REACHED`, correct only for the four
+LAUNCH facts (I2A's own accepted asymmetry -- they are recorded from the
+`RUNTIME_LAUNCH` observation before the controller knows whether
+`RUNTIME_LAUNCH` itself will pass) but far too broad for the other seven
+single-mapped facts, whose own gate and whose own observation are always set
+together, unconditionally, in the SAME block. And the `PROTOCOL_INTEGRITY`
+conjunction check proved only that the two protocol facts agreed with
+pass/fail, never *which* failure code they were consistent with --
+`FAILED:PROTOCOL_VIOLATION_OBSERVED` and `FAILED:EXTENSION_ERROR_OBSERVED`
+each pin a DIFFERENT exact pair of fact values, and the old check could not
+tell them apart.
+
+FU2E closes both, plus one further terminal-state gap: `CategoryBEvidence()`'s
+bare, no-argument constructor produces a safe INTERMEDIATE placeholder
+(`scrub_findings == ("evidence_not_yet_built",)`) that is legitimate to
+construct in isolation but is never a shape `run_category_b_controller` itself
+returns -- nothing previously refused a terminal `CategoryBControllerResult`
+carrying it. All fourteen of this phase's own mandatory counterexamples were
+reproduced against a scratch reconstruction of the pre-fix module (each
+constructed cleanly there) before being closed; every one is now refused
+except the two accepted positive controls (a valid `RuntimeLaunchObservation`
+with `session=None` -- `RUNTIME_LAUNCH_FAILED` -- or a foreign session --
+`RUNTIME_SESSION_MISMATCH` -- still independently carries the four launch
+facts even though their own gates stay `NOT_REACHED`). See the `5F3B-I2B-FU2E`
+section in `FINDINGS.md` for the full record, including the exact
+observation-availability rule, the exact protocol failure-code/fact mapping,
+and the second-adversarial-sweep notes.
+
+**Correction (5F3B-I2B-FU2F): FU2E's own "READY FOR FINAL INDEPENDENT FREEZE
+REVIEW" verdict was premature, for exactly one narrow residual.** FU2E bound
+every `CompatibilityFacts` field to the gate that produced it, but
+`EVIDENCE_SAFETY`'s own failure code was still bound only to
+`evidence.retention_ready` -- never to WHICH of the controller's two
+mutually-exclusive evidence-construction paths actually produced a
+non-retention-ready `CategoryBEvidence`. The suite's own
+`test_fu2c_evidence_safety_alone_failing_may_be_failed_gate` still accepted
+`gate_statuses['evidence_safety'] = FAILED:EVIDENCE_SCRUB_REFUSED` paired
+with `CategoryBEvidence._refused(("safety_context_unprovable",))` -- the
+real controller's SAFETY_CONTEXT_UNPROVABLE-branch shape, which
+`EVIDENCE_SCRUB_REFUSED` (only ever emitted for a non-retention-ready
+`_build_from_payload` body) can never accompany.
+
+FU2F closes this by having `CategoryBEvidence` stamp its own construction
+origin (`_refused` vs `_build_from_payload` vs the untouched bare-constructor
+default), and binding `EVIDENCE_SAFETY`'s code to that origin by DIRECT,
+PER-ORIGIN EQUALITY -- the same pattern the three lifecycle-closure gates
+already use against their own typed objects' `status_text`. The fix also
+surfaced a SECOND, symmetric bypass the old `retention_ready`-only check
+permitted (`SAFETY_CONTEXT_UNPROVABLE` paired with a REAL dirty
+`_build_from_payload` body), closed the same way; and it resolved
+`EVIDENCE_SAFETY`'s defensive `MALFORMED_ADAPTER_RESULT` branch, PROVEN
+unreachable under the controller's own invariants (`EVIDENCE_SAFETY` is
+unconditionally resolved on every path before that guard runs) and removed
+from the gate's accepted terminal vocabulary, so a future regression that
+somehow reaches it would now raise loudly at result construction rather than
+silently accepting an unproducible code. See the `5F3B-I2B-FU2F` section in
+`FINDINGS.md` for the full record, including the exhaustive cross-swap sweep.
+
+**5F3B-I2B, as corrected by 5F3B-I2B-FU1, brought into conformance with the
+frozen I2A/FU3 design family by 5F3B-I2B-FU2, made cross-field-coherent by
+5F3B-I2B-FU2A and 5F3B-I2B-FU2B, given exact resource/state failure-code
+domains, first-failure attribution and cleanup-classification coherence by
+5F3B-I2B-FU2C, made refusal-trace/resource-existence coherent by
+5F3B-I2B-FU2D, given exact observation-availability and terminal-evidence-
+state closure by 5F3B-I2B-FU2E, and given exact evidence-safety failure
+attribution by 5F3B-I2B-FU2F, is offline wiring only.**
+`qualification/i2b_controller.py`, `qualification/i2b_session.py`
+and `qualification/i2b_workspace.py` implement the state machine, the
+run-scoped resource authority and the synthetic workspace authority that
+will LATER execute the accepted Category-B gates -- the frozen-O1 lifecycle
+order, the corrected pre-credential ordering, session-bound observations,
+thirteen independently established compatibility facts (including the
+corrected extension-command-provenance gate, which is explicitly **not** a
+tool-registry observation, and each now BOUND to its own compatibility
+gate's status), the handle-free creator partial-failure contract, absolute
+foreign-session refusal, a terminal pass rule that requires the ACTUAL
+successful Category-B shape (every typed closure object genuinely
+`CLOSED_BY_ORCHESTRATOR`/verified, never merely `closure_satisfied`, which
+`NOT_REQUIRED` also satisfies), per-gate-bounded status text, a
+retention-ready evidence body mechanically bound to the exact result
+consuming it, and immutable results -- entirely through injected adapters
+and synthetic offline doubles.
 **I2B CONTROLLER WIRED OFFLINE. CATEGORY-B LIVE EXECUTION NOT RUN. NO
 CANDIDATE MODEL RUN. Q1/Q2 NO-GO.** See the "What I2B adds" section above
 for the full closure record, including what it deliberately does NOT
 claim.
+
+**5F3B-I2B-FU2F verdict: COMPLETE. 5F3B-I2B verdict: READY FOR FINAL FREEZE
+REVIEW.** Category-B live execution, 5F3B-Q1/Q2 and real-workspace authority
+all remain **NO-GO** -- FU2F closes an evidence-safety failure-code
+attribution gap in the OFFLINE result validator; it authorizes no live
+Pi/Node launch, no network call, no credential read, no model call and no
+semantic prompt, and reopens no accepted I2A/FU3 or
+5F3B-I2B-FU2/FU2A/FU2B/FU2C/FU2D/FU2E design decision. See the
+`5F3B-I2B-FU2F` section in `FINDINGS.md` for the full closure record.
 
 **This is still an offline-only implementation.** No zero-prompt live gate
 (I2A Sec. 15) has run, no candidate model has run, and 5F3B-Q1/Q2 (the first

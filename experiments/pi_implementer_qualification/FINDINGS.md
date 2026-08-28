@@ -1956,6 +1956,19 @@ unverified cleanup. `CategoryBControllerResult.__post_init__` refuses to
 construct a pass that violates any of these, so the rule holds even for a
 directly-constructed result.
 
+**Correction (5F3B-I2B-FU2A).** The claim above was FALSE as first written.
+Independent review found `__post_init__` read
+`runtime_teardown.closure_satisfied`/`broker_shutdown.closure_satisfied`/
+`cleanup.closure_satisfied`/`evidence.retention_ready` via bare attribute
+access with **no type check on those three fields at all**, and checked
+`facts`/`evidence` with `isinstance` rather than exact type -- so an
+unrelated object merely exposing `closure_satisfied = True` as a bare class
+attribute, or a subclass overriding any of these five read-only properties,
+constructed a `CATEGORY_B_GATE_PASSED` result directly. See the FU2A section
+below for the concrete counterexamples, the fix (every nested authority
+value is now checked by `type(x) is ExactType`, never `isinstance`), and the
+regression tests. The claim is accurate again as of FU2A.
+
 ## Teardown / broker-shutdown behaviour, stated truthfully
 
 Runtime first, then broker -- frozen O1's order. Each is attempted exactly
@@ -2121,3 +2134,2097 @@ hard bar, no ranking, and no `AUTONOMOUS_PASS`/`AUTONOMOUS_FAIL`.
   cannot execute until a future, separately authorized phase supplies real
   implementations for the injected adapters and receives its own explicit
   go-ahead.
+
+---
+
+# 5F3B-I2B-FU2 -- Offline Category-B Controller Correction (Offline Only)
+
+> **OFFLINE IMPLEMENTATION ONLY. CATEGORY-B LIVE EXECUTION NOT RUN. NO
+> CANDIDATE MODEL RUN. NO REAL WORKSPACE. Q1/Q2 NO-GO.**
+
+The `5F3B-I2A` design family -- including `DESIGN-FU3`, `FU3A`, `FU3B` and
+`FU3C` -- is **frozen**. The I2B-FU1 implementation slice was **never
+accepted**, and the frozen design names six defects in it. This phase brings
+the unfrozen I2B slice into exact conformance with that design. **No frozen
+AR1/AR2/O1/I1/I2 contract or code was modified**, nothing under `src/`,
+root `tests/` or `projects/` was touched, and `CLAUDE.md` was not modified.
+
+## Pre-coding adversarial analysis
+
+Answered for every authority-bearing object before any code was written.
+
+| Object | Who creates it | Who may mutate it | What proves provenance | Bypassable through a supported path? |
+|---|---|---|---|---|
+| `QualificationRunWorkspace` | **only** `mint_qualification_run_workspace()`, which CREATES the root | nobody (frozen; both paths `repr=False` behind a bounded `__repr__`) | a process-local mint record keyed by a fresh 128-bit nonce, plus the frozen AR2 on-disk marker re-read at every consumption boundary | **No** -- there is no function taking a path, `__post_init__` refuses an unregistered nonce or a path that disagrees with the mint record, and every check is EXACT-type (a subclass is refused) |
+| `BrokerCreationRequest` / `RuntimeLaunchRequest` | the controller only | nobody (frozen) | constructed from the run's own `run_id` plus the claimed, re-verified workspace | **No** -- re-verifies the workspace against the filesystem and requires the single-use claim to name exactly this `run_id` |
+| `BrokerCreationObservation` / `RuntimeLaunchObservation` | the injected creator adapter | nobody (frozen) | the correlated `session`, or three orthogonal creator-reported facts | Fails closed: `_invoke` requires `type(v) is expected` (a subclass is refused), and every malformed/incoherent combination raises at construction |
+| `BrokerSession` / `RuntimeSession` | the creator adapter | nobody (frozen) | `run_id` (and `broker_session_id`) equality against this invocation's own nonce, **and** being the direct return value of this invocation's own creation call | Value equality is a CORRELATION control, not authentication -- stated, not overclaimed |
+| `GetCommandsObservation` (H1 + namespace) | the `get_commands` adapter | nobody (frozen) | five frozen-evaluator components AIDO recomputes; AIDO's own declared sentinel name and expected origin kind | An adapter fabricating all five components is out of scope by the design's own Sec. 6.3(e) -- stated as a residual, never claimed closed |
+| `RuntimeShutdownObservation` / `BrokerShutdownObservation` | the shutdown adapters | nobody (frozen) | session-id equality with the exact session this run created | Never called at all for a session this run cannot prove is its own |
+| generated Pi config | frozen `i2_pi_config` (unmodified) | its own internal-only issuance registry | unchanged from I2-FU3A/FU3B | Unchanged |
+| evidence / safety context | the controller | nobody (canonical JSON string; fresh copy per read) | scrub gate over an explicitly declared needle set | Mutating a returned dict cannot rewrite the object |
+
+Findings that changed the implementation, before coding:
+
+1. **The `TOOL_REGISTRY` gate was unprovable AND unsatisfiable.** Confirmed
+   mechanically in-repo: `ar2/extension/index.ts` registers `aido_read` and
+   `aido_edit` with `pi.registerTool` and the sentinel with
+   `pi.registerCommand`, and `get_commands` reports commands. The old gate
+   could never pass on a correct run.
+2. **The top-level `source` cannot discriminate.** Both AIDO's sentinel and
+   Pi's own inline `llama` report `source == "extension"`; the real
+   discriminator is `sourceInfo.source`. So `ObservedCommand` had to gain
+   bounded PROVENANCE fields, and malformed `sourceInfo` had to be
+   *representable* (so the gate can fail with the specific
+   `EXTENSION_COMMAND_PROVENANCE_UNKNOWN` code) rather than refused at
+   construction into a generic malformed-adapter bucket.
+3. **A single H1 boolean cannot be audited.** Decomposition into the frozen
+   evaluator's five components plus an AIDO-owned conjunction was required,
+   with a differential conformance corpus proving the projection matches the
+   frozen rule.
+4. **`route_descriptor_for_candidate` was called AFTER the credential read.**
+   It is fully deterministic and non-secret, so it had to move ahead of the
+   boundary, along with the workspace claim and the correlation-id mint.
+5. **`experiment_root`/`workspace_root` were arbitrary strings feeding a
+   `mkdir`.** Both parameters had to be removed, not validated harder.
+6. **`RuntimeLaunchObservation` made a physically real state
+   unconstructible**, and its `partial_resource_cleaned_internally` flag was a
+   creator-supplied verdict.
+7. **`_close_runtime`/`_close_broker` called the shutdown adapter for a
+   foreign session** and merely withheld `closure_satisfied`.
+8. **`secrets.token_hex(16)` was unguarded**, so an entropy failure would
+   escape a controller whose entire design is bounded refusal.
+9. **A pre-existing FU1 truthfulness defect, found during this analysis and
+   corrected here:** `RuntimeLaunchObservation` refused
+   `session is None and launch_shape_valid is True`. A process can genuinely
+   start with a valid launch shape and then fail before an RPC-correlated
+   session id exists; forcing `launch_shape_valid=False` there would
+   overwrite an independently observed creation fact with a lie, which is
+   exactly what FU3 Sec. 9.3 forbids ("the resource kind's own independent
+   creation-failure facts... are never overwritten or masked by the cleanup
+   outcome"). The coupling was removed. No pass leaks: a `None` session
+   fails the `RUNTIME_LAUNCH` gate, and the four launch facts are only gated
+   after it passes.
+
+## What was implemented
+
+- **`qualification/i2b_workspace.py` (new).** One minting function taking no
+  argument at all; `verify_run_workspace` delegating THE PROOF to the frozen
+  `ar2.capability` root-authority verification (reused, never forked) and
+  adding an existence/canonicity check for the repository child; a
+  single-use `claim_run_workspace(workspace, run_id=...)`; and a
+  removal/discard pair for fixture teardown. There is deliberately no
+  function anywhere that converts an existing path into authority.
+- **`qualification/i2b_session.py`.** `ObservedCommand` gained bounded
+  provenance; `GetCommandsObservation` carries H1 COMPONENTS plus AIDO's own
+  `h1_identity_established`, AIDO's declared sentinel name and expected
+  origin kind, and an `extension_command_partition()` over SORTED sequences;
+  `h1_components_from_frozen_evaluation` and
+  `observed_command_from_reported_entry` are the fixed adapter projections;
+  the new `BrokerCreationObservation` and the corrected
+  `RuntimeLaunchObservation` share ONE validator for the four-row creator
+  contract, and both expose `cleanup_verified_success` as a read-only
+  AIDO-derived property; both run-scoped requests take the workspace object
+  and re-verify it.
+- **`qualification/i2b_controller.py`.** New `RUN_CORRELATION` and
+  `WORKSPACE_AUTHORITY` gates ahead of `ROUTE_DESCRIPTOR`, which itself moved
+  ahead of the credential boundary; `TOOL_REGISTRY` replaced by
+  `EXTENSION_COMMAND_NAMESPACE`; closure modelled as one
+  `ResourceClosureState` enum with DERIVED `attempted`/
+  `authority_available`/`closure_satisfied`, so a contradictory combination
+  is unrepresentable rather than merely rejected; the shutdown adapters are
+  never called for an untrusted session; and the evidence gained
+  `active_tool_registry_observation_available: false` plus AR2D Sec. 2.2's
+  three-way distinction.
+
+**One deliberate, documented deviation from "verbatim".** AR2D Sec. 2.2's
+second line reads `observed live tool calls : aido_read x2, aido_edit x1, no
+other observed` -- AR2's own live run's counts. A Category-B run sends zero
+semantic prompts and therefore observes NO tool call at all; reproducing
+those counts would fabricate an observation this run never made. That one
+line is scoped to this run; the structure and every other line, including the
+load-bearing `NOT established` statement, are AR2D's.
+
+## Bypasses found during post-implementation self-review
+
+Both were found by constructing supported/public counterexamples against the
+implemented code, and both were fixed with a regression test **before**
+completion was reported.
+
+1. **The sentinel command name was adapter-supplied.** `sentinel_command_name`
+   arrived on the observation. An adapter could nominate Pi's OWN `llama` as
+   "the sentinel", mark it `"cli"`, and have BOTH H1 and the namespace
+   partition evaluated against that nomination -- a fabricated identity
+   dressed as an observation. **Fixed:** the name is now AIDO's own declared
+   constant `CATEGORY_B_SENTINEL_COMMAND_NAME` (duplicated as a VALUE from
+   `ar2.pi_config.SENTINEL_COMMAND_NAME`, with a test asserting they agree),
+   and any observation naming a different sentinel is refused at
+   construction. Regression:
+   `test_the_sentinel_name_is_aidos_own_bytes_not_an_adapter_nomination`.
+2. **Subclass substitution was unproven for the new types.** The exact-type
+   discipline was implemented, but nothing tested it for
+   `QualificationRunWorkspace`, `BrokerCreationObservation`, `RuntimeSession`
+   or `BrokerSession` -- and a subclass can override a validated field with a
+   property that returns a different value on each read. **Regressions added:**
+   `test_a_subclass_of_the_workspace_type_is_refused_everywhere`,
+   `test_a_subclass_of_the_broker_creation_observation_is_refused`,
+   `test_a_subclass_of_a_session_type_is_refused_inside_an_observation`.
+
+Two further supported counterexamples were constructed and found already
+closed, and now carry regressions:
+`test_discarding_a_workspace_cannot_resurrect_or_relaunder_authority` (the
+public `discard_run_workspace` removes the MINT record, not merely the claim,
+so a discarded workspace cannot be re-claimed, re-constructed or re-run) and
+`test_h1_components_that_disagree_with_the_reported_list_fail_closed`.
+
+## Adversarial coverage in the offline suite
+
+The frozen design's named minimum, all present: the genuine
+sentinel(`cli`) + `llama`(`inline`) passing regression, proven against the
+real observed shape rather than a synthetic double; a second `cli` entry
+refused; four distinct malformed/unrecognized provenance refusals plus a
+sentinel whose own provenance is unreadable; a sixteen-row H1 differential
+conformance corpus against the frozen evaluator; zero credential reads proven
+for an unknown candidate, an unverifiable workspace, a foreign-claimed
+workspace, cross-run reuse, a failing non-secret gate and a correlation-id
+failure; workspace substitution/forgery/relocation/marker-tampering, plus
+tampering INSERTED between the authority gate and the config-write
+consumption boundary; all four creator partial-lifecycle states for BOTH
+resource kinds; direct-child `False` vs `True`; `STATE_TEARDOWN_INCOMPLETE`
+vs `STATE_CLOSED`; every malformed cleanup-observation typing combination
+(non-bool, attempted-with-`None`, not-attempted-with-non-`None`,
+cleanup-without-creation, session-plus-self-close); foreign broker session,
+foreign runtime `run_id` and foreign runtime `broker_session_id` each with
+shutdown call count **0**; a same-run positive control tearing down exactly
+once in frozen-O1 order; teardown, broker-shutdown, cleanup and evidence-scrub
+failures each proven unable to produce a terminal PASS; the pass decision
+proven to consume already-resolved closure facts; result/evidence/facts/
+workspace immutability and post-validation mutation attempts; and
+duplicate/multiplicity cases proven not to collapse.
+
+## Offline suite result
+
+```text
+718 passed, 0 failed
+python -m pytest experiments/pi_implementer_qualification/tests -q
+```
+
+(514 = I1 plus I2 through FU3B, unchanged and unmodified; I2B-FU2
+contributes 204, replacing I2B-FU1's 124.) No network call, socket, model
+call, Pi/Node process, or credential lookup occurred anywhere in the run.
+
+Frozen suites re-run unmodified, to prove no accepted behavior regressed:
+
+```text
+experiments/pi_external_runtime_ar1/tests         96 passed, 0 failed
+experiments/pi_external_runtime_ar2/tests        290 passed, 0 failed
+experiments/pi_external_runtime_ar2_o1/tests      89 passed, 0 failed
+tests/  (the production suite)                  3504 passed, 0 failed
+```
+
+No file under `ar1/`, `ar2/`, `o1/`, `src/`, root `tests/` or `projects/` was
+touched.
+
+## What this does NOT establish
+
+- **No zero-prompt live gate has ever run.** No Pi/Node process was launched,
+  no RPC call was made, no broker was created, no socket was opened, no
+  `/models` request was issued, and no real credential was read.
+- **`get_commands` still proves NOTHING about the active tool registry.** The
+  corrected gate proves the extension COMMAND PROVENANCE PARTITION is exactly
+  what AIDO intended. Pi exposes no zero-prompt observation of the registry's
+  contents, and the evidence records that as an explicit non-observation.
+- **The adapter trust boundary is unchanged.** The component/verdict split
+  for H1 and for cleanup is a correctness control against a projection defect
+  or a future refactor -- **not** a defense against an adapter that
+  deliberately fabricates every component. In particular, nothing forces an
+  adapter's H1 components and its reported command list to have come from the
+  same response; that remains the design's own stated Sec. 6.3(e) residual.
+- **The synthetic workspace authority is not real-workspace authority**, and
+  is not a step toward one. It makes a real workspace structurally unnameable
+  from this path. It is not a defense against a same-user adversary, who
+  could forge a marker trivially and does not need this code path at all.
+- **No claim about descendants, inference or GPU work.** Neither the
+  creator's observed postcondition nor AIDO's derived
+  `cleanup_verified_success` nor an ordinary teardown result is ever a claim
+  that a descendant process was terminated, that Pi/provider inference
+  stopped, or that GPU work stopped.
+- **Redaction/scrubbing remain backstops, not guarantees.**
+- **5F3B-Q1/Q2 remain NOT authorized**, Category-B live execution remains
+  **NO-GO**, and real-workspace authority remains **NO-GO**.
+
+---
+
+# 5F3B-I2B-FU2A -- Terminal Result + Evidence Integrity Closure (Offline Only)
+
+> **OFFLINE ONLY. NO LIVE ACTIVITY OF ANY KIND.** No Pi/Node process, no
+> socket, no model call, no credential read, no semantic prompt, no real
+> workspace access. Category-B live execution remains **NO-GO**, Q1/Q2
+> remain **NO-GO**, real-workspace authority remains **NO-GO**. The I2A/FU3
+> design family is unchanged and was not reopened. No frozen AR1/AR2/O1
+> code or contract was modified.
+
+Independent source review of the accepted-in-direction 5F3B-I2B-FU2
+architecture found three concrete, exploitable defects, all in
+`qualification/i2b_controller.py`, none in `i2b_session.py` or
+`i2b_workspace.py`. Each is closed below with a proven-before/proven-after
+counterexample and a regression test.
+
+## Public counterexamples that worked BEFORE this fix
+
+Each was reproduced against the actual pre-fix code before any edit was made.
+
+**1. `CleanupStatus` truthiness fail-open.**
+
+```python
+CleanupStatus(attempted=True, scrub_verified="false", classification=None)
+# constructed successfully:
+#   .closure_satisfied  -> True
+#   .status_text        -> "VERIFIED_REMOVED"
+```
+
+`scrub_verified` was typed `bool | None` but never checked for exact `bool`;
+`closure_satisfied` returned `bool(self.scrub_verified)`, and a non-empty
+string is truthy in Python. `_attempt_cleanup()` separately re-introduced the
+same coercion at the frozen `i2_cleanup` consumption boundary
+(`verified = bool(result.scrub_verified)`).
+
+**2. `CategoryBControllerResult` was not valid by construction.**
+
+```python
+class FakeClosure:
+    closure_satisfied = True
+
+CategoryBControllerResult(
+    ..., outcome=CategoryBOutcome.CATEGORY_B_GATE_PASSED,
+    runtime_teardown=FakeClosure(), broker_shutdown=FakeClosure(), cleanup=FakeClosure(),
+    ...
+)
+# constructed successfully: .outcome is CATEGORY_B_GATE_PASSED
+```
+
+`runtime_teardown`/`broker_shutdown`/`cleanup` were consumed via bare
+attribute access (`.closure_satisfied`) with **no type check at all** --
+not even `isinstance`. `facts`/`evidence` used `isinstance`, which a
+subclass overriding `all_established`/`retention_ready` as a read-only
+property satisfies while lying about its own state; reproduced identically
+with `FakeFacts(CompatibilityFacts)` overriding `all_established` and
+`FakeTeardown(RuntimeTeardownStatus)`/`FakeBroker(BrokerShutdownStatus)`
+overriding `closure_satisfied`, all four accepted into a genuine
+`CATEGORY_B_GATE_PASSED` result.
+
+**3. `CategoryBEvidence` could self-declare scrub-clean.**
+
+```python
+CategoryBEvidence(
+    retention_ready=True, scrub_clean=True, scrub_findings=(),
+    _serialized='{"api_key":"raw-secret"}',
+)
+# constructed successfully: .retention_ready -> True, .as_json() -> the raw secret string
+```
+
+No scrub provenance was established by the constructor at all --
+`retention_ready` was a bare caller-supplied boolean the object trusted.
+
+## Pre-coding adversarial analysis
+
+The ten required counterexamples were constructed against the pre-fix code
+before any edit, to determine which actually succeeded:
+
+| # | Case | Result against pre-fix code |
+|---|---|---|
+| 1 | `scrub_verified="false"` | **Succeeded** -- blocker 1 |
+| 2 | `scrub_verified=1` | Succeeded (same class) |
+| 3 | truthy custom object as `scrub_verified` | Succeeded (same class) |
+| 4 | subclass of `CleanupStatus` overriding `closure_satisfied` | Succeeded once accepted into a result (no type check on `cleanup` at all) |
+| 5 | custom non-`CleanupStatus` object exposing `closure_satisfied=True` | **Succeeded** -- blocker 2 |
+| 6 | subclass of `RuntimeTeardownStatus`/`BrokerShutdownStatus` overriding the derived property | **Succeeded** -- blocker 2 |
+| 7 | subclass of `CompatibilityFacts` overriding `all_established` | **Succeeded** -- blocker 2 (`isinstance` accepted it) |
+| 8 | subclass of `CategoryBEvidence` overriding `retention_ready` | Constructible via the OLD public constructor (no protection at all before this fix) |
+| 9 | direct `CategoryBEvidence` creation with an unsafe `_serialized` body | **Succeeded** -- blocker 3 |
+| 10 | a `CATEGORY_B_GATE_PASSED` result whose `_gate_status_pairs` contain a `FAILED:...`/`NOT_REACHED` entry | Succeeded -- `_gate_status_pairs` was never validated at all |
+
+## Mechanical closure chosen
+
+**1. `CleanupStatus` (blocker 1).** `scrub_verified` now goes through
+`i2b_session.require_exact_bool` (reused, not reimplemented) when
+`attempted=True`; `closure_satisfied` returns the already-proven-exact-bool
+field directly, with **no** `bool(...)` call anywhere in the property.
+`_attempt_cleanup()` consumes the frozen `i2_cleanup.CleanupResult`'s own
+`scrub_verified` fail-closed: `verified = raw_verified is True` -- anything
+that is not exactly `True`, including a value that is not exactly a `bool`
+at all, is treated as unverified. `CleanupStatus`'s own exact-bool
+requirement is what actually enforces the type; the consumption site never
+coerces on its own.
+
+**2. `CategoryBControllerResult` (blocker 2).** Every nested authority value
+is now checked by **exact type** (`type(x) is ExactType`), never
+`isinstance`: `facts` must be exactly `CompatibilityFacts`, `evidence`
+exactly `CategoryBEvidence`, `runtime_teardown` exactly
+`RuntimeTeardownStatus`, `broker_shutdown` exactly `BrokerShutdownStatus`,
+`cleanup` exactly `CleanupStatus`. `outcome`/`failed_gate`/`failure_code`
+are checked to be exactly their declared enum type (not merely
+non-`None`); `pi_config_created`/`broker_created`/
+`runtime_session_established` go through `require_exact_bool`;
+`semantic_prompts_sent` is checked `type(x) is int` **before** the
+value-equality check, because `False == 0` is `True` in Python and the old
+bare `!=` comparison alone would have silently accepted
+`semantic_prompts_sent=False`. `_gate_status_pairs` -- previously
+unvalidated in any way -- is now checked by a new
+`_validate_gate_status_pairs` helper against the bounded, declared
+vocabulary of gate names (`CategoryBGateName`) and status texts this module
+ever actually produces (`PASSED`/`NOT_REQUIRED`/`SUCCEEDED`/`CLOSED`/
+`VERIFIED_REMOVED`/`CLOSED_BY_CREATOR_VERIFIED`/`NOT_REACHED`/
+`FAILED:<known code>`), requires every declared gate exactly once, and --
+only for a claimed `CATEGORY_B_GATE_PASSED` -- refuses any `NOT_REACHED` or
+`FAILED:...` entry for **any** gate.
+
+**3. `CategoryBEvidence` (blocker 3).** Every field is now `field(init=False,
+...)`: the public, auto-generated constructor takes **no arguments at all**
+and always yields the safe, inert `retention_ready=False` default -- there
+is no supported way to pass `retention_ready=True` (or any other field) to
+it. The only way to obtain a populated instance is through two
+package-internal classmethods, both of which **derive** every field rather
+than accepting it: `_build_from_payload(payload, safety)` runs the frozen,
+unmodified `qualification.safety.qualification_scrub_check` on the payload
+itself, inside this class, and the boolean/serialized body are a direct
+function of that one real call -- never of a caller's say-so; `_refused(...)`
+is for the one caller with no payload to check at all, and can only ever
+produce the unconditionally-`False`, unconditionally body-less shape. The
+scrub check that used to live in `_build_evidence` moved into the classmethod
+itself, so there is exactly one call site for it. `payload` is a local
+parameter only, never stored on the returned instance, so no raw
+(possibly secret-bearing) diagnostic can be read back off any evidence
+object, retained or refused.
+
+## Bypasses found during post-implementation self-review
+
+**Subclassing `CategoryBEvidence` was still exploitable after the `init=False`
+fix, via a mechanism distinct from every other value object in this module.**
+For a dataclass field with `init=False` **and a plain (non-factory)
+default**, Python's generated `__init__` does not call
+`object.__setattr__` for that field at all -- it relies on the class-level
+default attribute, since the value already equals its default. A subclass
+overriding `retention_ready` as a read-only property therefore constructed
+successfully via the bare `cls()` call (no `AttributeError`, unlike
+assigning to an ordinary frozen field with an `init=True` parameter) and
+immediately reported `retention_ready is True` with **nothing ever
+scrub-checked**:
+
+```python
+class _Sneaky(CategoryBEvidence):
+    @property
+    def retention_ready(self):
+        return True
+
+_Sneaky()  # constructed successfully before this fix; .retention_ready -> True
+```
+
+The exact-type check already added to `CategoryBControllerResult` (item 2
+above) closes the only production path that could turn this into an
+authorized PASS, but the object itself made a false claim about its own
+state under a bare, no-argument, fully "supported" call. **Closed by
+refusing subclassing outright**: `_check_invariants()` (called from
+`__post_init__` and, explicitly, again after each classmethod's mutation)
+now requires `type(self) is CategoryBEvidence` exactly, as its first check
+-- so even a subclass that overrides nothing at all is refused the moment
+`__init__` runs, including inside `_build_from_payload`/`_refused` when
+called on a subclass. Regression:
+`test_a_subclass_of_categorybevidence_cannot_override_retention_ready`,
+`test_evidence_subclassing_is_refused_outright_even_via_the_classmethods`.
+
+A broader sweep for the same class of bug (`isinstance` where exact-type
+authority is intended; the `init=False`-plain-default `object.__setattr__`
+skip specifically) across `i2b_controller.py`, `i2b_session.py` and
+`i2b_workspace.py` found `CategoryBEvidence` was the **only** class in any
+of the three modules using `field(init=False, default=<plain value>)` at
+all -- confirmed by grep, not merely inspection. Every other `isinstance`
+use in the package (`BrokerSession` inside `RuntimeLaunchRequest`,
+`ResourceClosureState` membership, `Mapping`/`tuple`/`str` content checks)
+was checked directly: each guards a value whose relevant fields are ordinary
+`init=True` dataclass fields, which -- confirmed with an isolated
+repro -- **are** always explicitly assigned via `object.__setattr__` in the
+generated `__init__` regardless of default, so a subclass overriding one of
+those as a property raises `AttributeError` at construction, before
+`__post_init__` even runs. None of those needed a change, and
+`i2b_session.py`/`i2b_workspace.py` were not touched by this follow-up.
+
+## Regression tests added
+
+All in `tests/test_i2b_controller.py`:
+
+- `test_cleanup_status_scrub_verified_string_false_is_refused` -- the exact
+  counterexample from the brief;
+- `test_cleanup_status_rejects_every_non_bool_scrub_verified` -- `1`, `0`,
+  `"true"`, `""`, `object()`, `1.0`, `[]`, `{}`;
+- `test_cleanup_status_attempted_true_requires_a_scrub_verified_value`;
+- `test_the_frozen_cleanup_helpers_own_return_is_consumed_fail_closed` --
+  an end-to-end run through a monkeypatched `scrub_generated_qualification_config`
+  returning a truthy non-`bool` `scrub_verified`, proving the real controller
+  pipeline reports `attempted=True, scrub_verified=False, closure_satisfied=False`;
+- `test_a_bare_object_exposing_closure_satisfied_cannot_authorize_a_pass` --
+  the exact counterexample from the brief, for `runtime_teardown`/
+  `broker_shutdown`/`cleanup`;
+- `test_a_subclass_overriding_closure_satisfied_cannot_authorize_a_pass`;
+- `test_a_subclass_of_cleanup_status_overriding_closure_satisfied_is_refused`;
+- `test_a_subclass_of_compatibility_facts_overriding_all_established_is_refused`;
+- `test_a_subclass_of_categorybevidence_cannot_override_retention_ready`;
+- `test_evidence_subclassing_is_refused_outright_even_via_the_classmethods`;
+- `test_a_duck_typed_object_cannot_stand_in_for_evidence_at_the_result_boundary`;
+- `test_result_scalar_fields_are_checked_by_exact_type` -- eleven malformed
+  scalar cases, including `semantic_prompts_sent=False`;
+- `test_the_false_semantic_prompts_sent_counterexample_is_refused`;
+- `test_result_enum_fields_are_checked_by_exact_type`;
+- `test_a_failed_or_not_reached_gate_status_cannot_coexist_with_a_pass` --
+  item 10's exact counterexample;
+- `test_gate_status_pairs_must_name_every_declared_gate_exactly_once`,
+  `test_gate_status_pairs_rejects_an_unrecognized_status_text`,
+  `test_gate_status_pairs_shape_is_checked_structurally`,
+  `test_a_refusal_result_still_validates_its_gate_status_pairs`;
+- `test_the_public_evidence_constructor_cannot_assert_any_field_at_all` --
+  the exact `CategoryBEvidence` counterexample from the brief;
+- `test_retention_ready_true_is_only_reachable_by_actually_scrubbing_the_payload`;
+- `test_a_malformed_scrub_check_result_is_refused_never_coerced`;
+- `test_refused_requires_at_least_one_bounded_finding_code`;
+- `test_the_full_pipeline_result_actually_satisfies_the_hardened_invariants`
+  -- a real, end-to-end controller PASS still constructs cleanly under every
+  new invariant.
+
+## Offline suite result
+
+```text
+757 passed, 0 failed
+python -m pytest experiments/pi_implementer_qualification/tests -q
+```
+
+(514 unchanged I1/I2 through FU3B; 243 in `test_i2b_controller.py`, up from
+FU2's 204 -- 39 new/rewritten tests for this follow-up.)
+
+Frozen suites re-run unmodified:
+
+```text
+experiments/pi_external_runtime_ar1/tests         96 passed, 0 failed
+experiments/pi_external_runtime_ar2/tests        290 passed, 0 failed
+experiments/pi_external_runtime_ar2_o1/tests      89 passed, 0 failed
+tests/  (the production suite)                  3504 passed, 0 failed
+```
+
+No file under `ar1/`, `ar2/`, `o1/`, `src/`, root `tests/` or `projects/` was
+touched. `i2b_session.py` and `i2b_workspace.py` were not modified --  the
+self-review sweep found no instance of any of the three blockers' defect
+classes in either module.
+
+## Corrected claims
+
+The "Terminal-pass rule" section above previously stated the terminal rule
+"holds even for a directly-constructed result" -- **false at the time it was
+written**, for the reason item 2 documents. The passage is corrected in
+place, with a pointer to this section; it is accurate as of FU2A.
+
+## What this does NOT establish
+
+Unchanged from FU2's own closing section: no zero-prompt live gate has ever
+run; `get_commands` still proves nothing about the active tool registry; the
+adapter trust boundary is unchanged (an adapter that deliberately fabricates
+every component of an observation remains out of this design's stated
+scope); the synthetic workspace authority is not real-workspace authority
+and is not a step toward one; no claim about descendants, inference, or GPU
+work; redaction/scrubbing remain backstops, not guarantees.
+
+**Additionally, narrowly, from this follow-up:** the exact-type checks added
+to `CategoryBControllerResult` and the classmethod-only construction added
+to `CategoryBEvidence` are, like every other component/verdict split in this
+design, a correctness/integrity control against a caller (including a
+future refactor) inside the trust boundary -- never a defense against a
+caller willing to import and call a package-internal (single-underscore)
+classmethod directly with fabricated inputs it controls end-to-end. That
+residual is inherent to Python and is stated, not hidden.
+
+---
+
+# 5F3B-I2B-FU2B -- Terminal Cross-Field + Evidence Binding Closure (Offline Only)
+
+> **OFFLINE ONLY. NO LIVE ACTIVITY OF ANY KIND.** No Pi/Node process, no
+> socket, no model call, no credential read, no semantic prompt, no real
+> workspace access. Category-B live execution remains **NO-GO**, Q1/Q2
+> remain **NO-GO**, real-workspace authority remains **NO-GO**. The I2A/FU3
+> design family is unchanged and was not reopened. No frozen AR1/AR2/O1/I1/I2
+> code or contract was modified. `i2b_session.py`/`i2b_workspace.py` were not
+> touched -- no reproduced defect required it.
+
+FU2A hardened individual field TYPES (exact-type checks, no bare Python
+truthiness) but left `CategoryBControllerResult` semantically incoherent:
+fields could individually be well-typed while collectively describing an
+impossible run. **The FU2A test helper's own default kwargs were themselves
+the exact contradiction** this phase closes -- `pi_config_created=True`
+alongside `cleanup.attempted=False`; `broker_created`/
+`runtime_session_established=True` alongside `runtime_teardown`/
+`broker_shutdown` left at `NOT_REQUIRED`; a single GLOBAL vocabulary of
+gate-status strings that let ANY gate use ANY other gate's text; and a
+retention-ready `CategoryBEvidence` scrub-built from `{"ok": True}`, with no
+relationship to the result consuming it, accepted unconditionally. Roughly
+twenty FU2A tests reused that contradictory default and were, without
+anyone intending it, no longer isolating what they claimed to test -- the
+FIRST cross-field check the constructor happened to run caught them all,
+regardless of which field each test actually overrode.
+
+## Mandatory counterexamples: which succeeded before the fix
+
+All ten reproduced against the actual pre-fix code, isolated to ONE field
+each (not merely via the already-contradictory shared default):
+
+| # | Case | Result |
+|---|---|---|
+| 1 | `pi_config_created=True` + `cleanup.attempted=False` | **Succeeded** |
+| 2 | `runtime_session_established=True` + `runtime_teardown.state=NOT_REQUIRED` | **Succeeded** |
+| 3 | `broker_created=True` + `broker_shutdown.state=NOT_REQUIRED` | **Succeeded** |
+| 4 | typed `runtime_teardown=NOT_REQUIRED` but `gate_statuses['runtime_teardown']=="PASSED"` | **Succeeded** |
+| 5 | `gate_statuses['route_check']=="NOT_REQUIRED"` on an otherwise-passing result | **Succeeded** |
+| 6 | retention-ready evidence scrub-built from `{"ok": True}` | **Succeeded** |
+| 7 | `candidate="not-a-frozen-candidate"` on a PASS | **Succeeded** |
+| 8 | `facts.pi_version_observed=True` + `observed_pi_version=None` | **Succeeded** |
+| 9 | scrub helper returning a non-string finding entry | **Succeeded** (the entry's `str()` was called and RETAINED) |
+| 10 | refusal whose `failed_gate`/`failure_code` disagree with that gate's own `_gate_status_pairs` entry | **Succeeded** |
+
+## Exact cross-field invariants added
+
+All in `CategoryBControllerResult.__post_init__`, unless noted:
+
+1. **Universal (every outcome):** `pi_config_created == cleanup.attempted`.
+   Both are, in the real controller, literally the SAME
+   `generated_config is not None` fact -- `_attempt_cleanup(None)` iff no
+   config was ever created, always attempted otherwise. Mechanically certain
+   from source inspection, not invented.
+2. **Universal:** `facts.pi_version_observed == (observed_pi_version is not
+   None)`. Both come from the SAME `RuntimeLaunchObservation`, assigned at
+   the SAME call site.
+3. **Universal:** each of the other ELEVEN `CompatibilityFacts` fields must
+   agree with its own compatibility gate's `PASSED`/not-`PASSED` status --
+   **except when that gate was never reached (`NOT_REACHED`)**, an
+   intentional, narrow exception for the four LAUNCH facts
+   (`pi_version_observed`/`rpc_launch_shape_valid`/
+   `required_launch_flags_accepted`/`lf_jsonl_correlation_succeeded`), which
+   are recorded from the launch observation BEFORE the controller knows
+   whether `RUNTIME_LAUNCH` itself will pass -- a session mismatch can still
+   fail `RUNTIME_LAUNCH` AFTER a fact already reads `True`, and the four
+   launch-fact gates are only evaluated in a LATER block gated behind
+   `RUNTIME_LAUNCH` having passed. This asymmetry was discovered live, mid-
+   implementation, when the first (unconditional) version of this check
+   broke FOUR genuinely-passing offline tests exercising the real
+   controller pipeline -- not a synthetic counterexample. Once a gate IS
+   reached, the equivalence holds exactly, for all thirteen facts uniformly
+   (the two `PROTOCOL_INTEGRITY` facts checked by conjunction, since ONE
+   gate is jointly gated by both).
+4. **PASS-only:** `candidate` must be a member of the frozen
+   `qualification.records.CANDIDATE_MODEL_IDS` -- imported directly, never
+   re-declared.
+5. **PASS-only:** `pi_config_created`/`broker_created`/
+   `runtime_session_established` all `True`.
+6. **PASS-only:** `runtime_teardown.state is CLOSED_BY_ORCHESTRATOR` and
+   `broker_shutdown.state is CLOSED_BY_ORCHESTRATOR` -- **not merely
+   `closure_satisfied`**, which `NOT_REQUIRED` also satisfies and cannot be
+   true of a resource the result itself says was created.
+7. **PASS-only:** `cleanup.attempted and cleanup.scrub_verified`.
+8. **PASS-only:** `observed_pi_version is not None` (redundant with
+   `facts.all_established` + invariant 2 above, by design -- explicit per
+   this phase's own brief, kept as defense in depth).
+
+## Per-gate status validation rule
+
+Replaces FU2A's single global vocabulary:
+
+- **The three typed-object-bound closure gates**
+  (`RUNTIME_TEARDOWN`/`BROKER_SHUTDOWN`/`GENERATED_CONFIG_CLEANUP`) are
+  bound by **direct equality** to the already-validated typed object's own
+  `status_text` property -- no separate vocabulary at all, no possibility of
+  drift between the typed object and its string projection, for EVERY
+  outcome.
+- **`EVIDENCE_SAFETY`** is bound to `evidence.retention_ready`: `PASSED`
+  exactly iff retention-ready; otherwise a `FAILED:<code>` naming one of the
+  three codes this gate's own producer ever assigns
+  (`SAFETY_CONTEXT_UNPROVABLE`/`EVIDENCE_SCRUB_REFUSED`/
+  `MALFORMED_ADAPTER_RESULT`).
+- **Each of the 21 COMPATIBILITY gates** gets its OWN bounded set of
+  failure codes, read directly off that gate's own `_fail(...)` call
+  site(s) in `run_category_b_controller` (`_COMPATIBILITY_GATE_ALLOWED_FAILURE_CODE_VALUES`,
+  asserted at import time to cover `COMPATIBILITY_GATES` exactly). A status
+  text valid on one gate (`"CLOSED"`, a broker-only text; or
+  `BROKER_NOT_READY`, `BROKER_READY`'s own code) is refused on any other.
+- **On a terminal PASS**, every compatibility gate must be **exactly**
+  `"PASSED"` -- not merely "a text that gate's own producer could have
+  emitted", which would still accept a stray `FAILED:.../NOT_REACHED` entry
+  sitting alongside an otherwise-passing result. This is a SEPARATE check
+  from the per-gate vocabulary rule above (needed because that rule alone
+  does not distinguish PASS from REFUSAL) -- found missing during this
+  phase's OWN implementation, when a mandatory counterexample regression
+  (`route_check` `NOT_REACHED`/`FAILED:...`) failed against the first draft.
+- `failed_gate`/`failure_code`, when set, must agree EXACTLY with that
+  gate's own `_gate_status_pairs` entry (`f"FAILED:{failure_code.value}"`).
+
+## Evidence-binding mechanism chosen
+
+**Smallest mechanically sound shape, per the brief's own framing (option
+"validate the retained canonical body against the result's own
+projection").** No new digest/token/registry mechanism, and
+`CategoryBControllerResult` was NOT converted into a factory-controlled
+type (both were offered as options; neither was needed).
+
+`_require_evidence_describes_this_result` runs whenever
+`evidence.retention_ready` is `True` (for EVERY outcome, not only PASS) and
+compares the retained body, key by key, against the RESULT's OWN
+already-validated fields -- never a caller-supplied duplicate boolean:
+`candidate`, `semantic_prompts_sent`, `compatibility_gate_passed` (derived
+from `outcome`), `compatibility_facts` (`facts.as_dict()`),
+`observed_pi_version`, `gate_statuses` (minus `EVIDENCE_SAFETY`, matching
+the existing accepted `_build_evidence` exclusion), and the three closure
+status-text strings. Any mismatch on any covered key is refused.
+
+**Honest scope, stated per the brief's own "where available" framing.** The
+frozen route/model/provider facts (`model_id`/`provider_id`/
+`gateway_class`) and the safety-context needle codes are part of the
+canonical evidence body but are **not** typed fields on
+`CategoryBControllerResult` at all (they live only as local variables inside
+`run_category_b_controller`) -- so they are not, and cannot yet be, bound by
+this mechanism. This is recorded as an explicit residual, not a silent gap.
+
+**Stated residual, matching every other component/verdict split in this
+design:** this binds the result to whatever payload `_build_from_payload`
+was actually called with -- it is not a defense against a caller willing to
+import that package-internal classmethod directly and hand-craft a payload
+whose keys happen to match a target result's fields; such a caller already
+controls both sides of the comparison.
+
+## Same-class bypasses found during the second adversarial review
+
+Two, both fixed with a regression before completion was reported.
+
+**1. A genuine PRODUCTION bug, surfaced end to end by the new closure-gate
+equality binding, not a synthetic construction.**
+`CleanupStatus.status_text`'s FAILED branch returned
+`f"FAILED:{self.classification.autonomous_classification.value}"` --
+embedding an `AutonomousClassification` member (a DIFFERENT enum than
+`CategoryBFailureCode`). The controller's own closure loop separately calls
+`_fail(GENERATED_CONFIG_CLEANUP, CategoryBFailureCode.GENERATED_CONFIG_CLEANUP_UNVERIFIED)`
+for an unverified cleanup (`CleanupStatus` carries no `failure_code`
+attribute for the loop's `getattr(status, "failure_code", None) or
+default_code` to find, so the fallback always fires) -- and `_fail`
+OVERWRITES `gate_statuses['generated_config_cleanup']` with that fixed code
+immediately afterward. The typed object's own property and what the
+controller actually recorded for the SAME gate therefore DISAGREED, and the
+SAME evidence body carried BOTH strings under two different keys
+(`gate_statuses['generated_config_cleanup']` and
+`orchestrator_generated_config_cleanup_status`). Reproduced through TWO
+pre-existing FU2/FU2A offline tests that call the real
+`run_category_b_controller` (`test_all_gates_pass_but_config_cleanup_fails_is_an_infrastructure_refusal`,
+`test_the_frozen_cleanup_helpers_own_return_is_consumed_fail_closed`), both
+of which started failing the moment the new equality binding was added,
+before any test-suite change was made to accommodate it. **Fixed** by
+changing `status_text`'s FAILED branch to the fixed
+`CategoryBFailureCode.GENERATED_CONFIG_CLEANUP_UNVERIFIED` code, matching
+exactly what `_fail()` always produces for this gate.
+`classification` remains a real, validated, retained diagnostic fact on the
+object -- it is simply no longer the STATUS TEXT's source. Regression:
+`test_cleanup_status_text_agrees_with_what_fail_actually_records`,
+`test_cleanup_status_classification_is_a_real_diagnostic_still_carried`.
+
+**2. `CompatibilityFacts` fields were not bound to their own compatibility
+gate's status at all.** Found during this phase's OWN post-implementation
+adversarial review (not the mandatory pre-coding list). A hand-built
+REFUSAL result could claim `facts.h1_extension_identity_matched=True` while
+`gate_statuses['h1_extension_identity']` read `FAILED:...` -- two
+individually-typed, individually-valid objects disagreeing about the same
+underlying fact, exactly the "individually valid objects that contradict
+one another" class the post-implementation review brief named. **Fixed**
+via `_SINGLE_FACT_TO_GATE` (eleven of the thirteen facts map 1:1 to their
+own gate; the two `PROTOCOL_INTEGRITY` facts are checked by conjunction),
+enforced only when the gate was actually reached (see cross-field
+invariant 3 above for the launch-facts exception this required). Sweep
+regression: `test_every_single_mapped_fact_is_checked_against_its_own_gate`
+(all eleven, independently); `test_protocol_integrity_conjunction_is_checked`;
+positive controls proving the exception is neither too broad
+(`test_the_launch_facts_are_still_checked_once_their_gate_is_reached`) nor
+too narrow (`test_the_launch_facts_may_legitimately_be_true_while_not_reached`).
+
+## New regression tests
+
+All in `tests/test_i2b_controller.py`, under the new
+`# FU2B -- terminal cross-field + per-gate status + evidence-binding
+closure` section: ten `test_counterexample_N_*` tests (one per mandatory
+counterexample, isolated to exactly one field via a corrected, genuinely
+self-consistent `_build_result`/`_passing_gate_status_pairs` baseline --
+every override now isolates the SPECIFIC check it names, verified directly
+against the implementation before being trusted); the PASS-shape tests
+(`test_pass_requires_*`, four); per-gate vocabulary tests
+(`test_a_closure_only_status_text_is_refused_on_a_compatibility_gate`,
+`test_a_failure_code_valid_on_one_gate_is_refused_on_another`,
+`test_every_compatibility_gate_has_its_own_declared_allowed_codes`,
+`test_evidence_safety_gate_is_bound_to_retention_ready`); evidence-binding
+tests (a nine-way parametrized per-key mismatch sweep, plus a REFUSAL-outcome
+positive/negative pair); malformed-finding tests (non-string entries never
+stringified, out-of-pattern codes, the `_refused` path, and a positive
+sweep proving every REAL finding code this package's frozen scrub layer
+produces satisfies the new bounded pattern); the nearby-sweep tests
+(`_ResourceClosureStatus.failure_code`/`CleanupStatus.classification` exact-
+type, both previously blowing up LATER with an unrelated `AttributeError`
+instead of refusing at construction); the two same-class-bypass regressions
+above; `test_dataclasses_replace_cannot_break_a_genuine_passing_result`;
+and `test_every_real_refusal_path_satisfies_the_new_binding_invariants`,
+which drives the REAL controller through four distinct refusal gates and
+re-asserts the headline bindings explicitly on each.
+
+**The FU2A helper's isolation defect was verified directly, not assumed
+fixed.** Before adding new tests, every existing FU2A test using
+`_build_result` was re-run against a small standalone script constructing
+each scenario in isolation (flipping exactly the ONE field each test names,
+against an otherwise-valid baseline) and printing the actual raised
+message -- confirming each now fails for the SPECIFIC reason it claims,
+not merely "some ValueError, possibly the wrong one." Two isolation bugs
+surfaced this way in the NEW tests themselves during this process (an
+`observed_pi_version` cross-check firing before the intended check in two
+places; a misplaced `@pytest.mark.parametrize` decorator left attached to
+the wrong function after a naive text-insertion patch) and were corrected
+before this report.
+
+## Offline suite result
+
+```text
+823 passed, 0 failed
+python -m pytest experiments/pi_implementer_qualification/tests -q
+```
+
+(514 unchanged I1/I2 through FU3B; 309 in `test_i2b_controller.py`, up from
+FU2A's 243 -- 66 new/rewritten tests for this follow-up.)
+
+Frozen suites re-run unmodified:
+
+```text
+experiments/pi_external_runtime_ar1/tests         96 passed, 0 failed
+experiments/pi_external_runtime_ar2/tests        290 passed, 0 failed
+experiments/pi_external_runtime_ar2_o1/tests      89 passed, 0 failed
+tests/  (the production suite)                  3504 passed, 0 failed
+```
+
+No file under `ar1/`, `ar2/`, `o1/`, `src/`, root `tests/` or `projects/` was
+touched. `i2b_session.py`/`i2b_workspace.py` were not modified -- no
+reproduced defect required it.
+
+## Corrected claims
+
+FU2A's own closing README/FINDINGS text described
+`CategoryBControllerResult` as "valid by construction" without
+qualification. That was accurate for individual field TYPES and
+subclass/duck-type substitution, but overstated for CROSS-FIELD coherence --
+the FU2A test helper's own default kwargs were themselves the counterexample.
+README.md's I2B closing block is corrected in place, with a pointer to this
+section.
+
+## What this does NOT establish
+
+Unchanged from FU2/FU2A's own closing sections: no zero-prompt live gate has
+ever run; `get_commands` still proves nothing about the active tool
+registry; the adapter trust boundary is unchanged; the synthetic workspace
+authority is not real-workspace authority; no claim about descendants,
+inference, or GPU work; redaction/scrubbing remain backstops, not
+guarantees.
+
+**Additionally, narrowly, from this follow-up:** the evidence-binding check
+covers exactly the canonical-evidence fields already represented as typed
+`CategoryBControllerResult` fields -- `model_id`/`provider_id`/
+`gateway_class`/the safety-needle codes are NOT independently re-verified
+against the result, because the result carries no typed field for them at
+all. And, as with every component/verdict split in this design, none of
+these checks defend against a caller willing to import a package-internal
+classmethod directly and fabricate both sides of a comparison it fully
+controls.
+
+# 5F3B-I2B-FU2C -- Refusal Evidence Semantic Closure (Offline Only)
+
+> **OFFLINE ONLY. NO LIVE ACTIVITY OF ANY KIND.** No Pi/Node process, no
+> socket, no model call, no credential read, no semantic prompt, no real
+> workspace access. Category-B live execution remains **NO-GO**, Q1/Q2
+> remain **NO-GO**, real-workspace authority remains **NO-GO**. The I2A/FU3
+> design family is unchanged and was not reopened; H1/command provenance,
+> credential ordering, partial-cleanup ownership, evidence-binding
+> architecture and candidate-qualification design were not reopened. No
+> frozen AR1/AR2/O1/I1/I2 code or contract was modified.
+> `i2b_session.py`/`i2b_workspace.py` were not touched -- no reproduced
+> defect required either.
+
+FU2B's structural checks (cross-field invariants, per-gate status
+vocabulary, evidence binding) were accepted, but independent source review
+found FU2B stopped one layer too shallow in three places -- each checked
+that a nested value carried the right EXACT TYPE, but not that its
+CONTENTS were an actually-reachable combination:
+
+1. `_ResourceClosureStatus.__post_init__` validated `failure_code` by being
+   exactly a `CategoryBFailureCode` -- **any** member, on **any**
+   `ResourceClosureState`, on **either** resource kind. Nothing constrained
+   `failure_code` by the RESOURCE the status describes or by the STATE it is
+   attached to.
+2. `CategoryBControllerResult.__post_init__` checked that `failed_gate`,
+   when set, agreed with THAT gate's own `gate_statuses` entry -- but never
+   verified `failed_gate` was the FIRST failed gate the controller's own
+   `_fail()` would have recorded. The real controller's `_fail()` sets
+   `failed_gate`/`failure_code` only on its OWN first call
+   (`if failed_gate is None: failed_gate = gate; failure_code = code`); every
+   later `_fail()` call updates only that gate's own `gate_statuses` entry.
+   So the true result semantics are `failed_gate = the first failed gate
+   this controller run encountered` -- a fact nothing checked.
+3. `CleanupStatus.__post_init__` validated `classification`'s exact type
+   (`CleanupFailureClassification`) but never its four FIELDS. The frozen
+   `i2_cleanup.CleanupFailureClassification` dataclass (deliberately not
+   modified here) performs no validation of its own.
+
+## Mandatory pre-coding counterexamples: which succeeded before the fix
+
+All ten reproduced against the actual pre-fix code before any change was
+written:
+
+| # | Case | Result |
+|---|---|---|
+| 1 | `RuntimeTeardownStatus(state=SHUTDOWN_FAILED, failure_code=BROKER_SHUTDOWN_INCOMPLETE)` | **Succeeded** |
+| 2 | `RuntimeTeardownStatus(state=SHUTDOWN_REFUSED_FOREIGN_SESSION, failure_code=RUNTIME_TEARDOWN_FAILED)` (instead of the foreign-session-specific code) | **Succeeded** |
+| 3 | `BrokerShutdownStatus(state=SHUTDOWN_FAILED, failure_code=RUNTIME_TEARDOWN_FAILED)` | **Succeeded** |
+| 4 | `CLOSED_BY_CREATOR_UNVERIFIED` carrying the OTHER resource kind's authority-unavailable code | **Succeeded** (both directions) |
+| 5 | a hand-built refusal with two FAILED gates (an earlier compatibility gate and a later closure gate, and separately H1 + the later namespace gate) where `failed_gate` names the LATER one | **Succeeded** (both variants) |
+| 6 | `failed_gate` naming a gate whose OWN `gate_statuses` text correctly matches `failure_code`, while an EARLIER gate is independently also `FAILED:...` | **Succeeded** (same construction as #5 -- the per-gate agreement check alone cannot see gate POSITION) |
+| 7 | `CleanupFailureClassification(semantic_prompts_sent=1, ...)` alongside the pre-prompt `autonomous_classification` | **Succeeded** |
+| 8 | `CleanupFailureClassification(..., scoring_eligible=True)` | **Succeeded** |
+| 9 | `CleanupFailureClassification(..., autonomous_classification=None)` (a shape only the post-prompt branch approaches, and even that branch never leaves it bare) | **Succeeded** |
+| 10 | genuine runtime/broker/cleanup refusal shapes (positive controls) | Already constructed correctly -- confirmed unaffected by the fix |
+
+## Exact resource/state failure-code domains added
+
+`_ResourceClosureStatus` gained one `ClassVar` table,
+`_ALLOWED_FAILURE_CODES_BY_STATE: Mapping[ResourceClosureState,
+frozenset[CategoryBFailureCode]]`, deliberately left empty on the (never
+instantiated) base class and overridden once per concrete subclass. Every
+entry was read directly off that subclass's own `_close_runtime`/
+`_close_broker` producer function -- confirmed by grepping every
+`RuntimeTeardownStatus(...)`/`BrokerShutdownStatus(...)` construction site
+in `i2b_controller.py` and finding all of them inside those two functions,
+none elsewhere:
+
+**`RuntimeTeardownStatus`** (from `_close_runtime`):
+
+| State | Allowed code(s) |
+|---|---|
+| `SHUTDOWN_AUTHORITY_UNAVAILABLE` | `RUNTIME_TEARDOWN_AUTHORITY_UNAVAILABLE` |
+| `SHUTDOWN_REFUSED_FOREIGN_SESSION` | `RUNTIME_SHUTDOWN_REFUSED_FOREIGN_SESSION` |
+| `SHUTDOWN_FAILED` | `RUNTIME_TEARDOWN_FAILED`, `RUNTIME_SESSION_MISMATCH` |
+| `CLOSED_BY_CREATOR_UNVERIFIED` | `CLOSED_BY_CREATOR_UNVERIFIED` |
+| `PARTIAL_RESOURCE_STRANDED_NO_CLEANUP_ATTEMPT` | `PARTIAL_RESOURCE_STRANDED_NO_CLEANUP_ATTEMPT` |
+
+**`BrokerShutdownStatus`** (from `_close_broker`, the exact mirror):
+
+| State | Allowed code(s) |
+|---|---|
+| `SHUTDOWN_AUTHORITY_UNAVAILABLE` | `BROKER_SHUTDOWN_AUTHORITY_UNAVAILABLE` |
+| `SHUTDOWN_REFUSED_FOREIGN_SESSION` | `BROKER_SHUTDOWN_REFUSED_FOREIGN_SESSION` |
+| `SHUTDOWN_FAILED` | `BROKER_SHUTDOWN_INCOMPLETE`, `BROKER_SESSION_MISMATCH` |
+| `CLOSED_BY_CREATOR_UNVERIFIED` | `CLOSED_BY_CREATOR_UNVERIFIED` |
+| `PARTIAL_RESOURCE_STRANDED_NO_CLEANUP_ATTEMPT` | `PARTIAL_RESOURCE_STRANDED_NO_CLEANUP_ATTEMPT` |
+
+The two creator-retained-ownership rows are the SAME two codes on both
+tables, deliberately -- `_RUNTIME_CLOSURE_FAILURE_CODES` and
+`_BROKER_CLOSURE_FAILURE_CODES` are already, in the source, the identical
+`MappingProxyType` object (`_BROKER_CLOSURE_FAILURE_CODES =
+_RUNTIME_CLOSURE_FAILURE_CODES`), so `_creator_retained_ownership_state`
+genuinely returns the same code regardless of resource kind. No generic
+global closure-code set was introduced; every other row is resource-kind-
+specific and refused on the other kind
+(`test_fu2c_a_code_valid_for_runtime_is_not_automatically_valid_for_broker`).
+`NOT_REQUIRED`/`CLOSED_BY_ORCHESTRATOR`/`CLOSED_BY_CREATOR_VERIFIED` carry no
+table entry at all -- they are satisfied closures and are refused a
+`failure_code` by the existing (unchanged) satisfied/unsatisfied branch
+before the new table is ever consulted. A module-import-time assertion
+(`test_fu2c_resource_closure_tables_cover_every_unsatisfied_state` mirrors
+it in the test suite) proves both tables' key sets equal exactly
+`set(ResourceClosureState) - {NOT_REQUIRED, CLOSED_BY_ORCHESTRATOR,
+CLOSED_BY_CREATOR_VERIFIED}` -- five states, never a subset, a superset, or
+one table forgetting a state the other has.
+
+`test_fu2c_every_state_failure_code_pairing_is_exhaustively_swept` is the
+strongest available proof of exactness: for both classes, for every one of
+the five unsatisfied states, for every one of the 43 declared
+`CategoryBFailureCode` members -- the allowed codes construct cleanly and
+every other code is refused. 430 individual constructions per run.
+
+## First-failure attribution mechanism
+
+`CategoryBControllerResult.__post_init__` now scans `gate_statuses` in
+`CategoryBGateName`'s own declaration order (confirmed, not merely assumed,
+to be the controller's real evaluation order: the 23 `COMPATIBILITY_GATES`
+in that exact order, followed by the four `CLOSURE_GATES` --
+`RUNTIME_TEARDOWN -> BROKER_SHUTDOWN -> GENERATED_CONFIG_CLEANUP ->
+EVIDENCE_SAFETY` -- in that exact order, both matching the real
+`run_category_b_controller` source sequence read top to bottom) and:
+
+- for `INFRASTRUCTURE_REFUSAL`: finds the FIRST `"FAILED:..."` entry, requires
+  one to exist, and requires `failed_gate` to be exactly that gate (not
+  merely "a gate whose own text matches its own `failure_code`", which the
+  pre-existing agreement check already covered and which is silent about
+  POSITION);
+- for `CATEGORY_B_GATE_PASSED`: requires no gate at all to read `"FAILED:..."`
+  (a narrower, explicit restatement of what invariants 5/6/7 in the FU2B
+  section already implied together, made direct so the intent cannot be
+  missed by a future reader of either check alone).
+
+This is deliberately NOT a new generic workflow/state-machine validator --
+it is the one first-failure-attribution invariant the controller's own
+`_fail()` closure already implements operationally
+(`if failed_gate is None: failed_gate = gate; failure_code = code`), made
+externally checkable.
+
+## CleanupFailureClassification coherence rule
+
+`CleanupStatus.__post_init__` now calls a new
+`_require_category_b_cleanup_failure_shape` helper whenever `classification`
+is not `None` (i.e. on the already-existing failed/unverified path only).
+The helper compares the given classification field-by-field against a
+FRESHLY minted reference from the frozen, reused
+`classify_cleanup_failure(semantic_prompts_sent=SEMANTIC_PROMPTS_SENT)` --
+never against hand-declared literal field values:
+
+- `semantic_prompts_sent`: exact `int` type, then `!=` against the
+  reference's value (always `0`) -- catches a wrong value AND the
+  `semantic_prompts_sent=False` truthiness bypass (`False == 0` in Python)
+  the same way this design already guards `CategoryBControllerResult`'s own
+  field of the same name.
+- `autonomous_classification`: identity (`is not`) against the reference's
+  member -- an enum-shaped singleton comparison, never `==`, so a
+  duck-typed/foreign "equal-by-value" stand-in cannot pass.
+- `run_validity`: `is not None` -- a pre-prompt refusal carries no
+  `run_validity` at all, so ANY non-`None` value (regardless of its own
+  type) is wrong.
+- `scoring_eligible`: `require_exact_bool` (the same helper `CleanupStatus`
+  already uses for its own `attempted`/`scrub_verified` fields), then an
+  explicit `False` check.
+
+**This never imports or names `AutonomousClassification` inside
+`i2b_controller.py`.** `test_no_candidate_scoring_machinery_is_reachable`
+(zero-prompt-authority suite, unchanged) already forbids that exact token in
+this module's code -- reusing the frozen function's own RETURN VALUE for the
+identity comparison, rather than re-declaring the correct enum member by
+importing the enum, satisfies the field-level check without ever writing
+the forbidden name. `test_fu2c_no_i2b_module_names_autonomous_classification`
+pins this down directly, and the full zero-prompt-authority sweep
+(`test_no_i2b_module_has_a_prompt_shaped_name_anywhere`,
+`test_no_i2b_module_imports_a_live_io_primitive`,
+`test_no_candidate_scoring_machinery_is_reachable`) still passes unmodified.
+
+`i2_cleanup.py` (frozen) was **not** modified -- `CleanupFailureClassification`
+still performs no validation of its own; the new check lives entirely on
+the CONSUMING side, in `i2b_controller.py`.
+
+## Same-class bypasses found during the second adversarial review
+
+None found beyond the three named blockers themselves. The review checked,
+specifically:
+
+- **Per-resource failure-code drift** -- closed by exhaustively sweeping
+  both classes' tables against all 43 `CategoryBFailureCode` members
+  (`test_fu2c_every_state_failure_code_pairing_is_exhaustively_swept`) and
+  grep-auditing every construction site of both classes in
+  `i2b_controller.py`, confirming all of them live inside `_close_runtime`/
+  `_close_broker` and nowhere else -- so the tables cannot have missed a
+  reachable code the real source can emit.
+- **State/failure-code disagreement** -- same sweep; every combination
+  outside each state's declared set is mechanically refused.
+- **`failed_gate` not being the first failure** -- checked against seven
+  distinct REAL controller refusal shapes, including one where the
+  compatibility failure and the closure failure both occur in the SAME run
+  (`test_fu2c_real_pipeline_earlier_compat_failure_stays_failed_gate_despite_later_cleanup_failure`)
+  and two where a real double-gate failure occurs from one observation
+  (the `h1_components={"malformed_source_metadata": True}` case inside
+  `test_fu2c_real_refusals_failed_gate_is_always_the_first_failed_gate_in_declared_order`)
+  or where only a closure gate fails and every compatibility gate genuinely
+  passed (`runtime_child_exited=False`/`broker_reached_closed=False`).
+- **Typed diagnostic objects whose internal fields remain annotation-only
+  trust** -- `CleanupFailureClassification` was exactly this shape before
+  this phase (exact-type checked, fields untouched); now closed. No other
+  typed diagnostic object consumed by `CategoryBControllerResult`/
+  `CleanupStatus`/`_ResourceClosureStatus` was found in the same shape
+  during this pass (`CompatibilityFacts`, `CategoryBEvidence` and the two
+  closure-status classes already had FU2A/FU2B/this-phase field-level
+  checks; the observation types in `i2b_session.py` already validate their
+  own fields in `__post_init__` and were not touched).
+- **New bool/truthiness coercion** -- every new comparison is by exact type
+  then `!=`/`is`/`is not`, or (for `scoring_eligible`) `require_exact_bool`
+  followed by a plain `if` on an already-type-proven `bool` (the same
+  pattern the surrounding, already-accepted `CleanupStatus` code uses for
+  `attempted`/`scrub_verified`) -- never a bare `if x:` on an unproven value.
+- **Any gate/status/evidence field that can now contradict another
+  individually valid field** -- none found; the full 344-test
+  `test_i2b_controller.py` suite (was 309) and the full 858-test package
+  suite (was 823) both pass with no test weakened, only two corrected (see
+  "Corrected claims" below), proving every existing accepted invariant still
+  holds simultaneously with the three new ones.
+
+## New regression tests
+
+35 new tests in `tests/test_i2b_controller.py`, under a new `# FU2C --
+resource/state failure-code domains + first-failure attribution +
+cleanup-classification coherence` section:
+
+- **Blocker 1 (9 tests, one parametrized ×2, one parametrized ×2):**
+  `test_fu2c_counterexample_1/2/3` (the three single-resource pre-coding
+  reproductions), `test_fu2c_counterexample_4_creator_unverified_carrying_unrelated_resource_code`
+  (parametrized, both directions), `test_fu2c_every_state_failure_code_pairing_is_exhaustively_swept`
+  (parametrized ×2, the 430-combination sweep),
+  `test_fu2c_a_code_valid_for_runtime_is_not_automatically_valid_for_broker`,
+  `test_fu2c_the_shared_creator_retained_codes_really_are_shared`,
+  `test_fu2c_resource_closure_tables_cover_every_unsatisfied_state`,
+  `test_fu2c_real_controller_creator_retained_broker_state_still_constructs`
+  (a genuine end-to-end `_close_broker` creator-retained-ownership
+  reproduction, not merely a synthetic one).
+- **Blocker 2 (7 tests, one parametrized ×7):**
+  `test_fu2c_counterexample_5_earlier_compat_failure_later_closure_failure_wrong_failed_gate`,
+  `test_fu2c_counterexample_6_h1_and_namespace_both_failed_wrong_failed_gate_is_later`,
+  `test_fu2c_evidence_safety_alone_failing_may_be_failed_gate` (positive
+  control), `test_fu2c_real_pipeline_earlier_compat_failure_stays_failed_gate_despite_later_cleanup_failure`
+  (real end-to-end, both a compatibility AND a closure failure in one run),
+  `test_fu2c_real_refusals_failed_gate_is_always_the_first_failed_gate_in_declared_order`
+  (parametrized over seven real refusal shapes, stated as a GENERAL
+  property rather than one scenario at a time),
+  `test_fu2c_a_genuine_pass_still_constructs_with_no_failed_gate_check_active`
+  (positive control).
+- **Blocker 3 (10 tests, one parametrized ×4):**
+  `test_fu2c_pre_coding_check_7/8/9` (the three named pre-coding shapes),
+  `test_fu2c_cleanup_classification_run_validity_set_is_refused`,
+  `test_fu2c_cleanup_classification_semantic_prompts_sent_false_is_refused`
+  (the `False == 0` bypass, named explicitly per this design's existing
+  convention), `test_fu2c_cleanup_classification_scoring_eligible_non_bool_is_refused`
+  (parametrized ×4: `1`, `0`, `"false"`, `None`),
+  `test_fu2c_pre_coding_check_10_genuine_cleanup_classification_still_constructs`
+  (positive control), `test_fu2c_real_pipeline_cleanup_failure_still_constructs_under_the_new_check`
+  (real end-to-end, via the same monkeypatched-`scrub_generated_qualification_config`
+  reproduction FU2B's own regression already used),
+  `test_fu2c_no_i2b_module_names_autonomous_classification` (the residual
+  proof for why the fix does not need to violate the existing
+  zero-prompt-authority sweep).
+
+**Two pre-existing FU2B tests were corrected, not weakened, by the new
+checks -- exactly the same class of "the fix surfaces a defect in an
+existing test" event FU2B itself reported for
+`CleanupStatus.status_text`.**
+`test_every_unsatisfied_closure_state_reports_no_orchestrator_attempt` had
+constructed all four of `SHUTDOWN_REFUSED_FOREIGN_SESSION`/
+`SHUTDOWN_AUTHORITY_UNAVAILABLE`/`CLOSED_BY_CREATOR_UNVERIFIED`/
+`PARTIAL_RESOURCE_STRANDED_NO_CLEANUP_ATTEMPT` with the SAME bare
+`RUNTIME_TEARDOWN_FAILED` code -- a combination the new table correctly
+refuses for three of the four states. It now supplies each state's own
+correct code. `test_pass_requires_runtime_teardown_and_broker_shutdown_closed_by_orchestrator`
+asserted a specific error-message substring
+(`"CLOSED_BY_ORCHESTRATOR"`) for a `SHUTDOWN_REFUSED_FOREIGN_SESSION`
+`runtime_teardown` sitting inside an otherwise-PASS result; that
+construction now correctly trips the NEW, earlier "a PASS may have no
+FAILED gate" check first (a `FAILED:...` runtime_teardown status text is,
+after all, a FAILED gate) -- the test's `match` pattern was broadened to
+accept either message, since both are correct refusals of the same
+underlying contradiction.
+
+## Offline suite result
+
+```text
+858 passed, 0 failed
+python -m pytest experiments/pi_implementer_qualification/tests -q
+```
+
+(514 unchanged I1/I2 through FU3B; 344 in `test_i2b_controller.py`, up from
+FU2B's 309 -- 35 new tests, 2 corrected, for this follow-up.)
+
+Frozen suites re-run unmodified:
+
+```text
+experiments/pi_external_runtime_ar1/tests         96 passed, 0 failed
+experiments/pi_external_runtime_ar2/tests        290 passed, 0 failed
+experiments/pi_external_runtime_ar2_o1/tests      89 passed, 0 failed
+tests/  (the production suite)                  3504 passed, 0 failed
+```
+
+No file under `ar1/`, `ar2/`, `o1/`, `src/`, root `tests/` or `projects/` was
+touched. `i2b_session.py`/`i2b_workspace.py`/`i2_cleanup.py` were not
+modified -- no reproduced defect required any of them.
+
+## Corrected claims
+
+FU2B's own closing text did not claim more than it had closed, so nothing
+in its prose is corrected here. What is corrected is narrower: two of
+FU2B's OWN regression tests (named above) had encoded assumptions --
+"any bare `RUNTIME_TEARDOWN_FAILED` demonstrates the derived-boolean
+properties", "a `CLOSED_BY_ORCHESTRATOR` requirement is the only thing a
+PASS-shaped invariant can fail on" -- that were true under FU2B's own
+(looser) validation and are no longer the most specific true statement
+under FU2C's. Neither test's INTENT changed; both still prove exactly what
+their names say.
+
+## What this does NOT establish
+
+Unchanged from FU2/FU2A/FU2B's own closing sections: no zero-prompt live
+gate has ever run; `get_commands` still proves nothing about the active
+tool registry; the adapter trust boundary is unchanged; the synthetic
+workspace authority is not real-workspace authority; no claim about
+descendants, inference, or GPU work; redaction/scrubbing remain backstops,
+not guarantees; the evidence-binding check still covers only the
+canonical-evidence fields already represented as typed
+`CategoryBControllerResult` fields.
+
+**Additionally, narrowly, from this follow-up:** every new check in this
+phase is, like every other component/verdict split in this design, a
+correctness/integrity control against a caller (including a future
+refactor) INSIDE the trust boundary -- none of it defends against a caller
+willing to import a package-internal construction path directly and
+hand-craft both sides of a comparison it fully controls (e.g. calling
+`classify_cleanup_failure` itself with a value other than `0`, which
+remains a legitimate call for OTHER, non-Category-B callers of that shared
+frozen function, and is not something this module can or should prevent).
+The first-failure-attribution check proves `failed_gate` agrees with
+`gate_statuses` POSITIONALLY; it does not, and cannot, prove
+`gate_statuses` itself reflects any real controller run, which is what the
+pre-existing per-gate vocabulary and typed-object-equality checks (FU2A/
+FU2B, unchanged) are for.
+
+# 5F3B-I2B-FU2D -- Refusal Trace + Resource-Existence Coherence (Offline Only)
+
+> **OFFLINE ONLY. NO LIVE ACTIVITY OF ANY KIND.** No Pi/Node process, no
+> socket, no model call, no credential read, no semantic prompt, no real
+> workspace access. Category-B live execution remains **NO-GO**, Q1/Q2
+> remain **NO-GO**, real-workspace authority remains **NO-GO**. Nothing in
+> the frozen I2A/FU3 design family, H1/`get_commands` semantics, workspace
+> authority, credential ordering, partial-resource ownership,
+> foreign-session authority rules, the evidence-binding architecture, the
+> FU2C failure-code domains, or the FU2C cleanup classification was
+> reopened. `i2b_session.py`/`i2b_workspace.py` were not touched -- no
+> reproduced defect required either.
+
+FU2C's three fixes were accepted in substance. The remaining defect was one
+layer up, and narrower:
+
+> **Individually valid resource and gate objects could still describe an
+> EXECUTION TRACE the real controller could never have produced.**
+
+The suite's own `test_the_launch_facts_may_legitimately_be_true_while_not_
+reached` "positive control" WAS such a trace, and was the brief's primary
+counterexample. It asserted as legitimate a result with
+`PI_CONFIG_GENERATION = PASSED` alongside `pi_config_created=False` and a
+`NOT_REQUIRED` cleanup, and `RUNTIME_LAUNCH = FAILED:RUNTIME_SESSION_MISMATCH`
+alongside `runtime_session_established=False`. Both are impossible: the
+controller assigns `generated_config` exactly on that gate's success path,
+and a session-mismatch refusal is reached only AFTER
+`launch_observation.session` was returned and assigned. **Refusing to shut a
+foreign session down is not the same fact as no session having been
+returned.**
+
+## Mandatory pre-coding counterexamples: which succeeded before the fix
+
+All 13 negative cases reproduced against the actual pre-fix (FU2C) code
+before any change was written; both positive controls were confirmed
+constructible:
+
+| # | Case | Result |
+|---|---|---|
+| 1 | the existing suite's own launch-facts "positive control" (the composite above) | **Constructed** |
+| 2 | `pi_config_created=False` + `PI_CONFIG_GENERATION=PASSED` | **Constructed** |
+| 3 | `pi_config_created=True` + `PI_CONFIG_GENERATION=NOT_REACHED` | **Constructed** |
+| 4 | `runtime_session_established=False` + `runtime_teardown=CLOSED_BY_ORCHESTRATOR` | **Constructed** |
+| 5 | `runtime_session_established=False` + `runtime_teardown=SHUTDOWN_REFUSED_FOREIGN_SESSION` | **Constructed** |
+| 6 | `runtime_session_established=True` + `runtime_teardown=SHUTDOWN_AUTHORITY_UNAVAILABLE` | **Constructed** |
+| 7 | `broker_created=False` + `broker_shutdown=CLOSED_BY_ORCHESTRATOR` | **Constructed** |
+| 8 | `broker_created=False` + `broker_shutdown=SHUTDOWN_REFUSED_FOREIGN_SESSION` | **Constructed** |
+| 9 | `broker_created=True` + `broker_shutdown=SHUTDOWN_AUTHORITY_UNAVAILABLE` | **Constructed** |
+| 10 | `WORKSPACE_AUTHORITY=NOT_REACHED` + `ROUTE_DESCRIPTOR=FAILED` | **Constructed** |
+| 11 | early compatibility failure + later `ROUTE_CHECK=PASSED` | **Constructed** |
+| 12 | `GET_COMMANDS=FAILED` + `H1`/namespace reporting a verdict | **Constructed** |
+| 13 | `RUNTIME_LAUNCH=FAILED` + a launch-fact gate reporting a verdict | **Constructed** |
+| 14 | POSITIVE: `H1` and namespace both FAILED from one good `get_commands` | Constructed (must remain) |
+| 15 | POSITIVE: launch FACTS True while their own GATES `NOT_REACHED` | Constructed (must remain) |
+
+## Exact resource/session-existence invariants added
+
+All derived from the controller's own terminal field expressions --
+`pi_config_created = generated_config is not None`,
+`broker_created = broker_session is not None`,
+`runtime_session_established = runtime_session is not None` -- combined with
+where each of those three locals is actually assigned. Every rule is a
+biconditional, in `_require_resource_existence_coherence`:
+
+1. **`pi_config_created == (gate_statuses['pi_config_generation'] ==
+   'PASSED')`.** `generated_config` is assigned only inside that gate's own
+   success path. Combined with the already-enforced FU2B
+   `pi_config_created == cleanup.attempted`, this is what makes a
+   config-generation PASS incompatible with a `NOT_REQUIRED` cleanup.
+2. **Each existence boolean equals "the creation adapter returned a full
+   session"**, which that gate's own status determines exactly: `PASSED` or
+   that gate's own session-mismatch refusal, and no other status. A
+   non-`None` session survives into exactly the mismatch-refusal branch or
+   the success branch, because the branch immediately below the assignment
+   refuses a `None` session with its own distinct code.
+3. **The typed closure state must be one THAT EXACT gate status can
+   produce** (`_RUNTIME_LAUNCH_STATUS_TO_CLOSURE_STATES` /
+   `_BROKER_SESSION_STATUS_TO_CLOSURE_STATES`), transcribed from each
+   resource's creation block and `_close_*` function together. This is
+   strictly stronger than a session-bearing/non-session-bearing split, which
+   it implies -- see the second-review finding below for why the weaker form
+   was not enough. An import-time assertion requires each map's keys to be
+   exactly `NOT_REACHED`, `PASSED`, and one entry per failure code that
+   gate's FU2B vocabulary allows, so a code added to one table without the
+   other cannot fall through unconstrained.
+
+**The distinction the fix deliberately PRESERVES.** "A physical partial
+resource may exist" and "a full session object crossed the boundary" are two
+different facts, and only the second is what these booleans report. A
+creator-retained partial broker (`resource_created=True`, `session=None`)
+yields `broker_created=False` -- correctly, since no `BrokerSession` was ever
+handed over -- while a FOREIGN full session yields `broker_created=True`
+even though this run refused to act on it. Neither is collapsed into the
+other; both directions are covered by tests, the second end-to-end through
+the real controller.
+
+## Exact gate reachability rules added
+
+`_GATE_PREREQUISITES` transcribes, one-for-one, the `if` condition guarding
+each compatibility gate's block in `run_category_b_controller` -- the
+sequential pre-launch prefix, then the four-launch-fact group, the
+`get_commands` group (H1 + namespace from ONE response), the `get_state`
+group (H2 from ONE response), then protocol integrity and the route check.
+`_require_reachable_gate_trace` walks the gates once and requires
+
+```text
+(status != NOT_REACHED)  ==  (every prerequisite is PASSED)
+```
+
+a **biconditional**, so both directions close: a gate reporting a verdict
+its prerequisite never authorized is refused, and so is a gate claiming
+`NOT_REACHED` when its prerequisite DID pass (the controller's launch-fact
+loop sets all four gates together, so three `NOT_REACHED` beside one verdict
+never happened either). `RUN_CORRELATION` has an empty prerequisite tuple --
+the controller always attempts it, so `NOT_REACHED` is not a state it can
+report.
+
+Each block, once entered, records a status on every path through it
+(verified branch by branch), which is what makes the biconditional sound
+rather than merely an implication. An import-time assertion requires every
+prerequisite to be a strictly EARLIER compatibility gate, which makes the
+validator a single forward pass and rules out a cyclic table by
+construction.
+
+**This is deliberately not a generic workflow engine**, per the brief's stop
+condition: one table transcribed from one function's `if` conditions, plus
+one forward pass. It says nothing about WHICH status a reached gate holds --
+the FU2B per-gate vocabulary and the FU2C first-failure rule already own
+that. The four closure gates and `EVIDENCE_SAFETY` are deliberately absent
+from the table: they are resolved on EVERY controller path, so their
+coherence is proven against resource existence instead.
+
+## Existing tests that encoded impossible traces, and how they were corrected
+
+Nine tests failed the moment the new validators were added. Every one was
+encoding a trace the controller cannot produce; none was weakened.
+
+1. **`test_the_launch_facts_may_legitimately_be_true_while_not_reached`** --
+   the brief's primary counterexample, described above. Rebuilt on the
+   genuine reachable shape, and it now asserts the accepted asymmetry
+   EXPLICITLY (the four launch FACTS read True while their own GATES stay
+   `NOT_REACHED`) plus the resource trace that actually accompanies it
+   (`runtime_session_established=True`, teardown
+   `SHUTDOWN_REFUSED_FOREIGN_SESSION`, `pi_config_created=True`, cleanup
+   attempted).
+2. **`test_evidence_binding_applies_to_refusals_too_not_only_pass`** -- its
+   comment claimed *"NOTHING was created before BROKER_READY failed"*, which
+   is false for this lifecycle: frozen-O1 mints the generated config and the
+   broker session BEFORE `BROKER_READY` is checked. Rebuilt on a derived
+   trace; a new companion test
+   (`test_fu2d_a_broker_ready_failure_reports_the_resources_that_already_exist`)
+   asserts the positive half directly.
+3. **`test_a_fact_claiming_true_while_its_own_gate_is_failed_is_refused`**,
+   **`test_every_single_mapped_fact_is_checked_against_its_own_gate`**,
+   **`test_protocol_integrity_conjunction_is_checked`**,
+   **`test_the_launch_facts_are_still_checked_once_their_gate_is_reached`**,
+   **`test_fu2c_counterexample_6_h1_and_namespace_both_failed_wrong_failed_gate_is_later`**
+   -- all built on the old `_all_not_reached_pairs` helper, whose premise
+   ("every gate `NOT_REACHED` except the ones a test names") was itself an
+   impossible-trace generator. Rebuilt on `_reachable_refusal`.
+4. **`test_pass_requires_pi_config_created_broker_created_runtime_session_established`**
+   and
+   **`test_pass_requires_runtime_teardown_and_broker_shutdown_closed_by_orchestrator`**
+   -- both now trip a stricter, more specific FU2D rule before reaching the
+   PASS-shape rule they named. The PASS-shape "all be True" check is
+   consequently **defence in depth** rather than the first line of defence
+   (the same stance FU2B already documented for the deliberately redundant
+   `observed_pi_version is not None` PASS-only check); the tests accept
+   either refusal and say so.
+
+**The old helper was replaced, not patched.** `_all_not_reached_pairs` is
+gone; `_reachable_compatibility_pairs` walks the SAME `_GATE_PREREQUISITES`
+table the controller declares (imported, never re-declared, so the helper
+cannot drift from the source), and `_closure_objects_for_trace` /
+`_facts_for_trace` / `_reachable_refusal` DERIVE every remaining field from
+that trace. A test overriding exactly one thing now isolates exactly that
+one thing. `observed_pi_version` is derived from the resulting facts for the
+same reason.
+
+## Additional same-class bypass found in the second adversarial review
+
+**One, fixed with a regression before completion was reported.** An
+exhaustive (closure state x existence boolean) sweep over three reachable
+traces found that binding the closure state only to *"was a session
+returned"* was not tight enough: on a trace where `BROKER_SESSION` failed --
+so the runtime launch adapter was **never called**, `launch_attempted` is
+False, and `_close_runtime` can only return `NOT_REQUIRED` -- the
+creator-retained (`CLOSED_BY_CREATOR_VERIFIED`/`UNVERIFIED`,
+`PARTIAL_RESOURCE_STRANDED_NO_CLEANUP_ATTEMPT`) and
+`SHUTDOWN_AUTHORITY_UNAVAILABLE` runtime states all still constructed. Fixed
+by replacing the coarse session-bearing split with the per-status
+closure-state maps described above. Regression:
+`test_fu2d_second_review_bypass_creator_states_need_the_adapter_to_have_been_called`.
+
+**And one over-refusal in this phase's own first draft of that map**, caught
+immediately by the real-controller trace sweep rather than by reasoning:
+`_creator_retained_ownership_state` returns `NOT_REQUIRED` whenever the
+creator reports `resource_created=False`, so a `RUNTIME_LAUNCH_FAILED` trace
+legitimately admits FOUR closure states, not three. Regression:
+`test_fu2d_not_required_is_reachable_from_a_launch_that_created_nothing`.
+
+The remaining second-review items produced no finding: individually-valid
+resource states whose existence booleans disagree (closed by invariants 2/3),
+foreign full sessions vs creator-retained partial resources (both directions
+tested, one end-to-end), gates reached after an earlier stage made them
+unreachable (closed by the trace validator), the two intentional multi-fact
+observation groups (positive controls, both still representable), and
+`dataclasses.replace` on genuine controller refusals (swept).
+
+## New regression tests
+
+**56 new tests** in `tests/test_i2b_controller.py`, under a new `# FU2D --
+refusal-trace + resource-existence coherence closure` section, plus the nine
+corrections above. Highlights:
+
+- the 13 negative counterexamples, each isolated to the one rule it names;
+- both positive controls stated explicitly
+  (`test_fu2d_counterexample_14_h1_and_namespace_may_both_fail_from_one_observation`,
+  `test_fu2d_one_launch_fact_may_fail_while_its_three_siblings_pass`);
+- `test_fu2d_a_foreign_session_is_still_a_returned_session` and
+  `test_fu2d_a_creator_retained_partial_resource_is_not_a_returned_session`
+  (the latter driving the REAL controller), pinning both halves of the
+  distinction the brief insists on;
+- `test_fu2d_a_reached_prerequisite_makes_not_reached_impossible_too` and
+  `test_fu2d_run_correlation_may_never_be_not_reached`, closing the second
+  direction of the biconditional;
+- structural tests that the prerequisite table and both status->state maps
+  match their sources
+  (`test_fu2d_the_prerequisite_table_matches_the_controllers_own_stage_order`,
+  `test_fu2d_status_to_closure_state_maps_cover_their_whole_vocabulary`);
+- **`test_fu2d_every_real_controller_trace_is_accepted_by_the_new_validators`**,
+  the decisive check that these rules are DERIVED and not merely plausible:
+  **29 distinct real controller runs** -- every creation, observation,
+  identity and teardown failure mode the offline harness can drive, plus the
+  full pass -- each constructing its result cleanly. A rule that over-refuses
+  shows up here immediately, and one did (above).
+
+## Offline suite result
+
+```text
+914 passed, 0 failed
+python -m pytest experiments/pi_implementer_qualification/tests -q
+```
+
+(514 unchanged I1/I2 through FU3B; 400 in `test_i2b_controller.py`, up from
+FU2C's 344 -- 56 new tests, 9 corrected, for this follow-up.)
+
+Frozen suites re-run unmodified:
+
+```text
+experiments/pi_external_runtime_ar1/tests         96 passed, 0 failed
+experiments/pi_external_runtime_ar2/tests        290 passed, 0 failed
+experiments/pi_external_runtime_ar2_o1/tests      89 passed, 0 failed
+tests/  (the production suite)                  3504 passed, 0 failed
+```
+
+No file under `ar1/`, `ar2/`, `o1/`, `src/`, root `tests/` or `projects/` was
+touched. `i2b_session.py`, `i2b_workspace.py` and `i2_cleanup.py` were not
+modified.
+
+## Corrected claims
+
+**FU2C's closing verdict of "READY FOR INDEPENDENT REVIEW" was premature**,
+and is corrected here. FU2C closed which failure code a resource/gate may
+carry and which gate may be nominated as `failed_gate`, but its own
+regression suite still contained a "positive control" asserting an
+unreachable execution trace as legitimate -- so the suite was, in that one
+place, defending the wrong thing. README.md's I2B status block is corrected
+in place with a pointer to this section.
+
+## What this does NOT establish
+
+Unchanged from FU2/FU2A/FU2B/FU2C: no zero-prompt live gate has ever run;
+`get_commands` still proves nothing about the active tool registry; the
+adapter trust boundary is unchanged; the synthetic workspace authority is not
+real-workspace authority; no claim about descendants, inference, or GPU work;
+redaction/scrubbing remain backstops, not guarantees; the evidence-binding
+check still covers only the canonical-evidence fields represented as typed
+result fields.
+
+**Additionally, narrowly, from this follow-up:** these validators prove that
+an accepted result describes a trace the controller COULD have produced --
+not that it describes a trace that DID occur. They are a coherence control
+against a caller or a future refactor inside the trust boundary, not
+provenance: nothing here (and nothing that could reasonably be added here)
+distinguishes a hand-built result that happens to be perfectly coherent from
+one a real run emitted. The rules are also transcriptions of the CURRENT
+controller's control flow; a future change to `run_category_b_controller`'s
+stage conditions must update `_GATE_PREREQUISITES` and both status->state
+maps in the same commit, and the 29-trace real-controller test is what would
+catch a divergence.
+
+# 5F3B-I2B-FU2E -- Observation-Fact Availability + Terminal Evidence State Closure (Offline Only)
+
+> **OFFLINE ONLY. NO LIVE ACTIVITY OF ANY KIND.** No Pi/Node process, no
+> socket, no model call, no credential read, no semantic prompt, no real
+> workspace access. Category-B live execution remains **NO-GO**, Q1/Q2
+> remain **NO-GO**, real-workspace authority remains **NO-GO**. Nothing in
+> the frozen I2A/FU3 design family, gate reachability/prerequisite coherence,
+> resource/session-existence coherence, the FU2B/FU2C status->closure-state
+> maps, the foreign-session/creator-retained-partial-resource distinction,
+> first-failure attribution, the FU2B/FU2C resource/state failure-code
+> domains, workspace authority, credential ordering, H1/`get_commands`
+> observability design, partial-cleanup ownership, or the evidence-scrub
+> architecture was reopened. `i2b_session.py`/`i2b_workspace.py` were not
+> touched -- no reproduced blocker required either.
+
+FU2D's own "READY FOR FINAL FREEZE REVIEW" verdict was premature. FU2D
+proved a gate TRACE is reachable exactly when the controller's own `if`
+conditions would have reached it -- but a trace being reachable says nothing
+about whether the `CompatibilityFacts` recorded alongside it are honest. The
+gap was narrower and one layer up:
+
+> **A gate trace can be reachable while `CompatibilityFacts` still claims an
+> observation the controller never performed.**
+
+Two independent forms of the same gap, plus one adjacent terminal-state gap:
+
+1. **Blocker 1.** The fact-vs-gate loop's `NOT_REACHED` exception
+   (`if gate_status == _STATUS_NOT_REACHED: continue`) applied uniformly to
+   all eleven single-mapped facts. It is correct ONLY for the four LAUNCH
+   facts; for the other seven, the fact and its own gate's `_pass`/`_fail`
+   are set together, unconditionally, in the SAME block on every path
+   through it -- "gate reached", "observation available" and "fact observed"
+   are the same fact for them, so `NOT_REACHED` should have pinned the fact
+   `False`, not left it unchecked.
+2. **Blocker 2.** The four launch facts genuinely ARE the one place those
+   three notions diverge, but the exception needed to be bound to
+   `RUNTIME_LAUNCH`'s own status -- specifically to whether a valid
+   `RuntimeLaunchObservation` was actually consumed -- not to "this fact's
+   own gate is `NOT_REACHED`" taken as a free pass on its own.
+3. **Blocker 3.** The `PROTOCOL_INTEGRITY` conjunction check
+   (`(no_pv and no_ee) == protocol_gate_passed`) proved only that the two
+   facts agreed with pass/fail, never *which* failure interpretation of the
+   SAME observation they were consistent with -- it could not tell
+   `FAILED:PROTOCOL_VIOLATION_OBSERVED` apart from
+   `FAILED:EXTENSION_ERROR_OBSERVED`, each of which pins a DIFFERENT exact
+   pair of fact values in the real controller.
+4. **Terminal evidence state.** `CategoryBEvidence()`'s bare, no-argument
+   constructor produces a safe INTERMEDIATE placeholder
+   (`scrub_findings == ("evidence_not_yet_built",)`) -- legitimate to
+   construct in isolation, but never a shape `run_category_b_controller`
+   itself returns (every real path calls either `_refused` or
+   `_build_from_payload`). Nothing previously refused a terminal
+   `CategoryBControllerResult` carrying it.
+
+## Mandatory pre-coding counterexamples: which succeeded before the fix
+
+All 14 reproduced against a scratch, line-for-line reconstruction of the
+pre-fix (FU2D-accepted) module, built by mechanically reverse-applying this
+phase's own three edits to a throwaway sibling module
+(`qualification/_i2b_controller_prefu2e.py`, deleted before this phase's
+tests were finalized -- it is not part of the shipped package) and importing
+it side-by-side with the real, fixed `qualification.i2b_controller`. Every
+negative case constructed cleanly pre-fix and is refused post-fix; both
+positive controls construct on BOTH:
+
+| # | Case | Pre-fix | Post-fix |
+|---|---|---|---|
+| 1 | `RUN_CORRELATION` fails, `get_commands_response_shape_understood=True` | **Constructed** | Refused |
+| 2 | same, `h1_extension_identity_matched=True` | **Constructed** | Refused |
+| 3 | same, `exact_candidate_model_served=True` | **Constructed** | Refused |
+| 4 | `BROKER_SESSION` fails / `BROKER_READY` `NOT_REACHED`, `broker_reached_required_ready_state=True` | **Constructed** | Refused |
+| 5 | `GET_STATE` `NOT_REACHED`, `get_state_response_shape_understood=True` + `h2_provider_model_identity_matched=True` | **Constructed** | Refused |
+| 6 | `PROTOCOL_INTEGRITY` `NOT_REACHED`, either protocol fact `True` | **Constructed** | Refused |
+| 7 | `RUNTIME_LAUNCH` `NOT_REACHED`, all four launch facts `True` | **Constructed** | Refused |
+| 8 | `RUNTIME_LAUNCH_REQUEST_UNCONSTRUCTIBLE`, launch facts `True` | **Constructed** | Refused |
+| 9 | `RUNTIME_LAUNCH` `ADAPTER_RAISED`, launch facts `True` | **Constructed*** | Refused (same underlying reason on both, see note) |
+| 10 | POSITIVE: `RUNTIME_LAUNCH_FAILED` from a VALID observation, `session=None`, launch facts `True` | **Constructed (must remain)** | Constructed (must remain) |
+| 11 | POSITIVE: `RUNTIME_SESSION_MISMATCH`, launch facts `True` | **Constructed (must remain)** | Constructed (must remain) |
+| 12 | `FAILED:PROTOCOL_VIOLATION_OBSERVED` with `no_protocol_violation_observed=True`, `no_extension_error_observed=False` | **Constructed** | Refused |
+| 13 | `FAILED:EXTENSION_ERROR_OBSERVED` with `no_protocol_violation_observed=False`, `no_extension_error_observed=True` | **Constructed** | Refused |
+| 14 | terminal refusal carrying bare `CategoryBEvidence()` (`evidence_not_yet_built`) | **Constructed** | Refused |
+
+`MALFORMED_ADAPTER_RESULT` (the `RUNTIME_LAUNCH` sibling of case 9) was swept
+the same way with the same result. \* Case 9's scratch-diagnostic script used
+a simplified closure-object builder that does not special-case every
+failure code the way the real test suite's `_reachable_refusal` does, so it
+was ALREADY refused pre-fix by the unrelated, already-accepted FU2D
+resource-existence check (`ADAPTER_RAISED`/`MALFORMED_ADAPTER_RESULT` require
+a `SHUTDOWN_AUTHORITY_UNAVAILABLE` runtime-teardown state, not the default
+`NOT_REQUIRED`) -- not by anything this phase touches. The permanent
+regression test for this case (below) supplies the correct
+`SHUTDOWN_AUTHORITY_UNAVAILABLE` teardown explicitly so it isolates the
+FU2E rule rather than riding on that earlier, unrelated check.
+
+## Exact observation-availability rule added (blocker 1)
+
+The old single loop over `_SINGLE_FACT_TO_GATE` is now:
+
+```text
+for each single-mapped fact:
+    if its own gate status != NOT_REACHED:
+        fact must equal (gate status == PASSED)      # unchanged from FU2D
+    elif the fact is one of the four LAUNCH facts:
+        see the launch-fact exception below
+    else:
+        fact must be False                            # NEW
+```
+
+For the seven non-launch single-mapped facts
+(`get_commands_response_shape_understood`, `h1_extension_identity_matched`,
+`no_unexpected_extension_command_observed`, `get_state_response_shape_understood`,
+`h2_provider_model_identity_matched`, `exact_candidate_model_served`,
+`broker_reached_required_ready_state`), `NOT_REACHED` on their own gate now
+means the producing observation was never made, so the fact must be at its
+`False` default -- confirmed field-by-field against each fact's own
+assignment site in `run_category_b_controller` (e.g.
+`fact_values["get_commands_response_shape_understood"] = True` sits in the
+SAME `else` block as `_pass(GET_COMMANDS)`, on every path through the
+`if _all_passed(<four launch gates>): ...` block).
+
+## Exact launch-fact exception (blocker 2)
+
+Read directly off the real controller's `RUNTIME_LAUNCH` block: all four
+`fact_values[...]` assignments happen immediately after `_invoke(launch_runtime,
+...)` returns a non-`None` `RuntimeLaunchObservation`, strictly BEFORE the
+`runtime_session is None` / session-mismatch checks that can still fail
+`RUNTIME_LAUNCH` itself. So the exception is now keyed off `RUNTIME_LAUNCH`'s
+own recorded status, not off the fact's own (always-`NOT_REACHED`-in-this-
+branch) gate:
+
+```text
+RUNTIME_LAUNCH status                                  four launch facts
+---------------------------------------------------     ------------------
+NOT_REACHED                                              must be False
+FAILED:RUNTIME_LAUNCH_REQUEST_UNCONSTRUCTIBLE            must be False
+FAILED:ADAPTER_RAISED                                    must be False
+FAILED:MALFORMED_ADAPTER_RESULT                          must be False
+FAILED:RUNTIME_LAUNCH_FAILED     (session=None)           may be True or False (each independently)
+FAILED:RUNTIME_SESSION_MISMATCH  (foreign session)         may be True or False (each independently)
+PASSED                                                    own gates ARE reached; falls through to the
+                                                           ordinary per-own-gate check above
+```
+
+`PASSED` is deliberately absent from the "valid observation but own gate
+unreached" set: when `RUNTIME_LAUNCH` passes, the four launch-fact gates are
+themselves reached (their sole prerequisite IS `RUNTIME_LAUNCH`, enforced by
+FU2D's own `_GATE_PREREQUISITES`/`_require_reachable_gate_trace`), so they
+never need the exception at all. The existing accepted positive control for
+`RUNTIME_SESSION_MISMATCH` (`test_the_launch_facts_may_legitimately_be_true_
+while_not_reached`) was preserved verbatim -- not weakened -- and a new,
+symmetric positive control for `RUNTIME_LAUNCH_FAILED`
+(`test_fu2e_blocker2_positive_control_runtime_launch_failed_with_valid_no_
+session_observation`) was added, proving the exception holds on BOTH of its
+two reachable statuses, not just the one the suite happened to already cover.
+
+## Exact protocol failure-code/fact mapping (blocker 3)
+
+Read directly off the real controller's `PROTOCOL_INTEGRITY` block: both
+`fact_values["no_protocol_violation_observed"]`/`["no_extension_error_
+observed"]` are set from the raw observation booleans BEFORE the `if`/`elif`
+that classifies the failure, so `PROTOCOL_VIOLATION_OBSERVED` (checked FIRST)
+has precedence when both were observed:
+
+```text
+protocol_integrity status              no_protocol_violation_observed   no_extension_error_observed
+--------------------------------------  --------------------------------  -----------------------------
+PASSED                                  True                              True
+FAILED:PROTOCOL_VIOLATION_OBSERVED      False                             either (violation has precedence)
+FAILED:EXTENSION_ERROR_OBSERVED         True                              False
+FAILED:RUNTIME_SESSION_MISMATCH         False                             False   (no valid observation consumed)
+FAILED:ADAPTER_RAISED                   False                             False   (no valid observation consumed)
+FAILED:MALFORMED_ADAPTER_RESULT         False                             False   (no valid observation consumed)
+NOT_REACHED                             False                             False
+```
+
+The three "no valid observation consumed" rows share one code path in the
+new validator (a single `else` bucket after the `PASSED`/
+`PROTOCOL_VIOLATION_OBSERVED`/`EXTENSION_ERROR_OBSERVED` branches): both
+facts are only ever populated inside the real controller's own `else` branch
+that follows a matched `runtime_session_id`, so every failure reached BEFORE
+that point -- a session mismatch or an adapter fault -- leaves both at their
+`False` default, exactly like `NOT_REACHED`.
+
+## Terminal evidence-state rule
+
+One module-level constant,
+`_EVIDENCE_NOT_YET_BUILT_SENTINEL = CategoryBEvidence().scrub_findings`
+(derived from a fresh default instance rather than a duplicated literal, so
+it can never drift from the dataclass field default it names), and one new
+check in `CategoryBControllerResult.__post_init__`:
+
+```python
+if not self.evidence.retention_ready and self.evidence.scrub_findings == _EVIDENCE_NOT_YET_BUILT_SENTINEL:
+    raise ValueError(...)
+```
+
+Deliberately narrow, per the brief's own stop condition: no second scrub-
+finding taxonomy, no change to what `_refused`/`_build_from_payload` accept,
+no change to `CategoryBEvidence`'s own invariants (a bare `CategoryBEvidence()`
+remains constructible in isolation -- it is a legitimate, safe intermediate
+value; only a TERMINAL `CategoryBControllerResult` carrying it is refused).
+
+## Same-class bypasses found during the second adversarial review
+
+The mandated sweep (every `CompatibilityFacts` field against its own gate
+PASSED/FAILED/NOT_REACHED, whether the producing adapter was actually
+called, and whether a valid observation was actually accepted) surfaced no
+NEW bypass beyond the three blockers and the terminal-evidence gap already
+closed. Specifically checked and found already correctly handled by the
+fix's own structure (a single `else`/generic branch covering each), without
+requiring a fourth blocker:
+
+- `GET_COMMANDS`/`GET_STATE`/`PROTOCOL_INTEGRITY` can each independently fail
+  with `RUNTIME_SESSION_MISMATCH` (a session-id mismatch on THAT call, not on
+  `RUNTIME_LAUNCH`). For `GET_COMMANDS`/`GET_STATE`, the relevant fact is
+  never populated on that branch (it sits in the `else` clause the mismatch
+  check precedes), so the fact's own gate is FAILED, not NOT_REACHED, and the
+  ORDINARY per-own-gate equality check (unchanged from FU2D) already binds it
+  correctly -- no blocker-1 exception applies here at all. For
+  `PROTOCOL_INTEGRITY`, this is exactly the same "no valid observation
+  consumed" bucket blocker 3 already closes, and is now covered by a
+  dedicated regression
+  (`test_fu2e_blocker3_session_mismatch_pins_both_protocol_facts_false`).
+- Downstream facts of a session-mismatched `GET_COMMANDS`/`GET_STATE`
+  (`H1`/namespace/`H2`) correctly stay `NOT_REACHED` (their prerequisite gate
+  did not pass), which is the ordinary blocker-1 non-launch case -- already
+  covered generically by the sweep (the exact upstream cause of `NOT_REACHED`
+  is irrelevant to the rule, only the status is).
+- The four launch facts remain genuinely INDEPENDENT even inside the one
+  "valid observation, own gate unreached" exception (e.g.
+  `pi_version_observed=True` while `rpc_launch_shape_valid=False`, both on a
+  `RUNTIME_LAUNCH_FAILED` trace) -- unchanged and still representable, matching
+  I2A Sec. 15's "four independent facts from one observation" design.
+- A retention-ready evidence body (`scrub_clean=True`) can never carry the
+  sentinel tuple in the first place -- `CategoryBEvidence`'s own existing
+  invariant (`scrub_clean == (not scrub_findings)`) already forces
+  `scrub_findings == ()` whenever `retention_ready` is `True`, so the new
+  terminal check's `not self.evidence.retention_ready` guard cannot be
+  bypassed by a "clean but sentinel-carrying" evidence object -- there is no
+  such reachable object.
+
+## New/corrected tests
+
+**28 new tests**, all under a new `# 5F3B-I2B-FU2E` section in
+`tests/test_i2b_controller.py`; zero existing tests were weakened or
+deleted, and the pre-existing 400/914 both remain green unmodified:
+
+- **Blocker 1**: a parametrized sweep over all seven non-launch
+  single-mapped facts
+  (`test_fu2e_blocker1_a_non_launch_fact_may_not_float_true_while_never_
+  reached`), plus a structural test that the sweep covers the whole set with
+  no silent hand-picked subset
+  (`test_fu2e_blocker1_every_non_launch_single_mapped_fact_is_swept`).
+- **Blocker 2**: a parametrized sweep over the four no-valid-observation
+  `RUNTIME_LAUNCH` statuses (mandatory counterexamples 4/7/8/9,
+  `test_fu2e_blocker2_launch_facts_may_not_float_true_without_a_valid_
+  observation`), plus the new `RUNTIME_LAUNCH_FAILED` positive control
+  (counterexample 10) described above.
+- **Blocker 3**: `NOT_REACHED` (counterexample 6) and
+  `RUNTIME_SESSION_MISMATCH` both pinning both facts False; counterexamples
+  12 and 13 exactly; a positive control proving `PROTOCOL_VIOLATION_OBSERVED`
+  precedence leaves the OTHER fact free
+  (`test_fu2e_blocker3_protocol_violation_precedence_leaves_the_other_fact_
+  free`); and the unchanged `PASSED`-requires-both-True case re-expressed
+  under the new branch structure.
+- **Terminal evidence**: counterexample 14 directly on
+  `CategoryBControllerResult`; an end-to-end proof that a genuine controller
+  refusal's evidence is never the sentinel
+  (`test_fu2e_a_real_refusal_still_carries_a_real_evidence_body_never_the_
+  sentinel`); and a `dataclasses.replace` mutation of a genuine PASS onto the
+  bare sentinel, refused.
+- **Not-over-refused, end to end**: a parametrized sweep of six REAL
+  controller refusal traces through the actual harness/`_run` path
+  (`broker_ready=False`, `launch_returns_no_session=True`, a launch
+  session-id mismatch, `protocol_violation=True`, `extension_error=True`,
+  `pi_version=None`) -- the decisive proof that the tighter rules do not
+  over-refuse a genuine run, exactly mirroring FU2D's own 29-trace
+  real-controller test for this phase's own two blockers.
+
+## Offline suite result
+
+```text
+942 passed, 0 failed
+python -m pytest experiments/pi_implementer_qualification/tests -q
+```
+
+(514 unchanged I1/I2 through FU3B; 428 in `test_i2b_controller.py`, up from
+FU2D's 400 -- 28 new tests, 0 corrected, for this follow-up.)
+
+Frozen suites re-run unmodified:
+
+```text
+experiments/pi_external_runtime_ar1/tests         96 passed, 0 failed
+experiments/pi_external_runtime_ar2/tests        290 passed, 0 failed
+experiments/pi_external_runtime_ar2_o1/tests      89 passed, 0 failed
+```
+
+No file under `ar1/`, `ar2/`, `o1/`, `src/`, root `tests/` or `projects/` was
+touched. `i2b_session.py`, `i2b_workspace.py`, `i2_cleanup.py` and every
+other reused I2 module were not modified.
+
+## No-live/no-network/no-model/no-credential confirmation
+
+Unchanged from every prior FU2* closure: this follow-up touches only
+`qualification/i2b_controller.py`'s terminal-result validator and
+`tests/test_i2b_controller.py`. No new import of `subprocess`/`socket`/
+`http`/`urllib`/`os.environ` was added (the module's own source-level
+regression test enforces this mechanically and still passes); no test opens
+a socket, launches a process, or reads an environment variable for a
+credential; the scratch pre-fix reconstruction used to verify the mandatory
+counterexamples was a diagnostic-only, throwaway Python module (never
+imported by the shipped package or by any test) and was deleted before this
+phase's own tests were finalized. Category-B live execution, Q1/Q2, and
+real-workspace authority all remain **NO-GO**.
+
+## Corrected claims
+
+**FU2D's closing verdict of "READY FOR FINAL FREEZE REVIEW" was premature**,
+and is corrected here. FU2D closed whether a gate TRACE is reachable, but its
+own regression suite still let a reachable trace carry a `CompatibilityFacts`
+field the controller's own source could never have set to `True` on that
+trace (seven non-launch facts) or an execution-consistent but wrong pair of
+values (the two protocol facts) -- so the suite was, in those places,
+defending trace shape without defending the facts riding on it. README.md's
+I2B status block is corrected in place with a pointer to this section.
+
+## What this does NOT establish
+
+Unchanged from FU2/FU2A/FU2B/FU2C/FU2D: no zero-prompt live gate has ever
+run; `get_commands` still proves nothing about the active tool registry; the
+adapter trust boundary is unchanged; the synthetic workspace authority is not
+real-workspace authority; no claim about descendants, inference, or GPU work;
+redaction/scrubbing remain backstops, not guarantees; the evidence-binding
+check still covers only the canonical-evidence fields represented as typed
+result fields; and, as FU2D itself already stated, these validators prove a
+result describes a trace the controller COULD have produced, never that it
+describes a trace that DID occur.
+
+**Additionally, narrowly, from this follow-up:** the observation-availability
+rules and the protocol failure-code mapping are, like FU2D's own rules,
+transcriptions of the CURRENT controller's control flow at the exact call
+sites named above. A future change to where `run_category_b_controller`
+assigns `fact_values[...]` (particularly inside the `RUNTIME_LAUNCH` or
+`PROTOCOL_INTEGRITY` blocks) must update `_LAUNCH_FACT_NAMES`/
+`_RUNTIME_LAUNCH_STATUSES_WITH_VALID_OBSERVATION_BUT_OWN_GATE_UNREACHED`/the
+protocol branch in the same commit, and the real-controller-trace regression
+sweep is what would catch a divergence.
+
+# 5F3B-I2B-FU2F -- Evidence-Safety Failure Attribution Closure (Offline Only)
+
+> **OFFLINE ONLY. NO LIVE ACTIVITY OF ANY KIND.** No Pi/Node process, no
+> socket, no model call, no credential read, no semantic prompt, no real
+> workspace access. Category-B live execution remains **NO-GO**, Q1/Q2
+> remain **NO-GO**, real-workspace authority remains **NO-GO**. Nothing in
+> the frozen I2A/FU3 design family, non-launch `NOT_REACHED` fact
+> availability, the exact `RuntimeLaunchObservation` exception, the protocol
+> failure-code/fact mapping, or the terminal `evidence_not_yet_built`
+> exclusion (all FU2E-accepted) was reopened. `i2b_session.py`/
+> `i2b_workspace.py` were not touched -- no reproduced blocker required
+> either.
+
+FU2E's own "READY FOR FINAL INDEPENDENT FREEZE REVIEW" verdict was
+premature, for exactly one narrow residual named by independent review:
+
+> **`EVIDENCE_SAFETY` failure_code is not mechanically bound to the evidence
+> refusal state that actually produced it.**
+
+The CURRENT test suite itself still accepted:
+
+```text
+gate_statuses[EVIDENCE_SAFETY] = FAILED:EVIDENCE_SCRUB_REFUSED
+failed_gate                    = EVIDENCE_SAFETY
+failure_code                   = EVIDENCE_SCRUB_REFUSED
+evidence                       = CategoryBEvidence._refused(
+                                      ("safety_context_unprovable",)
+                                  )
+```
+
+-- not a trace `run_category_b_controller` can produce. The real controller
+has exactly TWO reachable evidence-refusal paths, and they are mutually
+exclusive: (A) `safety is None` -> `evidence = CategoryBEvidence._refused(...)`
+-> `EVIDENCE_SAFETY = FAILED:SAFETY_CONTEXT_UNPROVABLE`; (B) safety exists but
+the canonical payload fails the real scrub -> `evidence =
+CategoryBEvidence._build_from_payload(...)` -> `evidence.retention_ready =
+False` -> `EVIDENCE_SAFETY = FAILED:EVIDENCE_SCRUB_REFUSED`. The old check
+bound `EVIDENCE_SAFETY`'s code only to `evidence.retention_ready` (a single
+boolean, shared by BOTH paths) and a flat three-code allowed set, so it could
+not tell which path actually ran.
+
+## Exact evidence-origin binding chosen
+
+Of the three directions the brief offered, this phase chose **a narrow
+internal evidence-origin marker set only by the two builder classmethods**:
+
+- `CategoryBEvidence` gained one new `init=False` field, `_origin: str`,
+  defaulting to `"unbuilt"` (the bare constructor's untouched value).
+  `_refused` stamps `"refused"`; `_build_from_payload` stamps `"built"` --
+  each inside the SAME classmethod that already derives every other field,
+  never accepted as a constructor argument, and validated in
+  `_check_invariants` against the exact three-member set `_EVIDENCE_ORIGINS`.
+- `CategoryBControllerResult.__post_init__`'s `EVIDENCE_SAFETY` block now
+  branches on `evidence._origin` (not `evidence.retention_ready` alone):
+  `retention_ready=True` still requires `PASSED`; `_origin == "refused"`
+  requires EXACTLY `FAILED:SAFETY_CONTEXT_UNPROVABLE` **and**
+  `evidence.scrub_findings == _SAFETY_CONTEXT_UNPROVABLE_REFUSAL` (the one
+  finding-code shape the real `_refused` call site ever passes -- a new
+  module constant, reused at BOTH that real call site and the validator, so
+  they cannot drift apart); `_origin == "built"` requires EXACTLY
+  `FAILED:EVIDENCE_SCRUB_REFUSED`; `_origin == "unbuilt"` is left
+  UNCONSTRAINED at this checkpoint -- FU2E's own, unchanged terminal
+  `evidence_not_yet_built` sentinel check is what refuses it, regardless of
+  what `gate_statuses['evidence_safety']` text accompanies it.
+
+**Deliberately not a finding-code taxonomy.** `_origin` records WHICH
+classmethod ran, never WHAT the scrub layer found -- the brief's own
+"do not create an exhaustive second taxonomy" instruction is honored by
+tracking exactly two builder identities plus the untouched default, nothing
+about scrub-finding content. `_EVIDENCE_SAFETY_ALLOWED_FAILURE_CODE_VALUES`
+(the old flat three-code set) was removed entirely rather than kept
+alongside the new binding -- it is now provably redundant, and a document
+comment at its former location explains why (see the `MALFORMED_ADAPTER_RESULT`
+section below).
+
+## Treatment of EVIDENCE_SAFETY MALFORMED_ADAPTER_RESULT
+
+Inspected, not guessed. `run_category_b_controller` has a THIRD
+`_fail(EVIDENCE_SAFETY, MALFORMED_ADAPTER_RESULT)` call site, guarding
+`outcome is INFRASTRUCTURE_REFUSAL and failed_gate is None`. Traced against
+the controller's own invariants:
+
+- `EVIDENCE_SAFETY` is unconditionally resolved -- to `PASSED`, or via one of
+  the two real `_fail` calls immediately above -- on EVERY path through the
+  safety/evidence block, before the defensive guard's line ever runs;
+- `provisional_pass = compatibility_established and closure_established`
+  being `False` always traces back to a genuine, earlier `_fail` call:
+  `compatibility_established=False` requires some compatibility gate not
+  `PASSED`, and by induction along `_GATE_PREREQUISITES` (base case
+  `RUN_CORRELATION`, which is ALWAYS resolved via its own bounded try/except
+  -- never `NOT_REACHED`) that chain bottoms out at a genuinely FAILED gate,
+  never at a `NOT_REACHED` one with no `_fail` behind it;
+  `closure_established=False` means the closure loop already `_fail`-ed
+  `RUNTIME_TEARDOWN`/`BROKER_SHUTDOWN`/`GENERATED_CONFIG_CLEANUP`
+  unconditionally for the unsatisfied one(s);
+- therefore `failed_gate` can never still be `None` when the guard's
+  condition is evaluated. **The branch is PROVABLY UNREACHABLE** under the
+  controller's own current invariants.
+
+Per the brief's own instruction for the unreachable case: `MALFORMED_ADAPTER_
+RESULT` is now **removed from `EVIDENCE_SAFETY`'s accepted terminal
+vocabulary** -- neither `_origin` branch above accepts it, so a hand-built
+`CategoryBControllerResult` claiming it is refused
+(`test_fu2f_malformed_adapter_result_is_no_longer_an_accepted_evidence_
+safety_code`). The dead defensive `_fail(...)` call site itself is KEPT in
+the controller (a legitimate belt-and-suspenders invariant guard, not a
+reachable branch) with an updated comment stating the unreachability
+argument and the new consequence explicitly: if a future regression ever
+does reach it, the `CategoryBControllerResult` constructed immediately after
+will now itself raise -- loudly, at construction -- rather than silently
+accepting a code the current source can never actually produce.
+`MALFORMED_ADAPTER_RESULT` remains untouched and fully valid for every OTHER
+gate that already used it (`RUNTIME_LAUNCH`/`BROKER_SESSION`/`GET_COMMANDS`/
+`GET_STATE`/`PROTOCOL_INTEGRITY`) -- this is a per-gate vocabulary removal,
+never a change to the shared `CategoryBFailureCode` enum or to any other
+gate's own table.
+
+## Mandatory pre-coding counterexamples
+
+Reproduced against the REAL pre-fix predicate (the exact
+`evidence.retention_ready`-only logic, extracted verbatim as it read
+immediately before this phase's edit -- not a guess, not a reconstructed
+whole module) alongside the real, current post-fix module, using the exact
+real evidence shapes (`_refused(("safety_context_unprovable",))`, and a
+genuinely dirty `_build_from_payload` body built the same way
+`test_retention_ready_true_is_only_reachable_by_actually_scrubbing_the_
+payload` already does -- `ArtifactSafetyContext(api_key="sk-should-be-
+caught")` plus that literal in the payload, never a monkeypatch for this
+part):
+
+| # | Case | Pre-fix | Post-fix |
+|---|---|---|---|
+| 1 | `EVIDENCE_SCRUB_REFUSED` + `_refused(("safety_context_unprovable",))` | **Constructed** | Refused |
+| 2 | `SAFETY_CONTEXT_UNPROVABLE` + a real dirty `_build_from_payload(...)` body | **Constructed** (the SYMMETRIC, previously-undetected twin of #1) | Refused |
+| 3 | `EVIDENCE_SCRUB_REFUSED` + bare `CategoryBEvidence()` | Constructed | **Still refused** (by FU2E's unchanged sentinel check, unaffected by this phase) |
+| 4 | POSITIVE: real controller safety-context-unprovable path, end to end | Constructed (must remain) | Constructed (must remain), now also carrying `_origin == "refused"` |
+| 5 | POSITIVE: real controller scrub-refusal path (`qualification_scrub_check` forced dirty via a safe synthetic finding, `"synthetic_finding"`, never a real secret/endpoint), end to end | Constructed (must remain) | Constructed (must remain), now also carrying `_origin == "built"` |
+
+Counterexample 2 answers the brief's own open question ("Determine whether
+it currently constructs") directly: **yes** -- the old `retention_ready`-only
+check accepted BOTH the reproduced counterexample and its unnamed symmetric
+twin, and this phase closes both on the same footing.
+
+## Corrected existing test
+
+**`test_fu2c_evidence_safety_alone_failing_may_be_failed_gate`.** Its intent
+(EVIDENCE_SAFETY may legitimately be the sole/first failed gate) was never in
+question and is UNCHANGED -- the assertion `result.failed_gate is
+CategoryBGateName.EVIDENCE_SAFETY` still holds. Its evidence object was
+wrong for the failure code under test: it paired `EVIDENCE_SCRUB_REFUSED`
+with `CategoryBEvidence._refused(("safety_context_unprovable",))`, exactly
+this phase's own reproduced counterexample. It now builds a GENUINE scrub
+refusal via the real `_build_from_payload` -> `qualification_scrub_check`
+path (the same technique
+`test_retention_ready_true_is_only_reachable_by_actually_scrubbing_the_
+payload` already established), asserting `evidence.retention_ready is False`
+and `evidence._origin == _EVIDENCE_ORIGIN_BUILT` before use. No other
+existing test required correction; the full pre-existing 439/953 both remain
+green.
+
+Two other existing call sites needed a SMALL, mechanical follow-on change,
+not a correction of a wrong assertion: `_reachable_refusal`'s helper (used by
+dozens of other, unrelated tests) previously derived `EVIDENCE_SAFETY`'s
+status from `evidence.retention_ready` alone; it now derives it from
+`evidence._origin` too, so a future test supplying a genuine BUILT-but-dirty
+body (not just the helper's default REFUSED one) is not tripped by this
+phase's own new binding instead of the check it is exercising. Its default
+behavior (a `_refused(...)`-built evidence, mapping to
+`SAFETY_CONTEXT_UNPROVABLE`) is byte-for-byte unchanged.
+
+## Second-adversarial-review result
+
+The mandated sweep (`evidence.retention_ready`, evidence construction
+origin, `evidence.scrub_findings`, `EVIDENCE_SAFETY` status, `failed_gate`/
+`failure_code` against each other) was run as an EXHAUSTIVE cross-swap: every
+individually-valid non-retention-ready evidence shape
+(`_refused(...)`-origin, real dirty `_build_from_payload`-origin, bare
+`CategoryBEvidence()`) against every one of the four EVIDENCE_SAFETY status
+texts the old vocabulary allowed (`PASSED`,
+`FAILED:SAFETY_CONTEXT_UNPROVABLE`, `FAILED:EVIDENCE_SCRUB_REFUSED`,
+`FAILED:MALFORMED_ADAPTER_RESULT`) -- 12 pairings total. Exactly the two
+reachable pairings construct; the other ten are refused. (The retention-ready
+`PASSED` shape is swept separately, end to end, through the real controller
+-- see counterexamples 4/5 above and `test_fu2d_a_genuine_pass_still_
+constructs` -- rather than hand-built into this matrix, because a genuinely
+retention-ready evidence body must ALSO describe the exact result consuming
+it (`_require_evidence_describes_this_result`, FU2B, unrelated to and
+unchanged by this phase); a hand-built `PASSED` case in the matrix would trip
+THAT binding instead of the one under test.)
+
+No bypass beyond the two named blockers (the reproduced counterexample and
+its symmetric twin) and the `MALFORMED_ADAPTER_RESULT` unreachability finding
+was found. `dataclasses.replace` on a genuine controller REFUSAL (swapping
+its evidence for either wrong-origin real shape) and on a genuine controller
+PASS (swapping its retention-ready evidence for either non-retention-ready
+real shape) were both re-run and both refuse in every direction.
+
+## New regression tests
+
+**11 new tests** in `tests/test_i2b_controller.py`, under a new
+`# 5F3B-I2B-FU2F` section:
+
+- the reproduced counterexample and its symmetric twin, each isolated to the
+  one origin/code pairing it names;
+- counterexample 3 (bare evidence remains refused, via FU2E's own unchanged
+  check);
+- counterexamples 4 and 5, end to end through the real controller, each now
+  additionally asserting the correct `_origin`;
+- the `MALFORMED_ADAPTER_RESULT` unreachability closure, plus a scope check
+  that the code remains valid for every OTHER gate that already used it;
+- the exhaustive cross-swap sweep;
+- two `dataclasses.replace` sweeps (a genuine refusal's evidence swapped to
+  each wrong origin; a genuine pass's evidence swapped to each non-retention-
+  ready origin -- split into two test functions after the first combined
+  draft reused one `run_workspace` fixture instance across two `_run()`
+  calls, which the workspace's own single-use claim authority correctly
+  refused on the second call; the second scenario now uses the existing
+  `second_run_workspace` fixture instead);
+- a structural test that `_origin`'s three values are never mistaken for a
+  fourth scrub-finding-code taxonomy entry.
+
+## Offline suite result
+
+```text
+953 passed, 0 failed
+python -m pytest experiments/pi_implementer_qualification/tests -q
+```
+
+(514 unchanged I1/I2 through FU3B; 439 in `test_i2b_controller.py`, up from
+FU2E's 428 -- 11 new tests, 1 corrected, for this follow-up.)
+
+Frozen suites re-run unmodified (each run separately -- running all three
+`ar1`/`ar2`/`ar2_o1` suites in one combined `pytest` invocation collides on
+their identically-named `conftest` modules, a pre-existing pytest collection
+artifact unrelated to this phase, confirmed by running them individually):
+
+```text
+experiments/pi_external_runtime_ar1/tests          96 passed, 0 failed
+experiments/pi_external_runtime_ar2/tests         290 passed, 0 failed
+experiments/pi_external_runtime_ar2_o1/tests       89 passed, 0 failed
+```
+
+No file under `ar1/`, `ar2/`, `o1/`, `src/`, root `tests/` or `projects/` was
+touched. `i2b_session.py`, `i2b_workspace.py` and every other reused I2
+module were not modified.
+
+## No-live/no-network/no-model/no-credential confirmation
+
+Unchanged from every prior FU2* closure: this follow-up touches only
+`qualification/i2b_controller.py`'s `CategoryBEvidence`/
+`CategoryBControllerResult` and `tests/test_i2b_controller.py`. No new
+import of `subprocess`/`socket`/`http`/`urllib`/`os.environ` was added (the
+module's own source-level regression test enforces this mechanically and
+still passes); no test opens a socket, launches a process, or reads an
+environment variable for a credential; the one "synthetic needle" used to
+force a real dirty scrub result (`"synthetic_finding"`) and the one synthetic
+API-key-shaped string used to prove a real scrub catch (`"sk-should-be-
+caught"`, already an established pattern from
+`test_retention_ready_true_is_only_reachable_by_actually_scrubbing_the_
+payload`) are both fabricated test literals, never real credentials. A
+scratch, throwaway diagnostic script used to confirm the pre-fix/post-fix
+predicate difference during this phase's own investigation was never part of
+the shipped package or the test suite, and was deleted before this phase's
+tests were finalized. Category-B live execution, Q1/Q2, and real-workspace
+authority all remain **NO-GO**.
+
+## Corrected claims
+
+**FU2E's closing verdict of "READY FOR FINAL INDEPENDENT FREEZE REVIEW" was
+premature**, for exactly the one narrow residual independent review named.
+FU2E closed the fact-vs-gate and protocol-fact-vs-code bindings, but its own
+regression suite still let `EVIDENCE_SAFETY`'s failure code disagree with the
+evidence object actually attached to the same result -- so the suite was, in
+that one place, defending a code/state pairing the real controller can never
+produce. README.md's I2B status block is corrected in place with a pointer
+to this section.
+
+## What this does NOT establish
+
+Unchanged from FU2/FU2A/FU2B/FU2C/FU2D/FU2E: no zero-prompt live gate has
+ever run; `get_commands` still proves nothing about the active tool
+registry; the adapter trust boundary is unchanged; the synthetic workspace
+authority is not real-workspace authority; no claim about descendants,
+inference, or GPU work; redaction/scrubbing remain backstops, not
+guarantees; the evidence-binding check still covers only the
+canonical-evidence fields represented as typed result fields; these
+validators prove a result describes a trace the controller COULD have
+produced, never that it describes a trace that DID occur.
+
+**Additionally, narrowly, from this follow-up:** the evidence-origin binding
+is, like every other FU2* rule, a transcription of the CURRENT controller's
+exact call sites (`_refused`'s one production call site; `_build_from_payload`'s
+one production call site inside `_build_evidence`). A future change that adds
+a THIRD production call site for either classmethod, or that changes which
+finding-code tuple the safety-context-unprovable branch passes to `_refused`,
+must update `_SAFETY_CONTEXT_UNPROVABLE_REFUSAL` and the `_origin`-keyed
+branch in the same commit -- the regression suite's real-controller-path
+counterexamples (4 and 5) are what would catch a divergence. The
+`MALFORMED_ADAPTER_RESULT` unreachability argument is likewise a proof about
+the CURRENT source's control flow, not a structural guarantee independent of
+it; a future change to how `provisional_pass`/`failed_gate` are computed
+could reopen that branch's reachability, and would need to be re-audited
+against this section's argument before being trusted again.
