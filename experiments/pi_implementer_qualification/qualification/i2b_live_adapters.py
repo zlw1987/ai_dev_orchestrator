@@ -110,7 +110,8 @@ conservatively as forbidding.
 
 So :meth:`LiveCategoryBAdapters.launch_runtime` sends the ONE real
 ``get_commands`` frame this run ever sends, uses it to establish
-``lf_jsonl_correlation_succeeded``/``required_flags_accepted``, and CACHES
+``lf_jsonl_correlation_succeeded`` (and, with the separate argv check, the
+LF1-corrected ``required_flags_accepted``), and CACHES
 the raw response keyed by the minted ``runtime_session_id``.
 :meth:`LiveCategoryBAdapters.get_commands` -- the frozen controller's own,
 separate adapter call, invoked later against the returned
@@ -123,6 +124,71 @@ adapter methods rather than by one bundled call, matching the frozen
 ``i2b_session``/``i2b_controller`` contract's own separate-adapter shape.
 ``get_state`` has no such reuse: the frozen ``get_state`` adapter sends its
 own single, fresh, real ``get_state`` frame, never shared with anything.
+
+5F3B-I2B-L1-LF1 -- required-flag observation vs. protocol integrity
+--------------------------------------------------------------------
+
+The first (and only) live Candidate-A Category-B attempt refused at
+``required_launch_flags`` with ``REQUIRED_LAUNCH_FLAGS_REJECTED`` while
+recording ``rpc_launch_shape_valid=True`` and
+``lf_jsonl_correlation_succeeded=True``. Independent review found the frozen
+controller had behaved exactly as designed -- it mapped a FALSE adapter fact
+to that failure code -- and that the DEFECT was in this module's producer of
+that fact.
+
+Two separate defects were found here, both corrected below and both proved
+offline:
+
+1. ``_protocol_violation_observed`` -- the projection of
+   ``PiRpcSupervisor.stdout_state()["protocol_violation"]`` asserted a
+   ``bool`` contract, but the frozen AR2 value is ``str | None``. The old
+   expression ``type(raw) is not bool or raw is True`` was therefore
+   UNSATISFIABLE: ``None`` (no violation) reported a violation, so EVERY
+   real launch reported one. The offline suite missed it because its
+   supervisor double published a ``bool``.
+
+2. ``required_flags_accepted`` was computed as ``launch_shape_valid and
+   lf_jsonl_correlation_succeeded and not protocol_violation_observed``,
+   which is not the frozen fact. Frozen I2A section 15 item 3 and
+   ``RuntimeLaunchObservation.required_flags_accepted`` both define it as
+   "no 'unknown flag' startup rejection", and ``protocol_integrity`` is a
+   SEPARATE, later gate. The same bit must not serve two gates.
+
+Together these made the two gates non-independent AND made the second one
+unconditionally false. The corrected producer, its three-part proof chain
+against the installed Pi CLI source, and the bounded declared-code launch
+diagnostic added to diagnose a future zero-prompt refusal all live beside
+:data:`_RECOGNIZED_AWAIT_RESPONSE_OUTCOMES` below.
+
+5F3B-I2B-L1-LF1-FU1 -- required flags and LF correlation are INDEPENDENT
+--------------------------------------------------------------------------
+
+LF1 left one half of the coupling in place. Its producer computed
+``required_flags_accepted = argv_options_source_established and
+lf_jsonl_correlation_succeeded``, whose positive direction is sound (a
+correlated RPC response can only come from inside ``runRpcMode``, which both
+unknown-option exits are strictly earlier than) but whose reverse direction is
+not: **no correlated response does not imply an unknown CLI flag was
+rejected**. Because the frozen controller evaluates ``rpc_launch_shape``,
+then ``required_launch_flags``, then ``lf_jsonl_correlation``, EVERY
+correlation failure -- a deadline, a launch-window protocol violation, an
+output cap, an event cap, a read error, and a generic early exit alike -- was
+attributed FIRST as ``REQUIRED_LAUNCH_FLAGS_REJECTED``, a cause none of them
+mechanically establishes.
+
+FU1 replaces that single expression with a THREE-state classification
+(:func:`_classify_required_flag_evidence`): ACCEPTED, from LF1's unchanged
+positive proof; REJECTED, only from a bounded startup diagnostic that
+specifically observes Pi rejecting an option present in AIDO's own argv; and
+INDETERMINATE for everything else. Only the two definite states may reach the
+frozen ``bool``. An INDETERMINATE launch fails earlier, at this module's own
+runtime-launch boundary, through the existing creator-retained cleanup
+contract -- so the frozen controller reports the honest
+``RUNTIME_LAUNCH_FAILED`` and leaves ``required_launch_flags`` NOT_REACHED,
+rather than being told a rejection occurred. Neither the frozen
+``RuntimeLaunchObservation`` nor the frozen controller gained a third state;
+the three states are visible only in this module and in its own L1-level
+bounded launch diagnostic.
 
 Session/ownership discipline (adversarial items 1-5, 7-10 of the L1 brief)
 ----------------------------------------------------------------------------
@@ -168,6 +234,17 @@ every exception this module raises either propagates a frozen, already-safe
 exception type (``ObservationError``, ``PiSupervisorError``,
 ``LaunchIdentityError``) or is a bounded, literal-string ``RuntimeError``
 naming no runtime value.
+
+5F3B-I2B-L1-LF1-FU1 added exactly ONE place that inspects raw child stderr:
+:func:`_unknown_option_rejection_established`, through the existing PUBLIC
+``PiRpcSupervisor.stderr_snapshot()`` surface. It is reached only when the
+positive flag-acceptance proof did not hold, it scans the bounded text tail
+TRANSIENTLY, and it reduces everything it saw to one ``bool`` before
+returning. No stderr line, no diagnostic message, no option name and no byte
+count survives that call: what is retained is one declared literal from
+:data:`REQUIRED_FLAG_STATES`. Raw stderr never reaches a
+``RuntimeLaunchObservation``, a ``CategoryBEvidence``, the launch diagnostic,
+a result JSON, or any exception text.
 """
 
 from __future__ import annotations
@@ -176,6 +253,7 @@ import hashlib
 import inspect
 import json
 import os
+import re
 import secrets
 import shutil
 import tempfile
@@ -221,6 +299,7 @@ from ar2.route_check import check_route_serves_model
 from ar2.supervisor import (
     RUNTIME_DEADLINE_EXPIRED,
     RUNTIME_EVENT_CAP_EXCEEDED,
+    RUNTIME_EXITED_EARLY,
     RUNTIME_OUTPUT_CAP_EXCEEDED,
     RUNTIME_PROTOCOL_VIOLATION,
     RUNTIME_READ_ERROR,
@@ -411,14 +490,606 @@ def _require_runtime_identity_matches_trusted_resolution(identity: RuntimeIdenti
 #: result. An unknown/malformed outcome -- one that is not a member of this
 #: fixed set -- is never treated as valid merely because it happens not to
 #: equal one of the two known-bad constants; it fails closed instead.
+#:
+#: **5F3B-I2B-L1-LF1 added ``RUNTIME_EXITED_EARLY``.** Its absence was itself
+#: a misattribution: ``PiRpcSupervisor._wait`` genuinely returns it whenever
+#: the direct child terminated before the awaited response arrived. With it
+#: excluded, such a launch made ``launch_shape_valid`` False, so the frozen
+#: controller failed the EARLIER ``rpc_launch_shape`` gate -- though the
+#: Node-direct ``--mode rpc`` launch shape had in fact been constructed and
+#: launched correctly, and what had not been established belongs to a LATER
+#: gate.
+#:
+#: **5F3B-I2B-L1-LF1-FU1 corrected this entry's own prose.** An unknown-CLI-
+#: flag startup rejection is ONE source-supported CAUSE of
+#: ``RUNTIME_EXITED_EARLY`` -- ``dist/main.js`` reports the diagnostic on
+#: stderr and calls ``process.exit(1)`` before ``runRpcMode`` is ever entered
+#: -- but ``RUNTIME_EXITED_EARLY`` does NOT itself prove one. Any other
+#: pre-RPC child exit produces the identical outcome constant. Nothing in
+#: this module branches on ``RUNTIME_EXITED_EARLY`` to establish flag
+#: rejection; see :func:`_classify_required_flag_evidence`, which reads no
+#: supervisor outcome constant at all.
+#:
+#: This tuple is now the exact, complete reachable return domain of
+#: ``PiRpcSupervisor._wait``. ``RUNTIME_SETTLED`` (only ``await_settled``
+#: maps to it) and ``RUNTIME_LAUNCH_FAILED`` (only ``launch()`` raises it)
+#: are deliberately still absent, because ``await_response`` cannot produce
+#: them.
 _RECOGNIZED_AWAIT_RESPONSE_OUTCOMES = (
     RUNTIME_RESPONSE_RECEIVED,
     RUNTIME_DEADLINE_EXPIRED,
+    RUNTIME_EXITED_EARLY,
     RUNTIME_PROTOCOL_VIOLATION,
     RUNTIME_OUTPUT_CAP_EXCEEDED,
     RUNTIME_EVENT_CAP_EXCEEDED,
     RUNTIME_READ_ERROR,
 )
+
+
+# -- 5F3B-I2B-L1-LF1: the required-CLI-flag OBSERVATION -----------------------
+#
+# Frozen I2A section 15 item 3, and the frozen
+# ``RuntimeLaunchObservation.required_flags_accepted`` docstring, define this
+# fact identically and narrowly:
+#
+#     required flags accepted  =  no "unknown flag" startup rejection
+#
+# It is NOT "no protocol violation" -- that is a separate, later, frozen gate
+# (``protocol_integrity``), fed by the separate ``ProtocolObservation``. The
+# two must never be served by the same bit under two gate names.
+#
+# THE PROOF CHAIN, stated exactly, in three mechanical parts:
+#
+#   1. THE EXACT ARGV AIDO CONSTRUCTED. Every option token in the argv the
+#      frozen, unmodified ``ar2.launch.build_pi_argv`` produced is a member
+#      of the source-established option set below. This half is checked
+#      against AIDO'S OWN argv, before any runtime behaviour is consulted,
+#      and it fails closed for any token whose recognition was never
+#      source-established -- so a future argv change cannot ride silently on
+#      the runtime-behaviour half.
+#
+#   2. PI'S CLI PARSER BEHAVIOUR, established from the CURRENT installed
+#      package source by OFFLINE inspection (no launch, no version gate):
+#
+#        - ``dist/cli/args.js`` ``parseArgs``: every long option below has
+#          its own explicit ``else if`` branch. An option matching no branch
+#          falls through to the ``arg.startsWith("--")`` catch-all and is
+#          recorded in ``result.unknownFlags``; a single-dash token matching
+#          no branch pushes an ``{type: "error"}`` entry into
+#          ``result.diagnostics``.
+#        - ``dist/core/agent-session-services.js``
+#          ``applyExtensionFlagValues``: any ``unknownFlags`` name not
+#          registered by a loaded extension becomes an
+#          ``{type: "error", message: "Unknown option: --<name>"}``
+#          diagnostic in the runtime's diagnostics.
+#        - ``dist/main.js``: a ``parseArgs`` error diagnostic is printed and
+#          ``process.exit(1)`` runs immediately after parsing; a runtime
+#          error diagnostic sets ``hasRuntimeErrors``, is reported through
+#          ``console.error`` (STDERR, never stdout) and also calls
+#          ``process.exit(1)``. BOTH exits are strictly BEFORE the
+#          ``if (appMode === "rpc") { ... await runRpcMode(runtime); }``
+#          block, so Pi cannot read, parse or answer a single JSONL RPC
+#          command when any flag was rejected as unknown.
+#
+#   3. THE EXACT OBSERVED RUNTIME BEHAVIOUR. AIDO wrote its one
+#      ``{"id": "h1", "type": "get_commands"}`` frame to the child's stdin
+#      and the frozen supervisor returned ``RUNTIME_RESPONSE_RECEIVED``
+#      correlated to id ``h1`` -- i.e. ``runRpcMode`` ran, consumed the
+#      command and wrote a correlated response.
+#
+#   => No "unknown flag" startup rejection occurred.
+#
+# This is the same evidence shape frozen AR2/O1 already accepted for its own
+# ``required_launch_flags_accepted`` check (``run_o1.py``: the argv from
+# ``build_pi_argv`` was accepted because the process reached H1/H2 without an
+# early exit), and O1 likewise kept ``no_protocol_violation_during_handshake``
+# as a SEPARATE fact. Nothing here compares a Pi version: the version stays
+# provenance only, and no exact-version authorization gate is introduced.
+
+#: Long options AIDO's argv may contain, each with its own explicit
+#: recognizing branch in the installed Pi ``dist/cli/args.js`` ``parseArgs``.
+#: Split by whether ``parseArgs`` consumes a following value token, so this
+#: module can walk AIDO's own argv the way Pi's parser does. This is a
+#: recorded fact about AIDO's OWN argv vocabulary -- not an authorization
+#: gate, not a version pin, and never applied to a runtime-reported value.
+_PI_SOURCE_ESTABLISHED_LONG_OPTIONS_WITH_VALUE: frozenset[str] = frozenset(
+    {"--mode", "--extension", "--tools", "--provider", "--model"}
+)
+_PI_SOURCE_ESTABLISHED_LONG_OPTIONS_WITHOUT_VALUE: frozenset[str] = frozenset(
+    {
+        "--no-session",
+        "--no-extensions",
+        "--no-builtin-tools",
+        "--no-skills",
+        "--no-prompt-templates",
+        "--no-themes",
+        "--no-context-files",
+        "--no-approve",
+        "--offline",
+    }
+)
+_PI_SOURCE_ESTABLISHED_LONG_OPTIONS: frozenset[str] = (
+    _PI_SOURCE_ESTABLISHED_LONG_OPTIONS_WITH_VALUE
+    | _PI_SOURCE_ESTABLISHED_LONG_OPTIONS_WITHOUT_VALUE
+)
+
+
+def _argv_options_are_source_established(argv: tuple[str, ...]) -> bool:
+    """Whether every option token in AIDO'S OWN ``argv`` is source-established.
+
+    ``argv[0]``/``argv[1]`` are the two pinned program paths (the Node
+    executable and Pi's ``dist/cli.js``) and are skipped. The remainder is
+    walked the way Pi's own ``parseArgs`` walks it: a value-taking option
+    consumes the following token, a valueless option consumes nothing, and
+    anything else -- an unrecognized option token, a value-taking option with
+    no value left, or an unexpected positional (AIDO's argv contains none) --
+    fails CLOSED.
+
+    This launches nothing and retains nothing: it returns one bool, and no
+    token from ``argv`` (which carries an absolute extension path) reaches a
+    caller, an exception message, or any record.
+    """
+    if len(argv) < 2:
+        return False
+    index = 2
+    while index < len(argv):
+        token = argv[index]
+        if token in _PI_SOURCE_ESTABLISHED_LONG_OPTIONS_WITH_VALUE:
+            if index + 1 >= len(argv):
+                return False
+            index += 2
+            continue
+        if token in _PI_SOURCE_ESTABLISHED_LONG_OPTIONS_WITHOUT_VALUE:
+            index += 1
+            continue
+        return False
+    return True
+
+
+# -- 5F3B-I2B-L1-LF1-FU1: required-flag evidence is THREE-STATE ---------------
+#
+# THE FU1 BLOCKER. LF1's producer computed
+#
+#     required_flags_accepted = argv_options_source_established
+#                               and lf_jsonl_correlation_succeeded
+#
+# The POSITIVE implication that expression rests on is sound:
+#
+#     correlated RPC response  =>  Pi entered runRpcMode
+#                              =>  no unknown-option startup rejection occurred
+#
+# The REVERSE implication is NOT:
+#
+#     no correlated response   =/=>  an unknown CLI flag was rejected
+#
+# Because the frozen controller evaluates RPC_LAUNCH_SHAPE, then
+# REQUIRED_LAUNCH_FLAGS, then LF_JSONL_CORRELATION in that order, and reads
+# ``required_flags_accepted=False`` as REQUIRED_LAUNCH_FLAGS_REJECTED, every
+# one of these recognized ``await_response`` outcomes --
+# ``RUNTIME_DEADLINE_EXPIRED``, ``RUNTIME_PROTOCOL_VIOLATION``,
+# ``RUNTIME_OUTPUT_CAP_EXCEEDED``, ``RUNTIME_EVENT_CAP_EXCEEDED``,
+# ``RUNTIME_READ_ERROR`` and a generic ``RUNTIME_EXITED_EARLY`` -- was
+# attributed FIRST as an unknown-flag rejection, though none of them
+# mechanically proves one. That is a truthful-attribution defect, and it also
+# meant the four launch facts were not observationally independent: LF
+# correlation false forced required flags false, unconditionally.
+#
+# The correction is to treat required-flag evidence as THREE conceptual
+# states internally, and to map them into the frozen two-valued field only
+# where the mapping is honest:
+#
+#     ACCEPTED       mechanical evidence establishes that NO unknown-option
+#                    startup rejection occurred;
+#     REJECTED       mechanical evidence specifically establishes that Pi
+#                    rejected an argv option as unknown;
+#     INDETERMINATE  neither can be established.
+#
+# Nothing is added to the frozen ``RuntimeLaunchObservation`` or to the frozen
+# controller: the three states live here, in this module's own private
+# classification and in its L1-level bounded launch diagnostic.
+
+#: The three declared required-flag classification codes. These are also
+#: :class:`LaunchDiagnostic` values -- see :data:`LAUNCH_DIAGNOSTIC_CODES`.
+REQUIRED_FLAGS_ACCEPTED = "required_flags_accepted"
+REQUIRED_FLAGS_REJECTED_UNKNOWN_OPTION = "required_flags_rejected_unknown_option"
+REQUIRED_FLAGS_INDETERMINATE = "required_flags_indeterminate"
+
+REQUIRED_FLAG_STATES: frozenset[str] = frozenset(
+    {
+        REQUIRED_FLAGS_ACCEPTED,
+        REQUIRED_FLAGS_REJECTED_UNKNOWN_OPTION,
+        REQUIRED_FLAGS_INDETERMINATE,
+    }
+)
+
+#: The exact character bound ``PiRpcSupervisor.stderr_snapshot()`` applies to
+#: its ``text_tail`` field (``text[-4000:]``). Because decoding N bytes can
+#: only ever produce at most N characters, a snapshot whose ``bytes_retained``
+#: does not exceed this bound carries its ENTIRE retained stderr in
+#: ``text_tail``, with nothing sliced away. An offline test asserts this
+#: constant still matches the frozen AR2 source.
+_STDERR_TEXT_TAIL_CHAR_LIMIT = 4000
+
+#: ``dist/main.js`` prints every diagnostic through ``chalk`` -- colourless
+#: when stderr is a pipe (as it always is here), but the wrapper is part of
+#: the emission path, so its SGR sequences are stripped before matching
+#: rather than being allowed to silently defeat the match.
+_ANSI_SGR_SEQUENCE = re.compile(r"\x1b\[[0-9;]*m")
+
+#: The exact prefix ``dist/main.js`` prints for an ERROR diagnostic -- both at
+#: the ``parseArgs`` site and in ``reportDiagnostics`` (``prefix = "Error: "``).
+#: Only an ERROR diagnostic reaches ``process.exit(1)``, so only an ERROR line
+#: is accepted as evidence of a rejection.
+_PI_DIAGNOSTIC_ERROR_PREFIX = "Error: "
+
+#: The exact unknown-option diagnostic MESSAGE shape the installed package
+#: emits, established from its own source by OFFLINE inspection (no launch, no
+#: version gate):
+#:
+#:   - ``dist/cli/args.js`` ``parseArgs`` pushes an error diagnostic whose
+#:     message is "Unknown option: " followed by the offending single-dash
+#:     token;
+#:   - ``dist/core/agent-session-services.js`` ``applyExtensionFlagValues``
+#:     pushes an error diagnostic whose message is "Unknown option: " (one
+#:     flag) or "Unknown options: " (more than one) followed by the unknown
+#:     long-flag names, each re-prefixed with "--" and joined with ", ".
+#:
+#: Both are printed to STDERR and both are strictly followed by
+#: ``process.exit(1)`` BEFORE the ``appMode === "rpc"`` branch that awaits
+#: ``runRpcMode``, so a rejected option can never answer an RPC command.
+_UNKNOWN_OPTION_DIAGNOSTIC = re.compile(r"^Unknown options?:[ ](?P<names>\S.*)$")
+
+
+def _argv_option_tokens(argv: tuple[str, ...]) -> frozenset[str]:
+    """The OPTION tokens in AIDO's own ``argv``, walked Pi's parser's way.
+
+    This is deliberately NOT :func:`_argv_options_are_source_established`:
+    that function answers "is every option token one Pi's parser is
+    source-established to recognize?" and fails closed on the first token it
+    does not know. This one answers "which tokens did AIDO actually pass as
+    options?", INCLUDING ones that are not source-established -- because those
+    are exactly the tokens a genuine unknown-option diagnostic would name, and
+    a finding must be tied to an option actually present in AIDO's own argv.
+
+    ``argv[0]``/``argv[1]`` are the two pinned program paths and are skipped.
+    Value consumption mirrors ``dist/cli/args.js`` ``parseArgs``: a
+    source-established value-taking option consumes the following token; a
+    ``--name=value`` token carries its own value; and an UNRECOGNIZED long
+    option consumes the next token as its value only when that token starts
+    with neither ``-`` nor ``@`` (``parseArgs``' own rule).
+
+    Returns option tokens only -- never a value token, so no absolute
+    extension path, model id or provider id is ever collected. The result is
+    consumed inside :func:`_unknown_option_rejection_established` for one
+    membership test and never reaches a caller, a record, or an exception.
+    """
+    if not isinstance(argv, tuple) or len(argv) < 2:
+        return frozenset()
+    tokens: set[str] = set()
+    index = 2
+    while index < len(argv):
+        token = argv[index]
+        if not isinstance(token, str):
+            return frozenset()
+        if token.startswith("--"):
+            name_part, separator, _value_part = token.partition("=")
+            tokens.add(name_part)
+            if separator:
+                index += 1
+                continue
+            if token in _PI_SOURCE_ESTABLISHED_LONG_OPTIONS_WITH_VALUE:
+                index += 2
+                continue
+            if token in _PI_SOURCE_ESTABLISHED_LONG_OPTIONS_WITHOUT_VALUE:
+                index += 1
+                continue
+            following = argv[index + 1] if index + 1 < len(argv) else None
+            if (
+                isinstance(following, str)
+                and not following.startswith("-")
+                and not following.startswith("@")
+            ):
+                index += 2
+                continue
+            index += 1
+            continue
+        if token.startswith("-"):
+            tokens.add(token)
+            index += 1
+            continue
+        index += 1
+    return frozenset(tokens)
+
+
+def _unknown_option_rejection_established(
+    *, argv: tuple[str, ...], stderr_snapshot: Any
+) -> bool:
+    """Whether a bounded startup diagnostic MECHANICALLY establishes that Pi
+    rejected an option in AIDO's own argv as unknown.
+
+    This is the ONLY thing in this module that inspects raw stderr, and it
+    does so TRANSIENTLY: the snapshot's ``text_tail`` is scanned here, reduced
+    to one ``bool``, and dropped. No line, message, option name, byte count or
+    fragment of it is returned, retained, logged, ``repr()``'d, placed in a
+    record, or placed in an exception message.
+
+    It fails CLOSED -- returning ``False``, i.e. "not established", which the
+    caller resolves to INDETERMINATE and never to REJECTED -- whenever:
+
+    - the snapshot is not the frozen mapping shape, or reports ``captured``
+      anything other than exactly ``True``;
+    - the stderr reader recorded a read error (``read_error is not None``);
+    - the bounded reader dropped bytes (``cap_exceeded`` is anything other
+      than exactly ``False``, or ``bytes_seen != bytes_retained``);
+    - the retained stderr exceeds :data:`_STDERR_TEXT_TAIL_CHAR_LIMIT`, so
+      ``text_tail`` may itself be a sliced tail rather than the whole of it;
+    - ``text_tail`` is not a ``str``;
+    - no line matches the exact ``Error: Unknown option(s): ...`` shape;
+    - a matching line names ANY option token that is not present in AIDO's own
+      argv (an ambiguous diagnostic proves nothing about AIDO's flags).
+
+    ``eof`` is deliberately NOT required. Completeness of the stream matters
+    only for an ABSENCE proof, and this function never makes one: it accepts
+    only the POSITIVE presence of a diagnostic, and the checks above already
+    prove nothing was dropped from what the reader did see. Requiring ``eof``
+    would add a race in which a genuine rejection reads as indeterminate
+    purely because the reader thread had not yet observed end-of-stream.
+    """
+    if not isinstance(stderr_snapshot, dict):
+        return False
+    if stderr_snapshot.get("captured") is not True:
+        return False
+    if stderr_snapshot.get("read_error") is not None:
+        return False
+    if stderr_snapshot.get("cap_exceeded") is not False:
+        return False
+    bytes_seen = stderr_snapshot.get("bytes_seen")
+    bytes_retained = stderr_snapshot.get("bytes_retained")
+    if type(bytes_seen) is not int or type(bytes_retained) is not int:
+        return False
+    if bytes_seen != bytes_retained or bytes_retained > _STDERR_TEXT_TAIL_CHAR_LIMIT:
+        return False
+    text_tail = stderr_snapshot.get("text_tail")
+    if type(text_tail) is not str:
+        return False
+    option_tokens = _argv_option_tokens(argv)
+    if not option_tokens:
+        return False
+    for raw_line in text_tail.splitlines():
+        line = _ANSI_SGR_SEQUENCE.sub("", raw_line).strip()
+        if not line.startswith(_PI_DIAGNOSTIC_ERROR_PREFIX):
+            continue
+        match = _UNKNOWN_OPTION_DIAGNOSTIC.match(line[len(_PI_DIAGNOSTIC_ERROR_PREFIX) :])
+        if match is None:
+            continue
+        named = [part.strip() for part in match.group("names").split(",")]
+        if any(not name for name in named):
+            continue
+        if all(name in option_tokens for name in named):
+            return True
+    return False
+
+
+def _classify_required_flag_evidence(
+    *,
+    argv: tuple[str, ...],
+    argv_options_source_established: bool,
+    lf_jsonl_correlation_succeeded: bool,
+    stderr_snapshot_reader: Any,
+) -> str:
+    """Classify required-flag evidence into exactly one of the three states.
+
+    ACCEPTED is decided FIRST, and it is the LF1 positive proof, unchanged:
+    the actual argv is source-established AND the exact runtime returned a
+    correlated RPC response. That response can only have been produced from
+    inside ``runRpcMode``, which both unknown-option exits are strictly
+    earlier than, so it establishes that no unknown-option startup rejection
+    occurred. Deciding it first also means the ordinary passing path never
+    reads raw stderr at all.
+
+    Only when that positive proof does NOT hold is a bounded startup
+    diagnostic consulted, and only to establish the specifically-observed
+    REJECTED state. Everything else -- a deadline, a protocol violation
+    without a correlated response, an output cap, an event cap, a read error,
+    a generic early exit with no unknown-option observation, and an
+    unreadable, truncated or ambiguous diagnostic -- is INDETERMINATE.
+
+    An argv whose options are NOT source-established is INDETERMINATE too,
+    even when a correlated response DID come back. That case is a fail-closed
+    refusal about AIDO's OWN argv vocabulary having drifted from the parser
+    behaviour this module established from source -- it is emphatically NOT a
+    claim that Pi rejected anything, which is precisely why it must not be
+    reported as a rejection. The actual-argv check is kept (LF1 added it so a
+    future argv change could not ride silently on the runtime-behaviour half);
+    what FU1 changes is only where its failure is allowed to land.
+
+    ``RUNTIME_EXITED_EARLY`` has NO special status here: no supervisor outcome
+    constant is read by this function at all. An unknown-option startup
+    rejection is ONE source-supported cause of an early exit, not the only
+    one, so an early exit alone is never treated as proof of one.
+    """
+    if argv_options_source_established and lf_jsonl_correlation_succeeded:
+        return REQUIRED_FLAGS_ACCEPTED
+    try:
+        snapshot = stderr_snapshot_reader()
+    except Exception:  # noqa: BLE001 - an unreadable diagnostic proves nothing
+        return REQUIRED_FLAGS_INDETERMINATE
+    if _unknown_option_rejection_established(argv=argv, stderr_snapshot=snapshot):
+        return REQUIRED_FLAGS_REJECTED_UNKNOWN_OPTION
+    return REQUIRED_FLAGS_INDETERMINATE
+
+
+def _protocol_violation_observed(stdout_state: dict[str, Any]) -> bool:
+    """Project the frozen supervisor's ``protocol_violation`` fact, correctly.
+
+    **5F3B-I2B-L1-LF1 root cause.** The frozen AR2 contract is
+    ``str | None``, never ``bool``:
+    ``ar2.protocol.RecordStreamReader.protocol_violation`` is initialised to
+    ``None`` and is only ever assigned a violation MESSAGE string, and
+    ``PiRpcSupervisor.stdout_state()`` republishes that value verbatim. The
+    previous projection here was ``type(raw) is not bool or raw is True``,
+    which is UNSATISFIABLE against that contract: ``type(None) is not bool``
+    is ``True``, so a wholly clean run reported a violation on every real
+    launch. The offline suite could not catch it, because its supervisor
+    double published a ``bool`` -- the double, not the adapter, disagreed
+    with the real class.
+
+    The corrected projection still fails CLOSED, in the one direction that
+    matters: ``None`` -- and only ``None`` -- means no violation; a ``str``
+    is a violation message; anything else is outside the frozen contract and
+    is treated as a violation rather than coerced by truthiness. A ``bool``
+    is therefore itself an out-of-contract value and fails closed.
+
+    A state mapping that does not carry the key at all is likewise outside
+    the frozen contract (``PiRpcSupervisor.stdout_state()`` always publishes
+    it) and fails closed.
+
+    The message string is examined for its TYPE only. It is never retained,
+    returned, logged, or placed in any record -- raw runtime content never
+    leaves this function.
+    """
+    if "protocol_violation" not in stdout_state:
+        return True
+    return stdout_state["protocol_violation"] is not None
+
+
+# -- 5F3B-I2B-L1-LF1 OBJECTIVE 6: the bounded live launch diagnostic ----------
+#
+# The first live Candidate-A refusal proved the retained evidence was too
+# coarse to tell an unknown-flag rejection apart from a launch-window
+# protocol violation without reading raw logs afterwards. This is the
+# smallest bounded, scrub-safe diagnostic that separates them.
+#
+# It is DECLARED-ENUM ONLY. Raw runtime observations are reduced to these
+# fixed literals at the moment of observation and the raw values are dropped
+# immediately; no stdout, stderr, RPC object, endpoint, API key, broker
+# token, pipe name, capability id, absolute workspace path, argv token or
+# violation message can reach it. It lives at the L1 harness/live-run level
+# ONLY -- neither the frozen ``RuntimeLaunchObservation`` nor the frozen
+# ``CategoryBEvidence`` schema is touched, so frozen I2B is not reopened.
+
+ARGV_OPTIONS_SOURCE_ESTABLISHED = "argv_options_all_source_established"
+ARGV_OPTION_NOT_SOURCE_ESTABLISHED = "argv_option_not_source_established"
+
+CORRELATION_RESPONSE_RECEIVED = "correlated_rpc_response_received"
+CORRELATION_NONE_RUNTIME_EXITED_EARLY = "no_response_runtime_exited_early"
+CORRELATION_NONE_DEADLINE_EXPIRED = "no_response_deadline_expired"
+CORRELATION_NONE_PROTOCOL_VIOLATION = "no_response_protocol_violation"
+CORRELATION_NONE_OUTPUT_CAP_EXCEEDED = "no_response_output_cap_exceeded"
+CORRELATION_NONE_EVENT_CAP_EXCEEDED = "no_response_event_cap_exceeded"
+CORRELATION_NONE_READ_ERROR = "no_response_read_error"
+CORRELATION_NONE_UNRECOGNIZED_OUTCOME = "no_response_unrecognized_outcome"
+
+LAUNCH_WINDOW_PROTOCOL_VIOLATION_OBSERVED = "launch_window_protocol_violation_observed"
+LAUNCH_WINDOW_PROTOCOL_VIOLATION_NOT_OBSERVED = (
+    "launch_window_protocol_violation_not_observed"
+)
+
+#: Every literal a :class:`LaunchDiagnostic` field may ever hold. An offline
+#: test asserts the produced values are always drawn from this set.
+LAUNCH_DIAGNOSTIC_CODES: frozenset[str] = frozenset(
+    {
+        ARGV_OPTIONS_SOURCE_ESTABLISHED,
+        ARGV_OPTION_NOT_SOURCE_ESTABLISHED,
+        CORRELATION_RESPONSE_RECEIVED,
+        CORRELATION_NONE_RUNTIME_EXITED_EARLY,
+        CORRELATION_NONE_DEADLINE_EXPIRED,
+        CORRELATION_NONE_PROTOCOL_VIOLATION,
+        CORRELATION_NONE_OUTPUT_CAP_EXCEEDED,
+        CORRELATION_NONE_EVENT_CAP_EXCEEDED,
+        CORRELATION_NONE_READ_ERROR,
+        CORRELATION_NONE_UNRECOGNIZED_OUTCOME,
+        LAUNCH_WINDOW_PROTOCOL_VIOLATION_OBSERVED,
+        LAUNCH_WINDOW_PROTOCOL_VIOLATION_NOT_OBSERVED,
+        # 5F3B-I2B-L1-LF1-FU1: the three-state required-flag classification,
+        # the ONE place the INDETERMINATE state is visible at all. The frozen
+        # ``RuntimeLaunchObservation`` still carries only the bool.
+        REQUIRED_FLAGS_ACCEPTED,
+        REQUIRED_FLAGS_REJECTED_UNKNOWN_OPTION,
+        REQUIRED_FLAGS_INDETERMINATE,
+    }
+)
+assert REQUIRED_FLAG_STATES <= LAUNCH_DIAGNOSTIC_CODES
+
+#: The raw ``await_response`` outcome -> declared correlation code map. Every
+#: member of :data:`_RECOGNIZED_AWAIT_RESPONSE_OUTCOMES` appears exactly once;
+#: anything outside it reduces to
+#: :data:`CORRELATION_NONE_UNRECOGNIZED_OUTCOME`, so no raw outcome string
+#: from the supervisor is ever retained verbatim.
+_CORRELATION_CODE_BY_OUTCOME: dict[str, str] = {
+    RUNTIME_RESPONSE_RECEIVED: CORRELATION_RESPONSE_RECEIVED,
+    RUNTIME_EXITED_EARLY: CORRELATION_NONE_RUNTIME_EXITED_EARLY,
+    RUNTIME_DEADLINE_EXPIRED: CORRELATION_NONE_DEADLINE_EXPIRED,
+    RUNTIME_PROTOCOL_VIOLATION: CORRELATION_NONE_PROTOCOL_VIOLATION,
+    RUNTIME_OUTPUT_CAP_EXCEEDED: CORRELATION_NONE_OUTPUT_CAP_EXCEEDED,
+    RUNTIME_EVENT_CAP_EXCEEDED: CORRELATION_NONE_EVENT_CAP_EXCEEDED,
+    RUNTIME_READ_ERROR: CORRELATION_NONE_READ_ERROR,
+}
+assert set(_CORRELATION_CODE_BY_OUTCOME) == set(_RECOGNIZED_AWAIT_RESPONSE_OUTCOMES)
+
+
+@dataclass(frozen=True)
+class LaunchDiagnostic:
+    """Four declared codes. Nothing raw, nothing secret, nothing unbounded.
+
+    5F3B-I2B-L1-LF1-FU1 added ``required_flags_code``: the ONLY place the
+    three-state required-flag classification is visible, and the only thing
+    that distinguishes a mechanically-established unknown-option REJECTION
+    from an INDETERMINATE launch. It is a declared literal from
+    :data:`REQUIRED_FLAG_STATES`, never a stderr line, never an option name,
+    and never an unknown-option message.
+    """
+
+    argv_code: str
+    correlation_code: str
+    launch_window_protocol_code: str
+    required_flags_code: str
+
+    def as_dict(self) -> dict[str, str]:
+        return {
+            "argv_options": self.argv_code,
+            "launch_correlation": self.correlation_code,
+            "launch_window_protocol": self.launch_window_protocol_code,
+            "required_launch_flags": self.required_flags_code,
+        }
+
+
+def _launch_diagnostic(
+    *,
+    argv_ok: bool,
+    wait_outcome: Any,
+    protocol_violation_observed: bool,
+    required_flags_code: str,
+) -> LaunchDiagnostic:
+    """Reduce the raw launch-window observations to declared codes at once.
+
+    ``required_flags_code`` arrives ALREADY reduced -- it is produced by
+    :func:`_classify_required_flag_evidence`, which is the only thing that
+    ever sees a raw stderr snapshot and which returns one of exactly three
+    declared literals.
+    """
+    if required_flags_code not in REQUIRED_FLAG_STATES:
+        raise LiveAdapterError(
+            "launch diagnostic refused: the required-flag classification is "
+            "not one of the three declared states"
+        )
+    return LaunchDiagnostic(
+        argv_code=(
+            ARGV_OPTIONS_SOURCE_ESTABLISHED
+            if argv_ok
+            else ARGV_OPTION_NOT_SOURCE_ESTABLISHED
+        ),
+        correlation_code=_CORRELATION_CODE_BY_OUTCOME.get(
+            wait_outcome if isinstance(wait_outcome, str) else "",
+            CORRELATION_NONE_UNRECOGNIZED_OUTCOME,
+        ),
+        launch_window_protocol_code=(
+            LAUNCH_WINDOW_PROTOCOL_VIOLATION_OBSERVED
+            if protocol_violation_observed
+            else LAUNCH_WINDOW_PROTOCOL_VIOLATION_NOT_OBSERVED
+        ),
+        required_flags_code=required_flags_code,
+    )
 
 
 # -- BLOCKER 2 (5F3B-I2B-L1-FU3): RuntimeIdentity ISSUANCE -------------------
@@ -1435,6 +2106,16 @@ class LiveCategoryBAdapters:
         self._bounds = bounds or _DEFAULT_BOUNDS
         self._brokers: dict[str, _LiveBrokerRecord] = {}
         self._runtimes: dict[str, _LiveRuntimeRecord] = {}
+        #: LF1 OBJECTIVE 6. Bounded, declared-code-only launch diagnostics,
+        #: keyed by run id, recorded on exactly the ``launch_runtime`` path
+        #: that reached the correlation window and therefore HAS a wait
+        #: outcome to reduce. A creator-retained partial failure records
+        #: none, deliberately: it has no correlation observation to describe,
+        #: and the frozen controller already attributes it to its own
+        #: RUNTIME_LAUNCH gate rather than to a launch-fact gate. Read by the
+        #: L1 live entry point for the run artifact; never passed to, or
+        #: observed by, the frozen controller.
+        self._launch_diagnostics: dict[str, LaunchDiagnostic] = {}
 
     # -- credential boundary -------------------------------------------------
 
@@ -1666,17 +2347,96 @@ class LiveCategoryBAdapters:
         # unknown/malformed outcome (which should never occur, but must never
         # be trusted merely because it isn't one of those two) fails closed.
         launch_shape_valid = wait_outcome in _RECOGNIZED_AWAIT_RESPONSE_OUTCOMES
-        # BLOCKER 5: fail closed on a malformed/untyped protocol_violation
-        # flag rather than applying bare truthiness to it -- a value that
-        # is not exactly a bool is treated as a violation, never silently
-        # coerced.
-        raw_violation = stdout_state.get("protocol_violation")
-        protocol_violation_observed = type(raw_violation) is not bool or raw_violation is True
-        required_flags_accepted = (
-            launch_shape_valid
-            and lf_jsonl_correlation_succeeded
-            and not protocol_violation_observed
+        # LF1: projected against the FROZEN ``str | None`` contract, not a
+        # bool. See ``_protocol_violation_observed``. This value does NOT
+        # feed ``required_flags_accepted`` -- it belongs to the separate,
+        # later ``protocol_integrity`` gate, which reads the supervisor's own
+        # cumulative (monotonic) state again in ``observe_protocol``. It is
+        # read here only to reduce it into the bounded launch diagnostic.
+        protocol_violation_observed = _protocol_violation_observed(stdout_state)
+        # LF1 OBJECTIVE 4: the corrected required-CLI-flag observation.
+        #
+        #     required flags accepted  =  no "unknown flag" startup rejection
+        #
+        # Both halves of the proof chain documented above
+        # ``_argv_options_are_source_established`` are required, and neither
+        # is a protocol-violation bit:
+        #
+        #   (a) every option token in the argv AIDO itself constructed is
+        #       source-established as recognized by Pi's CLI parser, and
+        #   (b) the exact argv was launched and the runtime went on to
+        #       consume AIDO's one JSONL RPC command and return a correlated
+        #       response -- which Pi cannot reach when any flag was rejected
+        #       as unknown, because that path exits before ``runRpcMode``.
+        #
+        # A launch-window protocol violation alone therefore no longer denies
+        # this fact.
+        #
+        # 5F3B-I2B-L1-LF1-FU1: and neither does a bare correlation failure.
+        # The LF1 producer read "no correlated response" as an unknown-flag
+        # rejection, which is the unsound REVERSE implication -- a deadline, a
+        # launch-window protocol violation, an output cap, an event cap, a
+        # read error, and a generic early exit all land there while proving
+        # nothing at all about flag acceptance. The classification is now
+        # THREE-state, and only its two DEFINITE states may reach the frozen
+        # bool.
+        argv_options_source_established = _argv_options_are_source_established(argv)
+        required_flag_state = _classify_required_flag_evidence(
+            argv=argv,
+            argv_options_source_established=argv_options_source_established,
+            lf_jsonl_correlation_succeeded=lf_jsonl_correlation_succeeded,
+            # Deferred, so the ordinary ACCEPTED path never reads raw stderr
+            # at all, and an unreadable surface can only ever mean
+            # INDETERMINATE.
+            stderr_snapshot_reader=lambda: supervisor.stderr_snapshot(),
         )
+        required_flags_accepted = required_flag_state == REQUIRED_FLAGS_ACCEPTED
+        launch_diagnostic = _launch_diagnostic(
+            argv_ok=argv_options_source_established,
+            wait_outcome=wait_outcome,
+            protocol_violation_observed=protocol_violation_observed,
+            required_flags_code=required_flag_state,
+        )
+        self._launch_diagnostics[request.run_id] = launch_diagnostic
+
+        # -- LF1-FU1: how INDETERMINATE maps into the FROZEN controller -----
+        #
+        # The frozen ``RuntimeLaunchObservation`` carries one ``bool``, and the
+        # frozen controller reads ``required_flags_accepted=False`` on a
+        # TRUSTED session as REQUIRED_LAUNCH_FLAGS_REJECTED. There is
+        # therefore no truthful session-bearing observation for a launch whose
+        # flag evidence is indeterminate: ``True`` would fabricate a proof
+        # that was never obtained, and ``False`` would invent a cause more
+        # specific than what was observed.
+        #
+        # So an indeterminate launch fails EARLIER, at this adapter's own
+        # runtime-launch boundary, through the existing creator-retained
+        # cleanup contract: no session crosses the boundary, the frozen
+        # controller fails RUNTIME_LAUNCH itself with RUNTIME_LAUNCH_FAILED
+        # (the honest "no trustworthy runtime session was produced"), and
+        # REQUIRED_LAUNCH_FLAGS is left NOT_REACHED rather than being told a
+        # rejection happened. The frozen controller already sanctions exactly
+        # this shape -- see its
+        # ``_RUNTIME_LAUNCH_STATUSES_WITH_VALID_OBSERVATION_BUT_OWN_GATE_UNREACHED``,
+        # under which a genuinely-consumed observation's four launch facts may
+        # each independently be True or False while their own gates never ran.
+        #
+        # Because of that sanction, the two launch facts this run DID
+        # establish are carried through truthfully rather than flattened to
+        # False: the launch shape really was valid, and Pi's version really was
+        # observed. Neither is read by any gate on this path.
+        #
+        # This is not chosen to make LF_JSONL_CORRELATION reachable -- it makes
+        # it UNREACHABLE for these outcomes. It is chosen because failing
+        # closed is truthful and inventing a more specific cause is not.
+        if required_flag_state == REQUIRED_FLAGS_INDETERMINATE:
+            return self._retain_and_close_partial_runtime(
+                supervisor=supervisor,
+                extension_dir=extension.extension_dir,
+                launch_shape_valid=launch_shape_valid,
+                lf_jsonl_correlation_succeeded=lf_jsonl_correlation_succeeded,
+                observed_pi_version=identity.reported_version,
+            )
 
         try:
             run_id = request.run_id
@@ -1708,8 +2468,27 @@ class LiveCategoryBAdapters:
             resource_created=True,
         )
 
+    def launch_diagnostics(self) -> dict[str, dict[str, str]]:
+        """LF1 OBJECTIVE 6: the bounded per-run launch diagnostics.
+
+        Declared codes only (:data:`LAUNCH_DIAGNOSTIC_CODES`). Never raw
+        stdout, stderr, an RPC object, an endpoint, an API key, a broker
+        token, a pipe name, a capability id, an argv token, an absolute
+        workspace path, or a protocol-violation message.
+        """
+        return {
+            run_id: diagnostic.as_dict()
+            for run_id, diagnostic in self._launch_diagnostics.items()
+        }
+
     def _retain_and_close_partial_runtime(
-        self, *, supervisor: PiRpcSupervisor, extension_dir: str
+        self,
+        *,
+        supervisor: PiRpcSupervisor,
+        extension_dir: str,
+        launch_shape_valid: bool = False,
+        lf_jsonl_correlation_succeeded: bool = False,
+        observed_pi_version: str | None = None,
     ) -> RuntimeLaunchObservation:
         """A real process exists but no trustworthy session can be formed.
 
@@ -1720,6 +2499,31 @@ class LiveCategoryBAdapters:
         this module does not scrub it here (see the module docstring --
         scrubbing/removal of the disposable tree is the live entry point's
         job, run unconditionally after every outcome).
+
+        **5F3B-I2B-L1-LF1-FU1.** ``launch_shape_valid``,
+        ``lf_jsonl_correlation_succeeded`` and ``observed_pi_version`` default
+        to the conservative "nothing was established" values that every
+        PRE-EXISTING caller of this method genuinely observed: those callers
+        arrive from a raised ``launch()``, a raised send/await, or an
+        unconstructible session, none of which ever obtained a recognized
+        ``await_response`` outcome or reached a point where a version could be
+        reported for this launch. The INDETERMINATE-flag caller added by FU1
+        DID establish them and passes them through, so a fail-closed mapping
+        never has to flatten a fact it actually observed -- notably, an
+        indeterminate launch in which the LF-framed JSONL correlation really
+        did succeed still reports that truthfully. None of them is read by any
+        gate on this path: with no session, the frozen controller fails
+        RUNTIME_LAUNCH itself and leaves all four launch-fact gates
+        NOT_REACHED (its own
+        ``_RUNTIME_LAUNCH_STATUSES_WITH_VALID_OBSERVATION_BUT_OWN_GATE_UNREACHED``
+        is what sanctions each fact standing independently there).
+
+        ``required_flags_accepted`` is ALWAYS ``False`` here and is
+        deliberately NOT a parameter. With no session there is no gate to
+        interpret it, so ``False`` means "not established by this launch" and
+        never "rejected". The one state that does mean rejection keeps its
+        session and is reported through the ordinary path above, where the
+        frozen controller can name it exactly.
         """
         del extension_dir
         try:
@@ -1730,10 +2534,10 @@ class LiveCategoryBAdapters:
             exit_observed = False
         return RuntimeLaunchObservation(
             session=None,
-            launch_shape_valid=False,
+            launch_shape_valid=launch_shape_valid,
             required_flags_accepted=False,
-            lf_jsonl_correlation_succeeded=False,
-            observed_pi_version=None,
+            lf_jsonl_correlation_succeeded=lf_jsonl_correlation_succeeded,
+            observed_pi_version=observed_pi_version,
             resource_created=True,
             cleanup_attempted=True,
             direct_child_reported_exit=exit_observed,
@@ -1841,15 +2645,28 @@ class LiveCategoryBAdapters:
 
         BLOCKER 5: neither boolean is derived by applying bare Python
         truthiness to untrusted supervisor-reported state. A
-        ``protocol_violation`` value that is not exactly a ``bool``, or an
-        ``extension_errors`` collection that is not exactly a ``list``,
-        fails CLOSED -- treated as an observed violation/error -- rather
-        than being coerced.
+        ``protocol_violation`` value outside the frozen ``str | None``
+        contract, or an ``extension_errors`` collection that is not exactly a
+        ``list``, fails CLOSED -- treated as an observed violation/error --
+        rather than being coerced.
+
+        **LF1 OBJECTIVE 5: a launch-window protocol violation must still be
+        visible HERE.** Correcting ``required_flags_accepted`` must not make
+        the violation disappear, and it does not: the frozen
+        ``ar2.protocol.RecordStreamReader.protocol_violation`` field is
+        MONOTONIC -- it is assigned exactly once, at the point of detection,
+        and the reader thread then returns, so nothing ever clears it or
+        overwrites it with ``None``. ``PiRpcSupervisor.stdout_state()``
+        republishes that same live reader field on every call, so this method
+        reads the supervisor's CUMULATIVE state, not a launch-window
+        snapshot. A violation observed during the launch window is therefore
+        still reported at ``protocol_integrity`` time, and a corrected run
+        can truthfully produce ``required_launch_flags = PASSED`` alongside
+        ``protocol_integrity = FAILED:PROTOCOL_VIOLATION_OBSERVED``.
         """
         record = self._require_runtime_record(session)
         stdout_state = record.supervisor.stdout_state()
-        raw_violation = stdout_state.get("protocol_violation")
-        protocol_violation_observed = type(raw_violation) is not bool or raw_violation is True
+        protocol_violation_observed = _protocol_violation_observed(stdout_state)
         raw_errors = record.supervisor.activity.extension_errors
         extension_error_observed = type(raw_errors) is not list or len(raw_errors) > 0
         return ProtocolObservation(

@@ -1,7 +1,32 @@
 # 5F3B-I1 / I2 Findings
 
-> **I1 + I2 OFFLINE MACHINERY ONLY. NO ZERO-PROMPT LIVE GATE HAS RUN. NO
-> MODEL QUALIFICATION HAS OCCURRED. Q1/Q2 REMAIN UNAUTHORIZED.**
+> **NO MODEL QUALIFICATION HAS OCCURRED. NO CANDIDATE PASS/FAIL EXISTS.
+> NO SEMANTIC PROMPT HAS EVER BEEN SENT. Q1/Q2 REMAIN UNAUTHORIZED.**
+
+> **TOP-LEVEL CORRECTION (5F3B-I2B-L1).** Exactly **one** zero-prompt
+> Category-B live attempt has now occurred -- Candidate A,
+> `results/i2b_live_A_20260831T192543Z.json`, observed Pi `0.84.4`. It
+> launched a real Node/Pi process, opened a real named pipe and read a real
+> credential, sent **zero** semantic prompts, never reached model inference,
+> refused fail-closed, and tore down, shut down and cleaned up verifiably.
+> So the blanket claim that previously stood here -- "NO ZERO-PROMPT LIVE
+> GATE HAS RUN" -- is **no longer true as of that attempt** and is corrected
+> in place. **No candidate model has run**, and no further live attempt is
+> authorized.
+>
+> **5F3B-I2B-L1-LF1** then established that that refusal's ATTRIBUTION was
+> wrong, and **5F3B-I2B-L1-LF1-FU1** established that the LF1 correction was
+> itself still over-attributing -- see those sections below.
+
+> **HOW TO READ THE HISTORICAL SECTIONS BELOW.** Every section in this
+> document is a **phase record**, written when that phase was accepted, and
+> is retained unedited except for time scope. Where such a section says
+> something like "no zero-prompt live gate has ever run" or "Category-B live
+> execution not run", read it as **a fact as of that phase's acceptance**,
+> not as a claim about now: those statements were true when written and are
+> superseded by the TOP-LEVEL CORRECTION above. Nothing below is rewritten
+> to pretend the live attempt did not happen, and no historical result
+> artifact is edited.
 
 This document reports only facts about the **offline harness itself**. It
 does not, and cannot, report anything about Candidate A (`qwen3-coder-next`)
@@ -459,8 +484,11 @@ emission are all unchanged.
 
 # 5F3B-I2 -- Offline B300/Pi Route + Credential Boundary Machinery
 
-> **I2 OFFLINE IMPLEMENTATION ONLY. NO ZERO-PROMPT LIVE GATE HAS RUN. NO
-> CANDIDATE MODEL HAS RUN. Q1/Q2 REMAIN UNAUTHORIZED.**
+> **AS OF THIS PHASE'S ACCEPTANCE: I2 OFFLINE IMPLEMENTATION ONLY. NO
+> ZERO-PROMPT LIVE GATE HAD RUN. NO CANDIDATE MODEL HAD RUN. Q1/Q2 REMAINED
+> UNAUTHORIZED.** (One zero-prompt live attempt has since occurred -- see the
+> TOP-LEVEL CORRECTION at the head of this document. No candidate model has
+> run, then or now.)
 
 This section reports facts about the **offline I2 machinery itself**,
 implemented per
@@ -649,9 +677,11 @@ value" used anywhere in this package is a hard-coded synthetic literal.
 
 ## What this does NOT establish
 
-- No zero-prompt live gate (I2A Sec. 15: Node-direct launch, RPC broker
-  reaching `READY`, H1/H2, `get_commands`/`get_state`, the real `/models`
-  listing) has ever run.
+- At the time this phase was accepted, no zero-prompt live gate (I2A
+  Sec. 15: Node-direct launch, RPC broker reaching `READY`, H1/H2,
+  `get_commands`/`get_state`, the real `/models` listing) had run. (One such
+  attempt has since occurred and refused fail-closed before `/models` -- see
+  the TOP-LEVEL CORRECTION at the head of this document.)
 - No candidate model has ever run. No PASS/FAIL, no ranking, no
   qualification verdict exists for Candidate A or Candidate B.
 - 5F3B-Q1/Q2 (the first live candidate sweeps) remain **NOT authorized** and
@@ -670,8 +700,11 @@ value" used anywhere in this package is a hard-coded synthetic literal.
 
 # 5F3B-I2-FU1 -- Credential/Route Boundary Integrity Closure
 
-> **STILL OFFLINE ONLY. NO ZERO-PROMPT LIVE GATE HAS RUN. NO CANDIDATE MODEL
-> HAS RUN. Q1/Q2 REMAIN UNAUTHORIZED.**
+> **AS OF THIS PHASE'S ACCEPTANCE: STILL OFFLINE ONLY. NO ZERO-PROMPT LIVE
+> GATE HAD RUN. NO CANDIDATE MODEL HAD RUN. Q1/Q2 REMAINED UNAUTHORIZED.**
+> (One zero-prompt live attempt has since occurred -- see the TOP-LEVEL
+> CORRECTION at the head of this document. No candidate model has run, then
+> or now.)
 
 Independent review of the actual I2 source (not the design document) found
 seven concrete implementation gaps between what I2A's architecture requires
@@ -838,9 +871,11 @@ coverage of any previously-accepted behavior.
 
 ## What this does NOT establish (unchanged)
 
-- No zero-prompt live gate has ever run. No candidate model has ever run.
-  No PASS/FAIL, no ranking, no qualification verdict exists for Candidate A
-  or Candidate B.
+- At the time this phase was accepted, no zero-prompt live gate had run, and
+  no candidate model had run. (One zero-prompt live gate attempt has since
+  occurred -- see the TOP-LEVEL CORRECTION at the head of this document. No
+  candidate model has run, then or now.) No PASS/FAIL, no ranking and no
+  qualification verdict exists for Candidate A or Candidate B.
 - 5F3B-Q1/Q2 remain **NOT authorized**.
 - Redaction/scrubbing remain **backstops, not guarantees**.
 
@@ -848,8 +883,11 @@ coverage of any previously-accepted behavior.
 
 # 5F3B-I2-FU2 -- Authority + Trusted-Value Closure
 
-> **STILL OFFLINE ONLY. NO ZERO-PROMPT LIVE GATE HAS RUN. NO CANDIDATE MODEL
-> HAS RUN. Q1/Q2 REMAIN UNAUTHORIZED.**
+> **AS OF THIS PHASE'S ACCEPTANCE: STILL OFFLINE ONLY. NO ZERO-PROMPT LIVE
+> GATE HAD RUN. NO CANDIDATE MODEL HAD RUN. Q1/Q2 REMAINED UNAUTHORIZED.**
+> (One zero-prompt live attempt has since occurred -- see the TOP-LEVEL
+> CORRECTION at the head of this document. No candidate model has run, then
+> or now.)
 
 FU1 closed repr/PATH/config-carrier/raw-diagnostic/InfrastructureRefusal/
 base-URL-validator gaps. Independent review of the RESULT found one further
@@ -1048,9 +1086,11 @@ none of them reduces test coverage of any previously-accepted behavior.
 
 ## What this does NOT establish (unchanged)
 
-- No zero-prompt live gate has ever run. No candidate model has ever run.
-  No PASS/FAIL, no ranking, no qualification verdict exists for Candidate A
-  or Candidate B.
+- At the time this phase was accepted, no zero-prompt live gate had run, and
+  no candidate model had run. (One zero-prompt live gate attempt has since
+  occurred -- see the TOP-LEVEL CORRECTION at the head of this document. No
+  candidate model has run, then or now.) No PASS/FAIL, no ranking and no
+  qualification verdict exists for Candidate A or Candidate B.
 - 5F3B-Q1/Q2 remain **NOT authorized**.
 - Redaction/scrubbing remain **backstops, not guarantees**. The authority
   marker and the trusted-value-object checks in this closure are
@@ -1065,8 +1105,11 @@ none of them reduces test coverage of any previously-accepted behavior.
 
 # 5F3B-I2-FU3 -- Run Authority and Cross-Boundary Binding Closure
 
-> **STILL OFFLINE ONLY. NO ZERO-PROMPT LIVE GATE HAS RUN. NO CANDIDATE MODEL
-> HAS RUN. Q1/Q2 REMAIN UNAUTHORIZED.**
+> **AS OF THIS PHASE'S ACCEPTANCE: STILL OFFLINE ONLY. NO ZERO-PROMPT LIVE
+> GATE HAD RUN. NO CANDIDATE MODEL HAD RUN. Q1/Q2 REMAINED UNAUTHORIZED.**
+> (One zero-prompt live attempt has since occurred -- see the TOP-LEVEL
+> CORRECTION at the head of this document. No candidate model has run, then
+> or now.)
 
 FU1/FU2 made every I2 value object valid by construction and closed the
 directory-deletion boundary against an arbitrary raw path. Independent
@@ -1329,9 +1372,11 @@ none of them reduces test coverage of any previously-accepted behavior.
 
 ## What this does NOT establish (unchanged, as of FU3)
 
-- No zero-prompt live gate has ever run. No candidate model has ever run.
-  No PASS/FAIL, no ranking, no qualification verdict exists for Candidate A
-  or Candidate B.
+- At the time this phase was accepted, no zero-prompt live gate had run, and
+  no candidate model had run. (One zero-prompt live gate attempt has since
+  occurred -- see the TOP-LEVEL CORRECTION at the head of this document. No
+  candidate model has run, then or now.) No PASS/FAIL, no ranking and no
+  qualification verdict exists for Candidate A or Candidate B.
 - 5F3B-Q1/Q2 remain **NOT authorized**.
 - Redaction/scrubbing, and every trusted-value-object check in this
   closure, remain correctness/integrity controls -- not an OS sandbox, and
@@ -1520,9 +1565,11 @@ of them reduces test coverage of any previously-accepted behavior.
 
 ### What this does NOT establish (unchanged)
 
-- No zero-prompt live gate has ever run. No candidate model has ever run.
-  No PASS/FAIL, no ranking, no qualification verdict exists for Candidate A
-  or Candidate B.
+- At the time this phase was accepted, no zero-prompt live gate had run, and
+  no candidate model had run. (One zero-prompt live gate attempt has since
+  occurred -- see the TOP-LEVEL CORRECTION at the head of this document. No
+  candidate model has run, then or now.) No PASS/FAIL, no ranking and no
+  qualification verdict exists for Candidate A or Candidate B.
 - 5F3B-Q1/Q2 remain **NOT authorized**.
 - The `i2_issuance` registry is an in-process authority fact, not evidence,
   and not a security boundary against a same-process adversary willing to
@@ -1733,9 +1780,11 @@ policy all unchanged).
 
 ### What this does NOT establish (unchanged)
 
-- No zero-prompt live gate has ever run. No candidate model has ever run.
-  No PASS/FAIL, no ranking, no qualification verdict exists for Candidate A
-  or Candidate B.
+- At the time this phase was accepted, no zero-prompt live gate had run, and
+  no candidate model had run. (One zero-prompt live gate attempt has since
+  occurred -- see the TOP-LEVEL CORRECTION at the head of this document. No
+  candidate model has run, then or now.) No PASS/FAIL, no ranking and no
+  qualification verdict exists for Candidate A or Candidate B.
 - 5F3B-Q1/Q2 remain **NOT authorized**.
 - The threat boundary is unchanged from FU3A: this closes PUBLIC-API misuse
   (the two attacks independent review actually reproduced), not a defense
@@ -1751,8 +1800,11 @@ policy all unchanged).
 
 # 5F3B-I2B / I2B-FU1 -- Category-B Runtime Authority + Lifecycle Closure (Offline Only)
 
-> **I2B CONTROLLER WIRED OFFLINE. CATEGORY-B LIVE EXECUTION NOT RUN. NO
-> CANDIDATE MODEL RUN. Q1/Q2 NO-GO.**
+> **AS OF THIS PHASE'S ACCEPTANCE: I2B CONTROLLER WIRED OFFLINE. CATEGORY-B
+> LIVE EXECUTION NOT YET RUN. NO CANDIDATE MODEL RUN. Q1/Q2 NO-GO.** (One
+> zero-prompt Category-B live attempt has since occurred -- see the TOP-LEVEL
+> CORRECTION at the head of this document. No candidate model has run, then
+> or now.)
 
 I2-1 through I2-6 (hardened through FU1/FU2/FU3/FU3A/FU3B) built the offline
 objects a future live qualification run would need. I2B assembles them into
@@ -2113,11 +2165,13 @@ hard bar, no ranking, and no `AUTONOMOUS_PASS`/`AUTONOMOUS_FAIL`.
 
 ## What this does NOT establish
 
-- No zero-prompt live gate has ever run. No Pi/Node process was launched, no
-  RPC call was made, no broker was created, no socket was opened, no
-  `/models` request was issued, and no real credential was read. Every live
-  boundary is an injected adapter this package supplies no real
+- At the time this phase was accepted, no zero-prompt live gate had run: no
+  Pi/Node process had been launched, no RPC call made, no broker created, no
+  socket opened, no `/models` request issued, and no real credential read.
+  Every live boundary was an injected adapter this package supplied no real
   implementation for, and **no real live adapter was added by this phase**.
+  (5F3B-I2B-L1 later added real live adapters and ran one zero-prompt
+  attempt -- see the TOP-LEVEL CORRECTION at the head of this document.)
 - No candidate model has ever run. No PASS/FAIL, no ranking and no
   qualification verdict exists for Candidate A or Candidate B, and this
   module cannot produce one.
@@ -2139,8 +2193,11 @@ hard bar, no ranking, and no `AUTONOMOUS_PASS`/`AUTONOMOUS_FAIL`.
 
 # 5F3B-I2B-FU2 -- Offline Category-B Controller Correction (Offline Only)
 
-> **OFFLINE IMPLEMENTATION ONLY. CATEGORY-B LIVE EXECUTION NOT RUN. NO
-> CANDIDATE MODEL RUN. NO REAL WORKSPACE. Q1/Q2 NO-GO.**
+> **AS OF THIS PHASE'S ACCEPTANCE: OFFLINE IMPLEMENTATION ONLY. CATEGORY-B
+> LIVE EXECUTION NOT YET RUN. NO CANDIDATE MODEL RUN. NO REAL WORKSPACE.
+> Q1/Q2 NO-GO.** (One zero-prompt Category-B live attempt has since occurred
+> -- see the TOP-LEVEL CORRECTION at the head of this document. No candidate
+> model has run, then or now.)
 
 The `5F3B-I2A` design family -- including `DESIGN-FU3`, `FU3A`, `FU3B` and
 `FU3C` -- is **frozen**. The I2B-FU1 implementation slice was **never
@@ -2327,9 +2384,11 @@ touched.
 
 ## What this does NOT establish
 
-- **No zero-prompt live gate has ever run.** No Pi/Node process was launched,
-  no RPC call was made, no broker was created, no socket was opened, no
-  `/models` request was issued, and no real credential was read.
+- **At the time this phase was accepted, no zero-prompt live gate had run.**
+  No Pi/Node process had been launched, no RPC call made, no broker created,
+  no socket opened, no `/models` request issued, and no real credential read.
+  (One zero-prompt attempt has since occurred -- see the TOP-LEVEL CORRECTION
+  at the head of this document.)
 - **`get_commands` still proves NOTHING about the active tool registry.** The
   corrected gate proves the extension COMMAND PROVENANCE PARTITION is exactly
   what AIDO intended. Pi exposes no zero-prompt observation of the registry's
@@ -3261,8 +3320,10 @@ their names say.
 
 ## What this does NOT establish
 
-Unchanged from FU2/FU2A/FU2B's own closing sections: no zero-prompt live
-gate has ever run; `get_commands` still proves nothing about the active
+Unchanged from FU2/FU2A/FU2B's own closing sections, and true as of this
+phase's acceptance: no zero-prompt live gate had run (one has since occurred
+-- see the TOP-LEVEL CORRECTION at the head of this document);
+`get_commands` still proves nothing about the active
 tool registry; the adapter trust boundary is unchanged; the synthetic
 workspace authority is not real-workspace authority; no claim about
 descendants, inference, or GPU work; redaction/scrubbing remain backstops,
@@ -3557,7 +3618,9 @@ in place with a pointer to this section.
 
 ## What this does NOT establish
 
-Unchanged from FU2/FU2A/FU2B/FU2C: no zero-prompt live gate has ever run;
+Unchanged from FU2/FU2A/FU2B/FU2C, and true as of this phase's acceptance:
+no zero-prompt live gate had run (one has since occurred -- see the
+TOP-LEVEL CORRECTION at the head of this document);
 `get_commands` still proves nothing about the active tool registry; the
 adapter trust boundary is unchanged; the synthetic workspace authority is not
 real-workspace authority; no claim about descendants, inference, or GPU work;
@@ -4204,8 +4267,10 @@ to this section.
 
 ## What this does NOT establish
 
-Unchanged from FU2/FU2A/FU2B/FU2C/FU2D/FU2E: no zero-prompt live gate has
-ever run; `get_commands` still proves nothing about the active tool
+Unchanged from FU2/FU2A/FU2B/FU2C/FU2D/FU2E, and true as of this phase's
+acceptance: no zero-prompt live gate had run (one has since occurred -- see
+the TOP-LEVEL CORRECTION at the head of this document);
+`get_commands` still proves nothing about the active tool
 registry; the adapter trust boundary is unchanged; the synthetic workspace
 authority is not real-workspace authority; no claim about descendants,
 inference, or GPU work; redaction/scrubbing remain backstops, not
@@ -4228,3 +4293,849 @@ the CURRENT source's control flow, not a structural guarantee independent of
 it; a future change to how `provisional_pass`/`failed_gate` are computed
 could reopen that branch's reachability, and would need to be re-audited
 against this section's argument before being trusted again.
+
+---
+
+# 5F3B-I2B-L1-LF1 — Live Finding 1
+
+**Required-flag observation correction + Pi 0.84.4 protocol-drift
+attribution.** Everything in this section is OFFLINE. No live attempt was
+made, Candidate A was not re-run, no prompt was sent, no real credential was
+read, no broker was opened, no Node/Pi process was launched, and `/models`
+was not called.
+
+## 0. The first live record
+
+The one and only Candidate-A Category-B live attempt is retained verbatim at
+`results/i2b_live_A_20260831T192543Z.json`. **It has not been edited,
+rewritten, or retroactively reclassified**, and it is not reclassified here:
+its `outcome`, `failed_gate`, `failure_code` and every gate status stand as
+historical evidence of what the frozen controller received from the live
+adapter.
+
+What is corrected is the FAILURE ATTRIBUTION — a statement *about* that
+record — and the adapter producer that generated the false fact it
+faithfully reported.
+
+## 1. Did the first live refusal prove that unknown flags were rejected?
+
+**No. It proved nothing about CLI flags at all.**
+
+The retained record shows `rpc_launch_shape_valid: true`,
+`lf_jsonl_correlation_succeeded: true`, `required_launch_flags_accepted:
+false`. Under the pre-LF1 producer the third value was:
+
+```
+required_flags_accepted =
+    launch_shape_valid AND lf_jsonl_correlation_succeeded AND NOT protocol_violation_observed
+```
+
+with
+
+```
+raw = stdout_state()["protocol_violation"]
+protocol_violation_observed = type(raw) is not bool or raw is True
+```
+
+**That expression is UNSATISFIABLE against the frozen AR2 contract.**
+`ar2.protocol.RecordStreamReader.protocol_violation` is declared
+`str | None`, initialised to `None`, and only ever assigned a violation
+MESSAGE string (`protocol.py:286`, `:350`, `:357`);
+`PiRpcSupervisor.stdout_state()` republishes that value verbatim
+(`supervisor.py:465`). It is never a `bool`. So `type(None) is not bool` is
+`True`, and `protocol_violation_observed` was `True` on **every** real
+launch, clean or not — which forced `required_flags_accepted` to `False` on
+every real launch, whatever the runtime actually did.
+
+The live refusal is therefore fully explained without any protocol violation
+and without any unknown flag. Two further lines of evidence — one merely
+suggestive, one conclusive — point the same way:
+
+* **From the retained artifact — SUGGESTIVE, not conclusive.**
+  `lf_jsonl_correlation_succeeded: true` means `await_response` returned
+  `RUNTIME_RESPONSE_RECEIVED`, and `PiRpcSupervisor._wait` has exactly two
+  paths that return it. On the **ordinary loop path**,
+  `_terminal_stream_outcome()` is evaluated and must return `None` in the
+  *same iteration*, immediately before `satisfied()` produces that outcome —
+  and it returns `RUNTIME_PROTOCOL_VIOLATION` for any truthy
+  `protocol_violation` — so that path does establish that no violation had
+  been detected at that instant. On the **child-already-exited branch**,
+  however, `satisfied()` is checked BEFORE the terminal check, so that path
+  does **not** exclude a violation. The retained artifact does not record
+  which path was taken, and a violation arriving between `await_response`
+  returning and the adapter's later `stdout_state()` call is not excluded
+  either. **This line of evidence is therefore stated as suggestive only.**
+  It is not load-bearing: the next one is.
+* **Mechanically, from the Pi 0.84.4 source — CONCLUSIVE, and independent
+  of the above.** An unknown-flag rejection cannot coexist with a correlated
+  RPC response at all, on any path: Pi calls `process.exit(1)` before
+  `runRpcMode` is entered, so it never attaches its JSONL stdin reader, never
+  reads AIDO's `get_commands` frame, and never writes a response record —
+  `satisfied()` cannot become true in either `_wait` branch (§3). So the one
+  fact the artifact does record unambiguously, a correlated response, already
+  rules an unknown-flag rejection out.
+
+The retained artifact did **not** keep the raw offending record, so it cannot
+by itself distinguish the two hypotheses. That is exactly the gap Objective 6
+closes.
+
+> **Stated precisely.** The live run was a VALID FAIL-CLOSED RUN: it refused,
+> it sent zero semantic prompts, it tore down, it cleaned up, and it
+> verified. Its failure was misATTRIBUTED, by the adapter, to
+> `REQUIRED_LAUNCH_FLAGS_REJECTED`. **The frozen controller behaved exactly
+> as designed** — it mapped a `False` adapter fact to that gate's code — and
+> is not reopened.
+
+## 2. Pre-fix reproduction (Objective 1)
+
+Written and run BEFORE any code change, against the unmodified adapter, with
+**no unknown-flag observation present in either synthetic input** (in both,
+the synthetic runtime accepted the exact argv, entered RPC command
+processing, consumed AIDO's one `get_commands` frame, and returned a
+correlated response):
+
+```
+tests/test_lf1_prefix_reproduction.py ...                         [100%]
+3 passed in 0.40s
+```
+
+1. `launch_shape_valid=True`, LF correlation `True`, `protocol_violation=None`
+   (a wholly CLEAN run, in the real `str | None` contract)
+   → pre-fix `required_flags_accepted=False`. **This is the live run.**
+2. `launch_shape_valid=True`, LF correlation `True`, `protocol_violation=<a
+   real violation message>` → pre-fix `required_flags_accepted=False`.
+   (The reviewer's hypothesised misattribution — also real, but not what the
+   live run needed.)
+3. Source pin: the frozen reader declares `str | None`.
+
+That temporary module was removed once the fix landed, because it asserted
+the defective behaviour. Its content survives as permanent regressions:
+`test_lf1_prefix_defect_reproduction_old_projection_was_unsatisfiable`
+evaluates the exact pre-LF1 expression over the frozen contract's real value
+domain and proves it can never be `False`; the two behavioural cases became
+`test_lf1_clean_run_real_supervisor_contract_accepts_required_flags` and
+`test_lf1_launch_window_protocol_violation_does_not_deny_required_flags`.
+
+**Why the offline suite never caught this.** The suite's supervisor double
+published `protocol_violation` as a `bool` (`self._protocol_violation =
+False`). The DOUBLE, not the adapter, disagreed with the real class, so an
+adapter check that was unsatisfiable against real state passed here for
+free. The double now defaults to `None` and models an observed violation
+with a message STRING, exactly as `RecordStreamReader` does.
+
+## 3. Pi 0.84.4 required-flag source inspection (Objective 2)
+
+Offline inspection of the installed package
+(`@earendil-works/pi-coding-agent`, `package.json` version `0.84.4`). No
+launch, no network, no version gate.
+
+**(a) Are all of AIDO's required argv flags still recognized?** Yes — all
+fourteen, each with its own explicit `else if` branch in
+`dist/cli/args.js` `parseArgs`:
+
+| flag | recognized | takes a value |
+|---|---|---|
+| `--mode rpc` | yes (`text`/`json`/`rpc` accepted) | yes |
+| `--no-session` | yes | no |
+| `--no-extensions` | yes (`-ne`) | no |
+| `--extension <path>` | yes (`-e`) | yes |
+| `--tools <list>` | yes (`-t`) | yes |
+| `--no-builtin-tools` | yes (`-nbt`) | no |
+| `--no-skills` | yes (`-ns`) | no |
+| `--no-prompt-templates` | yes (`-np`) | no |
+| `--no-themes` | yes | no |
+| `--no-context-files` | yes (`-nc`) | no |
+| `--no-approve` | yes (`-na`) | no |
+| `--offline` | yes | no |
+| `--provider <name>` | yes | yes |
+| `--model <pattern>` | yes | yes |
+
+**(b) What code path does an unknown option take?**
+
+* An unrecognized `--flag` does **not** error in `parseArgs`. It falls
+  through to the `arg.startsWith("--")` catch-all and is stored in
+  `result.unknownFlags` (this is Pi's extension-registered-flag mechanism).
+  Later, `dist/core/agent-session-services.js` `applyExtensionFlagValues`
+  compares each name against the flags the LOADED extensions registered; any
+  name with no registration becomes
+  `{type: "error", message: "Unknown option: --<name>"}` in the runtime's
+  diagnostics.
+* An unrecognized single-dash token (`-x`) pushes
+  `{type: "error", message: "Unknown option: -x"}` straight into
+  `result.diagnostics` during `parseArgs`.
+
+**(c) Does unknown-option handling exit before RPC request processing?**
+**Yes, in both paths, unconditionally.** In `dist/main.js`: a `parseArgs`
+error diagnostic is printed and `process.exit(1)` runs immediately after
+parsing; a runtime error diagnostic sets `hasRuntimeErrors`, is reported, and
+also calls `process.exit(1)`. Both exits are strictly above the
+`if (appMode === "rpc") { printTimings(); await runRpcMode(runtime); }`
+block, so `runRpcMode` — the only place Pi attaches its JSONL stdin reader —
+is never entered.
+
+**(d) Which channel is the error emitted on?** **stderr.**
+`reportDiagnostics` and the `parseArgs` diagnostic loop both use
+`console.error`; the `parseArgs` path additionally exits before
+`runRpcMode`'s `takeOverStdout()` could redirect anything. Nothing about the
+message is written to stdout. There is no structured diagnostic channel.
+
+**(e) Is there a stable machine-observable outcome AR2's supervisor already
+exposes?** **Yes: the direct child terminates without answering.**
+`PiRpcSupervisor._wait` polls `self.process.poll()`; a child that exited
+without producing the awaited response yields `RUNTIME_EXITED_EARLY`. That is
+a declared AR2 constant, already produced by the frozen supervisor, requiring
+no stderr parsing at all.
+
+**The smallest truthful live observation** that establishes *no "unknown
+flag" startup rejection* is therefore: **AIDO's own argv contains only
+source-established options, AND the exact argv was launched and the runtime
+went on to answer AIDO's one correlated JSONL RPC command.** No semantic
+prompt, no second candidate, no network call, no second runtime, no raw
+secret retention, no version pin. No human stderr prose is parsed.
+
+## 4. Every supervisor protocol-violation trigger condition (Objective 3)
+
+`stdout_state()["protocol_violation"]` is set in exactly **five** places, all
+in `ar2.protocol`'s stdout framing/decoding path, and all assign a message
+STRING:
+
+1. `RecordStreamReader._run` — a blank framed record (`raw.strip()` empty);
+2. `decode_record` — an empty/whitespace-only record;
+3. `decode_record` — a record that is not valid UTF-8;
+4. `decode_record` — a record that is not strict JSON;
+5. `decode_record` — a record that is JSON but not an OBJECT.
+
+Enumerated and exercised offline in
+`test_lf1_every_protocol_violation_trigger_condition_is_enumerated`, which
+also proves the field is monotonic (the reader assigns once and returns) and
+that a clean stream leaves it at exactly `None`.
+
+**None of the five is a CLI-flag observation**, which is the structural
+reason the same bit must never serve both `required_launch_flags` and
+`protocol_integrity`.
+
+### Source-level Pi 0.84.4 protocol drift found: NONE
+
+* RPC-mode stdout is written through exactly one function,
+  `dist/modes/rpc/jsonl.js` `serializeJsonLine` —
+  ``return `${JSON.stringify(value)}\n`;`` — one JSON value, LF-only
+  framing, one record per line. Its header states the same LF-only rule
+  (and the same U+2028/U+2029 caveat) that `ar2.protocol` implements. Every
+  RPC emission (`output(...)`, responses, events, `extension_ui_request`)
+  goes through it, so no top-level non-object and no non-JSON record can be
+  produced by that path.
+* `runRpcMode` calls `takeOverStdout()` as its **first** statement
+  (`dist/core/output-guard.js`), which replaces `process.stdout.write` with a
+  writer that redirects to **stderr** and routes protocol output through the
+  retained raw handle. For the whole RPC lifetime, any stray
+  `console.log`/`process.stdout.write` lands on stderr, not on the protocol
+  channel.
+* The only unguarded stdout writers in the package are on paths AIDO's argv
+  does not reach: `--version`, `--export`, `printHelp`, the auth/list-models/
+  session-picker/config commands, interactive/TUI mode, and the session-
+  resume prompts (AIDO passes `--no-session` and neither `--continue` nor
+  `--resume`). `printTimings` writes to stderr and is inert unless
+  `PI_TIMING=1`. `core/model-resolver.js` `restoreModelFromSession` contains
+  three `console.log` calls but has **no caller anywhere in `dist/`** — dead
+  code in this build.
+* The AR2 disposable extension AIDO writes contains no `console.*` and no
+  `process.stdout` write at all.
+
+`test_lf1_pi_rpc_output_shape_is_accepted_by_the_frozen_parser` models Pi's
+exact `serializeJsonLine` shape for the record kinds a zero-prompt run can
+see — including a payload carrying real U+2028/U+2029 — and proves the frozen
+parser accepts every one with `protocol_violation is None`.
+
+> **Source-supported possible causes vs. actual observed cause.** The five
+> conditions above are the complete set of *source-supported possible*
+> causes. The **actual observed cause** of the live run's
+> `required_flags_accepted=False` is the unsatisfiable type check in §1 — a
+> defect that fires with or without any of them. **No claim is made that the
+> live run hit any specific protocol-violation condition**; the retained
+> artifact did not keep the raw offending record, and no source-level drift
+> in Pi 0.84.4 that could produce one for AIDO's argv was found.
+
+## 5. The corrected `required_flags_accepted` producer (Objective 4)
+
+```
+required_flags_accepted =
+    argv_options_are_source_established(argv)      # AIDO's OWN argv
+    AND lf_jsonl_correlation_succeeded             # the runtime answered
+```
+
+with the proof chain stated in full at the definition site:
+
+```
+exact argv AIDO constructed            (every option token source-established)
++ Pi CLI parser behaviour from current package source
+      (unknown flag -> error diagnostic -> stderr -> process.exit(1),
+       strictly BEFORE runRpcMode is entered)
++ exact observed runtime behaviour
+      (the child consumed AIDO's one JSONL command and returned a
+       correlated response, so runRpcMode ran)
+=> no "unknown flag" startup rejection
+```
+
+This is the same evidence shape frozen AR2/O1 already accepted for its own
+`required_launch_flags_accepted` (`run_o1.py`: the `build_pi_argv` argv was
+accepted because the process reached H1/H2 without an early exit), and O1
+likewise kept `no_protocol_violation_during_handshake` as a **separate**
+fact.
+
+**It is deliberately NOT a rename of "no protocol violation", and it is
+deliberately NOT a collapse into LF correlation.** The argv half is checked
+against AIDO's own argv before any runtime behaviour is consulted and fails
+closed on its own: `test_lf1_unestablished_argv_option_denies_required_flags_
+accepted` shows a correlated RPC response is *not* sufficient when the argv
+carries an option whose recognition was never source-established.
+`test_lf1_required_flags_producer_reads_no_protocol_violation_bit` pins, at
+source level, that `protocol_violation` appears nowhere in the assignment.
+
+**One further misattribution corrected alongside it.**
+`RUNTIME_EXITED_EARLY` was missing from
+`_RECOGNIZED_AWAIT_RESPONSE_OUTCOMES`, so a genuine early exit — exactly the
+unknown-flag rejection shape — made `launch_shape_valid` `False` and failed
+the *earlier* `rpc_launch_shape` gate. The Node-direct `--mode rpc` launch
+shape was in fact constructed and launched correctly in that case; what
+failed was flag acceptance. The tuple is now the exact, complete reachable
+return domain of `PiRpcSupervisor._wait` (`RUNTIME_SETTLED` and
+`RUNTIME_LAUNCH_FAILED` remain out, because `await_response` cannot produce
+them).
+
+The four launch facts remain four distinct facts: `observed_pi_version`,
+`launch_shape_valid`, `required_flags_accepted`,
+`lf_jsonl_correlation_succeeded`.
+
+## 6. Independence of required flags and protocol integrity (Objectives 5, 6)
+
+`observe_protocol` already read the supervisor's **cumulative** state, and
+still does: `RecordStreamReader.protocol_violation` is assigned exactly once
+(the reader thread then returns), nothing clears it, and `stdout_state()`
+republishes that same live field on every call. Correcting
+`required_flags_accepted` therefore cannot make a launch-window violation
+disappear — only its type projection needed fixing, which it got
+(`_protocol_violation_observed`, shared by both call sites).
+
+Proven end to end, in both directions:
+
+* `test_lf1_launch_window_protocol_violation_survives_to_protocol_observation`
+  — one real observation set yields `required_flags_accepted=True` **and**
+  `protocol_violation_observed=True`.
+* `test_lf1_required_flags_pass_while_protocol_integrity_fails` (frozen
+  controller) — `required_launch_flags = PASSED` alongside
+  `protocol_integrity = FAILED:PROTOCOL_VIOLATION_OBSERVED`.
+* `test_lf1_required_flags_fail_while_protocol_integrity_is_clean` (frozen
+  controller) — an unknown-flag rejection attributes to
+  `required_launch_flags`, leaves `rpc_launch_shape` PASSED, and leaves
+  `protocol_integrity` `NOT_REACHED`.
+
+### The bounded live diagnostic
+
+Three declared codes per run, recorded at the **L1 harness/live-run level
+only**. The frozen `RuntimeLaunchObservation` and the frozen
+`CategoryBEvidence` schema are untouched, so frozen I2B is not reopened; the
+harness attaches it as a SIBLING of `evidence`, never inside it.
+
+```
+launch_diagnostics: {
+  "<run_id>": {
+    "argv_options":           argv_options_all_source_established
+                            | argv_option_not_source_established
+    "launch_correlation":     correlated_rpc_response_received
+                            | no_response_runtime_exited_early
+                            | no_response_deadline_expired
+                            | no_response_protocol_violation
+                            | no_response_output_cap_exceeded
+                            | no_response_event_cap_exceeded
+                            | no_response_read_error
+                            | no_response_unrecognized_outcome
+    "launch_window_protocol": launch_window_protocol_violation_observed
+                            | launch_window_protocol_violation_not_observed
+  }
+}
+```
+
+Raw observations are reduced to these literals at the moment of observation
+and the raw values are dropped. A future zero-prompt refusal reads as
+`no_response_runtime_exited_early` for an unknown-flag rejection and as
+`launch_window_protocol_violation_observed` for a launch-window protocol
+violation — no raw log needed. Retained: nothing else. **Never** raw stdout,
+raw stderr, a raw RPC object, an endpoint, an API key, a broker token, a pipe
+name, a capability id, an absolute workspace path, an argv token, or a
+violation message —
+`test_lf1_launch_diagnostic_values_are_declared_codes_only` and
+`test_lf1_live_harness_diagnostic_passes_the_qualification_scrub` prove it,
+the latter through the package's own `qualification_scrub_check` under a
+context declaring the run's real broker token, pipe name, capability id,
+endpoint host, API key and absolute workspace path as needles.
+
+## 7. Pi version 0.84.4 (Objective 7)
+
+**No authorization rule changed. Pi version remains PROVENANCE ONLY.** Both
+facts stand and neither supersedes the other:
+
+```
+historical source-inspection baseline : 0.84.3
+first L1 live observation             : 0.84.4   (Candidate A, first
+                                                  Category-B attempt)
+```
+
+The LF1 source inspection in §3 was performed against the **installed
+0.84.4** package. `test_lf1_pi_version_mismatch_alone_never_rejects` proves
+0.84.3, 0.84.4 and an unreleased version all produce identical launch facts,
+and `test_lf1_no_version_string_is_consulted_by_the_corrected_producer`
+proves no version literal appears in the corrected machinery. No
+exact-version authorization gate was introduced.
+
+## 8. Files changed
+
+| file | change |
+|---|---|
+| `qualification/i2b_live_adapters.py` | corrected `required_flags_accepted` producer + its proof chain; new `_argv_options_are_source_established`, `_protocol_violation_observed`, `LaunchDiagnostic`/`_launch_diagnostic`/`launch_diagnostics()`; `RUNTIME_EXITED_EARLY` added to the recognized outcome domain; `observe_protocol` type projection fixed; module docstring |
+| `run_i2b_live.py` | attaches `launch_diagnostics` to the run summary, beside (never inside) the frozen evidence |
+| `tests/test_i2b_live_adapters.py` | supervisor double's `protocol_violation` contract corrected to `str \| None`; two superseded misattribution tests replaced; LF1 regressions added |
+| `tests/test_i2b_controller.py` | two frozen-controller gate-independence regressions (no controller source change) |
+| `FINDINGS.md` | this section |
+
+**Not changed:** the frozen I2B controller source, `qualification/
+i2b_session.py`, `qualification/i2b_workspace.py`, anything under `ar2/`,
+anything under `o1/`, `src/`, `CLAUDE.md`, and the retained live result
+artifact.
+
+## 9. Offline regression counts
+
+| suite | before LF1 | after LF1 |
+|---|---|---|
+| `pi_implementer_qualification` | 1165 passed | 1187 passed |
+| `pi_external_runtime_ar2` | 298 passed | 298 passed |
+| `pi_external_runtime_ar1` | 96 passed | 96 passed |
+| `pi_external_runtime_ar2_o1` | 89 passed | 89 passed |
+| root production `tests/` | 3504 passed | 3504 passed |
+
+Net **+22** in the qualification suite = **24 new LF1 regressions**
+(`pytest -k lf1` collects exactly 24: 22 in `test_i2b_live_adapters.py`,
+counting the 3 parametrizations of the version test as 3, plus 2 in
+`test_i2b_controller.py`) **minus the 2 superseded misattribution tests they
+replace** (`test_launch_runtime_protocol_violation_denies_required_flags_
+accepted` and `test_launch_runtime_malformed_protocol_violation_type_fails_
+closed`, both of which asserted exactly the behaviour LF1 corrects).
+
+The four other suites are unchanged in count and content: LF1 touched no
+file under `ar2/`, `o1/` or `src/`.
+
+## 10. No-live confirmation
+
+**No live attempt was made during LF1, and none is authorized.** Candidate A
+was not re-run and must not be. Candidate B: **NO-GO**. Q1/Q2: **NO-GO**.
+Real-workspace authority: **NO-GO**. Zero prompts were sent; no `/models`
+call was made; no real credential, broker, pipe, Node process or Pi process
+was created. The Pi 0.84.4 inspection was pure filesystem reading of the
+installed package — the runtime was never launched, not even for
+`--version`. Every regression above uses the established synthetic
+doubles under pytest `tmp_path`, with no socket, no subprocess and no
+environment credential.
+
+## 11. What LF1 does NOT establish
+
+* It does **not** establish that the live run's runtime was Category-B
+  compatible. `required_launch_flags` is one gate of many, and the live run
+  never reached `get_commands`, `h1`, `get_state`, `h2`,
+  `protocol_integrity` or `route_check`. **Candidate A remains NOT YET
+  QUALIFIED.**
+* It does **not** establish what would happen on a corrected live run. The
+  corrected producer is proven against synthetic doubles only; whether the
+  real runtime returns a correlated response is precisely what a future,
+  separately authorized live attempt would observe.
+* It does **not** prove the live run had no protocol violation. What it
+  proves is narrower: an unknown-flag rejection is ruled out conclusively
+  (§1), the pre-LF1 producer would have reported `required_flags_accepted=
+  False` with or without a violation, no source-level Pi 0.84.4 cause for one
+  was found (§4), and — only if `_wait`'s ordinary loop path was the one
+  taken, which the artifact does not record — none had been detected up to
+  the moment the correlated response was accepted. A violation is neither
+  established nor excluded by the retained evidence, and this section does
+  not claim otherwise.
+* The argv self-check is a fact about AIDO's OWN argv vocabulary against the
+  CURRENTLY installed Pi source. It is not a guarantee about a future Pi
+  build, and a future `build_pi_argv` change must re-establish the added
+  option's recognition in the same commit — the check fails closed until it
+  does, which is the intended behaviour, not a defect.
+* Nothing here weakens any standing scope claim: no fixer, no
+  model-backed implementer, no second candidate, no semantic prompt path,
+  no agent loop, no descendant/inference/GPU claim, and redaction/scrubbing
+  remain backstops, not guarantees.
+
+---
+
+# 5F3B-I2B-L1-LF1-FU1 — Required-Flag / LF-Correlation Independence Closure
+
+**Everything in this section is OFFLINE. No live attempt was made, no
+Node/Pi process was launched, no broker or named pipe was opened, no
+`/models` request was issued, no real credential was read, and no semantic
+prompt exists anywhere in this work.** Candidate A was not re-run and
+Candidate B was not run. The one retained live artifact
+(`results/i2b_live_A_20260831T192543Z.json`) is unedited.
+
+## 1. The blocker
+
+LF1's corrected producer still computed the required-flag fact as a
+conjunction with the LF-correlation fact:
+
+```text
+required_flags_accepted = argv_options_source_established
+                          and lf_jsonl_correlation_succeeded
+```
+
+The implication that expression rests on is sound in ONE direction:
+
+```text
+correlated RPC response  =>  Pi entered runRpcMode
+                         =>  no unknown-option startup rejection occurred
+```
+
+The reverse is not:
+
+```text
+no correlated response   =/=>  an unknown CLI flag was rejected
+```
+
+The frozen controller evaluates
+
+```text
+RPC_LAUNCH_SHAPE -> REQUIRED_LAUNCH_FLAGS -> LF_JSONL_CORRELATION -> ...
+                 -> PROTOCOL_INTEGRITY
+```
+
+and reads `required_flags_accepted=False` on a trusted session as
+`REQUIRED_LAUNCH_FLAGS_REJECTED`. So every correlation failure was
+attributed FIRST as an unknown-flag rejection. The four launch facts existed
+as four fields, but `LF correlation false => required flags false` was a hard
+producer invariant, so two of them were not observationally independent.
+
+## 2. Pre-fix reproduction (six outcomes)
+
+Reproduced offline against the synthetic supervisor double, with AIDO's own
+argv source-established and no unknown-option observation in any case. Each
+row is the `RuntimeLaunchObservation` the LF1 producer actually returned,
+followed by what the **unmodified** frozen controller then reported when
+driven end to end over the real live adapters:
+
+| `await_response` outcome     | argv src-est. | session | `launch_shape_valid` | `lf_..._succeeded` | `required_flags_accepted` | controller first failure |
+|------------------------------|---------------|---------|----------------------|--------------------|---------------------------|--------------------------|
+| `RUNTIME_DEADLINE_EXPIRED`   | True          | yes     | True                 | False              | **False**                 | `required_launch_flags` / `REQUIRED_LAUNCH_FLAGS_REJECTED` |
+| `RUNTIME_PROTOCOL_VIOLATION` | True          | yes     | True                 | False              | **False**                 | `required_launch_flags` / `REQUIRED_LAUNCH_FLAGS_REJECTED` |
+| `RUNTIME_OUTPUT_CAP_EXCEEDED`| True          | yes     | True                 | False              | **False**                 | `required_launch_flags` / `REQUIRED_LAUNCH_FLAGS_REJECTED` |
+| `RUNTIME_EVENT_CAP_EXCEEDED` | True          | yes     | True                 | False              | **False**                 | `required_launch_flags` / `REQUIRED_LAUNCH_FLAGS_REJECTED` |
+| `RUNTIME_READ_ERROR`         | True          | yes     | True                 | False              | **False**                 | `required_launch_flags` / `REQUIRED_LAUNCH_FLAGS_REJECTED` |
+| `RUNTIME_EXITED_EARLY`       | True          | no cause| True                 | False              | **False**                 | `required_launch_flags` / `REQUIRED_LAUNCH_FLAGS_REJECTED` |
+
+All six were misattributed. None of them mechanically proves an
+unknown-option startup rejection; `RUNTIME_EXITED_EARLY` is *compatible* with
+one but is equally produced by any other pre-RPC child exit.
+
+No frozen controller source was edited to obtain this. The controller behaved
+exactly as designed — it mapped a FALSE adapter fact to that failure code —
+and the defect was, again, in the producer of the fact.
+
+## 3. The corrected evidence rules (three states)
+
+Required-flag evidence is now classified internally into three states
+(`qualification/i2b_live_adapters.py`,
+`_classify_required_flag_evidence`). The frozen
+`RuntimeLaunchObservation` and the frozen controller are unchanged — neither
+gained a third state.
+
+**ACCEPTED** — decided FIRST, and it is LF1's positive proof, unchanged:
+
+```text
+actual argv is source-established
+  AND the exact runtime returned a correlated RPC response
+=> Pi entered runRpcMode
+=> no unknown-option startup rejection occurred
+```
+
+Both unknown-option exits (`dist/cli/args.js` `parseArgs` → an error
+diagnostic → `process.exit(1)`; `dist/core/agent-session-services.js`
+`applyExtensionFlagValues` → a runtime error diagnostic →
+`reportDiagnostics` → `process.exit(1)`) run strictly before the
+`appMode === "rpc"` branch that awaits `runRpcMode`, so a rejected option
+cannot answer an RPC command. The actual-argv check was NOT removed.
+
+**REJECTED** — only when a bounded startup diagnostic specifically
+establishes that Pi rejected an option **present in AIDO's own argv**. It is
+never inferred from a process exit, a missing response, a deadline, a
+protocol violation, an output/event cap, or a read error.
+
+**INDETERMINATE** — everything else, including: a deadline; a protocol
+violation without a correlated response; an output cap; an event cap; a read
+error; a generic early exit with no unknown-option observation; an
+unreadable, truncated or ambiguous diagnostic; and an argv whose options are
+not source-established **even when a correlated response did arrive** (that
+case is a fail-closed refusal about AIDO's own argv vocabulary, and is
+emphatically not a claim that Pi rejected anything).
+
+`_classify_required_flag_evidence` reads **no supervisor outcome constant at
+all**, so no outcome can become a proxy for flag rejection by drift.
+
+## 4. How INDETERMINATE maps into the frozen controller without lying
+
+The frozen `RuntimeLaunchObservation` carries one `bool`. For an
+indeterminate launch, `True` would fabricate a proof that was never obtained
+and `False` would invent a cause more specific than what was observed. There
+is therefore **no truthful session-bearing observation** for that state.
+
+So an indeterminate launch fails **earlier**, at the adapter's own
+runtime-launch boundary, through the existing creator-retained cleanup
+contract:
+
+```text
+INDETERMINATE
+  -> _retain_and_close_partial_runtime(...)      (exactly ONE bounded self-close)
+  -> RuntimeLaunchObservation(session=None, ...)
+  -> frozen controller: RUNTIME_LAUNCH = FAILED:RUNTIME_LAUNCH_FAILED
+  -> RPC_LAUNCH_SHAPE / REQUIRED_LAUNCH_FLAGS / LF_JSONL_CORRELATION
+     / PI_VERSION_OBSERVED  = NOT_REACHED
+```
+
+`RUNTIME_LAUNCH_FAILED` is the honest statement "this launch produced no
+trustworthy runtime session", and `REQUIRED_LAUNCH_FLAGS` is never told a
+rejection happened.
+
+Two things make this truthful rather than merely convenient:
+
+1. **The frozen controller already sanctions exactly this shape.** Its
+   `_RUNTIME_LAUNCH_STATUSES_WITH_VALID_OBSERVATION_BUT_OWN_GATE_UNREACHED`
+   names `RUNTIME_LAUNCH_FAILED` as one of the two statuses at which a
+   genuinely-consumed observation's four launch facts may each stand
+   independently while their own gates read `NOT_REACHED`. Nothing was added
+   to the controller to accommodate FU1; this is pinned by three new
+   regressions in `tests/test_i2b_controller.py` (controller **source**
+   unmodified).
+2. **The facts the launch DID establish are carried through, not flattened.**
+   `_retain_and_close_partial_runtime` gained three optional parameters
+   (`launch_shape_valid`, `lf_jsonl_correlation_succeeded`,
+   `observed_pi_version`), all defaulting to the conservative values every
+   pre-existing caller genuinely observed. So an indeterminate launch reports
+   a valid launch shape, the observed Pi version, and — in the
+   argv-not-source-established case — an LF correlation that genuinely DID
+   succeed. `required_flags_accepted` is always `False` there and is
+   deliberately **not** a parameter: with no session there is no gate to
+   interpret it, so it means "not established by this launch", never
+   "rejected".
+
+`resource_created`, `cleanup_attempted` and `direct_child_reported_exit` are
+preserved truthfully, exactly one self-close is performed, and a self-close
+that itself raises is reported as an unverified postcondition rather than
+erasing the primary failure (BLOCKER 3 still holds on the new path).
+
+This mapping was **not** chosen to make `LF_JSONL_CORRELATION` reachable — it
+makes that gate *unreachable* for these outcomes. It was chosen because
+failing closed is truthful and inventing a more specific cause is not.
+
+## 5. Was `stderr_snapshot` needed, and what is its bounded reduction
+
+**Yes.** Without a mechanism to establish a rejection, `REJECTED` would be
+unreachable and `REQUIRED_LAUNCH_FLAGS_REJECTED` could never be produced from
+a real observation at all. The existing **public**
+`PiRpcSupervisor.stderr_snapshot()` surface is used, in exactly one place
+(`_unknown_option_rejection_established`), reached only when the positive
+acceptance proof did not hold — so the ordinary passing path never reads raw
+stderr at all.
+
+The unknown-option emission path was established from the **currently
+installed** package source, offline:
+
+* `dist/cli/args.js` `parseArgs` pushes `{type: "error", message: "Unknown
+  option: <arg>"}` for a single-dash token matching no branch, and records
+  unrecognized long options in `unknownFlags`;
+* `dist/core/agent-session-services.js` `applyExtensionFlagValues` turns any
+  `unknownFlags` name no loaded extension registered into
+  `{type: "error", message: "Unknown option: --<name>"}` — or
+  `"Unknown options: --<a>, --<b>"` for more than one;
+* `dist/main.js` prints both through `chalk` to **stderr** with an
+  `"Error: "` prefix and calls `process.exit(1)`, in both cases strictly
+  before the `appMode === "rpc"` branch.
+
+The matched shape is therefore the smallest one that is mechanically
+justified: an `Error: `-prefixed line (only error diagnostics reach
+`process.exit(1)`; a `Warning:` line is refused) whose message is exactly
+`Unknown option: …` / `Unknown options: …`, with `chalk`'s SGR wrapper
+stripped, and with **every** named token required to be an option token
+present in AIDO's own argv. `_argv_option_tokens` walks AIDO's argv the way
+`parseArgs` walks it (value-taking options consume the next token;
+`--name=value` carries its own; an unrecognized long option consumes a
+following token only when it starts with neither `-` nor `@`) and collects
+**option tokens only** — never a value, so no absolute extension path can be
+collected.
+
+It fails closed on: a non-mapping snapshot; `captured` not exactly `True`;
+`read_error is not None`; `cap_exceeded` not exactly `False`;
+`bytes_seen != bytes_retained`; `bytes_retained` above the frozen
+4000-character `text_tail` bound (so a sliced tail is never read as
+complete); a non-`str` `text_tail`; a `stderr_snapshot()` call that raises;
+no matching line; and a matching line naming any option not in AIDO's argv.
+
+`eof` is deliberately **not** required, and the reason is stated rather than
+assumed: stream completeness matters only for an ABSENCE proof, and this
+function never makes one — it accepts only the POSITIVE presence of a
+diagnostic, and the checks above already prove nothing was dropped from what
+the reader saw. Requiring `eof` would add a race in which a genuine rejection
+reads as indeterminate because the reader thread had not yet seen
+end-of-stream.
+
+**The reduction is immediate and total.** The tail is scanned transiently and
+the function returns one `bool`. What is retained is one declared literal —
+`required_flags_accepted`, `required_flags_rejected_unknown_option`, or
+`required_flags_indeterminate` — added as the fourth field of the existing
+bounded `LaunchDiagnostic`. No stderr line, message, option name, byte count
+or fragment reaches a `RuntimeLaunchObservation`, a `CategoryBEvidence`, the
+launch diagnostics, the result JSON, or any exception text. The reducer
+refuses an undeclared classification outright, and its refusal message names
+no runtime value.
+
+## 6. `RUNTIME_EXITED_EARLY` is not proof
+
+`RUNTIME_EXITED_EARLY` remains in `_RECOGNIZED_AWAIT_RESPONSE_OUTCOMES` —
+that LF1 correction stands. Its prose is corrected:
+
+```text
+an unknown-option startup rejection is ONE source-supported cause of
+RUNTIME_EXITED_EARLY
+```
+
+not
+
+```text
+RUNTIME_EXITED_EARLY itself proves unknown-option rejection.
+```
+
+Proved two ways. Behaviourally: `RUNTIME_EXITED_EARLY` with no unknown-option
+observation classifies INDETERMINATE, identically to the other five
+outcomes, and hands over no session. At source level: no supervisor outcome
+constant appears in the **code** of `_classify_required_flag_evidence`,
+`_unknown_option_rejection_established` or `_argv_option_tokens` (the check
+strips docstrings, so the explanatory prose cannot satisfy or defeat it).
+
+## 7. Required flags vs LF correlation — independence
+
+| # | Claim | How proved |
+|---|-------|-----------|
+| 1 | ACCEPTED + LF PASS constructible | real launch, correlated response → `required_flags_accepted=True`, diagnostic `required_flags_accepted` |
+| 2 | ACCEPTED + LF FAIL | **not constructible, deliberately** — see below |
+| 4 | LF failure does not decide the flag fact | ONE fixed outcome (`RUNTIME_EXITED_EARLY`), TWO classifications: with the diagnostic → REJECTED (session handed over); without it → INDETERMINATE (no session) |
+| 5 | an established rejection maps to `required_flags_accepted=False` | driven end to end: frozen controller reports `required_launch_flags` / `REQUIRED_LAUNCH_FLAGS_REJECTED` |
+| 6 | generic early exit is not a rejection | INDETERMINATE, plus the source-level outcome-constant check |
+| 7 | deadline is not a rejection | INDETERMINATE |
+| 8 | protocol violation before a correlated response is not a rejection | INDETERMINATE |
+| 9 | output cap / event cap / read error are not rejections | INDETERMINATE |
+| 10 | indeterminate paths keep truthful creator ownership | `resource_created=True`, `cleanup_attempted=True`, one `shutdown()` call, truthful `direct_child_reported_exit` including the unverified and raising cases; no runtime record registered |
+| 11 | no raw stderr escapes | a stderr tail carrying an unknown-option line, a key-shaped string and a base URL is driven through the frozen controller; the serialized diagnostics + result contain none of it, and the only new exception names no runtime value |
+| 12 | no semantic prompt path | no new function names a prompt; the module still sends only `get_commands`/`get_state` |
+
+**On item 2, stated exactly.** ACCEPTED means "mechanical evidence
+establishes that no unknown-option startup rejection occurred". The only such
+evidence available in this phase is LF1's positive proof, whose runtime half
+*is* the correlated RPC response. So ACCEPTED alongside a failed LF
+correlation is **not constructible**, and that is the honest answer to the
+brief's "if and only if": no other mechanically-justified proof of acceptance
+exists here, and inventing one would be the fabrication FU1 exists to remove.
+
+That is not the coupling the blocker named. The defect was the *reverse*
+direction — LF correlation false FORCING required flags false — and that
+direction is now broken in both of its outcomes (rows 4–9).
+
+## 8. Required flags vs protocol integrity — independence
+
+* **Behaviourally.** A launch-window protocol violation changes nothing about
+  the flag classification: with a correlated response it is still ACCEPTED
+  (and the violation still survives to `observe_protocol`, so one real
+  observation set produces `required_launch_flags = PASSED` alongside
+  `protocol_integrity = FAILED:PROTOCOL_VIOLATION_OBSERVED`); without one it
+  is INDETERMINATE for exactly the reason it would have been with no
+  violation at all.
+* **At source level.** Neither `_protocol_violation_observed` nor
+  `stdout_state` appears anywhere in the classification chain, and
+  `required_flags_accepted` is now assigned from one thing only:
+  `required_flag_state == REQUIRED_FLAGS_ACCEPTED`.
+
+## 9. Second adversarial review — what was attacked, and the result
+
+| Attack | Result |
+|--------|--------|
+| deadline called an unknown flag | refused — INDETERMINATE |
+| protocol violation called an unknown flag | refused — INDETERMINATE |
+| output cap called an unknown flag | refused — INDETERMINATE |
+| event cap called an unknown flag | refused — INDETERMINATE |
+| read error called an unknown flag | refused — INDETERMINATE |
+| generic early exit called an unknown flag | refused — INDETERMINATE |
+| truncated stderr accepted as proof | refused — `cap_exceeded`, `bytes_seen != bytes_retained`, and `bytes_retained > 4000` each fail closed |
+| stderr read error accepted as proof | refused — `read_error is not None` fails closed |
+| `stderr_snapshot()` raising | refused — INDETERMINATE, never REJECTED |
+| `captured`/`cap_exceeded` reported by truthiness | refused — identity against the exact singletons |
+| unknown-option diagnostic for an option NOT in AIDO's argv | refused — including a message that also names a real AIDO option |
+| a `Warning:` unknown-option line | refused — only `Error:` reaches `process.exit(1)` |
+| the message shape embedded mid-line | refused — the diagnostic shape is anchored |
+| raw diagnostic leakage | refused — declared literals only, pinned by a whole-result JSON scan |
+| required-flags and LF-correlation re-coupled | refused — one outcome, two classifications |
+| required-flags and protocol-integrity re-coupled | refused — behavioural and source-level checks |
+
+**One further defect was found and fixed during this sweep**, in the tests
+rather than the module, and it is the same class of defect as LF1's own root
+cause: the synthetic supervisor double had no `stderr_snapshot` at all. It is
+now present **and pinned to the frozen AR2 source** — same keys, same
+declared value types, `read_error` typed `str | None` exactly as
+`BoundedStreamState.error` is, never a bool — so the double cannot silently
+disagree with the real class the way LF1's `protocol_violation` double did.
+The 4000-character `text_tail` bound is likewise asserted against
+`PiRpcSupervisor.stderr_snapshot`'s own source.
+
+## 10. Files changed
+
+| File | Change |
+|------|--------|
+| `qualification/i2b_live_adapters.py` | three-state classification, the bounded startup diagnostic, the argv option-token walk, the fourth `LaunchDiagnostic` field, the INDETERMINATE launch-boundary mapping, three optional parameters on `_retain_and_close_partial_runtime`, corrected `RUNTIME_EXITED_EARLY` prose |
+| `tests/test_i2b_live_adapters.py` | the FU1 section (pre-fix reproduction as a regression, independence tests 1–12, the adversarial sweep, the double/real conformance pin) plus the six existing tests whose expectations the correction changes |
+| `tests/test_i2b_controller.py` | three regressions pinning the frozen shape FU1 maps onto — **controller source unmodified** |
+| `run_i2b_live.py` | comment only: the stale claim that an unknown-flag rejection "reads `launch_correlation: no_response_runtime_exited_early`" is corrected, and the new `required_launch_flags` diagnostic field is described |
+| `FINDINGS.md` | this section, plus explicit time scope on historical present-perfect status claims |
+| `README.md` | explicit time scope on historical present-perfect status claims, plus the FU1 pointer |
+
+Not modified: `qualification/i2b_controller.py`, `qualification/i2b_session.py`,
+`qualification/i2b_workspace.py`, AR1, AR2, D1, O1, `src/`, `projects/`,
+`CLAUDE.md`, the first live result artifact.
+
+## 11. Offline validation
+
+```text
+experiments/pi_implementer_qualification    1258 passed, 0 failed
+experiments/pi_external_runtime_ar2           298 passed, 0 failed
+experiments/pi_external_runtime_ar1            96 passed, 0 failed
+experiments/pi_external_runtime_ar2_o1         89 passed, 0 failed
+root production tests (tests/)               3504 passed, 0 failed
+```
+
+Run separately, offline. No Candidate-A retry, no Candidate-B run, no real
+Node/Pi launch, no broker or named pipe, no `/models` call, no credential
+read, no semantic prompt, no real project workspace, no commit/push/PR.
+
+## 12. What this does NOT establish
+
+* It does **not** establish that any launch fact of the one retained live
+  attempt was different from what that artifact records. That artifact is
+  unedited, and FU1 re-ran nothing.
+* It does **not** prove that a future indeterminate launch had no
+  unknown-option rejection. INDETERMINATE means exactly what it says: the
+  evidence did not establish acceptance **or** rejection. The bounded
+  diagnostic makes no absence proof and none is claimed.
+* It does **not** make `LF_JSONL_CORRELATION` or `PROTOCOL_INTEGRITY`
+  reachable for a correlation-failing launch — it makes them unreachable,
+  because no trustworthy session exists to observe them through. That is the
+  intended fail-closed behaviour.
+* The stderr diagnostic is a fact about the **currently installed** Pi
+  source. It is not a guarantee about a future Pi build, and it introduces no
+  version gate: the observed version remains provenance only, nothing in the
+  new machinery reads or compares it.
+* Nothing here weakens any standing scope claim: no fixer, no model-backed
+  implementer, no second candidate, no semantic prompt path, no agent loop,
+  no descendant/inference/GPU claim, no real-workspace authority, and
+  redaction/scrubbing remain backstops, not guarantees.

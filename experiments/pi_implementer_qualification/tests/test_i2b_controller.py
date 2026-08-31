@@ -1794,6 +1794,120 @@ def test_runtime_state_3_cleanup_attempted_and_verified(
     assert result.outcome is CategoryBOutcome.INFRASTRUCTURE_REFUSAL
 
 
+# -- 5F3B-I2B-L1-LF1-FU1: the boundary an indeterminate launch maps onto -----
+
+
+def test_a_creator_retained_launch_may_report_the_facts_it_did_establish(
+    run_workspace: QualificationRunWorkspace,
+) -> None:
+    """The frozen shape 5F3B-I2B-L1-LF1-FU1 maps an INDETERMINATE required-flag
+    launch onto, pinned here against the UNMODIFIED controller.
+
+    The live adapter cannot express "flag acceptance could not be established"
+    in a ``bool``: ``True`` would fabricate a proof and ``False`` is read as
+    REQUIRED_LAUNCH_FLAGS_REJECTED. So it fails earlier, at the runtime-launch
+    boundary, and hands over no session -- while still reporting truthfully the
+    launch facts it DID establish (a valid launch shape, an observed Pi
+    version, and whatever the LF correlation actually did).
+
+    What this pins is that the controller accepts exactly that: RUNTIME_LAUNCH
+    itself fails with RUNTIME_LAUNCH_FAILED, all four launch-fact gates are
+    left NOT_REACHED -- so no rejection is ever named -- and the four recorded
+    facts are allowed to stand independently, which is what
+    ``_RUNTIME_LAUNCH_STATUSES_WITH_VALID_OBSERVATION_BUT_OWN_GATE_UNREACHED``
+    exists for. If this ever changes, the adapter mapping must be revisited
+    deliberately rather than silently becoming a lie.
+    """
+    harness = _Harness(
+        model_id=CANDIDATE_MODEL_IDS["A"],
+        launch_returns_no_session=True,
+        # the facts a creator-retained, indeterminate launch genuinely observed
+        launch_shape_valid=True,
+        required_flags_accepted=False,
+        lf_correlation=False,
+        pi_version=SYNTHETIC_PI_VERSION,
+        launch_resource_created=True,
+        launch_cleanup_attempted=True,
+        launch_direct_child_reported_exit=True,
+    )
+    result, harness = _run(run_workspace, harness=harness)
+
+    _assert_refusal(result)
+    assert result.failed_gate is CategoryBGateName.RUNTIME_LAUNCH
+    assert result.failure_code is CategoryBFailureCode.RUNTIME_LAUNCH_FAILED
+    for gate in (
+        CategoryBGateName.PI_VERSION_OBSERVED,
+        CategoryBGateName.RPC_LAUNCH_SHAPE,
+        CategoryBGateName.REQUIRED_LAUNCH_FLAGS,
+        CategoryBGateName.LF_JSONL_CORRELATION,
+    ):
+        assert result.gate_statuses[gate.value] == "NOT_REACHED"
+    # the truthful launch facts survive alongside those unreached gates
+    assert result.facts.rpc_launch_shape_valid is True
+    assert result.facts.pi_version_observed is True
+    assert result.facts.required_launch_flags_accepted is False
+    assert result.facts.lf_jsonl_correlation_succeeded is False
+    # no further live call was made against a session that never existed
+    assert harness.count("get_commands") == 0
+    assert harness.count("shutdown_runtime") == 0
+    assert result.semantic_prompts_sent == 0
+
+
+def test_a_creator_retained_launch_may_report_a_succeeded_lf_correlation(
+    run_workspace: QualificationRunWorkspace,
+) -> None:
+    """The same boundary, for the one indeterminate case in which the LF-framed
+    JSONL correlation genuinely DID succeed (AIDO's own argv vocabulary was
+    what could not be established). The fact is reported truthfully rather than
+    flattened, and it still names no rejection.
+    """
+    harness = _Harness(
+        model_id=CANDIDATE_MODEL_IDS["A"],
+        launch_returns_no_session=True,
+        launch_shape_valid=True,
+        required_flags_accepted=False,
+        lf_correlation=True,
+        pi_version=SYNTHETIC_PI_VERSION,
+        launch_resource_created=True,
+        launch_cleanup_attempted=True,
+        launch_direct_child_reported_exit=True,
+    )
+    result, harness = _run(run_workspace, harness=harness)
+
+    _assert_refusal(result)
+    assert result.failure_code is CategoryBFailureCode.RUNTIME_LAUNCH_FAILED
+    assert result.facts.lf_jsonl_correlation_succeeded is True
+    assert result.gate_statuses[CategoryBGateName.LF_JSONL_CORRELATION.value] == "NOT_REACHED"
+    assert result.gate_statuses[CategoryBGateName.REQUIRED_LAUNCH_FLAGS.value] == "NOT_REACHED"
+
+
+def test_a_trusted_session_with_rejected_flags_still_names_the_rejection(
+    run_workspace: QualificationRunWorkspace,
+) -> None:
+    """The other half of the FU1 mapping: a MECHANICALLY ESTABLISHED
+    unknown-option rejection keeps its session, so REQUIRED_LAUNCH_FLAGS_REJECTED
+    stays reachable -- and is attributed before LF_JSONL_CORRELATION, exactly as
+    the frozen gate order requires."""
+    harness = _Harness(
+        model_id=CANDIDATE_MODEL_IDS["A"],
+        launch_shape_valid=True,
+        required_flags_accepted=False,
+        lf_correlation=False,
+        pi_version=SYNTHETIC_PI_VERSION,
+    )
+    result, harness = _run(run_workspace, harness=harness)
+
+    _assert_refusal(result)
+    assert result.failed_gate is CategoryBGateName.REQUIRED_LAUNCH_FLAGS
+    assert result.failure_code is CategoryBFailureCode.REQUIRED_LAUNCH_FLAGS_REJECTED
+    assert result.gate_statuses[CategoryBGateName.RPC_LAUNCH_SHAPE.value] == "PASSED"
+    assert result.gate_statuses[CategoryBGateName.LF_JSONL_CORRELATION.value] == (
+        "FAILED:LF_JSONL_CORRELATION_FAILED"
+    )
+    assert harness.count("get_commands") == 0
+    assert result.semantic_prompts_sent == 0
+
+
 def test_runtime_state_4_cleanup_attempted_but_unverified(
     run_workspace: QualificationRunWorkspace,
 ) -> None:
@@ -2364,6 +2478,72 @@ def test_a_protocol_violation_is_an_explicit_compatibility_failure(
     assert result.failure_code is CategoryBFailureCode.PROTOCOL_VIOLATION_OBSERVED
     assert result.facts.no_protocol_violation_observed is False
     assert "route_checker" not in harness.calls
+
+
+def test_lf1_required_flags_pass_while_protocol_integrity_fails(
+    run_workspace: QualificationRunWorkspace,
+) -> None:
+    """5F3B-I2B-L1-LF1 test 6: the two gates are independent AT THE FROZEN
+    CONTROLLER, and the combination the corrected adapter can now produce is
+    one the frozen controller already supports and reports truthfully.
+
+    The first live Candidate-A attempt could not reach this shape, because
+    the L1 adapter fed the SAME launch-window protocol-violation bit into
+    ``required_flags_accepted``. With that corrected, a real run whose
+    observations genuinely are "required flags accepted, protocol violated"
+    reports exactly that: ``required_launch_flags = PASSED`` and
+    ``protocol_integrity = FAILED:PROTOCOL_VIOLATION_OBSERVED``.
+
+    Nothing in the frozen controller changed for this; it is asserted here so
+    a future change cannot quietly re-couple the two gates.
+    """
+    harness = _Harness(
+        model_id=CANDIDATE_MODEL_IDS["A"],
+        required_flags_accepted=True,
+        launch_shape_valid=True,
+        lf_correlation=True,
+        protocol_violation=True,
+    )
+    result, _ = _run(run_workspace, harness=harness)
+    _assert_refusal(result)
+    assert result.failed_gate is CategoryBGateName.PROTOCOL_INTEGRITY
+    assert result.failure_code is CategoryBFailureCode.PROTOCOL_VIOLATION_OBSERVED
+    assert result.gate_statuses[CategoryBGateName.RPC_LAUNCH_SHAPE.value] == "PASSED"
+    assert result.gate_statuses[CategoryBGateName.REQUIRED_LAUNCH_FLAGS.value] == "PASSED"
+    assert result.gate_statuses[CategoryBGateName.LF_JSONL_CORRELATION.value] == "PASSED"
+    assert (
+        result.gate_statuses[CategoryBGateName.PROTOCOL_INTEGRITY.value]
+        == "FAILED:PROTOCOL_VIOLATION_OBSERVED"
+    )
+    assert result.facts.required_launch_flags_accepted is True
+    assert result.facts.no_protocol_violation_observed is False
+
+
+def test_lf1_required_flags_fail_while_protocol_integrity_is_clean(
+    run_workspace: QualificationRunWorkspace,
+) -> None:
+    """5F3B-I2B-L1-LF1 test 6, the other direction.
+
+    A genuine unknown-CLI-flag startup rejection: the Node-direct ``--mode
+    rpc`` launch shape was valid, no protocol violation was ever observed,
+    and the required flags were not accepted. It must be attributed to
+    ``required_launch_flags``, not to the launch shape and not to protocol
+    integrity -- and ``protocol_integrity`` must never be reached, because
+    the earlier gate already failed.
+    """
+    harness = _Harness(
+        model_id=CANDIDATE_MODEL_IDS["A"],
+        launch_shape_valid=True,
+        required_flags_accepted=False,
+        lf_correlation=False,
+        protocol_violation=False,
+    )
+    result, _ = _run(run_workspace, harness=harness)
+    _assert_refusal(result)
+    assert result.failed_gate is CategoryBGateName.REQUIRED_LAUNCH_FLAGS
+    assert result.failure_code is CategoryBFailureCode.REQUIRED_LAUNCH_FLAGS_REJECTED
+    assert result.gate_statuses[CategoryBGateName.RPC_LAUNCH_SHAPE.value] == "PASSED"
+    assert result.gate_statuses[CategoryBGateName.PROTOCOL_INTEGRITY.value] == "NOT_REACHED"
 
 
 def test_an_extension_error_is_an_explicit_compatibility_failure(

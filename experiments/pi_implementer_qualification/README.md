@@ -1,19 +1,58 @@
 # Phase 5F3B-I1 / I2 -- Pi Implementer Qualification Corpus + Offline Harness
 
-> **OFFLINE QUALIFICATION HARNESS ONLY.**
 > **NO MODEL QUALIFICATION HAS OCCURRED.**
 > **NO CANDIDATE PASS/FAIL EXISTS YET.**
-> **NO ZERO-PROMPT LIVE GATE HAS RUN.**
+> **NO SEMANTIC PROMPT HAS EVER BEEN SENT.**
 > **5F3B-Q1 / Q2 ARE NOT AUTHORIZED.**
+> **CANDIDATE A IS NOT YET QUALIFIED. CANDIDATE B IS NO-GO.**
+
+> **Corrected 5F3B-I2B-L1: exactly ONE zero-prompt Category-B live attempt
+> has now occurred** (Candidate A, `results/i2b_live_A_20260831T192543Z.json`,
+> observed Pi `0.84.4`). It refused fail-closed at `required_launch_flags`
+> having sent **zero** semantic prompts, and it tore down, shut down and
+> cleaned up verifiably. It launched a real Node/Pi process, opened a real
+> named pipe and read a real credential, so the two blanket claims that
+> previously stood here -- "NO ZERO-PROMPT LIVE GATE HAS RUN" and "no
+> Pi/Node process has ever been launched from this package" -- are no longer
+> true and are corrected in place. **5F3B-I2B-L1-LF1** then established that
+> the refusal's ATTRIBUTION was wrong (an adapter type defect, not an
+> unknown-flag rejection) and corrected the producer; see
+> [FINDINGS.md](FINDINGS.md) section "5F3B-I2B-L1-LF1". The live artifact
+> itself is retained unedited. **No further live attempt is authorized.**
+>
+> **5F3B-I2B-L1-LF1-FU1** then found LF1's own correction still
+> over-attributing: it computed `required_flags_accepted` as
+> `argv_options_source_established and lf_jsonl_correlation_succeeded`, whose
+> reverse implication does not hold — **no correlated response does not imply
+> an unknown CLI flag was rejected** — so *every* correlation failure (a
+> deadline, a launch-window protocol violation, an output cap, an event cap, a
+> read error, a generic early exit) was reported as
+> `REQUIRED_LAUNCH_FLAGS_REJECTED`. Required-flag evidence is now three-state
+> internally — **ACCEPTED / REJECTED / INDETERMINATE** — and only the two
+> definite states reach the frozen `bool`: a rejection must be mechanically
+> established from a bounded startup diagnostic naming an option actually in
+> AIDO's own argv, and an indeterminate launch fails closed at the
+> runtime-launch boundary (no session, `RUNTIME_LAUNCH_FAILED`,
+> `required_launch_flags` left `NOT_REACHED`) rather than inventing a more
+> specific cause. Nothing was added to the frozen
+> `RuntimeLaunchObservation` or the frozen controller. See
+> [FINDINGS.md](FINDINGS.md) section "5F3B-I2B-L1-LF1-FU1".
+
+> **HOW TO READ THE HISTORICAL SECTIONS IN THIS FILE.** The per-phase status
+> blocks below are records written when each phase was accepted. Where one
+> says "Category-B live execution not run", read it as a fact **as of that
+> phase's acceptance** — superseded by the correction above, not a claim about
+> now. Nothing below is rewritten to pretend the live attempt did not happen,
+> and no historical result artifact is edited.
 
 **5F3B-I2 (route/credential offline machinery, slices I2-1 through I2-6) is
 now implemented, fully offline, per
 [`docs/PHASE_5F3B_I2A_B300_PI_ROUTE_CREDENTIAL_BOUNDARY_DESIGN.md`](../../docs/PHASE_5F3B_I2A_B300_PI_ROUTE_CREDENTIAL_BOUNDARY_DESIGN.md).**
 This establishes that the future live qualification route CAN be constructed
-safely -- it does NOT authorize using it. No Pi/Node process has ever been
-launched from this package, no HTTP/socket call has ever been made, no real
-`AIDO_LITELLM_*` value has ever been read, and no candidate model has ever
-been run.
+safely -- it does NOT authorize using it. Beyond the single 5F3B-I2B-L1
+Category-B attempt recorded above, no Pi/Node process has been launched from
+this package, and no candidate model has ever been run: that attempt sent
+zero semantic prompts and never reached a model call.
 
 **EXPERIMENT ONLY.** Not production code. Not a CLI command. Lives outside
 `src/`, adds no `ProjectConfig` field, and this whole directory may be
@@ -103,8 +142,11 @@ the accepted, frozen I2 scope):
 
 ## What I2B adds (offline wiring only)
 
-**I2B CONTROLLER WIRED OFFLINE. CATEGORY-B LIVE EXECUTION NOT RUN. NO
-CANDIDATE MODEL RUN. Q1/Q2 NO-GO.**
+**AS OF THE 5F3B-I2B ACCEPTANCE THIS SECTION RECORDS: I2B CONTROLLER WIRED
+OFFLINE. CATEGORY-B LIVE EXECUTION NOT YET RUN. NO CANDIDATE MODEL RUN.
+Q1/Q2 NO-GO.** (One zero-prompt Category-B live attempt has since occurred --
+see the corrected note at the head of this file. No candidate model has run,
+then or now.)
 
 `qualification/i2b_controller.py` (the state machine) and
 `qualification/i2b_session.py` (the run-scoped resource authority and the
@@ -384,10 +426,14 @@ immutability, the full safety context, and zero-prompt authority.
 
 Per the design's Section 24/23 roadmaps:
 
-- Any live Pi/Node process launch, RPC broker, or compatibility handshake --
-  including via `i2b_controller.py`/`i2b_session.py`, whose every live
-  boundary is an injected adapter this package never supplies a real
-  implementation for. No real live adapter exists anywhere in this package.
+- Any live Pi/Node process launch, RPC broker, or compatibility handshake,
+  **as of the 5F3B-I2 acceptance this list records** -- at that point every
+  live boundary of `i2b_controller.py`/`i2b_session.py` was an injected
+  adapter this package supplied no real implementation for, and no real live
+  adapter existed anywhere in it. (5F3B-I2B-L1 later added
+  `qualification/i2b_live_adapters.py`, the real live adapters, and ran one
+  zero-prompt Category-B attempt -- see the corrected note at the head of
+  this file. Nothing here authorizes another.)
 - Any real credential value read, anywhere, at any point.
 - A live qualification executor -- nothing here can run a candidate model.
 - Any model comparison result. The Section 26 comparison table in the design
@@ -821,10 +867,12 @@ successful Category-B shape (every typed closure object genuinely
 retention-ready evidence body mechanically bound to the exact result
 consuming it, and immutable results -- entirely through injected adapters
 and synthetic offline doubles.
-**I2B CONTROLLER WIRED OFFLINE. CATEGORY-B LIVE EXECUTION NOT RUN. NO
-CANDIDATE MODEL RUN. Q1/Q2 NO-GO.** See the "What I2B adds" section above
-for the full closure record, including what it deliberately does NOT
-claim.
+**AS OF THE 5F3B-I2B-FU2F ACCEPTANCE THIS SECTION RECORDS: I2B CONTROLLER
+WIRED OFFLINE. CATEGORY-B LIVE EXECUTION NOT YET RUN. NO CANDIDATE MODEL RUN.
+Q1/Q2 NO-GO.** See the "What I2B adds" section above for the full closure
+record, including what it deliberately does NOT claim. (One zero-prompt
+Category-B live attempt has since occurred -- see the corrected note at the
+head of this file.)
 
 **5F3B-I2B-FU2F verdict: COMPLETE. 5F3B-I2B verdict: READY FOR FINAL FREEZE
 REVIEW.** Category-B live execution, 5F3B-Q1/Q2 and real-workspace authority
@@ -835,8 +883,9 @@ semantic prompt, and reopens no accepted I2A/FU3 or
 5F3B-I2B-FU2/FU2A/FU2B/FU2C/FU2D/FU2E design decision. See the
 `5F3B-I2B-FU2F` section in `FINDINGS.md` for the full closure record.
 
-**This is still an offline-only implementation.** No zero-prompt live gate
-(I2A Sec. 15) has run, no candidate model has run, and 5F3B-Q1/Q2 (the first
-live candidate sweeps) remain **NOT authorized** and cannot execute until a
-future, separately authorized phase runs the Category B live gates on top of
-this machinery.
+**As of the 5F3B-I2B-FU2F acceptance recorded above, this was still an
+offline-only implementation:** no zero-prompt live gate (I2A Sec. 15) had
+run, and no candidate model had run. Exactly one zero-prompt live gate
+attempt has since occurred (5F3B-I2B-L1 -- see the corrected note at the head
+of this file); **no candidate model has run, then or now**, and 5F3B-Q1/Q2
+(the first live candidate sweeps) remain **NOT authorized**.

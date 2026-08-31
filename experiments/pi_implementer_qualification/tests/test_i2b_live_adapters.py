@@ -30,8 +30,10 @@ from __future__ import annotations
 
 import ast
 import inspect
+import io
 import json
 import os
+from dataclasses import dataclass
 from types import SimpleNamespace
 
 import pytest
@@ -46,12 +48,31 @@ from ar2.broker import (
 from ar2.launch import LaunchIdentityError, RuntimeIdentity
 from ar2.pi_config import SENTINEL_COMMAND_NAME
 from ar2.pi_config import TOOL_ALLOWLIST as AR2_TOOL_ALLOWLIST
+from ar2.launch import build_pi_argv
+from ar2.protocol import BoundedStreamState, RecordStreamReader
 from ar2.supervisor import (
     RUNTIME_DEADLINE_EXPIRED,
+    RUNTIME_EVENT_CAP_EXCEEDED,
+    RUNTIME_EXITED_EARLY,
     RUNTIME_LAUNCH_FAILED,
+    RUNTIME_OUTPUT_CAP_EXCEEDED,
+    RUNTIME_PROTOCOL_VIOLATION,
+    RUNTIME_READ_ERROR,
     RUNTIME_RESPONSE_RECEIVED,
+    RUNTIME_SETTLED,
+    PiRpcSupervisor,
     PiSupervisorError,
 )
+
+#: 5F3B-I2B-L1-LF1. What the FROZEN ``ar2.protocol.RecordStreamReader``
+#: actually assigns to ``protocol_violation`` when it observes one: a
+#: message STRING, never a bool. Tests modelling an observed violation use
+#: this; tests modelling "no violation" leave the double's field at ``None``.
+_SYNTHETIC_VIOLATION_MESSAGE = "protocol violation: a stdout record was not strict JSON"
+
+#: The genuine, unmodified ``build_pi_argv``, captured before any test
+#: monkeypatches the adapter module's reference to it.
+_real_build_pi_argv = build_pi_argv
 
 import qualification.i2b_live_adapters as live_module
 from qualification.i2_credentials import (
@@ -75,6 +96,11 @@ from qualification.i2b_live_adapters import (
     preflight_environment_forbidden_fragment_audit,
     preflight_pi_installed_offline,
     preflight_planned_cli_argv_shape,
+)
+from qualification.i2b_controller import (
+    CategoryBFailureCode,
+    CategoryBGateName,
+    run_category_b_controller,
 )
 from qualification.i2b_session import (
     BrokerCreationRequest,
@@ -227,7 +253,42 @@ class _FakeSupervisor:
         self.sent: list[dict] = []
         self.send_raises: Exception | None = None
         self.responses: dict[str, tuple[str, dict | None]] = {}
-        self._protocol_violation = False
+        #: 5F3B-I2B-L1-LF1 ROOT CAUSE. This used to default to ``False``, a
+        #: ``bool``, which is NOT the contract the real class publishes:
+        #: ``ar2.protocol.RecordStreamReader.protocol_violation`` is declared
+        #: ``str | None``, initialised to ``None``, and only ever assigned a
+        #: violation MESSAGE string, which ``PiRpcSupervisor.stdout_state()``
+        #: republishes verbatim. Because this double disagreed with the real
+        #: class, the whole offline suite validated the adapter against a
+        #: type the adapter would never actually see, and an adapter check
+        #: that was UNSATISFIABLE against real state passed here for free.
+        #: The default is now ``None`` -- "no protocol violation observed" --
+        #: exactly as the real reader starts. A test modelling an observed
+        #: violation assigns a MESSAGE STRING; a test modelling malformed,
+        #: out-of-contract state assigns some other type (a ``bool``
+        #: included, which is now itself out of contract).
+        self._protocol_violation: object | None = None
+        #: 5F3B-I2B-L1-LF1-FU1. The bounded startup-diagnostic surface the
+        #: corrected required-flag classification consults -- modelled on the
+        #: exact mapping the real ``PiRpcSupervisor.stderr_snapshot()``
+        #: publishes (``captured``/``bytes_seen``/``bytes_retained``/
+        #: ``cap_exceeded``/``eof``/``read_error``/``text_tail``, with
+        #: ``read_error`` typed ``str | None`` exactly as
+        #: ``BoundedStreamState.error`` is). The default models a clean,
+        #: complete, EMPTY stderr, so no test accidentally inherits an
+        #: unknown-option observation. ``stderr_text`` is the one knob most
+        #: tests set; ``bytes_seen``/``bytes_retained`` follow it unless a
+        #: test deliberately overrides them to model truncation.
+        self.stderr_captured: object = True
+        self.stderr_text: str = ""
+        self.stderr_cap_exceeded: object = False
+        self.stderr_eof: bool = True
+        self.stderr_read_error: object = None
+        self.stderr_bytes_seen_override: int | None = None
+        self.stderr_bytes_retained_override: int | None = None
+        self.stderr_snapshot_raises: Exception | None = None
+        self.stderr_snapshot_result_override: object = None
+        self.stderr_snapshot_calls = 0
         self.activity = SimpleNamespace(extension_errors=[])
         self.shutdown_calls = 0
         self.shutdown_result: dict = {"exit_status_observed": 0}
@@ -248,6 +309,31 @@ class _FakeSupervisor:
 
     def await_response(self, command_id: str, *, timeout_seconds: float):
         return self.responses.get(command_id, (RUNTIME_DEADLINE_EXPIRED, None))
+
+    def stderr_snapshot(self) -> dict:
+        self.stderr_snapshot_calls += 1
+        if self.stderr_snapshot_raises is not None:
+            raise self.stderr_snapshot_raises
+        if self.stderr_snapshot_result_override is not None:
+            return self.stderr_snapshot_result_override  # type: ignore[return-value]
+        encoded = len(self.stderr_text.encode("utf-8"))
+        return {
+            "captured": self.stderr_captured,
+            "bytes_seen": (
+                encoded
+                if self.stderr_bytes_seen_override is None
+                else self.stderr_bytes_seen_override
+            ),
+            "bytes_retained": (
+                encoded
+                if self.stderr_bytes_retained_override is None
+                else self.stderr_bytes_retained_override
+            ),
+            "cap_exceeded": self.stderr_cap_exceeded,
+            "eof": self.stderr_eof,
+            "read_error": self.stderr_read_error,
+            "text_tail": self.stderr_text,
+        }
 
     def stdout_state(self) -> dict:
         return {
@@ -1045,13 +1131,37 @@ def test_launch_runtime_never_re_resolves_identity(
     assert observation.observed_pi_version == SYNTHETIC_IDENTITY.reported_version
 
 
-def test_launch_runtime_protocol_violation_denies_required_flags_accepted(
+# -- 5F3B-I2B-L1-LF1 ----------------------------------------------------------
+#
+# LF1 test 4. The two tests that stood here before
+# (``..._protocol_violation_denies_required_flags_accepted`` and
+# ``..._malformed_protocol_violation_type_fails_closed``) asserted exactly
+# the misattribution LF1 corrects: they pinned a launch-window protocol
+# violation to ``required_flags_accepted is False``. They are REPLACED, not
+# merely deleted -- the protocol-violation observation itself is still
+# proven, at its own gate, by the ``observe_protocol`` tests below and by
+# ``test_lf1_launch_window_protocol_violation_survives_to_protocol_observation``.
+
+
+def test_lf1_launch_window_protocol_violation_does_not_deny_required_flags(
     run_workspace, patched, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """LF1 test 4: a protocol violation alone must NOT become an
+    unknown-flag rejection.
+
+    Frozen I2A section 15 item 3 defines ``required flags accepted`` as
+    "no 'unknown flag' startup rejection". A launch-window protocol
+    violation is not that fact and does not prove it; it belongs to the
+    separate, later ``protocol_integrity`` gate. **No unknown-flag
+    observation is present in this input**: the synthetic runtime accepted
+    the exact argv, entered RPC command processing, consumed AIDO's one
+    ``get_commands`` frame and returned a correlated response.
+    """
+
     def _make_supervisor(*, argv, cwd, environment, bounds):
         s = _FakeSupervisor(argv=argv, cwd=cwd, environment=environment, bounds=bounds)
         s.responses["h1"] = (RUNTIME_RESPONSE_RECEIVED, _successful_get_commands_response(run_workspace))
-        s._protocol_violation = True
+        s._protocol_violation = _SYNTHETIC_VIOLATION_MESSAGE
         patched.supervisors.append(s)
         return s
 
@@ -1059,21 +1169,30 @@ def test_launch_runtime_protocol_violation_denies_required_flags_accepted(
     adapters = _adapters()
     request = _launch_request_with_registered_broker(adapters, run_workspace, run_id="run-1002")
     observation = adapters.launch_runtime(request)
+    assert observation.launch_shape_valid is True
     assert observation.lf_jsonl_correlation_succeeded is True
-    assert observation.required_flags_accepted is False
+    assert observation.required_flags_accepted is True
 
 
-def test_launch_runtime_malformed_protocol_violation_type_fails_closed(
+def test_lf1_clean_run_real_supervisor_contract_accepts_required_flags(
     run_workspace, patched, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """BLOCKER 5: a ``protocol_violation`` flag that is not exactly a
-    ``bool`` must fail CLOSED (treated as a violation), never be coerced by
-    truthiness."""
+    """LF1 OBJECTIVE 1, corrected. THE LIVE REPRODUCTION.
+
+    This is the exact synthetic shape of the first live Candidate-A attempt,
+    expressed against the REAL supervisor contract
+    (``protocol_violation`` is ``str | None``; ``None`` means no violation):
+    ``launch_shape_valid`` True, LF correlation True, no violation, and **no
+    unknown-flag observation anywhere in the input**.
+
+    Before LF1 this produced ``required_flags_accepted=False`` -- the
+    unsatisfiable ``type(None) is not bool`` check meant EVERY real launch
+    reported a protocol violation. It now produces True.
+    """
 
     def _make_supervisor(*, argv, cwd, environment, bounds):
         s = _FakeSupervisor(argv=argv, cwd=cwd, environment=environment, bounds=bounds)
         s.responses["h1"] = (RUNTIME_RESPONSE_RECEIVED, _successful_get_commands_response(run_workspace))
-        s._protocol_violation = "false"  # malformed: a truthy non-bool
         patched.supervisors.append(s)
         return s
 
@@ -1081,23 +1200,599 @@ def test_launch_runtime_malformed_protocol_violation_type_fails_closed(
     adapters = _adapters()
     request = _launch_request_with_registered_broker(adapters, run_workspace, run_id="run-1002b")
     observation = adapters.launch_runtime(request)
+    assert observation.launch_shape_valid is True
+    assert observation.lf_jsonl_correlation_succeeded is True
+    assert observation.required_flags_accepted is True
+    # and the run is NOT quietly reclassified: nothing was observed to have
+    # violated the protocol either.
+    assert (
+        adapters.observe_protocol(observation.session).protocol_violation_observed is False
+    )
+
+
+def test_lf1_unknown_flag_rejection_denies_required_flags_accepted(
+    run_workspace, patched, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """LF1 test 2, as corrected by LF1-FU1: an unknown-CLI-flag startup
+    rejection that is MECHANICALLY ESTABLISHED, not merely inferred.
+
+    Established from the installed Pi package source, offline: an
+    unrecognized option becomes an error diagnostic on STDERR and
+    ``dist/main.js`` calls ``process.exit(1)`` strictly before ``runRpcMode``
+    is entered, so the child terminates without ever answering an RPC
+    command. The frozen supervisor's ``_wait`` reports
+    ``RUNTIME_EXITED_EARLY`` for that.
+
+    **FU1: the early exit is not the evidence -- the diagnostic is.** This
+    test therefore supplies the exact stderr shape the package emits AND an
+    option token actually present in AIDO's own argv, which is the only thing
+    that establishes REJECTED. (The companion test
+    ``test_lf1fu1_generic_early_exit_is_not_an_unknown_option_rejection``
+    proves the identical outcome constant WITHOUT that diagnostic is
+    INDETERMINATE instead.)
+
+    The correct attribution is then: the Node-direct ``--mode rpc`` launch
+    shape WAS valid (the process was constructed and launched), LF
+    correlation did not succeed, and the required flags were REJECTED -- so
+    the session IS handed over and the frozen controller can name the cause
+    exactly.
+    """
+
+    def _make_supervisor(*, argv, cwd, environment, bounds):
+        s = _FakeSupervisor(argv=argv, cwd=cwd, environment=environment, bounds=bounds)
+        s.responses["h1"] = (RUNTIME_EXITED_EARLY, None)
+        s.stderr_text = "Error: Unknown option: --offline\n"
+        patched.supervisors.append(s)
+        return s
+
+    monkeypatch.setattr(live_module, "PiRpcSupervisor", _make_supervisor)
+    adapters = _adapters()
+    request = _launch_request_with_registered_broker(adapters, run_workspace, run_id="run-1002c")
+    observation = adapters.launch_runtime(request)
+    assert observation.session is not None
+    assert observation.launch_shape_valid is True
+    assert observation.lf_jsonl_correlation_succeeded is False
+    assert observation.required_flags_accepted is False
+    assert adapters.launch_diagnostics()["run-1002c"] == {
+        "argv_options": live_module.ARGV_OPTIONS_SOURCE_ESTABLISHED,
+        "launch_correlation": live_module.CORRELATION_NONE_RUNTIME_EXITED_EARLY,
+        "launch_window_protocol": (
+            live_module.LAUNCH_WINDOW_PROTOCOL_VIOLATION_NOT_OBSERVED
+        ),
+        "required_launch_flags": live_module.REQUIRED_FLAGS_REJECTED_UNKNOWN_OPTION,
+    }
+
+
+def test_lf1_argv_options_are_all_source_established_for_the_real_argv() -> None:
+    """LF1 test 3, half (a) of the proof chain: AIDO's OWN argv.
+
+    Every option token the frozen, unmodified ``ar2.launch.build_pi_argv``
+    emits is a member of the source-established option set -- each one has
+    its own explicit recognizing branch in the installed Pi
+    ``dist/cli/args.js`` ``parseArgs``. This is a fact about AIDO's argv
+    vocabulary; it compares no version and authorizes nothing.
+    """
+    argv = build_pi_argv(
+        SYNTHETIC_IDENTITY,
+        extension_entry=r"C:\synthetic\experiment\pi_extension\index.ts",
+        tool_allowlist=AR2_TOOL_ALLOWLIST,
+        provider="synthetic-provider",
+        model="synthetic-model",
+    )
+    assert live_module._argv_options_are_source_established(argv) is True
+    # Every long option in the real argv is accounted for by name.
+    assert {token for token in argv if token.startswith("--")} == set(
+        live_module._PI_SOURCE_ESTABLISHED_LONG_OPTIONS
+    )
+
+
+def test_lf1_unestablished_argv_option_denies_required_flags_accepted(
+    run_workspace, patched, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """LF1 test 3, fail-closed direction, as corrected by LF1-FU1: the
+    runtime-behaviour half alone is NOT enough. An argv carrying an option
+    whose recognition was never source-established denies ACCEPTED even when
+    a correlated RPC response came back, so ``required_flags_accepted`` can
+    never silently collapse into ``lf_jsonl_correlation_succeeded``.
+
+    **FU1: denying ACCEPTED is not the same as asserting REJECTED.** A stale
+    AIDO argv vocabulary says nothing about what Pi did -- and the correlated
+    response in fact shows Pi rejected nothing -- so this is INDETERMINATE,
+    which fails closed at the runtime-launch boundary with NO session rather
+    than telling the frozen controller a rejection happened. The LF fact that
+    genuinely WAS established is still reported truthfully on the partial
+    observation.
+    """
+
+    def _make_supervisor(*, argv, cwd, environment, bounds):
+        s = _FakeSupervisor(
+            argv=tuple(argv) + ("--not-source-established",),
+            cwd=cwd,
+            environment=environment,
+            bounds=bounds,
+        )
+        s.responses["h1"] = (RUNTIME_RESPONSE_RECEIVED, _successful_get_commands_response(run_workspace))
+        patched.supervisors.append(s)
+        return s
+
+    monkeypatch.setattr(live_module, "PiRpcSupervisor", _make_supervisor)
+    monkeypatch.setattr(
+        live_module,
+        "build_pi_argv",
+        lambda identity, **kwargs: tuple(
+            _real_build_pi_argv(identity, **kwargs)
+        )
+        + ("--not-source-established",),
+    )
+    adapters = _adapters()
+    request = _launch_request_with_registered_broker(adapters, run_workspace, run_id="run-1002d")
+    observation = adapters.launch_runtime(request)
+    assert observation.session is None
+    assert observation.lf_jsonl_correlation_succeeded is True
+    assert observation.required_flags_accepted is False
+    assert observation.resource_created is True
+    assert observation.cleanup_attempted is True
+    assert observation.direct_child_reported_exit is True
+    diagnostic = adapters.launch_diagnostics()["run-1002d"]
+    assert diagnostic["argv_options"] == live_module.ARGV_OPTION_NOT_SOURCE_ESTABLISHED
+    assert diagnostic["required_launch_flags"] == live_module.REQUIRED_FLAGS_INDETERMINATE
+
+
+def test_lf1_argv_option_walker_fail_closed_cases() -> None:
+    """The argv self-check walks AIDO's argv the way Pi's parser does, and
+    fails closed on everything it does not positively recognize."""
+    head = (r"C:\node.exe", r"C:\pi\dist\cli.js")
+    check = live_module._argv_options_are_source_established
+    # a value-taking option consumes its following token, even a dashed one
+    assert check(head + ("--model", "-weird-model-id")) is True
+    # a value-taking option with no value left
+    assert check(head + ("--model",)) is False
+    # an unexpected positional
+    assert check(head + ("--offline", "a-stray-positional")) is False
+    # a single-dash short option (Pi recognizes several, AIDO emits none)
+    assert check(head + ("-nt",)) is False
+    # a truncated argv that cannot even carry the two program paths
+    assert check((r"C:\node.exe",)) is False
+
+
+def test_lf1_launch_window_protocol_violation_survives_to_protocol_observation(
+    run_workspace, patched, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """LF1 tests 5 and 6: independence, in the direction that matters.
+
+    A protocol violation observed during the LAUNCH WINDOW must not
+    disappear once ``required_flags_accepted`` stops consuming it. The frozen
+    ``RecordStreamReader.protocol_violation`` field is monotonic and
+    ``stdout_state()`` republishes it live, so the later, separate
+    ``observe_protocol`` call still reports it -- which is what lets a real
+    run truthfully produce ``required_launch_flags = PASSED`` alongside
+    ``protocol_integrity = FAILED:PROTOCOL_VIOLATION_OBSERVED``.
+    """
+
+    def _make_supervisor(*, argv, cwd, environment, bounds):
+        s = _FakeSupervisor(argv=argv, cwd=cwd, environment=environment, bounds=bounds)
+        s.responses["h1"] = (RUNTIME_RESPONSE_RECEIVED, _successful_get_commands_response(run_workspace))
+        s._protocol_violation = _SYNTHETIC_VIOLATION_MESSAGE
+        patched.supervisors.append(s)
+        return s
+
+    monkeypatch.setattr(live_module, "PiRpcSupervisor", _make_supervisor)
+    adapters = _adapters()
+    request = _launch_request_with_registered_broker(adapters, run_workspace, run_id="run-1002e")
+    launch_observation = adapters.launch_runtime(request)
+    assert launch_observation.required_flags_accepted is True
+
+    protocol_observation = adapters.observe_protocol(launch_observation.session)
+    assert protocol_observation.protocol_violation_observed is True
+    # LF1 test 6: the two facts are now genuinely independent -- from ONE
+    # real observation set, required flags PASS while protocol integrity
+    # FAILS.
+    assert launch_observation.required_flags_accepted is True
+    assert protocol_observation.protocol_violation_observed is True
+    assert adapters.launch_diagnostics()["run-1002e"] == {
+        "argv_options": live_module.ARGV_OPTIONS_SOURCE_ESTABLISHED,
+        "launch_correlation": live_module.CORRELATION_RESPONSE_RECEIVED,
+        "launch_window_protocol": live_module.LAUNCH_WINDOW_PROTOCOL_VIOLATION_OBSERVED,
+        "required_launch_flags": live_module.REQUIRED_FLAGS_ACCEPTED,
+    }
+
+
+def test_lf1_protocol_violation_projection_matches_the_frozen_ar2_contract() -> None:
+    """LF1 test 7: malformed diagnostic state fails closed, and the ONE
+    clean value is the one the frozen AR2 reader actually publishes.
+
+    The real contract is ``str | None``. ``None`` -- and only ``None`` -- is
+    "no violation". A ``bool`` is itself out of contract now, which is the
+    precise inversion of the defect: the old check treated a ``bool`` as the
+    only trustworthy shape and ``None`` as a violation.
+    """
+    project = live_module._protocol_violation_observed
+    assert project({"protocol_violation": None}) is False
+    assert project({"protocol_violation": _SYNTHETIC_VIOLATION_MESSAGE}) is True
+    assert project({"protocol_violation": ""}) is True
+    assert project({"protocol_violation": False}) is True
+    assert project({"protocol_violation": True}) is True
+    assert project({"protocol_violation": 0}) is True
+    assert project({"protocol_violation": object()}) is True
+    # a state mapping missing the key entirely is out of contract too
+    assert project({}) is True
+
+
+def test_lf1_every_protocol_violation_trigger_condition_is_enumerated() -> None:
+    """LF1 OBJECTIVE 3: EVERY condition that can set ``protocol_violation``.
+
+    Read from the frozen ``ar2.protocol`` source and exercised here against
+    a real ``RecordStreamReader`` over an in-memory stream. There are
+    exactly five, and all five live in the stdout framing/decoding path --
+    none of them is a CLI-flag observation, so none of them can prove or
+    disprove an unknown-flag startup rejection:
+
+      1. a blank framed record (``RecordStreamReader._run``);
+      2. an empty/whitespace-only record (``decode_record``);
+      3. a record that is not valid UTF-8;
+      4. a record that is not strict JSON;
+      5. a record that is JSON but not an OBJECT.
+
+    Every one of them assigns a MESSAGE STRING, never a bool -- which is the
+    contract the pre-LF1 adapter projection contradicted.
+    """
+    from ar2.protocol import ProtocolViolation, ReasoningDropStats, decode_record
+
+    # (2)-(5) are the decoder's own terminal conditions.
+    for raw in (
+        b"   ",  # whitespace only
+        b"\xff\xfe not utf-8",  # invalid UTF-8
+        b"{not json",  # not strict JSON
+        b"[1, 2, 3]",  # JSON, but not an object
+    ):
+        with pytest.raises(ProtocolViolation):
+            decode_record(raw)
+
+    # (1) plus (4), end to end through the real reader on a real pipe-like
+    # stream, proving the field is a STRING and that the reader stops.
+    for payload, fragment in (
+        (b'{"type":"a"}\n\n{"type":"b"}\n', "blank stdout record"),
+        (b'{"type":"a"}\nnot-json\n', "not strict JSON"),
+    ):
+        reader = RecordStreamReader(
+            io.BytesIO(payload),
+            max_bytes=1 << 20,
+            max_records=1000,
+            stats=ReasoningDropStats(),
+        )
+        reader.start()
+        reader.finished.wait(timeout=5.0)
+        assert isinstance(reader.protocol_violation, str)
+        assert fragment in reader.protocol_violation
+        # monotonic: the reader stopped, and nothing clears the field
+        assert reader.protocol_violation is not None
+
+    # A clean stream leaves it at exactly ``None`` -- the ONE value that
+    # means "no violation observed".
+    clean = RecordStreamReader(
+        io.BytesIO(b'{"type":"a"}\n{"type":"b"}\n'),
+        max_bytes=1 << 20,
+        max_records=1000,
+        stats=ReasoningDropStats(),
+    )
+    clean.start()
+    clean.finished.wait(timeout=5.0)
+    assert clean.protocol_violation is None
+    assert clean.record_count() == 2
+
+
+def test_lf1_pi_rpc_output_shape_is_accepted_by_the_frozen_parser() -> None:
+    """LF1 OBJECTIVE 3: no source-level Pi 0.84.4 RPC-shape drift.
+
+    Pi's RPC mode writes stdout through exactly one function,
+    ``dist/modes/rpc/jsonl.js`` ``serializeJsonLine``:
+
+        ``return `${JSON.stringify(value)}\n`;``
+
+    -- one JSON value, LF-only framing, one record per line, with that
+    file's own header stating the same LF-only rule the frozen AR2 parser
+    implements. Every RPC-mode emission (responses, events, extension UI
+    requests) goes through it, and ``runRpcMode`` calls
+    ``takeOverStdout()`` first, which redirects any OTHER
+    ``process.stdout.write`` to stderr for the rest of the run.
+
+    This models that exact shape for the record kinds AIDO's zero-prompt run
+    can see and proves the frozen parser accepts all of them, including the
+    U+2028/U+2029 case both sides call out explicitly.
+    """
+    from ar2.protocol import ReasoningDropStats, decode_record
+
+    def serialize_json_line(value) -> bytes:
+        # the Python equivalent of Pi's serializeJsonLine, ensure_ascii=False
+        # so a real U+2028 byte sequence is actually emitted
+        return (json.dumps(value, ensure_ascii=False) + "\n").encode("utf-8")
+
+    emissions = [
+        {"id": "h1", "type": "response", "command": "get_commands", "success": True,
+         "data": {"commands": []}},
+        {"id": "h2", "type": "response", "command": "get_state", "success": True,
+         "data": {"model": {"provider": "p", "id": "m"}}},
+        {"id": "x", "type": "response", "command": "get_state", "success": False,
+         "error": "synthetic"},
+        {"type": "extension_ui_request", "id": "u1"},
+        # a payload string carrying the separators Node readline would split
+        # on and strict JSONL must not -- the exact case both jsonl.js and
+        # ar2.protocol document
+        {"type": "message_end", "message": {"role": "assistant",
+                                            "content": "a\u2028b\u2029c"}},
+    ]
+    stream = b"".join(serialize_json_line(value) for value in emissions)
+    reader = RecordStreamReader(
+        io.BytesIO(stream), max_bytes=1 << 20, max_records=1000, stats=ReasoningDropStats()
+    )
+    reader.start()
+    reader.finished.wait(timeout=5.0)
+    assert reader.protocol_violation is None
+    assert reader.record_count() == len(emissions)
+    # and each record decodes on its own too
+    for value in emissions:
+        assert decode_record(serialize_json_line(value).rstrip(b"\n")) == value
+
+
+def test_lf1_prefix_defect_reproduction_old_projection_was_unsatisfiable() -> None:
+    """LF1 OBJECTIVE 1: the PRE-FIX defect, reproduced durably.
+
+    This evaluates the exact expression the adapter used before LF1 --
+
+        ``type(raw) is not bool or raw is True``
+
+    -- against the frozen AR2 contract's OWN value domain. It reports a
+    protocol violation for BOTH clean state (``None``) and violated state (a
+    message string), so it could never be False on a real run: the pre-fix
+    ``required_flags_accepted``, which ANDed ``not`` that expression, was
+    therefore False on every real launch regardless of what the runtime did.
+
+    **No unknown-flag observation is involved anywhere in this
+    reproduction.** The value domain below is exactly what
+    ``RecordStreamReader.protocol_violation`` can hold; the CLI parser, the
+    argv, and Pi's startup diagnostics play no part in it.
+    """
+
+    def _pre_lf1_projection(raw: object) -> bool:
+        return type(raw) is not bool or raw is True
+
+    # the two values the frozen reader can ACTUALLY publish
+    assert _pre_lf1_projection(None) is True  # no violation -> reported as one
+    assert _pre_lf1_projection(_SYNTHETIC_VIOLATION_MESSAGE) is True
+    # so "not protocol_violation_observed" was unreachable on a real run
+    assert not any(
+        not _pre_lf1_projection(raw) for raw in (None, _SYNTHETIC_VIOLATION_MESSAGE)
+    )
+    # the corrected projection separates them, which is the whole point
+    project = live_module._protocol_violation_observed
+    assert project({"protocol_violation": None}) is False
+    assert project({"protocol_violation": _SYNTHETIC_VIOLATION_MESSAGE}) is True
+
+
+def test_lf1_required_flags_producer_reads_no_protocol_violation_bit() -> None:
+    """LF1 OBJECTIVE 4 (LF1-FU1 form): source-level proof that the same bit
+    no longer serves two gates.
+
+    ``required_flags_accepted`` is now derived from ONE thing -- the declared
+    three-state classification -- and neither the launch-window
+    protocol-violation bit nor the launch-shape bit appears anywhere in the
+    classifier's own source, so a protocol violation cannot reach the
+    ``required_launch_flags`` gate by any path.
+    """
+    source = inspect.getsource(live_module.LiveCategoryBAdapters.launch_runtime)
+    assignment = next(
+        line for line in source.splitlines() if "required_flags_accepted = " in line
+    )
+    assert assignment.strip() == (
+        "required_flags_accepted = required_flag_state == REQUIRED_FLAGS_ACCEPTED"
+    )
+    classifier = inspect.getsource(live_module._classify_required_flag_evidence)
+    body = classifier[classifier.index('"""', classifier.index('"""') + 3) + 3 :]
+    assert "argv_options_source_established" in body
+    assert "lf_jsonl_correlation_succeeded" in body
+    assert "protocol_violation" not in body
+    assert "launch_shape_valid" not in body
+
+
+def test_lf1_frozen_ar2_publishes_protocol_violation_as_str_or_none() -> None:
+    """LF1 root-cause pin, read from the FROZEN AR2 source itself.
+
+    If this ever changes, the projection above must be revisited
+    deliberately rather than silently drifting back to a bool check.
+    """
+    reader_source = inspect.getsource(RecordStreamReader)
+    assert "self.protocol_violation: str | None = None" in reader_source
+    assert "self.protocol_violation = str(exc)" in reader_source
+    supervisor_source = inspect.getsource(PiRpcSupervisor.stdout_state)
+    assert '"protocol_violation": self._stdout.protocol_violation,' in supervisor_source
+
+
+def test_lf1_recognized_await_outcomes_are_the_exact_reachable_domain() -> None:
+    """LF1: ``RUNTIME_EXITED_EARLY`` is a real ``await_response`` outcome.
+
+    Read from the frozen supervisor source: ``_wait`` -- the only body
+    ``await_response`` returns from -- can return exactly these seven
+    outcomes. ``RUNTIME_EXITED_EARLY`` was missing from the adapter's
+    positive allowlist, which made a genuine early exit (the unknown-flag
+    rejection shape) fail the EARLIER ``rpc_launch_shape`` gate instead of
+    the required-flags gate.
+    """
+    wait_source = inspect.getsource(PiRpcSupervisor._wait)
+    terminal_source = inspect.getsource(PiRpcSupervisor._terminal_stream_outcome)
+    assert set(live_module._RECOGNIZED_AWAIT_RESPONSE_OUTCOMES) == {
+        RUNTIME_RESPONSE_RECEIVED,
+        RUNTIME_DEADLINE_EXPIRED,
+        RUNTIME_EXITED_EARLY,
+        RUNTIME_PROTOCOL_VIOLATION,
+        RUNTIME_OUTPUT_CAP_EXCEEDED,
+        RUNTIME_EVENT_CAP_EXCEEDED,
+        RUNTIME_READ_ERROR,
+    }
+    # every one of them is named by the frozen source that produces them
+    for name in ("RUNTIME_EXITED_EARLY", "RUNTIME_DEADLINE_EXPIRED", "RUNTIME_RESPONSE_RECEIVED"):
+        assert name in wait_source
+    for name in (
+        "RUNTIME_PROTOCOL_VIOLATION",
+        "RUNTIME_OUTPUT_CAP_EXCEEDED",
+        "RUNTIME_EVENT_CAP_EXCEEDED",
+        "RUNTIME_READ_ERROR",
+    ):
+        assert name in terminal_source
+    # and the two outcomes ``await_response`` genuinely cannot produce stay out
+    assert RUNTIME_SETTLED not in live_module._RECOGNIZED_AWAIT_RESPONSE_OUTCOMES
+    assert RUNTIME_LAUNCH_FAILED not in live_module._RECOGNIZED_AWAIT_RESPONSE_OUTCOMES
+
+
+def test_lf1_launch_diagnostic_values_are_declared_codes_only(
+    run_workspace, patched, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """LF1 test 8: nothing raw reaches the retained diagnostic.
+
+    Every value is a declared literal from
+    ``LAUNCH_DIAGNOSTIC_CODES``. The raw supervisor outcome string, the raw
+    protocol-violation MESSAGE, and every argv token (one of which is an
+    absolute extension path) are all reduced away at the moment of
+    observation and none of them appears anywhere in the diagnostic.
+    """
+    raw_outcome = "an-outcome-string-the-adapter-has-never-seen"
+
+    def _make_supervisor(*, argv, cwd, environment, bounds):
+        s = _FakeSupervisor(argv=argv, cwd=cwd, environment=environment, bounds=bounds)
+        s.responses["h1"] = (raw_outcome, None)
+        s._protocol_violation = _SYNTHETIC_VIOLATION_MESSAGE
+        patched.supervisors.append(s)
+        return s
+
+    monkeypatch.setattr(live_module, "PiRpcSupervisor", _make_supervisor)
+    adapters = _adapters()
+    request = _launch_request_with_registered_broker(adapters, run_workspace, run_id="run-1002f")
+    observation = adapters.launch_runtime(request)
+    # an unrecognized outcome still fails closed on the launch shape, and
+    # (LF1-FU1) is INDETERMINATE for the flags, so no session crosses over
+    assert observation.session is None
+    assert observation.launch_shape_valid is False
     assert observation.required_flags_accepted is False
 
+    diagnostic = adapters.launch_diagnostics()["run-1002f"]
+    assert set(diagnostic) == {
+        "argv_options",
+        "launch_correlation",
+        "launch_window_protocol",
+        "required_launch_flags",
+    }
+    assert set(diagnostic.values()) <= live_module.LAUNCH_DIAGNOSTIC_CODES
+    assert diagnostic["launch_correlation"] == live_module.CORRELATION_NONE_UNRECOGNIZED_OUTCOME
 
-def test_launch_runtime_correlation_timeout_leaves_all_four_facts_false(
+    serialized = json.dumps(adapters.launch_diagnostics())
+    assert raw_outcome not in serialized
+    assert _SYNTHETIC_VIOLATION_MESSAGE not in serialized
+    assert "protocol violation" not in serialized
+    for token in patched.supervisors[-1].argv:
+        assert token not in serialized
+    assert run_workspace.experiment_root not in serialized
+    assert request.broker_session.pipe_name not in serialized
+    assert request.broker_session.broker_token not in serialized
+    assert request.broker_session.capability_id not in serialized
+
+
+@pytest.mark.parametrize("version", ["0.84.3", "0.84.4", "9.99.99-unreleased"])
+def test_lf1_pi_version_mismatch_alone_never_rejects(
+    version, run_workspace, patched, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """LF1 test 9 / OBJECTIVE 7: Pi version stays PROVENANCE ONLY.
+
+    The first live attempt observed 0.84.4 where prior design-time source
+    inspection had used 0.84.3. That difference must not, by itself, deny
+    any launch fact. The version is carried on the observation and is read
+    by nothing that produces a pass/fail.
+    """
+    identity = RuntimeIdentity(
+        node_executable=SYNTHETIC_IDENTITY.node_executable,
+        pi_cli_js=SYNTHETIC_IDENTITY.pi_cli_js,
+        pi_package_root=SYNTHETIC_IDENTITY.pi_package_root,
+        reported_version=version,
+        launch_shape="node_direct",
+    )
+
+    def _make_supervisor(*, argv, cwd, environment, bounds):
+        s = _FakeSupervisor(argv=argv, cwd=cwd, environment=environment, bounds=bounds)
+        s.responses["h1"] = (
+            RUNTIME_RESPONSE_RECEIVED,
+            _successful_get_commands_response(run_workspace),
+        )
+        patched.supervisors.append(s)
+        return s
+
+    monkeypatch.setattr(live_module, "PiRpcSupervisor", _make_supervisor)
+    adapters = _adapters(runtime_identity=_issued(identity))
+    request = _launch_request_with_registered_broker(
+        adapters, run_workspace, run_id="run-1002g"
+    )
+    observation = adapters.launch_runtime(request)
+    assert observation.observed_pi_version == version
+    assert observation.launch_shape_valid is True
+    assert observation.lf_jsonl_correlation_succeeded is True
+    assert observation.required_flags_accepted is True
+
+
+def test_lf1_no_version_string_is_consulted_by_the_corrected_producer() -> None:
+    """LF1 test 9, source-level: no version literal appears in the corrected
+    required-flag machinery, so no exact-version authorization gate was
+    introduced."""
+    for function in (
+        live_module._argv_options_are_source_established,
+        live_module._protocol_violation_observed,
+        live_module._launch_diagnostic,
+    ):
+        source = inspect.getsource(function)
+        assert "reported_version" not in source
+        assert "0.84" not in source
+
+
+def test_lf1_correction_introduced_no_semantic_prompt_path() -> None:
+    """LF1 test 10: the corrected module still sends only ``get_commands``
+    and ``get_state``, and names no prompt anywhere."""
+    source = inspect.getsource(live_module)
+    assert '"type": "prompt"' not in source
+    assert '"prompt"' not in source
+    sent_types = sorted(
+        node.value
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and node.value in {"get_commands", "get_state", "prompt"}
+    )
+    assert "prompt" not in sent_types
+
+
+def test_launch_runtime_correlation_timeout_is_an_indeterminate_partial_launch(
     run_workspace, patched
 ) -> None:
-    """``await_response`` timing out (never raising) still produces a session
-    -- the four facts are simply False, and the controller's OWN later gates
-    (not this adapter) are what turn that into a compatibility refusal."""
+    """``await_response`` timing out (never raising) is INDETERMINATE (LF1-FU1).
+
+    Before FU1 this produced a SESSION carrying
+    ``required_flags_accepted=False``, which the frozen controller read as
+    REQUIRED_LAUNCH_FLAGS_REJECTED -- a cause a deadline does not establish.
+    A deadline now fails closed at the runtime-launch boundary instead: the
+    creator retains the runtime, closes it exactly once, reports the facts it
+    genuinely observed, and hands over no session at all.
+    """
     adapters = _adapters()
     request = _launch_request_with_registered_broker(adapters, run_workspace, run_id="run-1003")
     observation = adapters.launch_runtime(request)
-    assert observation.session is not None
+    assert observation.session is None
+    assert observation.launch_shape_valid is True
     assert observation.lf_jsonl_correlation_succeeded is False
     assert observation.required_flags_accepted is False
+    assert observation.observed_pi_version == SYNTHETIC_IDENTITY.reported_version
     assert observation.resource_created is True
-    assert observation.cleanup_attempted is False
+    assert observation.cleanup_attempted is True
+    assert observation.direct_child_reported_exit is True
+    assert patched.supervisors[-1].shutdown_calls == 1
+    assert (
+        adapters.launch_diagnostics()["run-1003"]["required_launch_flags"]
+        == live_module.REQUIRED_FLAGS_INDETERMINATE
+    )
 
 
 def test_launch_runtime_process_launch_failure_propagates_with_nothing_created(
@@ -1479,7 +2174,7 @@ def test_observe_protocol_reports_extension_errors_and_protocol_violation(
     def _make_supervisor(*, argv, cwd, environment, bounds):
         s = _FakeSupervisor(argv=argv, cwd=cwd, environment=environment, bounds=bounds)
         s.responses["h1"] = (RUNTIME_RESPONSE_RECEIVED, _successful_get_commands_response(run_workspace))
-        s._protocol_violation = True
+        s._protocol_violation = _SYNTHETIC_VIOLATION_MESSAGE
         s.activity = SimpleNamespace(extension_errors=["synthetic_extension_error"])
         patched.supervisors.append(s)
         return s
@@ -1944,6 +2639,88 @@ def _import_run_i2b_live():
     import run_i2b_live
 
     return run_i2b_live
+
+
+def test_lf1_live_harness_records_only_declared_diagnostic_codes(
+    run_workspace, patched, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """LF1 OBJECTIVE 6 / test 8, at the LIVE-RUN ARTIFACT level.
+
+    ``run_i2b_live`` attaches ``adapters.launch_diagnostics()`` to the run
+    summary ALONGSIDE the frozen controller's result. This proves what
+    actually lands in the artifact: three declared codes per run and nothing
+    else, and that the frozen evidence schema is untouched (the diagnostic
+    is a sibling key of ``evidence``, never a member of it).
+    """
+    run_i2b_live = _import_run_i2b_live()
+
+    def _make_supervisor(*, argv, cwd, environment, bounds):
+        s = _FakeSupervisor(argv=argv, cwd=cwd, environment=environment, bounds=bounds)
+        s.responses["h1"] = (RUNTIME_EXITED_EARLY, None)
+        patched.supervisors.append(s)
+        return s
+
+    monkeypatch.setattr(live_module, "PiRpcSupervisor", _make_supervisor)
+    adapters = _adapters()
+    request = _launch_request_with_registered_broker(
+        adapters, run_workspace, run_id="run-lf1-harness"
+    )
+    adapters.launch_runtime(request)
+
+    diagnostics = adapters.launch_diagnostics()
+    assert list(diagnostics) == ["run-lf1-harness"]
+    assert set(diagnostics["run-lf1-harness"].values()) <= live_module.LAUNCH_DIAGNOSTIC_CODES
+
+    # the harness attaches it as a SIBLING of the frozen evidence, never
+    # inside it -- the frozen CategoryBEvidence schema is not reopened.
+    harness_source = inspect.getsource(run_i2b_live.run_one_category_b_live_attempt)
+    assert 'summary["launch_diagnostics"] = adapters.launch_diagnostics()' in harness_source
+    summary_source = inspect.getsource(run_i2b_live._safe_result_summary)
+    assert "launch_diagnostics" not in summary_source
+
+    # and the frozen observation/evidence types gained no field for it
+    from qualification.i2b_session import RuntimeLaunchObservation
+
+    assert not hasattr(RuntimeLaunchObservation, "launch_diagnostic")
+    assert "launch_diagnostic" not in inspect.getsource(RuntimeLaunchObservation)
+
+
+def test_lf1_live_harness_diagnostic_passes_the_qualification_scrub(
+    run_workspace, patched, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """LF1 test 8: the retained diagnostic carries no needle.
+
+    Run the package's OWN artifact scrub over the serialized diagnostic,
+    under a safety context declaring this run's real broker token, pipe
+    name, capability id, endpoint host, API key and absolute workspace path
+    as needles. The declared codes contain none of them.
+    """
+
+    def _make_supervisor(*, argv, cwd, environment, bounds):
+        s = _FakeSupervisor(argv=argv, cwd=cwd, environment=environment, bounds=bounds)
+        s.responses["h1"] = (RUNTIME_RESPONSE_RECEIVED, _successful_get_commands_response(run_workspace))
+        s._protocol_violation = _SYNTHETIC_VIOLATION_MESSAGE
+        patched.supervisors.append(s)
+        return s
+
+    monkeypatch.setattr(live_module, "PiRpcSupervisor", _make_supervisor)
+    adapters = _adapters()
+    request = _launch_request_with_registered_broker(
+        adapters, run_workspace, run_id="run-lf1-scrub"
+    )
+    adapters.launch_runtime(request)
+
+    context = live_module.ArtifactSafetyContext(
+        endpoint_host="synthetic-endpoint.invalid",
+        api_key=SYNTHETIC_API_KEY,
+        broker_token=request.broker_session.broker_token,
+        pipe_name=request.broker_session.pipe_name,
+        capability_id=request.broker_session.capability_id,
+        workspace_absolute_path=run_workspace.workspace_root,
+    )
+    check = live_module.qualification_scrub_check(adapters.launch_diagnostics(), context)
+    assert check["clean"] is True
+    assert check["findings"] == []
 
 
 def test_outer_cleanup_both_actions_attempted_independently_on_scrub_failure(
@@ -4091,3 +4868,911 @@ def test_every_pre_controller_refusal_record_stays_bounded_and_secret_free(
     assert SYNTHETIC_API_KEY not in rendered
     assert SYNTHETIC_BASE_URL not in rendered
     assert record["semantic_prompts_sent"] == 0
+
+
+# ===========================================================================
+# 5F3B-I2B-L1-LF1-FU1 -- required-flag / LF-correlation independence closure
+# ===========================================================================
+#
+# THE DEFECT THIS SECTION CLOSES. LF1's producer computed
+#
+#     required_flags_accepted = argv_options_source_established
+#                               and lf_jsonl_correlation_succeeded
+#
+# whose positive direction is sound but whose REVERSE direction is not: no
+# correlated response does NOT imply an unknown CLI flag was rejected. Because
+# the frozen controller orders RPC_LAUNCH_SHAPE -> REQUIRED_LAUNCH_FLAGS ->
+# LF_JSONL_CORRELATION, all six recognized non-success ``await_response``
+# outcomes were attributed FIRST as REQUIRED_LAUNCH_FLAGS_REJECTED. The
+# pre-fix state is reproduced below as a permanent regression, driven through
+# the REAL, UNMODIFIED frozen controller.
+
+#: The six recognized ``await_response`` outcomes that are NOT a correlated
+#: response. Every one of them made the LF1 producer report
+#: ``required_flags_accepted=False`` on a TRUSTED session; none of them
+#: mechanically proves an unknown-option startup rejection.
+_FU1_NON_SUCCESS_OUTCOMES = (
+    RUNTIME_DEADLINE_EXPIRED,
+    RUNTIME_PROTOCOL_VIOLATION,
+    RUNTIME_OUTPUT_CAP_EXCEEDED,
+    RUNTIME_EVENT_CAP_EXCEEDED,
+    RUNTIME_READ_ERROR,
+    RUNTIME_EXITED_EARLY,
+)
+
+#: The exact unknown-option ERROR line the installed package emits on stderr,
+#: naming an option that IS present in AIDO's own argv. Test-owned data, never
+#: read back out of any adapter surface.
+_FU1_REAL_UNKNOWN_OPTION_LINE = "Error: Unknown option: --offline\n"
+
+#: AIDO's genuine argv, built by the frozen, unmodified ``build_pi_argv``.
+_FU1_REAL_ARGV = tuple(
+    _real_build_pi_argv(
+        SYNTHETIC_IDENTITY,
+        extension_entry=r"C:\synthetic\experiment\pi_extension\index.ts",
+        tool_allowlist=AR2_TOOL_ALLOWLIST,
+        provider="synthetic-provider",
+        model="synthetic-model",
+    )
+)
+
+
+def _stderr_snapshot(text: str, **overrides) -> dict:
+    """The exact mapping shape ``PiRpcSupervisor.stderr_snapshot()`` publishes."""
+    encoded = len(text.encode("utf-8"))
+    snapshot = {
+        "captured": True,
+        "bytes_seen": encoded,
+        "bytes_retained": encoded,
+        "cap_exceeded": False,
+        "eof": True,
+        "read_error": None,
+        "text_tail": text,
+    }
+    snapshot.update(overrides)
+    return snapshot
+
+
+@pytest.fixture
+def workspace_factory():
+    """Mint as many FRESH disposable run workspaces as a test needs.
+
+    A workspace nonce can be claimed exactly once, so any test driving more
+    than one launch needs more than one workspace. Every minted workspace is
+    removed afterwards, exactly as the single-workspace fixtures do.
+    """
+    minted = []
+
+    def _mint():
+        workspace = mint_qualification_run_workspace()
+        minted.append(workspace)
+        return workspace
+
+    try:
+        yield _mint
+    finally:
+        for workspace in minted:
+            remove_run_workspace(workspace)
+
+
+def _body_source(function) -> str:
+    """A function's source with its own docstring removed.
+
+    Source-level assertions about what a function READS must not be defeated
+    -- or satisfied -- by prose. The docstrings here deliberately NAME the
+    outcome constants they are explaining, so the checks below look at code.
+    """
+    source = inspect.getsource(function)
+    node = ast.parse(source.lstrip()).body[0]
+    literal = ast.get_docstring(node, clean=False)
+    return source if literal is None else source.replace(literal, "", 1)
+
+
+def _supervisor_factory(patched, monkeypatch: pytest.MonkeyPatch, configure) -> None:
+    """Patch in a ``_FakeSupervisor`` factory that runs ``configure(s)``."""
+
+    def _make_supervisor(*, argv, cwd, environment, bounds):
+        s = _FakeSupervisor(argv=argv, cwd=cwd, environment=environment, bounds=bounds)
+        configure(s)
+        patched.supervisors.append(s)
+        return s
+
+    monkeypatch.setattr(live_module, "PiRpcSupervisor", _make_supervisor)
+
+
+def _awaits(outcome, response=None):
+    """A ``configure`` callable that pins the one correlation probe's outcome."""
+
+    def _configure(s):
+        s.responses["h1"] = (outcome, response)
+
+    return _configure
+
+
+def _awaits_with_stderr(outcome, stderr_text, response=None):
+    def _configure(s):
+        s.responses["h1"] = (outcome, response)
+        s.stderr_text = stderr_text
+
+    return _configure
+
+
+def _launch_with(patched, monkeypatch, run_workspace, *, run_id, configure):
+    """One real ``launch_runtime`` against a configured synthetic supervisor."""
+    _supervisor_factory(patched, monkeypatch, configure)
+    adapters = _adapters()
+    request = _launch_request_with_registered_broker(adapters, run_workspace, run_id=run_id)
+    return adapters, adapters.launch_runtime(request)
+
+
+@dataclass(frozen=True)
+class _FU1RouteCheck:
+    reachable: bool = True
+    configured_model_served: bool = True
+
+
+def _drive_frozen_controller(workspace, adapters, *, candidate: str = "A"):
+    """Drive the REAL, UNMODIFIED frozen controller over the REAL live
+    adapters, with synthetic transport doubles underneath.
+
+    This is what makes the attribution claims here end-to-end rather than
+    adapter-local: the gate order, the first-failure choice and the failure
+    code all come from ``qualification.i2b_controller``, which this phase does
+    not modify. Nothing here launches a process, opens a pipe, reads a real
+    credential, or calls a model.
+    """
+    return run_category_b_controller(
+        candidate=candidate,
+        run_workspace=workspace,
+        ambient_environ={
+            "SystemRoot": r"C:\Windows",
+            "TEMP": workspace.experiment_root,
+            "TMP": workspace.experiment_root,
+        },
+        node_executable=os.path.join(workspace.experiment_root, "node.exe"),
+        non_secret_gates=[
+            lambda: PreflightGateResult(name="pi_installed_offline", passed=True),
+            lambda: PreflightGateResult(name="config_generator_self_check", passed=True),
+            lambda: PreflightGateResult(
+                name="environment_forbidden_fragment_audit", passed=True
+            ),
+        ],
+        read_connection=adapters.read_connection,
+        create_broker=adapters.create_broker,
+        launch_runtime=adapters.launch_runtime,
+        get_commands=adapters.get_commands,
+        get_state=adapters.get_state,
+        observe_protocol=adapters.observe_protocol,
+        route_checker=lambda base_url, *, model_id: _FU1RouteCheck(),
+        shutdown_runtime=adapters.shutdown_runtime,
+        shutdown_broker=adapters.shutdown_broker,
+    )
+
+
+def _fu1_result_render(result) -> dict:
+    """The same field set the live entry point retains, rendered JSON-safe."""
+    return {
+        "outcome": result.outcome.value,
+        "failed_gate": result.failed_gate.value if result.failed_gate else None,
+        "failure_code": result.failure_code.value if result.failure_code else None,
+        "gate_statuses": dict(result.gate_statuses),
+        "compatibility_facts": result.facts.as_dict(),
+        "observed_pi_version": result.observed_pi_version,
+        "runtime_teardown_status": result.runtime_teardown.status_text,
+        "broker_shutdown_status": result.broker_shutdown.status_text,
+        "cleanup_status": result.cleanup.status_text,
+        "evidence_retention_ready": result.evidence.retention_ready,
+        "evidence": result.evidence.as_dict() if result.evidence.retention_ready else None,
+        "evidence_scrub_findings": list(result.evidence.scrub_findings),
+    }
+
+
+# -- the pre-fix misattribution, inverted into a permanent regression ---------
+
+
+@pytest.mark.parametrize("outcome", _FU1_NON_SUCCESS_OUTCOMES)
+def test_fu1_no_non_success_outcome_alone_denies_required_flags(
+    outcome, run_workspace, patched, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every one of the six recognized non-success outcomes used to produce
+    ``launch_shape_valid=True, lf_jsonl_correlation_succeeded=False,
+    required_flags_accepted=False`` ON A TRUSTED SESSION, which the frozen
+    controller reads as REQUIRED_LAUNCH_FLAGS_REJECTED. With no unknown-option
+    observation none of them may do that any more: each is INDETERMINATE and
+    hands over NO session, so no rejection can be named.
+    """
+    run_id = "run-fu1-ind-" + outcome
+    adapters, observation = _launch_with(
+        patched, monkeypatch, run_workspace, run_id=run_id, configure=_awaits(outcome)
+    )
+    # the two facts this launch genuinely established are still truthful
+    assert observation.launch_shape_valid is True
+    assert observation.observed_pi_version == SYNTHETIC_IDENTITY.reported_version
+    assert observation.lf_jsonl_correlation_succeeded is False
+    # ...and the flag fact is NOT asserted as a rejection: no session crosses
+    assert observation.session is None
+    assert observation.required_flags_accepted is False
+    assert (
+        adapters.launch_diagnostics()[run_id]["required_launch_flags"]
+        == live_module.REQUIRED_FLAGS_INDETERMINATE
+    )
+
+
+@pytest.mark.parametrize("outcome", _FU1_NON_SUCCESS_OUTCOMES)
+def test_fu1_frozen_controller_no_longer_names_a_rejection_for_any_of_the_six(
+    outcome, run_workspace, patched, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same six, driven END TO END through the UNMODIFIED frozen controller.
+
+    Pre-fix, every one of these produced
+    ``failed_gate=required_launch_flags`` /
+    ``failure_code=REQUIRED_LAUNCH_FLAGS_REJECTED``. Post-fix the controller
+    reports the fact actually observed -- the launch produced no trustworthy
+    runtime session -- and leaves REQUIRED_LAUNCH_FLAGS NOT_REACHED.
+    """
+    _supervisor_factory(patched, monkeypatch, _awaits(outcome))
+    adapters = _adapters()
+    result = _drive_frozen_controller(run_workspace, adapters)
+    assert result.failed_gate is CategoryBGateName.RUNTIME_LAUNCH
+    assert result.failure_code is CategoryBFailureCode.RUNTIME_LAUNCH_FAILED
+    statuses = dict(result.gate_statuses)
+    assert statuses[CategoryBGateName.RPC_LAUNCH_SHAPE.value] == "NOT_REACHED"
+    assert statuses[CategoryBGateName.REQUIRED_LAUNCH_FLAGS.value] == "NOT_REACHED"
+    assert statuses[CategoryBGateName.LF_JSONL_CORRELATION.value] == "NOT_REACHED"
+    assert result.semantic_prompts_sent == 0
+
+
+# -- INDEPENDENCE TEST 1: ACCEPTED + LF PASS is constructible -----------------
+
+
+def test_fu1_independence_1_accepted_with_lf_pass_is_constructible(
+    run_workspace, patched, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapters, observation = _launch_with(
+        patched,
+        monkeypatch,
+        run_workspace,
+        run_id="run-fu1-acc",
+        configure=_awaits(
+            RUNTIME_RESPONSE_RECEIVED, _successful_get_commands_response(run_workspace)
+        ),
+    )
+    assert observation.session is not None
+    assert observation.required_flags_accepted is True
+    assert observation.lf_jsonl_correlation_succeeded is True
+    assert (
+        adapters.launch_diagnostics()["run-fu1-acc"]["required_launch_flags"]
+        == live_module.REQUIRED_FLAGS_ACCEPTED
+    )
+
+
+# -- INDEPENDENCE TEST 2: ACCEPTED + LF FAIL, stated exactly ------------------
+
+
+def test_fu1_independence_2_accepted_requires_the_correlated_response() -> None:
+    """The brief's "IF AND ONLY IF", answered honestly.
+
+    ACCEPTED means "mechanical evidence establishes that NO unknown-option
+    startup rejection occurred". The only such evidence available in this
+    phase is LF1's positive proof, whose runtime half IS the correlated RPC
+    response -- it is what shows ``runRpcMode`` was entered, which both
+    unknown-option exits are strictly earlier than. So ACCEPTED alongside a
+    FAILED LF correlation is deliberately NOT constructible: no other
+    mechanically-justified proof of acceptance exists here, and inventing one
+    would be exactly the fabrication FU1 exists to remove.
+
+    That is not the defect FU1 closes. The defect was the REVERSE coupling --
+    LF correlation false FORCING required flags false -- and the tests below
+    prove that direction is broken in both of its outcomes.
+    """
+    classify = live_module._classify_required_flag_evidence
+    unreadable = {"captured": False}
+    for argv_ok, lf_ok in ((True, False), (False, True), (False, False)):
+        assert (
+            classify(
+                argv=_FU1_REAL_ARGV,
+                argv_options_source_established=argv_ok,
+                lf_jsonl_correlation_succeeded=lf_ok,
+                stderr_snapshot_reader=lambda: unreadable,
+            )
+            == live_module.REQUIRED_FLAGS_INDETERMINATE
+        )
+    assert (
+        classify(
+            argv=_FU1_REAL_ARGV,
+            argv_options_source_established=True,
+            lf_jsonl_correlation_succeeded=True,
+            stderr_snapshot_reader=lambda: unreadable,
+        )
+        == live_module.REQUIRED_FLAGS_ACCEPTED
+    )
+
+
+# -- INDEPENDENCE TEST 3: protocol integrity never alters required flags ------
+
+
+@pytest.mark.parametrize(
+    "outcome, expected_state",
+    [
+        (RUNTIME_RESPONSE_RECEIVED, live_module.REQUIRED_FLAGS_ACCEPTED),
+        (RUNTIME_PROTOCOL_VIOLATION, live_module.REQUIRED_FLAGS_INDETERMINATE),
+    ],
+)
+def test_fu1_independence_3_protocol_violation_does_not_alter_required_flags(
+    outcome, expected_state, run_workspace, patched, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A launch-window protocol violation changes NOTHING about the flag
+    classification: with a correlated response it is still ACCEPTED, and
+    without one it is INDETERMINATE for exactly the reason it would have been
+    with no violation at all. The violation is a separate, later gate's fact.
+    """
+    run_id = "run-fu1-pv-" + outcome
+
+    def _configure(s):
+        s.responses["h1"] = (
+            outcome,
+            _successful_get_commands_response(run_workspace)
+            if outcome == RUNTIME_RESPONSE_RECEIVED
+            else None,
+        )
+        s._protocol_violation = _SYNTHETIC_VIOLATION_MESSAGE
+
+    adapters, observation = _launch_with(
+        patched, monkeypatch, run_workspace, run_id=run_id, configure=_configure
+    )
+    diagnostic = adapters.launch_diagnostics()[run_id]
+    assert diagnostic["required_launch_flags"] == expected_state
+    assert (
+        diagnostic["launch_window_protocol"]
+        == live_module.LAUNCH_WINDOW_PROTOCOL_VIOLATION_OBSERVED
+    )
+    assert observation.required_flags_accepted is (
+        expected_state == live_module.REQUIRED_FLAGS_ACCEPTED
+    )
+
+
+def test_fu1_independence_3_source_level_no_protocol_bit_reaches_the_classifier() -> None:
+    """Nothing in the flag-classification chain reads the protocol-violation
+    projection, or the stdout state it comes from, at source level."""
+    for function in (
+        live_module._classify_required_flag_evidence,
+        live_module._unknown_option_rejection_established,
+        live_module._argv_option_tokens,
+    ):
+        source = inspect.getsource(function)
+        assert "_protocol_violation_observed" not in source
+        assert "stdout_state" not in source
+
+
+# -- INDEPENDENCE TEST 4: LF-correlation failure never alters required flags --
+
+
+def test_fu1_independence_4_lf_failure_alone_does_not_decide_the_flag_fact(
+    run_workspace, second_run_workspace, patched, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ONE fixed correlation failure, TWO different flag classifications.
+
+    The supervisor outcome constant is identical in both halves; only the
+    bounded startup diagnostic differs. That is what "observationally
+    independent" means here: the LF fact no longer determines the flag fact.
+    """
+    rejected_adapters, rejected = _launch_with(
+        patched,
+        monkeypatch,
+        run_workspace,
+        run_id="run-fu1-lf-a",
+        configure=_awaits_with_stderr(RUNTIME_EXITED_EARLY, _FU1_REAL_UNKNOWN_OPTION_LINE),
+    )
+    indeterminate_adapters, indeterminate = _launch_with(
+        patched,
+        monkeypatch,
+        second_run_workspace,
+        run_id="run-fu1-lf-b",
+        configure=_awaits_with_stderr(RUNTIME_EXITED_EARLY, ""),
+    )
+
+    assert rejected.lf_jsonl_correlation_succeeded is False
+    assert indeterminate.lf_jsonl_correlation_succeeded is False
+    assert (
+        rejected_adapters.launch_diagnostics()["run-fu1-lf-a"]["required_launch_flags"]
+        == live_module.REQUIRED_FLAGS_REJECTED_UNKNOWN_OPTION
+    )
+    assert (
+        indeterminate_adapters.launch_diagnostics()["run-fu1-lf-b"]["required_launch_flags"]
+        == live_module.REQUIRED_FLAGS_INDETERMINATE
+    )
+    assert rejected.session is not None
+    assert indeterminate.session is None
+
+
+# -- INDEPENDENCE TEST 5: an ESTABLISHED rejection is reported as one ---------
+
+
+def test_fu1_independence_5_established_rejection_reaches_the_frozen_gate(
+    run_workspace, patched, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A mechanically-established unknown-option rejection maps to
+    ``required_flags_accepted=False`` on a session the frozen controller
+    trusts, so REQUIRED_LAUNCH_FLAGS_REJECTED is still reachable -- and is now
+    reachable ONLY from real evidence.
+    """
+    _supervisor_factory(
+        patched,
+        monkeypatch,
+        _awaits_with_stderr(RUNTIME_EXITED_EARLY, _FU1_REAL_UNKNOWN_OPTION_LINE),
+    )
+    adapters = _adapters()
+    result = _drive_frozen_controller(run_workspace, adapters)
+    assert result.failed_gate is CategoryBGateName.REQUIRED_LAUNCH_FLAGS
+    assert result.failure_code is CategoryBFailureCode.REQUIRED_LAUNCH_FLAGS_REJECTED
+    assert result.semantic_prompts_sent == 0
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Error: Unknown option: --offline",
+        "Error: Unknown options: --offline, --no-approve",
+        "\x1b[31mError: Unknown option: --offline\x1b[39m",
+        "prelude line\r\nError: Unknown option: --offline\r\n",
+    ],
+)
+def test_fu1_established_rejection_message_shapes(message) -> None:
+    """The exact diagnostic shapes ``dist/cli/args.js`` /
+    ``dist/core/agent-session-services.js`` / ``dist/main.js`` can emit --
+    singular, plural, chalk-wrapped, and embedded in other output."""
+    assert (
+        live_module._unknown_option_rejection_established(
+            argv=_FU1_REAL_ARGV, stderr_snapshot=_stderr_snapshot(message)
+        )
+        is True
+    )
+
+
+# -- INDEPENDENCE TESTS 6-9: what is NOT an unknown-option rejection ----------
+
+
+@pytest.mark.parametrize("outcome", _FU1_NON_SUCCESS_OUTCOMES)
+def test_fu1_independence_6_to_9_no_outcome_constant_decides_a_rejection(
+    outcome, run_workspace, patched, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FU1 tests 6, 7, 8 and 9 together, at the level where they are decided.
+
+    A generic early exit, a deadline, a protocol violation before a correlated
+    response, an output cap, an event cap and a read error all classify
+    identically -- INDETERMINATE -- because the classifier reads no supervisor
+    outcome constant at all. ``RUNTIME_EXITED_EARLY`` in particular has no
+    privileged status: an unknown-option startup rejection is ONE
+    source-supported cause of it, never a proof of it.
+    """
+    run_id = "run-fu1-69-" + outcome
+    adapters, observation = _launch_with(
+        patched, monkeypatch, run_workspace, run_id=run_id, configure=_awaits(outcome)
+    )
+    assert (
+        adapters.launch_diagnostics()[run_id]["required_launch_flags"]
+        == live_module.REQUIRED_FLAGS_INDETERMINATE
+    )
+    assert observation.session is None
+
+
+def test_fu1_independence_6_early_exit_is_not_privileged_at_source_level() -> None:
+    """No supervisor outcome constant appears anywhere in the classification
+    chain, so no outcome can become a proxy for flag rejection by drift."""
+    outcome_names = (
+        "RUNTIME_EXITED_EARLY",
+        "RUNTIME_DEADLINE_EXPIRED",
+        "RUNTIME_PROTOCOL_VIOLATION",
+        "RUNTIME_OUTPUT_CAP_EXCEEDED",
+        "RUNTIME_EVENT_CAP_EXCEEDED",
+        "RUNTIME_READ_ERROR",
+        "RUNTIME_RESPONSE_RECEIVED",
+    )
+    for function in (
+        live_module._classify_required_flag_evidence,
+        live_module._unknown_option_rejection_established,
+        live_module._argv_option_tokens,
+    ):
+        source = _body_source(function)
+        for name in outcome_names:
+            assert name not in source
+
+
+# -- the adversarial sweep on the bounded startup diagnostic ------------------
+
+
+@pytest.mark.parametrize(
+    "snapshot",
+    [
+        # a stderr READ ERROR is never proof
+        _stderr_snapshot(_FU1_REAL_UNKNOWN_OPTION_LINE, read_error="OSError: synthetic"),
+        # TRUNCATED by the bounded reader's own cap
+        _stderr_snapshot(_FU1_REAL_UNKNOWN_OPTION_LINE, cap_exceeded=True),
+        # bytes were dropped: seen != retained
+        _stderr_snapshot(_FU1_REAL_UNKNOWN_OPTION_LINE, bytes_seen=999999),
+        # retained more than the 4000-char tail can carry, so text_tail may be sliced
+        _stderr_snapshot(_FU1_REAL_UNKNOWN_OPTION_LINE, bytes_retained=4001),
+        # not captured at all
+        {"captured": False},
+        # captured reported by truthiness rather than exactly True
+        _stderr_snapshot(_FU1_REAL_UNKNOWN_OPTION_LINE, captured=1),
+        # cap_exceeded reported by truthiness rather than exactly False
+        _stderr_snapshot(_FU1_REAL_UNKNOWN_OPTION_LINE, cap_exceeded=0),
+        # malformed types
+        _stderr_snapshot(_FU1_REAL_UNKNOWN_OPTION_LINE, text_tail=None),
+        _stderr_snapshot(_FU1_REAL_UNKNOWN_OPTION_LINE, bytes_seen="12", bytes_retained="12"),
+        # not a mapping at all
+        "Error: Unknown option: --offline",
+        None,
+        # a WARNING diagnostic never reaches process.exit(1)
+        _stderr_snapshot("Warning: Unknown option: --offline\n"),
+        # the message shape, but not as a diagnostic line
+        _stderr_snapshot("note about Error: Unknown option: --offline\n"),
+        # an empty name in the list
+        _stderr_snapshot("Error: Unknown options: --offline, \n"),
+    ],
+)
+def test_fu1_bounded_diagnostic_fails_closed(snapshot) -> None:
+    assert (
+        live_module._unknown_option_rejection_established(
+            argv=_FU1_REAL_ARGV, stderr_snapshot=snapshot
+        )
+        is False
+    )
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Error: Unknown option: --not-in-aido-argv\n",
+        "Error: Unknown options: --offline, --not-in-aido-argv\n",
+        "Error: Unknown option: -q\n",
+    ],
+)
+def test_fu1_a_diagnostic_naming_an_option_not_in_aido_argv_proves_nothing(message) -> None:
+    """ADVERSARIAL: the finding must be tied to an option ACTUALLY PRESENT in
+    AIDO's own argv. A diagnostic naming anything else -- including one that
+    also names a real AIDO option -- is ambiguous and fails closed."""
+    assert (
+        live_module._unknown_option_rejection_established(
+            argv=_FU1_REAL_ARGV, stderr_snapshot=_stderr_snapshot(message)
+        )
+        is False
+    )
+
+
+def test_fu1_a_raising_stderr_surface_is_indeterminate_not_rejected(
+    run_workspace, patched, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _configure(s):
+        s.responses["h1"] = (RUNTIME_EXITED_EARLY, None)
+        s.stderr_snapshot_raises = RuntimeError("synthetic reader failure")
+
+    adapters, observation = _launch_with(
+        patched, monkeypatch, run_workspace, run_id="run-fu1-raise", configure=_configure
+    )
+    assert observation.session is None
+    assert (
+        adapters.launch_diagnostics()["run-fu1-raise"]["required_launch_flags"]
+        == live_module.REQUIRED_FLAGS_INDETERMINATE
+    )
+
+
+def test_fu1_the_accepted_path_never_reads_stderr_at_all(
+    run_workspace, patched, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The positive proof is decided first, so an ordinary passing launch
+    never touches the raw stderr surface."""
+    _unused, observation = _launch_with(
+        patched,
+        monkeypatch,
+        run_workspace,
+        run_id="run-fu1-nostderr",
+        configure=_awaits(
+            RUNTIME_RESPONSE_RECEIVED, _successful_get_commands_response(run_workspace)
+        ),
+    )
+    assert observation.required_flags_accepted is True
+    assert patched.supervisors[-1].stderr_snapshot_calls == 0
+
+
+def test_fu1_argv_option_token_walk_mirrors_pi_parseargs() -> None:
+    """The token walk that ties a diagnostic to AIDO's argv follows
+    ``parseArgs``' own value-consumption rules, and collects OPTION tokens
+    only -- never a value, so no absolute extension path can be collected."""
+    head = (r"C:\node.exe", r"C:\pi\dist\cli.js")
+    tokens = live_module._argv_option_tokens
+    # a source-established value-taking option consumes its value
+    assert tokens(head + ("--model", "some-model")) == frozenset({"--model"})
+    # a valueless option consumes nothing
+    assert tokens(head + ("--offline", "--no-approve")) == frozenset(
+        {"--offline", "--no-approve"}
+    )
+    # an UNRECOGNIZED long option consumes a following non-dash, non-@ token
+    assert tokens(head + ("--bogus", "value", "--offline")) == frozenset(
+        {"--bogus", "--offline"}
+    )
+    # ...but not one starting with - or @
+    assert tokens(head + ("--bogus", "--offline")) == frozenset({"--bogus", "--offline"})
+    assert tokens(head + ("--bogus", "@file")) == frozenset({"--bogus"})
+    # --name=value carries its own value; the NAME is what a diagnostic prints
+    assert tokens(head + ("--bogus=value",)) == frozenset({"--bogus"})
+    # a single-dash token is an option token too (parseArgs' error branch)
+    assert tokens(head + ("-q",)) == frozenset({"-q"})
+    # the two pinned program paths are never collected
+    assert tokens(head) == frozenset()
+    # and a value token is never collected, even an absolute path
+    assert tokens(
+        head + ("--extension", r"C:\synthetic\experiment\pi_extension\index.ts")
+    ) == frozenset({"--extension"})
+
+
+# -- INDEPENDENCE TEST 10: creator ownership on every indeterminate path ------
+
+
+@pytest.mark.parametrize("outcome", _FU1_NON_SUCCESS_OUTCOMES)
+def test_fu1_independence_10_indeterminate_paths_keep_truthful_creator_ownership(
+    outcome, run_workspace, patched, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An indeterminate launch retains the runtime, self-closes it EXACTLY
+    once, and reports the three creator facts truthfully -- never a second
+    cleanup, and never a fabricated postcondition."""
+    _unused, observation = _launch_with(
+        patched,
+        monkeypatch,
+        run_workspace,
+        run_id="run-fu1-own-" + outcome,
+        configure=_awaits(outcome),
+    )
+    assert observation.session is None
+    assert observation.resource_created is True
+    assert observation.cleanup_attempted is True
+    assert observation.direct_child_reported_exit is True
+    assert observation.cleanup_verified_success is True
+    assert patched.supervisors[-1].shutdown_calls == 1
+
+
+def test_fu1_indeterminate_path_reports_an_unverified_close_truthfully(
+    run_workspace, patched, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A self-close whose postcondition was not observed is reported as
+    unverified, never fabricated -- and it is still exactly one attempt."""
+
+    def _configure(s):
+        s.responses["h1"] = (RUNTIME_DEADLINE_EXPIRED, None)
+        s.shutdown_result = {"exit_status_observed": None}
+
+    _unused, observation = _launch_with(
+        patched,
+        monkeypatch,
+        run_workspace,
+        run_id="run-fu1-own-unverified",
+        configure=_configure,
+    )
+    assert observation.session is None
+    assert observation.cleanup_attempted is True
+    assert observation.direct_child_reported_exit is False
+    assert observation.cleanup_verified_success is False
+    assert patched.supervisors[-1].shutdown_calls == 1
+
+
+def test_fu1_indeterminate_path_cleanup_exception_never_erases_the_failure(
+    run_workspace, patched, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """BLOCKER 3 still holds on the new path: a raising self-close is reported
+    as an unverified postcondition, not as an escaped exception."""
+
+    def _configure(s):
+        s.responses["h1"] = (RUNTIME_DEADLINE_EXPIRED, None)
+        s.shutdown_raises = PiSupervisorError("synthetic close failure")
+
+    _unused, observation = _launch_with(
+        patched, monkeypatch, run_workspace, run_id="run-fu1-own-raise", configure=_configure
+    )
+    assert observation.session is None
+    assert observation.cleanup_attempted is True
+    assert observation.direct_child_reported_exit is False
+    assert patched.supervisors[-1].shutdown_calls == 1
+
+
+def test_fu1_an_indeterminate_launch_never_registers_a_runtime_record(
+    run_workspace, patched, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing is left behind that a later adapter call could pick up: no
+    session was minted, so no runtime record exists to be looked up."""
+    adapters, observation = _launch_with(
+        patched,
+        monkeypatch,
+        run_workspace,
+        run_id="run-fu1-noreg",
+        configure=_awaits(RUNTIME_DEADLINE_EXPIRED),
+    )
+    assert observation.session is None
+    assert adapters._runtimes == {}
+
+
+def test_fu1_indeterminate_launch_still_closes_the_broker_exactly_once(
+    run_workspace, patched, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The frozen controller still resolves the broker lifecycle for an
+    indeterminate launch, and the runtime teardown it never owned is reported
+    as creator-retained rather than as an AIDO teardown."""
+    _supervisor_factory(patched, monkeypatch, _awaits(RUNTIME_DEADLINE_EXPIRED))
+    adapters = _adapters()
+    result = _drive_frozen_controller(run_workspace, adapters)
+    assert result.failure_code is CategoryBFailureCode.RUNTIME_LAUNCH_FAILED
+    assert patched.servers[-1].shutdown_calls == 1
+    assert patched.supervisors[-1].shutdown_calls == 1
+
+
+# -- INDEPENDENCE TEST 11: no raw stderr escapes ------------------------------
+
+
+def test_fu1_independence_11_no_raw_stderr_reaches_any_retained_surface(
+    run_workspace, patched, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The raw stderr tail is scanned transiently and dropped. It must not
+    appear in the launch observation, the launch diagnostic, the frozen
+    controller's result or evidence, or the serialized result JSON.
+    """
+    secretish = (
+        "Error: Unknown option: --offline\n"
+        "sk-synthetic-should-never-be-retained\n"
+        "https://b300-proxy.example.invalid:8443/v1\n"
+    )
+    _supervisor_factory(
+        patched, monkeypatch, _awaits_with_stderr(RUNTIME_EXITED_EARLY, secretish)
+    )
+    adapters = _adapters()
+    result = _drive_frozen_controller(run_workspace, adapters)
+    diagnostics = adapters.launch_diagnostics()
+
+    rendered = json.dumps({"diagnostics": diagnostics, "result": _fu1_result_render(result)})
+    for fragment in (
+        "Unknown option",
+        "sk-synthetic-should-never-be-retained",
+        "b300-proxy.example.invalid",
+        "--offline",
+        "Error:",
+    ):
+        assert fragment not in rendered
+    for diagnostic in diagnostics.values():
+        assert set(diagnostic.values()) <= live_module.LAUNCH_DIAGNOSTIC_CODES
+    assert repr(result.evidence).count("Unknown option") == 0
+
+
+def test_fu1_no_raw_stderr_reaches_any_exception_text(
+    run_workspace, patched, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The only exception the new machinery can raise names no runtime value."""
+    with pytest.raises(LiveAdapterError) as excinfo:
+        live_module._launch_diagnostic(
+            argv_ok=True,
+            wait_outcome=RUNTIME_RESPONSE_RECEIVED,
+            protocol_violation_observed=False,
+            required_flags_code="Error: Unknown option: --offline",
+        )
+    assert "Unknown option" not in str(excinfo.value)
+    assert "--offline" not in str(excinfo.value)
+
+
+def test_fu1_the_diagnostic_carries_only_declared_codes(
+    workspace_factory, patched, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every produced diagnostic value, across every classification, is a
+    declared literal -- and all THREE states are genuinely reachable."""
+    cases = [
+        (RUNTIME_RESPONSE_RECEIVED, "", live_module.REQUIRED_FLAGS_ACCEPTED),
+        (
+            RUNTIME_EXITED_EARLY,
+            _FU1_REAL_UNKNOWN_OPTION_LINE,
+            live_module.REQUIRED_FLAGS_REJECTED_UNKNOWN_OPTION,
+        ),
+        (RUNTIME_DEADLINE_EXPIRED, "", live_module.REQUIRED_FLAGS_INDETERMINATE),
+    ]
+    produced = set()
+    for index, (outcome, stderr_text, expected) in enumerate(cases):
+        run_id = f"run-fu1-codes-{index}"
+        workspace = workspace_factory()
+        adapters, _observation = _launch_with(
+            patched,
+            monkeypatch,
+            workspace,
+            run_id=run_id,
+            configure=_awaits_with_stderr(
+                outcome,
+                stderr_text,
+                _successful_get_commands_response(workspace)
+                if outcome == RUNTIME_RESPONSE_RECEIVED
+                else None,
+            ),
+        )
+        diagnostic = adapters.launch_diagnostics()[run_id]
+        assert diagnostic["required_launch_flags"] == expected
+        assert set(diagnostic.values()) <= live_module.LAUNCH_DIAGNOSTIC_CODES
+        produced.add(diagnostic["required_launch_flags"])
+    # all three states are genuinely reachable
+    assert produced == live_module.REQUIRED_FLAG_STATES
+
+
+def test_fu1_stderr_is_read_in_exactly_one_place() -> None:
+    """``stderr_snapshot`` is consulted from exactly ONE call site in this
+    module, and no other function names the raw text field at all."""
+    source = inspect.getsource(live_module)
+    assert source.count("supervisor.stderr_snapshot()") == 1
+    assert source.count("_unknown_option_rejection_established(") == 2
+    assert "text_tail" in inspect.getsource(live_module._unknown_option_rejection_established)
+    for other in (
+        live_module.LiveCategoryBAdapters.launch_diagnostics,
+        live_module.LiveCategoryBAdapters.observe_protocol,
+        live_module.LiveCategoryBAdapters.get_commands,
+        live_module.LiveCategoryBAdapters.get_state,
+        live_module.LiveCategoryBAdapters._retain_and_close_partial_runtime,
+    ):
+        assert "text_tail" not in inspect.getsource(other)
+
+
+# -- INDEPENDENCE TEST 12 / version policy / double conformance ---------------
+
+
+def test_fu1_no_semantic_prompt_path_was_introduced() -> None:
+    for function in (
+        live_module._classify_required_flag_evidence,
+        live_module._unknown_option_rejection_established,
+        live_module._argv_option_tokens,
+        live_module._launch_diagnostic,
+    ):
+        assert "prompt" not in inspect.getsource(function)
+
+
+def test_fu1_no_version_gate_was_introduced() -> None:
+    """Pi's version stays PROVENANCE ONLY: nothing in the new machinery reads
+    or compares it."""
+    for function in (
+        live_module._classify_required_flag_evidence,
+        live_module._unknown_option_rejection_established,
+        live_module._argv_option_tokens,
+        live_module._launch_diagnostic,
+    ):
+        source = inspect.getsource(function)
+        assert "reported_version" not in source
+        assert "0.84" not in source
+
+
+def test_fu1_stderr_tail_bound_still_matches_the_frozen_ar2_source() -> None:
+    """The 4000-character bound the truncation check relies on is read from the
+    FROZEN ``PiRpcSupervisor.stderr_snapshot`` source itself. If AR2 ever
+    changes it, this fails rather than silently accepting a sliced tail as
+    complete."""
+    source = inspect.getsource(PiRpcSupervisor.stderr_snapshot)
+    assert f'"text_tail": text[-{live_module._STDERR_TEXT_TAIL_CHAR_LIMIT}:],' in source
+
+
+def test_fu1_the_stderr_double_matches_the_real_supervisor_contract() -> None:
+    """LF1's ROOT CAUSE was a synthetic double that disagreed with the real
+    class, so the new double is pinned to the frozen source directly: the same
+    keys, and the same declared value types -- notably ``read_error`` is
+    ``str | None``, exactly ``BoundedStreamState.error``, never a bool.
+    """
+    source = inspect.getsource(PiRpcSupervisor.stderr_snapshot)
+    double = _FakeSupervisor(argv=(), cwd="", environment={}, bounds=None).stderr_snapshot()
+    expected_keys = {
+        "captured",
+        "bytes_seen",
+        "bytes_retained",
+        "cap_exceeded",
+        "eof",
+        "read_error",
+        "text_tail",
+    }
+    for key in expected_keys:
+        assert f'"{key}"' in source
+    assert set(double) == expected_keys
+    assert double["read_error"] is None
+    assert type(double["captured"]) is bool
+    assert type(double["cap_exceeded"]) is bool
+    assert type(double["eof"]) is bool
+    assert type(double["bytes_seen"]) is int
+    assert type(double["bytes_retained"]) is int
+    assert type(double["text_tail"]) is str
+    assert "error: str | None = None" in inspect.getsource(BoundedStreamState)

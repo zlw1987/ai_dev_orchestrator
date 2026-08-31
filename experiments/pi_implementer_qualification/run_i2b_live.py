@@ -506,6 +506,32 @@ def run_one_category_b_live_attempt(*, candidate: str) -> dict[str, Any]:
 
         try:
             summary = _safe_result_summary(result)
+            # 5F3B-I2B-L1-LF1 OBJECTIVE 6. The bounded live launch
+            # diagnostic, recorded ALONGSIDE the frozen controller's result
+            # and never inside it: the frozen ``CategoryBEvidence`` schema is
+            # not touched and frozen I2B is not reopened. Every value is one
+            # of ``i2b_live_adapters.LAUNCH_DIAGNOSTIC_CODES`` -- a declared
+            # literal that raw runtime content was reduced to at the moment
+            # of observation. It exists so a FUTURE zero-prompt refusal can
+            # be attributed without reading raw logs after the fact.
+            #
+            # 5F3B-I2B-L1-LF1-FU1 corrected this note, which previously said
+            # an unknown-flag rejection "reads ``launch_correlation:
+            # no_response_runtime_exited_early``". It does not: that
+            # correlation code says only that the direct child exited before
+            # the awaited response arrived, and an unknown-option startup
+            # rejection is ONE source-supported cause of that, never a proof
+            # of it. The field that answers the flag question is
+            # ``required_launch_flags``, which carries the three declared
+            # states -- ``required_flags_accepted``,
+            # ``required_flags_rejected_unknown_option`` (mechanically
+            # established from a bounded startup diagnostic, and the only
+            # thing that can produce REQUIRED_LAUNCH_FLAGS_REJECTED) and
+            # ``required_flags_indeterminate``. A launch-window protocol
+            # violation is a separate field again
+            # (``launch_window_protocol``), and it never alters the flag
+            # state.
+            summary["launch_diagnostics"] = adapters.launch_diagnostics()
         except Exception as exc:  # noqa: BLE001 - reduced to a bounded, no-secret record
             post_controller_failure = PostControllerExceptionalFailure(
                 stage=STAGE_RESULT_PROCESSING, failure_type=type(exc).__name__
