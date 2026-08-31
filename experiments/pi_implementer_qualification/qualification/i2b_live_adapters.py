@@ -25,7 +25,11 @@ What is reused, unmodified, from frozen AR2 (composition, never copying):
 
     ar2.broker            BrokerBinding, BrokerRequestHandler, BrokerServer,
                            BrokerDiagnostics, STATE_READY, STATE_CLOSED,
-                           TRIGGER_AIDO_TEARDOWN
+                           TRIGGER_AIDO_TEARDOWN, and (5F3B-I2B-L1-D1)
+                           BrokerServer.pipe_resource_created -- the public,
+                           monotonic partial-start fact this module's
+                           broker-start failure path reads instead of
+                           guessing conservatively
     ar2.capability         StaticEligibilityDomain, RunState, CapDefinitions,
                            OPERATION_CLASSES, ROOT_CLASS_DISPOSABLE_SYNTHETIC
     ar2.launch             RuntimeIdentity, LaunchIdentityError,
@@ -135,6 +139,20 @@ correlation probe could not establish a trustworthy session) is retained and
 self-closed here, exactly once, bounded, per the frozen creator-partial-
 failure contract -- never handed to the controller as a trusted session, and
 never retried.
+
+Runtime-identity provenance (5F3B-I2B-L1-FU3 BLOCKER 2)
+--------------------------------------------------------
+
+The ``RuntimeIdentity`` a live attempt runs on is ISSUED by this module's
+own :func:`resolve_pi_identity` -- the same trusted operation that performs
+the one provenance-only ``node cli.js --version`` probe -- and handed to
+:class:`LiveCategoryBAdapters` as an opaque :class:`IssuedRuntimeIdentity`
+that a caller cannot construct and cannot populate. A freely-built
+``RuntimeIdentity``, even one carrying every trusted path, is refused at
+construction, so ``RuntimeLaunchObservation.observed_pi_version`` can only
+ever be a version THIS process observed. The observed version remains
+provenance only -- it is never compared, pinned, or gated on, here or
+anywhere else in this package.
 
 Credential/secret discipline
 -----------------------------
@@ -403,8 +421,167 @@ _RECOGNIZED_AWAIT_RESPONSE_OUTCOMES = (
 )
 
 
-def resolve_pi_identity() -> RuntimeIdentity:
+# -- BLOCKER 2 (5F3B-I2B-L1-FU3): RuntimeIdentity ISSUANCE -------------------
+#
+# FU2 removed PATH substitution by comparing a caller-supplied
+# ``RuntimeIdentity``'s executable paths against this machine's own trusted
+# resolver. It did not remove caller AUTHORSHIP: ``RuntimeIdentity`` is a
+# plain, freely-constructible frozen dataclass, so a supported caller could
+# build one carrying the three trusted paths and an entirely fabricated
+# ``reported_version``, and this module would later publish that fabricated
+# string as ``RuntimeLaunchObservation.observed_pi_version``. That is an
+# evidence-provenance defect, not an authorization defect -- the version is
+# NOT, and never becomes, a gate (no comparison, no pin, no equality check
+# anywhere; see ``_require_runtime_identity_matches_trusted_resolution``,
+# which deliberately checks only that the string is non-empty).
+#
+# The fix is an ISSUANCE boundary, not a stronger inspection: the SAME
+# trusted operation that runs the one provenance-only ``node cli.js
+# --version`` probe (:func:`resolve_pi_identity`) is the only thing that can
+# mint the object a live attempt consumes.
+#
+# What makes it unforgeable, mechanically:
+#
+#   * :class:`IssuedRuntimeIdentity` carries NO identity data of its own --
+#     only an opaque, fresh 128-bit issuance token. Every identity fact is
+#     read back out of this module's own process-local registry, so there is
+#     literally no field on the object a caller could author. A fabricated
+#     ``reported_version`` has nowhere to live.
+#   * Its ``__init__`` refuses any caller that cannot present the
+#     module-private issuer key object, so ``IssuedRuntimeIdentity(...)`` is
+#     not a public construction path.
+#   * An issuance is ONE-SHOT: the first ``LiveCategoryBAdapters``
+#     construction claims it, and a second claim of the same issuance is
+#     refused. One ``--version`` probe therefore authorizes exactly one live
+#     attempt, and an issued identity can never be replayed into another run.
+#
+# Per this package's already-accepted FU3B threat boundary (see
+# ``qualification.i2_issuance``'s own module docstring), this is NOT a
+# defense against a caller that deliberately imports underscored internals
+# or reaches through ``object.__new__``; it is the removal of a PUBLIC,
+# SUPPORTED path by which a well-behaved caller could author the evidence.
+# Deliberately NOT used: a caller-supplied ``trusted=True`` boolean, a
+# caller-supplied version/hash accepted as proof, and a global mutable "last
+# resolved identity" convention (which has no attempt binding at all).
+
+#: The module-private capability object :class:`IssuedRuntimeIdentity`'s
+#: constructor demands. Never exported, never a string, never derivable.
+_IDENTITY_ISSUER_KEY = object()
+
+
+@dataclass
+class _IssuedRuntimeIdentityRecord:
+    """One issuance. ``claimed`` makes the issuance one-shot (attempt binding)."""
+
+    identity: RuntimeIdentity
+    claimed: bool = False
+
+
+#: Process-local, in-memory only -- never persisted, never an evidence
+#: field, and carrying no claim of surviving a process restart. Keyed by
+#: issuance token alone, exactly as ``qualification.i2_issuance``'s own
+#: accepted registry is.
+_ISSUED_RUNTIME_IDENTITIES: dict[str, _IssuedRuntimeIdentityRecord] = {}
+
+
+class IssuedRuntimeIdentity:
+    """An opaque proof that THIS module's own trusted probe produced one
+    :class:`~ar2.launch.RuntimeIdentity`, for exactly one live attempt.
+
+    Holds only an issuance token. Every identity fact -- including
+    ``reported_version``, which stays provenance only -- lives in this
+    module's registry, never on the object, so no caller-authored value can
+    reach :class:`~qualification.i2b_session.RuntimeLaunchObservation`.
+    ``repr()`` renders no path and no token.
+    """
+
+    __slots__ = ("_issuance_token",)
+
+    def __init__(self, issuer_key: Any, *, issuance_token: str) -> None:
+        if issuer_key is not _IDENTITY_ISSUER_KEY:
+            raise LiveAdapterError(
+                "runtime identity refused: IssuedRuntimeIdentity is minted "
+                "only by this module's own qualification-owned issuance path"
+            )
+        self._issuance_token = issuance_token
+
+    @property
+    def node_executable(self) -> str:
+        """The trusted Node executable, read from the REGISTRY -- the one
+        identity fact the live entry point needs outside the adapter (the
+        frozen controller's own child-environment PATH narrowing). Never a
+        value stored on this object."""
+        record = _ISSUED_RUNTIME_IDENTITIES.get(self._issuance_token)
+        if record is None:
+            raise LiveAdapterError(
+                "runtime identity refused: this issued runtime identity is "
+                "not present in this process's own issuance registry"
+            )
+        return record.identity.node_executable
+
+    def __repr__(self) -> str:  # noqa: D105 - see class docstring
+        return f"{type(self).__name__}(issued=True)"
+
+
+def _issue_runtime_identity(identity: RuntimeIdentity) -> IssuedRuntimeIdentity:
+    """Package-internal. The ONLY supported caller is
+    :func:`resolve_pi_identity`, immediately after its one real
+    ``--version`` probe."""
+    if type(identity) is not RuntimeIdentity:
+        raise LiveAdapterError(
+            "runtime identity refused: only a RuntimeIdentity can be issued"
+        )
+    token = secrets.token_hex(16)
+    if token in _ISSUED_RUNTIME_IDENTITIES:  # pragma: no cover - 128-bit collision
+        raise LiveAdapterError("runtime identity refused: issuance token collision")
+    _ISSUED_RUNTIME_IDENTITIES[token] = _IssuedRuntimeIdentityRecord(identity=identity)
+    return IssuedRuntimeIdentity(_IDENTITY_ISSUER_KEY, issuance_token=token)
+
+
+def _claim_issued_runtime_identity(issued: Any) -> RuntimeIdentity:
+    """Consume one issuance for one live attempt, and return the TRUSTED
+    identity the registry holds -- never anything read off ``issued``.
+
+    Claiming happens BEFORE any further validation, so a construction that
+    is subsequently refused still burns the issuance: a rejected attempt can
+    never re-present the same probe's authority to a second construction.
+    """
+    if type(issued) is not IssuedRuntimeIdentity:
+        raise LiveAdapterError(
+            "LiveCategoryBAdapters requires a RuntimeIdentity ISSUED by this "
+            "module's own resolve_pi_identity probe; a caller-constructed "
+            "RuntimeIdentity can never authorize a live attempt"
+        )
+    token = issued._issuance_token
+    record = _ISSUED_RUNTIME_IDENTITIES.get(token) if type(token) is str else None
+    if record is None:
+        raise LiveAdapterError(
+            "runtime identity refused: this issued runtime identity is not "
+            "present in this process's own issuance registry"
+        )
+    if record.claimed:
+        raise LiveAdapterError(
+            "runtime identity refused: this issued runtime identity was "
+            "already consumed by one live attempt and is never reusable"
+        )
+    record.claimed = True
+    return record.identity
+
+
+def resolve_pi_identity() -> IssuedRuntimeIdentity:
     """Locate Node + Pi and OBSERVE Pi's version. Never gates on the value.
+
+    **The trusted issuance boundary (FU3 BLOCKER 2).** This is the one
+    operation authorized to run the single provenance-only ``node cli.js
+    --version`` probe for a live attempt, and it is therefore the one
+    operation that mints the :class:`IssuedRuntimeIdentity` a
+    :class:`LiveCategoryBAdapters` will consume. The probe and the issuance
+    are the SAME operation, so the identity handed to the adapter is
+    mechanically tied to a version this process itself observed -- there is
+    no supported path by which a caller can author ``reported_version``,
+    and none by which an unissued ``RuntimeIdentity`` can reach a live
+    launch. ``reported_version`` remains provenance ONLY: it is observed,
+    required to be non-empty, recorded, and never compared to anything.
 
     Structurally identical to ``experiments/pi_external_runtime_ar2_o1/
     o1/pi_compat.py``'s ``resolve_pi_identity_provenance_only`` -- composed
@@ -447,12 +624,14 @@ def resolve_pi_identity() -> RuntimeIdentity:
             "launch error: Pi reported an empty version string; a version must "
             "be observable even though it is never an authorization gate"
         )
-    return RuntimeIdentity(
-        node_executable=node_executable,
-        pi_cli_js=cli_js,
-        pi_package_root=package_root,
-        reported_version=reported,
-        launch_shape="node_direct",
+    return _issue_runtime_identity(
+        RuntimeIdentity(
+            node_executable=node_executable,
+            pi_cli_js=cli_js,
+            pi_package_root=package_root,
+            reported_version=reported,
+            launch_shape="node_direct",
+        )
     )
 
 
@@ -511,6 +690,123 @@ def preflight_pi_installed_offline() -> PreflightGateResult:
     return PreflightGateResult(name="pi_installed_offline", passed=True)
 
 
+#: FU3 BLOCKER 3 / FU4 BLOCKER 1 -- generated-config RELEASE ownership for
+#: the Category-A self-checks that actually generate a config.
+#:
+#: Three preflight producers below call
+#: ``i2_pi_config.write_qualification_pi_config``
+#: (``preflight_config_generator_self_check``,
+#: ``preflight_child_environment_builder_self_check``, and
+#: ``preflight_candidate_route_generator_symmetry``, which issues TWO). Every
+#: other Category-A producer generates nothing and is untouched by this rule.
+#:
+#: FU2 routed only the SUCCESSFUL exits through the official cleanup path.
+#: FU3 moved that official cleanup into a ``finally``, so it is attempted
+#: exactly once per returned object on every exit. FU4 fixes what remained:
+#: the throwaway parent's raw ``shutil.rmtree`` still ran UNCONDITIONALLY
+#: afterwards.
+#:
+#: That mattered because the frozen cleanup primitive has a deliberate
+#: invariant (``i2_cleanup.scrub_generated_qualification_config``):
+#:
+#:     removal VERIFIED      -> the process-local issuance is discarded
+#:     removal NOT verified  -> the issuance is RETAINED, precisely because
+#:                              the directory still exists and a future
+#:                              authorized cleanup must remain possible
+#:
+#: So "official cleanup could not verify, then raw-delete the tree anyway"
+#: destroyed the path while leaving the issuance live -- exactly the stale-
+#: authority class FU3 set out to eliminate, reintroduced one line later.
+#:
+#: The rule enforced below, per GENERATED OBJECT (never one aggregate bool
+#: across two objects):
+#:
+#:     A. official cleanup VERIFIED -- the issuance is gone and the config
+#:        tree is verified absent, so the throwaway PARENT may be raw-deleted
+#:        for hygiene. Gate unaffected.
+#:     B. generation failed BEFORE returning an object -- no issuance exists
+#:        and nothing was cleaned, so the throwaway PARENT may be
+#:        raw-deleted. Gate unaffected by cleanup.
+#:     C. official cleanup NOT VERIFIED, or it raised -- the frozen primitive
+#:        intentionally RETAINED the issuance. The gate FAILS, and NOTHING
+#:        beneath that retained issuance is raw-deleted. The synthetic temp
+#:        tree may survive on disk in this failure-only path; that is
+#:        strictly preferable to falsifying the issuance/path coupling.
+#:
+#: In case C this module never calls an ``i2_issuance`` discard function,
+#: never mutates the registry, never retries the delete through an
+#: unreviewed path, and never converts an unverified cleanup into success
+#: because a later raw delete happened to remove the directory. The truthful
+#: residual is reported as it stands: cleanup was attempted, cleanup was not
+#: verified, the preflight failed. A live attempt aborts on that Category-A
+#: failure -- before the version probe and before the credential boundary.
+
+
+@dataclass(frozen=True)
+class _GeneratedConfigRelease:
+    """What releasing ONE generated self-check config actually achieved.
+
+    Deliberately three recorded facts rather than a single bool, because
+    "nothing was generated" and "generated and successfully released" are
+    different histories that happen to permit the same follow-up action,
+    and "generated but NOT released" must permit neither the gate to pass
+    nor the parent to be deleted.
+    """
+
+    generated_object_existed: bool
+    cleanup_attempted: bool
+    cleanup_verified: bool
+
+    @property
+    def issuance_outstanding(self) -> bool:
+        """The one derived predicate both decisions below read.
+
+        True exactly while a generated object exists whose issuance the
+        frozen cleanup primitive deliberately RETAINED. Identity against the
+        ``True`` singleton is already enforced where ``cleanup_verified`` is
+        set, never bare truthiness on a primitive's return value.
+        """
+        return self.generated_object_existed and not self.cleanup_verified
+
+    @property
+    def gate_ok(self) -> bool:
+        """Whether this release lets the producing gate pass."""
+        return not self.issuance_outstanding
+
+    @property
+    def throwaway_parent_may_be_removed(self) -> bool:
+        """Whether the throwaway PARENT directory may now be raw-deleted."""
+        return not self.issuance_outstanding
+
+
+def _release_generated_self_check_config(
+    generated: GeneratedQualificationConfig | None,
+) -> _GeneratedConfigRelease:
+    """Attempt the official qualification cleanup/discard for ONE generated
+    self-check config, exactly once. Never a raw path delete.
+
+    :func:`~qualification.i2_cleanup.scrub_generated_qualification_config`
+    is the ONLY cleanup authority used -- it is what discards the
+    process-local :mod:`qualification.i2_issuance` record, and only on a
+    removal it verified. Any failure, including the cleanup primitive itself
+    raising, is recorded as an unverified cleanup rather than escaping: a
+    cleanup attempt must never erase the gate result it is cleaning up
+    after, and must never be skipped by an exception on a neighbouring
+    object.
+    """
+    if generated is None:
+        return _GeneratedConfigRelease(
+            generated_object_existed=False, cleanup_attempted=False, cleanup_verified=False
+        )
+    try:
+        verified = scrub_generated_qualification_config(generated).scrub_verified is True
+    except Exception:  # noqa: BLE001 - bounded: a cleanup failure is a gate failure, never a crash
+        verified = False
+    return _GeneratedConfigRelease(
+        generated_object_existed=True, cleanup_attempted=True, cleanup_verified=verified
+    )
+
+
 def preflight_config_generator_self_check() -> PreflightGateResult:
     """I2A §14.2 -- REAL, credential-free self-test of the config-generator
     round trip.
@@ -531,67 +827,69 @@ def preflight_config_generator_self_check() -> PreflightGateResult:
     the run's own eventual real generated config, which does not exist yet
     at preflight time.
 
-    **L1-FU2 nearby fix.** Cleanup now goes through the ACCEPTED
-    qualification cleanup path
-    (:func:`~qualification.i2_cleanup.scrub_generated_qualification_config`)
-    rather than a raw ``shutil.rmtree`` of the whole throwaway parent
-    directory -- the earlier raw delete bypassed
-    :mod:`qualification.i2_issuance`'s own discard step, leaving a stale
-    process-local issuance record behind even though the directory was
-    gone. A cleanup that cannot be verified now FAILS this gate, rather
-    than silently passing.
+    **L1-FU2 nearby fix, completed by L1-FU3 BLOCKER 3 and L1-FU4
+    BLOCKER 1.** Cleanup goes through the ACCEPTED qualification cleanup
+    path
+    (:func:`~qualification.i2_cleanup.scrub_generated_qualification_config`,
+    via :func:`_release_generated_self_check_config`) rather than a raw
+    ``shutil.rmtree`` of the whole throwaway parent directory -- the raw
+    delete bypassed :mod:`qualification.i2_issuance`'s own discard step,
+    leaving a stale process-local issuance record behind even though the
+    directory was gone. FU2 fixed only the SUCCESS exit; FU3 moved the
+    official cleanup into a ``finally``, so it is attempted exactly once on
+    EVERY exit after generation returned an object -- including the
+    verification-failure branch below and an unexpected propagating
+    exception. FU4 then made the throwaway parent's raw delete
+    CONDITIONAL: it runs only once the release verified (or when no object
+    was ever generated), never underneath an issuance the frozen primitive
+    deliberately retained. A cleanup that cannot be verified FAILS this
+    gate, rather than silently passing.
     """
     tmp_root = tempfile.mkdtemp(prefix="i2b-preflight-self-check-")
     generated: GeneratedQualificationConfig | None = None
+    gate_failed = False
     try:
-        generated = write_qualification_pi_config(
-            tmp_root, model_id=_SELF_CHECK_MODEL_ID, base_url=_SELF_CHECK_BASE_URL
-        )
-        verify_generated_config_integrity(
-            config_dir=generated.config_dir,
-            settings_path=generated.settings_path,
-            models_path=generated.models_path,
-            authority_token=generated.authority_token,
-            provider_id=generated.provider_id,
-            model_id=generated.model_id,
-        )
-        description = describe_generated_config(generated)
-        if description["api_key_resolution"] != "env_interpolation":
-            raise QualificationPiConfigError(
-                "config error: apiKey does not use exact $ENV interpolation"
+        try:
+            generated = write_qualification_pi_config(
+                tmp_root, model_id=_SELF_CHECK_MODEL_ID, base_url=_SELF_CHECK_BASE_URL
             )
-        if description["api_key_uses_shell_command_resolution"]:
-            raise QualificationPiConfigError(
-                "config error: apiKey uses a shell-command '!' resolution form"
+            verify_generated_config_integrity(
+                config_dir=generated.config_dir,
+                settings_path=generated.settings_path,
+                models_path=generated.models_path,
+                authority_token=generated.authority_token,
+                provider_id=generated.provider_id,
+                model_id=generated.model_id,
             )
-        if description["models_json_contains_max_tokens"]:
-            raise QualificationPiConfigError(
-                "config error: the generated models.json contains maxTokens"
-            )
-        if not description["settings_keys"] or not description["models_provider_ids"]:
-            raise QualificationPiConfigError(
-                "config error: the generated config is missing a required key"
-            )
-    except (
-        QualificationPiConfigError,
-        QualificationPiConfigCleanupError,
-        CleanupAuthorityError,
-    ):
-        shutil.rmtree(tmp_root, ignore_errors=True)
-        return PreflightGateResult(
-            name="config_generator_self_check",
-            passed=False,
-            failure_code="VERIFICATION_FAILED",
-        )
-
-    try:
-        cleanup_verified = scrub_generated_qualification_config(generated).scrub_verified
-    except CleanupAuthorityError:
-        cleanup_verified = False
+            description = describe_generated_config(generated)
+            if description["api_key_resolution"] != "env_interpolation":
+                raise QualificationPiConfigError(
+                    "config error: apiKey does not use exact $ENV interpolation"
+                )
+            if description["api_key_uses_shell_command_resolution"]:
+                raise QualificationPiConfigError(
+                    "config error: apiKey uses a shell-command '!' resolution form"
+                )
+            if description["models_json_contains_max_tokens"]:
+                raise QualificationPiConfigError(
+                    "config error: the generated models.json contains maxTokens"
+                )
+            if not description["settings_keys"] or not description["models_provider_ids"]:
+                raise QualificationPiConfigError(
+                    "config error: the generated config is missing a required key"
+                )
+        except (
+            QualificationPiConfigError,
+            QualificationPiConfigCleanupError,
+            CleanupAuthorityError,
+        ):
+            gate_failed = True
     finally:
-        shutil.rmtree(tmp_root, ignore_errors=True)
+        release = _release_generated_self_check_config(generated)
+        if release.throwaway_parent_may_be_removed:
+            shutil.rmtree(tmp_root, ignore_errors=True)
 
-    if not cleanup_verified:
+    if gate_failed or not release.gate_ok:
         return PreflightGateResult(
             name="config_generator_self_check",
             passed=False,
@@ -668,59 +966,61 @@ def preflight_child_environment_builder_self_check() -> PreflightGateResult:
     ``i2_environment.build_child_environment`` and
     ``i2_environment.audit_withheld_names`` -- never a second, drifting
     audit implementation.
+
+    **FU3 BLOCKER 3 + FU4 BLOCKER 1.** The post-generation failure branch
+    used to raw-delete the throwaway parent, leaving the process-local
+    issuance record behind after a FAILED preflight. The official
+    cleanup/discard now runs from a ``finally``, exactly once, on every exit
+    where generation returned an object -- the secret-context,
+    environment-builder and audit failures included -- and the raw parent
+    delete happens only after it AND only when that release verified.
     """
     tmp_root = tempfile.mkdtemp(prefix="i2b-preflight-env-self-check-")
     generated: GeneratedQualificationConfig | None = None
+    gate_failed = False
     try:
-        generated = write_qualification_pi_config(
-            tmp_root, model_id=_SELF_CHECK_MODEL_ID, base_url=_SELF_CHECK_BASE_URL
-        )
-        secret_context = build_secret_context(
-            base_url=_SELF_CHECK_BASE_URL,
-            api_key=_SELF_CHECK_API_KEY,
-            model_id=_SELF_CHECK_MODEL_ID,
-        )
-        launch_environment = build_child_environment(
-            ambient_environ=_SELF_CHECK_AMBIENT_ENVIRON,
-            node_executable=_SELF_CHECK_NODE_EXECUTABLE,
-            generated_config=generated,
-            secret_context=secret_context,
-        )
-        audit = audit_withheld_names(
-            ambient_environ=_SELF_CHECK_AMBIENT_ENVIRON,
-            built_environment=launch_environment.environment,
-        )
-        if audit["sensitive_names_forwarded_count"] != 0 or audit["profile_names_forwarded_to_child"]:
-            raise EnvironmentPolicyError(
-                "environment error: the self-check builder output failed its "
-                "own forbidden-fragment audit"
+        try:
+            generated = write_qualification_pi_config(
+                tmp_root, model_id=_SELF_CHECK_MODEL_ID, base_url=_SELF_CHECK_BASE_URL
             )
-    except (
-        QualificationPiConfigError,
-        QualificationPiConfigCleanupError,
-        CleanupAuthorityError,
-        SecretContextError,
-        InvalidBaseUrlError,
-        EnvironmentPolicyError,
-    ):
-        shutil.rmtree(tmp_root, ignore_errors=True)
-        return PreflightGateResult(
-            name="child_environment_builder_self_check",
-            passed=False,
-            failure_code="VERIFICATION_FAILED",
-        )
-
-    try:
-        cleanup_verified = (
-            generated is not None
-            and scrub_generated_qualification_config(generated).scrub_verified
-        )
-    except CleanupAuthorityError:
-        cleanup_verified = False
+            secret_context = build_secret_context(
+                base_url=_SELF_CHECK_BASE_URL,
+                api_key=_SELF_CHECK_API_KEY,
+                model_id=_SELF_CHECK_MODEL_ID,
+            )
+            launch_environment = build_child_environment(
+                ambient_environ=_SELF_CHECK_AMBIENT_ENVIRON,
+                node_executable=_SELF_CHECK_NODE_EXECUTABLE,
+                generated_config=generated,
+                secret_context=secret_context,
+            )
+            audit = audit_withheld_names(
+                ambient_environ=_SELF_CHECK_AMBIENT_ENVIRON,
+                built_environment=launch_environment.environment,
+            )
+            if (
+                audit["sensitive_names_forwarded_count"] != 0
+                or audit["profile_names_forwarded_to_child"]
+            ):
+                raise EnvironmentPolicyError(
+                    "environment error: the self-check builder output failed its "
+                    "own forbidden-fragment audit"
+                )
+        except (
+            QualificationPiConfigError,
+            QualificationPiConfigCleanupError,
+            CleanupAuthorityError,
+            SecretContextError,
+            InvalidBaseUrlError,
+            EnvironmentPolicyError,
+        ):
+            gate_failed = True
     finally:
-        shutil.rmtree(tmp_root, ignore_errors=True)
+        release = _release_generated_self_check_config(generated)
+        if release.throwaway_parent_may_be_removed:
+            shutil.rmtree(tmp_root, ignore_errors=True)
 
-    if not cleanup_verified:
+    if gate_failed or not release.gate_ok:
         return PreflightGateResult(
             name="child_environment_builder_self_check",
             passed=False,
@@ -736,80 +1036,101 @@ def preflight_candidate_route_generator_symmetry() -> PreflightGateResult:
     twice with only ``model_id`` varying: the two generated documents are
     compared field-by-field and must agree on everything except the one
     model entry's ``id``.
+
+    **FU3 BLOCKER 3 + FU4 BLOCKER 1.** This producer issues TWO configs, so
+    the ownership rule applies to each independently: whichever generations
+    returned an object get the official cleanup/discard exactly once, on
+    every exit -- a validation failure after BOTH were issued cleans both,
+    and a first generation that succeeded followed by a second that failed
+    still cleans the first. Each throwaway parent's raw delete is then
+    decided by ITS OWN release, never by one aggregate bool: a verified
+    release for one config and an unverified release for the other removes
+    only the released config's parent, leaving the other parent coupled to
+    the issuance the frozen primitive retained. The earlier ``_cleanup``
+    helper ran only where it was explicitly called and let a ``KeyError``
+    from the document comparison reach the raw-delete branch with issuance
+    records still live.
     """
     tmp_root_a = tempfile.mkdtemp(prefix="i2b-preflight-symmetry-a-")
     tmp_root_b = tempfile.mkdtemp(prefix="i2b-preflight-symmetry-b-")
     generated_a: GeneratedQualificationConfig | None = None
     generated_b: GeneratedQualificationConfig | None = None
-
-    def _cleanup() -> bool:
-        ok = True
-        for generated, tmp_root in ((generated_a, tmp_root_a), (generated_b, tmp_root_b)):
-            if generated is not None:
-                try:
-                    ok = scrub_generated_qualification_config(generated).scrub_verified and ok
-                except CleanupAuthorityError:
-                    ok = False
-            shutil.rmtree(tmp_root, ignore_errors=True)
-        return ok
+    gate_failed = False
 
     try:
-        generated_a = write_qualification_pi_config(
-            tmp_root_a, model_id=_CANDIDATE_MODEL_IDS["A"], base_url=_SELF_CHECK_BASE_URL
-        )
-        generated_b = write_qualification_pi_config(
-            tmp_root_b, model_id=_CANDIDATE_MODEL_IDS["B"], base_url=_SELF_CHECK_BASE_URL
-        )
-        settings_a = json.loads(Path(generated_a.settings_path).read_text(encoding="utf-8"))
-        settings_b = json.loads(Path(generated_b.settings_path).read_text(encoding="utf-8"))
-        if settings_a != settings_b:
-            raise QualificationPiConfigError(
-                "config error: candidate A/B settings.json documents disagree"
+        try:
+            generated_a = write_qualification_pi_config(
+                tmp_root_a, model_id=_CANDIDATE_MODEL_IDS["A"], base_url=_SELF_CHECK_BASE_URL
             )
-        models_a = json.loads(Path(generated_a.models_path).read_text(encoding="utf-8"))
-        models_b = json.loads(Path(generated_b.models_path).read_text(encoding="utf-8"))
-        entries_a = models_a["providers"][generated_a.provider_id]["models"]
-        entries_b = models_b["providers"][generated_b.provider_id]["models"]
-        if len(entries_a) != 1 or len(entries_b) != 1:
-            raise QualificationPiConfigError(
-                "config error: a candidate config does not carry exactly one "
-                "model entry"
+            generated_b = write_qualification_pi_config(
+                tmp_root_b, model_id=_CANDIDATE_MODEL_IDS["B"], base_url=_SELF_CHECK_BASE_URL
             )
-        stripped_a = {k: v for k, v in entries_a[0].items() if k != "id"}
-        stripped_b = {k: v for k, v in entries_b[0].items() if k != "id"}
-        if stripped_a != stripped_b:
-            raise QualificationPiConfigError(
-                "config error: candidate A/B model entries disagree on a "
-                "field other than id"
-            )
-        provider_a = {
-            k: v for k, v in models_a["providers"][generated_a.provider_id].items() if k != "models"
-        }
-        provider_b = {
-            k: v for k, v in models_b["providers"][generated_b.provider_id].items() if k != "models"
-        }
-        if provider_a != provider_b:
-            raise QualificationPiConfigError(
-                "config error: candidate A/B provider documents disagree on a "
-                "field other than the model list"
-            )
-        if (
-            entries_a[0]["id"] != _CANDIDATE_MODEL_IDS["A"]
-            or entries_b[0]["id"] != _CANDIDATE_MODEL_IDS["B"]
+            settings_a = json.loads(Path(generated_a.settings_path).read_text(encoding="utf-8"))
+            settings_b = json.loads(Path(generated_b.settings_path).read_text(encoding="utf-8"))
+            if settings_a != settings_b:
+                raise QualificationPiConfigError(
+                    "config error: candidate A/B settings.json documents disagree"
+                )
+            models_a = json.loads(Path(generated_a.models_path).read_text(encoding="utf-8"))
+            models_b = json.loads(Path(generated_b.models_path).read_text(encoding="utf-8"))
+            entries_a = models_a["providers"][generated_a.provider_id]["models"]
+            entries_b = models_b["providers"][generated_b.provider_id]["models"]
+            if len(entries_a) != 1 or len(entries_b) != 1:
+                raise QualificationPiConfigError(
+                    "config error: a candidate config does not carry exactly one "
+                    "model entry"
+                )
+            stripped_a = {k: v for k, v in entries_a[0].items() if k != "id"}
+            stripped_b = {k: v for k, v in entries_b[0].items() if k != "id"}
+            if stripped_a != stripped_b:
+                raise QualificationPiConfigError(
+                    "config error: candidate A/B model entries disagree on a "
+                    "field other than id"
+                )
+            provider_a = {
+                k: v
+                for k, v in models_a["providers"][generated_a.provider_id].items()
+                if k != "models"
+            }
+            provider_b = {
+                k: v
+                for k, v in models_b["providers"][generated_b.provider_id].items()
+                if k != "models"
+            }
+            if provider_a != provider_b:
+                raise QualificationPiConfigError(
+                    "config error: candidate A/B provider documents disagree on a "
+                    "field other than the model list"
+                )
+            if (
+                entries_a[0]["id"] != _CANDIDATE_MODEL_IDS["A"]
+                or entries_b[0]["id"] != _CANDIDATE_MODEL_IDS["B"]
+            ):
+                raise QualificationPiConfigError(
+                    "config error: a candidate config's model id does not match "
+                    "the frozen pairing"
+                )
+        except (
+            QualificationPiConfigError,
+            QualificationPiConfigCleanupError,
+            CleanupAuthorityError,
+            KeyError,
         ):
-            raise QualificationPiConfigError(
-                "config error: a candidate config's model id does not match "
-                "the frozen pairing"
-            )
-    except (QualificationPiConfigError, QualificationPiConfigCleanupError, CleanupAuthorityError, KeyError):
-        _cleanup()
-        return PreflightGateResult(
-            name="candidate_route_generator_symmetry",
-            passed=False,
-            failure_code="VERIFICATION_FAILED",
-        )
+            gate_failed = True
+    finally:
+        # BOTH issued objects, independently, exactly once each -- and each
+        # throwaway parent's raw delete is decided by ITS OWN release, never
+        # by one aggregate bool across the two (FU4 BLOCKER 1). A verified
+        # release for A and an unverified release for B removes A's parent
+        # and leaves B's parent coupled to B's retained issuance.
+        release_a = _release_generated_self_check_config(generated_a)
+        release_b = _release_generated_self_check_config(generated_b)
+        if release_a.throwaway_parent_may_be_removed:
+            shutil.rmtree(tmp_root_a, ignore_errors=True)
+        if release_b.throwaway_parent_may_be_removed:
+            shutil.rmtree(tmp_root_b, ignore_errors=True)
 
-    if not _cleanup():
+    if gate_failed or not (release_a.gate_ok and release_b.gate_ok):
         return PreflightGateResult(
             name="candidate_route_generator_symmetry",
             passed=False,
@@ -979,6 +1300,34 @@ def _build_inert_static_eligibility_domain(*, canonical_root: str) -> StaticElig
     )
 
 
+def _broker_reports_pipe_resource_created(server: Any) -> bool:
+    """FU3 BLOCKER 1: project AR2 D1's ``BrokerServer.pipe_resource_created``.
+
+    This is the ONE public fact the partial-start branch is allowed to read
+    (5F3B-I2B-L1-D1). It is monotonic and truthful by construction on the
+    frozen dependency: ``True`` only immediately after
+    ``winpipe.create_first_instance_pipe`` returned, never "creation was
+    attempted", and never reset to ``False`` afterwards.
+
+    Fail-closed in the direction that preserves cleanup: ONLY an exact
+    ``False`` singleton reports "no broker resource ever existed". An
+    unreadable attribute, or a value that is not exactly a ``bool`` --
+    neither of which the frozen D1 surface can produce -- reports ``True``,
+    so the one bounded supported cleanup is still attempted rather than
+    skipped on the strength of a value this module could not verify.
+
+    Nothing here reads ``server.state``, an exception, ``_pipe_handle``,
+    ``_thread``, or any other private field.
+    """
+    try:
+        raw = server.pipe_resource_created
+    except Exception:  # noqa: BLE001 - an unreadable fact is never "nothing was created"
+        return True
+    if type(raw) is not bool:
+        return True
+    return raw
+
+
 def _rpc_response_reports_exact_success(response: Any) -> bool:
     """BLOCKER 5: project an RPC response's ``success`` field FAIL-CLOSED.
 
@@ -1037,7 +1386,7 @@ class LiveCategoryBAdapters:
         self,
         *,
         environ_reader: Any,
-        runtime_identity: RuntimeIdentity,
+        runtime_identity: IssuedRuntimeIdentity,
         experiment_id: str = QUALIFICATION_EXPERIMENT_ID,
         bounds: RunBounds | None = None,
     ) -> None:
@@ -1053,11 +1402,22 @@ class LiveCategoryBAdapters:
         credential boundary. ``launch_runtime`` below consumes this exact
         object rather than re-resolving Pi's identity a second time at
         launch -- one Category-B attempt performs exactly one version
-        probe, never two (L1 brief, "SINGLE RUNTIME IDENTITY BINDING"). It
-        is additionally bound, mechanically, to this machine's own trusted
-        resolver path (L1-FU2 BLOCKER 1, RuntimeIdentity variant) -- a
-        same-type object carrying substituted executable paths is refused
-        here, at construction, never merely type-checked.
+        probe, never two (L1 brief, "SINGLE RUNTIME IDENTITY BINDING").
+
+        **It must be an :class:`IssuedRuntimeIdentity`, never a bare
+        ``RuntimeIdentity`` (FU3 BLOCKER 2).** A freely-constructed
+        ``RuntimeIdentity`` -- even one carrying all three trusted paths --
+        is refused here, because its ``reported_version`` would be
+        caller-authored evidence. The issuance is claimed ONE-SHOT at this
+        point, so one ``--version`` probe authorizes exactly one adapter
+        instance and can never be replayed into a second run, and the
+        identity this instance goes on to use is read from the issuance
+        registry rather than off the presented object.
+
+        The claimed identity is additionally bound, mechanically, to this
+        machine's own trusted resolver path (L1-FU2 BLOCKER 1,
+        RuntimeIdentity variant) -- that accepted check is unchanged and
+        still runs, as defense in depth behind the issuance boundary.
 
         **There is no ``ar2_extension_source_dir`` parameter (L1-FU2
         BLOCKER 1).** The disposable extension's source is derived
@@ -1066,15 +1426,11 @@ class LiveCategoryBAdapters:
         object exists -- no caller of this constructor can express a
         substitute.
         """
-        if type(runtime_identity) is not RuntimeIdentity:
-            raise LiveAdapterError(
-                "LiveCategoryBAdapters requires a single, already-resolved "
-                "RuntimeIdentity"
-            )
-        _require_runtime_identity_matches_trusted_resolution(runtime_identity)
+        identity = _claim_issued_runtime_identity(runtime_identity)
+        _require_runtime_identity_matches_trusted_resolution(identity)
         self._environ_reader = environ_reader
         self._ar2_extension_source_dir = _require_authorized_extension_source()
-        self._runtime_identity = runtime_identity
+        self._runtime_identity = identity
         self._experiment_id = experiment_id
         self._bounds = bounds or _DEFAULT_BOUNDS
         self._brokers: dict[str, _LiveBrokerRecord] = {}
@@ -1120,43 +1476,59 @@ class LiveCategoryBAdapters:
         )
 
     def _retain_and_close_partial_broker(self, server: BrokerServer) -> BrokerCreationObservation:
-        """A ``BrokerServer.start()`` failure. See L1 BLOCKER 1.
+        """A ``BrokerServer.start()`` failure. See L1 BLOCKER 1, corrected by
+        5F3B-I2B-L1-FU3 BLOCKER 1 once the AR2 D1 dependency landed.
 
-        The frozen ``BrokerServer``'s ``state`` reads ``STATE_CREATED`` for
-        EVERY pre-READY failure point ``start()`` can raise from -- the
-        worker only transitions to ``STATE_READY`` deep inside
-        ``_serve_body``, after issuing its first overlapped
-        ``ConnectNamedPipe``, which is strictly later than every exception
-        ``start()`` itself can propagate (a pipe-creation failure, a
-        shutdown-event-creation failure, a thread-construction/start
-        failure, or the worker never signalling READY within its
-        deadline). ``server.state == STATE_CREATED`` therefore CANNOT
-        mechanically distinguish "nothing was created" from "a pipe (and
-        possibly the shutdown event) was created but the worker thread was
-        never started or never reached READY" -- there is no other public,
-        supported signal on this class that can either (reaching into
-        ``server._pipe_handle`` or ``server._thread`` would be exactly the
-        private-internals workaround the L1 brief forbids).
+        **The single fact this reads is D1's own public, monotonic
+        ``BrokerServer.pipe_resource_created``** -- never ``server.state``,
+        never the exception's type or text, and never a private field
+        (``_pipe_handle``, ``_thread``, ``_worker_thread_started``). Before
+        D1, the frozen public surface could not distinguish "nothing was
+        created" from "a pipe exists but no worker owns it": ``state`` reads
+        ``STATE_CREATED`` for every pre-READY failure point ``start()`` can
+        raise from, so this method conservatively reported
+        ``resource_created=True`` and attempted a cleanup for EVERY start
+        failure, including one where the pipe creation itself raised. D1
+        removed that ambiguity, so the conservative behaviour is no longer
+        truthful and is no longer used.
 
-        So this method NEVER infers ``resource_created=False`` from an
-        exception here: it conservatively assumes a resource MAY have been
-        created, and calls the ONE safe, always-callable, supported cleanup
-        primitive the frozen class exposes for every such state --
-        ``BrokerServer.shutdown()`` -- exactly once, guarded so a cleanup
-        exception can never erase this primary start failure (BLOCKER 3).
+        ``pipe_resource_created is False`` -- ``create_first_instance_pipe``
+        raised before returning, or ``start()`` was never reached at all --
+        means no broker OS resource ever existed. There is nothing to own
+        and nothing to close, so this reports the frozen
+        :class:`~qualification.i2b_session.BrokerCreationObservation`
+        "nothing created" row exactly (``resource_created=False``,
+        ``cleanup_attempted=False``) and calls ``shutdown()`` ZERO times. A
+        fake cleanup call issued purely to make the two branches look
+        uniform would be an untrue ``cleanup_attempted=True``, so it is not
+        made.
 
-        ``shutdown()`` itself is fully effective when the worker thread WAS
-        started (a READY-deadline timeout): its own ``_thread is None``
-        early-return branch is never taken, so the full teardown ladder
-        runs and can genuinely reach ``STATE_CLOSED``. It is only
-        INEFFECTIVE -- never unsafe, never raising -- for the narrower
-        pre-thread-start failures, where its ``_thread is None`` branch
-        returns immediately without closing a pipe handle that may exist;
-        that case is reported exactly as designed: ``cleanup_attempted=
-        True, reached_closed=False`` (cleanup was attempted; the
-        postcondition is honestly unverified), never as a fabricated
-        success and never as an erased primary failure.
+        ``pipe_resource_created is True`` means an OS resource was created
+        during this ``start()`` call and, because ``start()`` did not
+        return, creator ownership never transferred anywhere. This performs
+        exactly ONE supported ``server.shutdown(TRIGGER_AIDO_TEARDOWN)``
+        -- D1's own no-worker branch closes only the handles
+        ``BrokerServer`` itself created and can genuinely reach
+        ``STATE_CLOSED``, and its worker-started branch runs the full
+        teardown ladder -- and reports the postcondition it actually
+        observed. A cleanup that itself raises is caught here so it can
+        never erase the primary start failure (BLOCKER 3); it is reported
+        as ``reached_closed=False``, an honestly unverified postcondition,
+        never a fabricated success.
+
+        The projection is fail-closed in the one direction that matters: a
+        value that is not EXACTLY the ``False`` singleton (an unreadable
+        attribute, or a non-``bool``, neither of which the frozen D1
+        surface can produce) is treated as creator-owned, so the cleanup is
+        still attempted rather than skipped.
         """
+        if not _broker_reports_pipe_resource_created(server):
+            return BrokerCreationObservation(
+                session=None,
+                start_attempted=True,
+                resource_created=False,
+                cleanup_attempted=False,
+            )
         try:
             lifecycle = server.shutdown(TRIGGER_AIDO_TEARDOWN)
             reached_closed = lifecycle["state_reached"] == STATE_CLOSED

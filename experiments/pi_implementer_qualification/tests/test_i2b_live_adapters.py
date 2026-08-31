@@ -30,12 +30,19 @@ from __future__ import annotations
 
 import ast
 import inspect
+import json
 import os
 from types import SimpleNamespace
 
 import pytest
 
-from ar2.broker import STATE_CLOSED, STATE_CREATED, STATE_DRAINING, STATE_READY
+from ar2.broker import (
+    STATE_CLOSED,
+    STATE_CREATED,
+    STATE_DRAINING,
+    STATE_READY,
+    STATE_TEARDOWN_INCOMPLETE,
+)
 from ar2.launch import LaunchIdentityError, RuntimeIdentity
 from ar2.pi_config import SENTINEL_COMMAND_NAME
 from ar2.pi_config import TOOL_ALLOWLIST as AR2_TOOL_ALLOWLIST
@@ -264,14 +271,21 @@ class _FakeBrokerServer:
     """Drop-in double for ``ar2.broker.BrokerServer``. No real thread/pipe.
 
     ``state_after_start_raise`` is kept only as NARRATIVE labelling of which
-    real partial-start point a given test models -- it no longer drives
-    adapter behaviour. The real ``BrokerServer.state`` reads
-    ``STATE_CREATED`` for EVERY pre-READY failure ``start()`` can raise
-    from (``STATE_READY`` is only reached deep inside the worker thread,
-    strictly later than any exception ``start()`` itself can propagate), so
-    the corrected adapter never branches on ``server.state`` in its
-    exception path at all -- it always calls ``shutdown()`` exactly once
-    and derives every fact from ITS return value (or from it raising).
+    real partial-start point a given test models -- it never drives adapter
+    behaviour. The real ``BrokerServer.state`` reads ``STATE_CREATED`` for
+    EVERY pre-READY failure ``start()`` can raise from (``STATE_READY`` is
+    only reached deep inside the worker thread, strictly later than any
+    exception ``start()`` itself can propagate), which is exactly why the
+    adapter never branches on ``server.state`` at all.
+
+    **5F3B-I2B-L1-D1 / FU3 BLOCKER 1.** The ONE fact the adapter's
+    partial-start branch reads is the real class's public, monotonic
+    ``pipe_resource_created``, modelled here by
+    ``pipe_resource_created_after_start_raise``: the real ``start()`` sets
+    it ``True`` immediately after ``create_first_instance_pipe`` returns and
+    never resets it, so a pipe-creation failure leaves it ``False`` while
+    every later partial-start failure point leaves it ``True``. A successful
+    ``start()`` always leaves it ``True``.
     """
 
     def __init__(self, handler):
@@ -281,6 +295,11 @@ class _FakeBrokerServer:
         self.start_calls = 0
         self.start_raises: Exception | None = None
         self.state_after_start_raise = STATE_CREATED
+        #: What D1's monotonic public fact reads after ``start()`` raised.
+        #: Defaults to True (a resource WAS created); only the
+        #: pipe-creation-failure case sets it False.
+        self.pipe_resource_created_after_start_raise = True
+        self.pipe_resource_created = False
         self.shutdown_calls = 0
         self.shutdown_state_reached = STATE_CLOSED
         self.shutdown_raises: Exception | None = None
@@ -293,7 +312,9 @@ class _FakeBrokerServer:
         self.start_calls += 1
         if self.start_raises is not None:
             self._state = self.state_after_start_raise
+            self.pipe_resource_created = self.pipe_resource_created_after_start_raise
             raise self.start_raises
+        self.pipe_resource_created = True
         self._state = STATE_READY
 
     def shutdown(self, trigger: str) -> dict:
@@ -341,13 +362,27 @@ def patched(monkeypatch: pytest.MonkeyPatch):
     return SimpleNamespace(supervisors=fake_supervisors, servers=fake_servers)
 
 
+def _issued(identity: RuntimeIdentity = SYNTHETIC_IDENTITY):
+    """Mint a genuine :class:`IssuedRuntimeIdentity` for one attempt.
+
+    FU3 BLOCKER 2: ``LiveCategoryBAdapters`` no longer accepts a bare
+    ``RuntimeIdentity`` -- only an issuance minted by the same trusted
+    operation that runs the one real ``--version`` probe. This offline suite
+    never runs that probe, so it uses the module-internal issuance function
+    directly (the established test-only internal-access precedent this
+    package already uses for ``i2_issuance``'s own registry). Every call
+    returns a FRESH issuance, because an issuance is one-shot.
+    """
+    return live_module._issue_runtime_identity(identity)
+
+
 def _adapters(**overrides) -> LiveCategoryBAdapters:
     kwargs = dict(
         environ_reader=lambda name: {
             "AIDO_LITELLM_BASE_URL": SYNTHETIC_BASE_URL,
             "AIDO_LITELLM_API_KEY": SYNTHETIC_API_KEY,
         }.get(name),
-        runtime_identity=SYNTHETIC_IDENTITY,
+        runtime_identity=_issued(),
     )
     kwargs.update(overrides)
     return LiveCategoryBAdapters(**kwargs)
@@ -401,64 +436,158 @@ def test_create_broker_happy_path_reaches_ready(run_workspace, patched) -> None:
     assert patched.servers[0].start_calls == 1
 
 
-def test_create_broker_pipe_creation_raises_before_pipe_exists_still_conservative(
-    run_workspace, patched, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """BLOCKER 1 / adversarial item A/B: even a failure AT the very first
-    creation point (pipe creation itself) can never be mechanically proven
-    "nothing was created" against the REAL ``BrokerServer`` -- its ``state``
-    reads ``STATE_CREATED`` for every pre-READY failure, indistinguishable
-    from a later partial-start failure. The corrected adapter therefore
-    NEVER reports ``resource_created=False`` here: it conservatively
-    assumes a resource may exist, attempts the one bounded ``shutdown()``
-    cleanup, and reports what THAT verified -- never a fabricated "nothing
-    to clean up"."""
+# -- FU3 BLOCKER 1: the D1 broker partial-start fact ------------------------
+#
+# Every test below drives the adapter through ONE ``BrokerServer.start()``
+# failure and asserts the observation is derived from D1's public, monotonic
+# ``pipe_resource_created`` alone. The five mandated states are modelled
+# exactly as the real class produces them:
+#
+#   A  pipe creation itself failed         pipe_resource_created False
+#   B  pipe exists, event creation failed  pipe_resource_created True
+#   C  Thread construction failed          pipe_resource_created True
+#   D  Thread.start() failed               pipe_resource_created True
+#   E  worker started, READY deadline      pipe_resource_created True
+#
+# Before FU3 the adapter reported ``resource_created=True`` and called
+# ``shutdown()`` for ALL FIVE, because the pre-D1 public surface could not
+# tell A apart from B-E. The pre-fix reproduction of that untruthful A is
+# ``test_pre_fix_repro_state_a_would_have_claimed_a_resource_and_cleaned_it``.
+
+
+def _server_factory(patched, monkeypatch, **attributes):
+    """Install a ``_FakeBrokerServer`` factory carrying ``attributes``."""
 
     def _make_server(handler):
-        s = _FakeBrokerServer(handler)
-        s.start_raises = OSError("synthetic pipe creation failure")
-        s.state_after_start_raise = STATE_CREATED  # narrative label only; see class docstring
-        patched.servers.append(s)
-        return s
+        server = _FakeBrokerServer(handler)
+        for name, value in attributes.items():
+            setattr(server, name, value)
+        patched.servers.append(server)
+        return server
 
     monkeypatch.setattr(live_module, "BrokerServer", _make_server)
+    return _make_server
+
+
+def _create_broker(adapters, run_workspace, run_id):
+    return adapters.create_broker(
+        BrokerCreationRequest(run_id=run_id, workspace=_claimed(run_workspace, run_id))
+    )
+
+
+def test_create_broker_state_a_pipe_creation_failed_reports_nothing_created(
+    run_workspace, patched, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D1 state A: ``create_first_instance_pipe`` raised before returning, so
+    ``pipe_resource_created`` is False and no broker OS resource ever
+    existed. The adapter must report the frozen "nothing created" row
+    exactly, and must call ``shutdown()`` ZERO times -- a cleanup issued
+    purely to keep the two branches uniform would be an untrue
+    ``cleanup_attempted=True``."""
+    _server_factory(
+        patched,
+        monkeypatch,
+        start_raises=OSError("synthetic pipe creation failure"),
+        pipe_resource_created_after_start_raise=False,
+    )
     adapters = _adapters()
-    request = BrokerCreationRequest(run_id="run-0002", workspace=_claimed(run_workspace, "run-0002"))
-    observation = adapters.create_broker(request)
+    observation = _create_broker(adapters, run_workspace, "run-0002a")
+
+    assert observation.session is None
+    assert observation.start_attempted is True
+    assert observation.resource_created is False
+    assert observation.cleanup_attempted is False
+    assert observation.reached_closed is None
+    assert observation.cleanup_verified_success is False
+    assert patched.servers[0].shutdown_calls == 0
+
+
+def test_pre_fix_repro_state_a_would_have_claimed_a_resource_and_cleaned_it(
+    run_workspace, patched, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The FU2 behaviour this follow-up removes, stated as an explicit
+    non-regression: in state A the adapter used to report
+    ``resource_created=True``/``cleanup_attempted=True`` and issue one
+    ``shutdown()`` against a broker that had created nothing. Both claims
+    were untrue, and neither may come back."""
+    _server_factory(
+        patched,
+        monkeypatch,
+        start_raises=OSError("synthetic pipe creation failure"),
+        pipe_resource_created_after_start_raise=False,
+    )
+    adapters = _adapters()
+    observation = _create_broker(adapters, run_workspace, "run-0002a2")
+
+    assert observation.resource_created is not True
+    assert observation.cleanup_attempted is not True
+    assert patched.servers[0].shutdown_calls != 1
+
+
+def test_create_broker_state_a_never_consults_server_state(
+    run_workspace, patched, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Adversarial: a server left in a state that LOOKS like a live broker
+    must not change the answer -- ``pipe_resource_created`` is the only fact
+    read, never ``state`` and never the exception."""
+    _server_factory(
+        patched,
+        monkeypatch,
+        start_raises=RuntimeError("synthetic failure with a misleading state"),
+        state_after_start_raise=STATE_READY,
+        pipe_resource_created_after_start_raise=False,
+    )
+    adapters = _adapters()
+    observation = _create_broker(adapters, run_workspace, "run-0002a3")
+
+    assert observation.resource_created is False
+    assert observation.cleanup_attempted is False
+    assert patched.servers[0].shutdown_calls == 0
+
+
+def test_create_broker_state_b_pipe_exists_event_creation_failed_self_closes(
+    run_workspace, patched, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D1 state B: the pipe was created, shutdown-event creation then failed.
+    Creator ownership never left ``BrokerServer``, so exactly ONE supported
+    ``shutdown(TRIGGER_AIDO_TEARDOWN)`` runs, and D1's no-worker branch --
+    which closes only the handles it created itself -- can genuinely reach
+    ``STATE_CLOSED``. That postcondition is consumed truthfully."""
+    _server_factory(
+        patched,
+        monkeypatch,
+        start_raises=OSError("synthetic shutdown-event creation failure"),
+        pipe_resource_created_after_start_raise=True,
+        shutdown_state_reached=STATE_CLOSED,
+    )
+    adapters = _adapters()
+    observation = _create_broker(adapters, run_workspace, "run-0002b")
+
     assert observation.session is None
     assert observation.start_attempted is True
     assert observation.resource_created is True
     assert observation.cleanup_attempted is True
+    assert observation.reached_closed is True
+    assert observation.cleanup_verified_success is True
     assert patched.servers[0].shutdown_calls == 1
 
 
-def test_create_broker_pipe_only_partial_start_shutdown_cannot_verify_closed(
+def test_create_broker_state_b_shutdown_cannot_verify_closed_is_reported_truthfully(
     run_workspace, patched, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Adversarial item B: pipe created, but the shutdown-event/thread
-    construction failed BEFORE ``self._thread`` was ever assigned. Real
-    ``BrokerServer.shutdown()``'s own ``if self._thread is None`` early-
-    return branch fires in this case and does NOT close a pipe handle that
-    may exist -- so ``shutdown()`` is a SAFE, always-callable cleanup
-    primitive, but an INEFFECTIVE one here. The adapter must report this
-    honestly: cleanup was attempted, but the postcondition (reaching
-    ``STATE_CLOSED``) was never verified -- never a fabricated success."""
-
-    def _make_server(handler):
-        s = _FakeBrokerServer(handler)
-        s.start_raises = OSError("synthetic shutdown-event creation failure")
-        s.state_after_start_raise = STATE_CREATED
-        # Models the REAL shutdown()'s `_thread is None` early-return: the
-        # state is never moved to CLOSED because nothing was ever torn down.
-        s.shutdown_state_reached = STATE_CREATED
-        patched.servers.append(s)
-        return s
-
-    monkeypatch.setattr(live_module, "BrokerServer", _make_server)
+    """Same state B, but D1's own handle close did not succeed, so it
+    reports ``TEARDOWN_INCOMPLETE``. Cleanup WAS attempted; the
+    postcondition is honestly unverified -- never a fabricated success."""
+    _server_factory(
+        patched,
+        monkeypatch,
+        start_raises=OSError("synthetic shutdown-event creation failure"),
+        pipe_resource_created_after_start_raise=True,
+        shutdown_state_reached=STATE_TEARDOWN_INCOMPLETE,
+    )
     adapters = _adapters()
-    request = BrokerCreationRequest(run_id="run-0002b", workspace=_claimed(run_workspace, "run-0002b"))
-    observation = adapters.create_broker(request)
-    assert observation.session is None
+    observation = _create_broker(adapters, run_workspace, "run-0002b2")
+
     assert observation.resource_created is True
     assert observation.cleanup_attempted is True
     assert observation.reached_closed is False
@@ -466,84 +595,216 @@ def test_create_broker_pipe_only_partial_start_shutdown_cannot_verify_closed(
     assert patched.servers[0].shutdown_calls == 1
 
 
-def test_create_broker_thread_construction_failure_still_conservative(
+def test_create_broker_state_c_thread_construction_failed_self_closes(
     run_workspace, patched, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Adversarial item C-adjacent broker variant: pipe AND shutdown event
-    exist, but ``threading.Thread(...)``/``.start()`` itself failed. Same
-    mechanical shape as the pipe-only case -- ``_thread`` was never
-    assigned, so real ``shutdown()`` cannot verify closure either."""
-
-    def _make_server(handler):
-        s = _FakeBrokerServer(handler)
-        s.start_raises = RuntimeError("synthetic thread-start failure")
-        s.state_after_start_raise = STATE_CREATED
-        s.shutdown_state_reached = STATE_CREATED
-        patched.servers.append(s)
-        return s
-
-    monkeypatch.setattr(live_module, "BrokerServer", _make_server)
+    """D1 state C: ``threading.Thread(...)`` construction raised. Same
+    creator-owned semantics as B."""
+    _server_factory(
+        patched,
+        monkeypatch,
+        start_raises=RuntimeError("synthetic thread construction failure"),
+        pipe_resource_created_after_start_raise=True,
+        shutdown_state_reached=STATE_CLOSED,
+    )
     adapters = _adapters()
-    request = BrokerCreationRequest(run_id="run-0002d", workspace=_claimed(run_workspace, "run-0002d"))
-    observation = adapters.create_broker(request)
+    observation = _create_broker(adapters, run_workspace, "run-0002c")
+
     assert observation.session is None
     assert observation.resource_created is True
     assert observation.cleanup_attempted is True
-    assert observation.reached_closed is False
-
-
-def test_create_broker_partial_close_itself_raises_never_escapes(
-    run_workspace, patched, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Adversarial item E / BLOCKER 3: the ONE bounded cleanup attempt
-    itself raising must never escape the adapter and must never erase the
-    primary start failure -- it is reported as an unverified postcondition,
-    not as a crash."""
-
-    def _make_server(handler):
-        s = _FakeBrokerServer(handler)
-        s.start_raises = OSError("synthetic pipe creation failure")
-        s.shutdown_raises = RuntimeError("synthetic shutdown failure")
-        patched.servers.append(s)
-        return s
-
-    monkeypatch.setattr(live_module, "BrokerServer", _make_server)
-    adapters = _adapters()
-    request = BrokerCreationRequest(run_id="run-0002c", workspace=_claimed(run_workspace, "run-0002c"))
-    observation = adapters.create_broker(request)
-    assert observation.session is None
-    assert observation.resource_created is True
-    assert observation.cleanup_attempted is True
-    assert observation.reached_closed is False
-    assert observation.cleanup_verified_success is False
+    assert observation.reached_closed is True
     assert patched.servers[0].shutdown_calls == 1
 
 
-def test_create_broker_partial_failure_self_closes_when_thread_started(
+def test_create_broker_state_d_thread_start_failed_self_closes(
     run_workspace, patched, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Adversarial item 8/9/10 territory: a thread started but READY never
-    observed. The creator retains ownership, self-closes exactly once, and
-    reports the truthful postcondition -- never a trusted session."""
-
-    def _make_server(handler):
-        s = _FakeBrokerServer(handler)
-        s.start_raises = TimeoutError("synthetic READY-deadline failure")
-        s.state_after_start_raise = STATE_DRAINING  # a thread WAS running
-        s.shutdown_state_reached = STATE_CLOSED
-        patched.servers.append(s)
-        return s
-
-    monkeypatch.setattr(live_module, "BrokerServer", _make_server)
+    """D1 state D: ``Thread.start()`` itself raised. ``self._thread`` is
+    assigned but no worker ever ran, and D1's own shutdown must never join
+    it. Same creator-owned semantics."""
+    _server_factory(
+        patched,
+        monkeypatch,
+        start_raises=RuntimeError("synthetic thread start failure"),
+        pipe_resource_created_after_start_raise=True,
+        shutdown_state_reached=STATE_CLOSED,
+    )
     adapters = _adapters()
-    request = BrokerCreationRequest(run_id="run-0003", workspace=_claimed(run_workspace, "run-0003"))
-    observation = adapters.create_broker(request)
+    observation = _create_broker(adapters, run_workspace, "run-0002d")
+
+    assert observation.session is None
+    assert observation.resource_created is True
+    assert observation.cleanup_attempted is True
+    assert observation.reached_closed is True
+    assert patched.servers[0].shutdown_calls == 1
+
+
+def test_create_broker_state_e_ready_deadline_failed_self_closes(
+    run_workspace, patched, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D1 state E: the worker DID start and never signalled READY. The
+    worker-owned teardown ladder runs, and its result is consumed
+    truthfully -- never a trusted session."""
+    _server_factory(
+        patched,
+        monkeypatch,
+        start_raises=TimeoutError("synthetic READY-deadline failure"),
+        state_after_start_raise=STATE_DRAINING,  # narrative: a worker WAS running
+        pipe_resource_created_after_start_raise=True,
+        shutdown_state_reached=STATE_CLOSED,
+    )
+    adapters = _adapters()
+    observation = _create_broker(adapters, run_workspace, "run-0003")
+
     assert observation.session is None
     assert observation.resource_created is True
     assert observation.cleanup_attempted is True
     assert observation.reached_closed is True
     assert observation.cleanup_verified_success is True
     assert patched.servers[0].shutdown_calls == 1
+
+
+def test_create_broker_state_e_worker_owned_teardown_incomplete_is_not_success(
+    run_workspace, patched, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """State E where the worker did not terminate within D1's deadline:
+    ``TEARDOWN_INCOMPLETE`` is not verified closure."""
+    _server_factory(
+        patched,
+        monkeypatch,
+        start_raises=TimeoutError("synthetic READY-deadline failure"),
+        state_after_start_raise=STATE_DRAINING,
+        pipe_resource_created_after_start_raise=True,
+        shutdown_state_reached=STATE_TEARDOWN_INCOMPLETE,
+    )
+    adapters = _adapters()
+    observation = _create_broker(adapters, run_workspace, "run-0003b")
+
+    assert observation.cleanup_attempted is True
+    assert observation.reached_closed is False
+    assert observation.cleanup_verified_success is False
+
+
+@pytest.mark.parametrize(
+    ("label", "start_error", "state_after"),
+    [
+        ("B", OSError("synthetic shutdown-event creation failure"), STATE_CREATED),
+        ("C", RuntimeError("synthetic thread construction failure"), STATE_CREATED),
+        ("D", RuntimeError("synthetic thread start failure"), STATE_CREATED),
+        ("E", TimeoutError("synthetic READY-deadline failure"), STATE_DRAINING),
+    ],
+)
+def test_create_broker_creator_owned_shutdown_itself_raising_never_escapes(
+    run_workspace, patched, monkeypatch: pytest.MonkeyPatch, label, start_error, state_after
+) -> None:
+    """BLOCKER 3, for every creator-owned D1 state: the ONE bounded cleanup
+    attempt raising must never escape the adapter and must never mask the
+    primary start failure. It is reported as an unverified postcondition."""
+    _server_factory(
+        patched,
+        monkeypatch,
+        start_raises=start_error,
+        state_after_start_raise=state_after,
+        pipe_resource_created_after_start_raise=True,
+        shutdown_raises=RuntimeError("synthetic shutdown failure"),
+    )
+    adapters = _adapters()
+    observation = _create_broker(adapters, run_workspace, "run-0002x" + label)
+
+    assert observation.session is None
+    assert observation.start_attempted is True
+    assert observation.resource_created is True
+    assert observation.cleanup_attempted is True
+    assert observation.reached_closed is False
+    assert observation.cleanup_verified_success is False
+    assert patched.servers[0].shutdown_calls == 1
+
+
+def test_create_broker_state_a_shutdown_is_never_called_so_it_can_never_raise(
+    run_workspace, patched, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """State A pairs with a raising ``shutdown()`` harmlessly, because
+    ``shutdown()`` is never reached at all."""
+    _server_factory(
+        patched,
+        monkeypatch,
+        start_raises=OSError("synthetic pipe creation failure"),
+        pipe_resource_created_after_start_raise=False,
+        shutdown_raises=RuntimeError("synthetic shutdown failure"),
+    )
+    adapters = _adapters()
+    observation = _create_broker(adapters, run_workspace, "run-0002a4")
+
+    assert observation.resource_created is False
+    assert observation.cleanup_attempted is False
+    assert patched.servers[0].shutdown_calls == 0
+
+
+@pytest.mark.parametrize("bogus", ["False", 0, None, [], object()])
+def test_create_broker_non_bool_pipe_fact_fails_closed_into_cleanup(
+    run_workspace, patched, monkeypatch: pytest.MonkeyPatch, bogus
+) -> None:
+    """A value that is not EXACTLY the ``False`` singleton is never read as
+    "nothing was created" -- the frozen D1 surface cannot produce one, and
+    if it somehow did, the safe direction is still to attempt the one
+    bounded cleanup."""
+    _server_factory(
+        patched,
+        monkeypatch,
+        start_raises=OSError("synthetic start failure"),
+        pipe_resource_created_after_start_raise=bogus,
+        shutdown_state_reached=STATE_CLOSED,
+    )
+    adapters = _adapters()
+    observation = _create_broker(adapters, run_workspace, "run-0002y")
+
+    assert observation.resource_created is True
+    assert observation.cleanup_attempted is True
+    assert patched.servers[0].shutdown_calls == 1
+
+
+def test_create_broker_unreadable_pipe_fact_fails_closed_into_cleanup(
+    run_workspace, patched, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unreadable fact is never "nothing was created" either."""
+
+    class _RaisingFactServer(_FakeBrokerServer):
+        @property
+        def pipe_resource_created(self):
+            raise RuntimeError("synthetic unreadable partial-start fact")
+
+        @pipe_resource_created.setter
+        def pipe_resource_created(self, value):
+            return
+
+    def _make_server(handler):
+        server = _RaisingFactServer(handler)
+        server.start_raises = OSError("synthetic start failure")
+        server.shutdown_state_reached = STATE_CLOSED
+        patched.servers.append(server)
+        return server
+
+    monkeypatch.setattr(live_module, "BrokerServer", _make_server)
+    adapters = _adapters()
+    observation = _create_broker(adapters, run_workspace, "run-0002z")
+
+    assert observation.resource_created is True
+    assert observation.cleanup_attempted is True
+    assert patched.servers[0].shutdown_calls == 1
+
+
+def test_create_broker_reads_only_the_public_d1_fact_in_its_failure_path() -> None:
+    """Source-level: the partial-start branch names ``pipe_resource_created``
+    and NEVER a private broker field or ``state``."""
+    source = inspect.getsource(live_module._broker_reports_pipe_resource_created)
+    partial = inspect.getsource(
+        live_module.LiveCategoryBAdapters._retain_and_close_partial_broker
+    )
+    executable = source.split('"""')[-1] + partial.split('"""')[-1]
+    assert "pipe_resource_created" in source
+    for forbidden in ("_pipe_handle", "_thread", "_worker_thread_started", ".state"):
+        assert forbidden not in executable
 
 
 def test_shutdown_broker_refuses_a_session_it_did_not_create(run_workspace, patched) -> None:
@@ -1752,6 +2013,70 @@ def test_outer_cleanup_verified_true_when_nothing_to_scrub_and_removal_succeeds(
     assert result["outer_cleanup_verified"] is True
 
 
+
+# -- L1-FU5 PRIMARY BLOCKER: the exact frozen removal return shape ----------
+
+
+@pytest.mark.parametrize(
+    ("removal_result", "case_id"),
+    [
+        ({"removed": True, "residual_file_count": 0, "verified": True}, "1-genuine-success"),
+        ({"removed": False, "residual_file_count": 1, "verified": True}, "2-residual-files"),
+        ({"removed": False, "residual_file_count": 0, "verified": True}, "3-not-removed-zero-residual"),
+        ({"removed": True, "residual_file_count": 0, "verified": False}, "4-unverified"),
+        ({"removed": "true", "residual_file_count": 0, "verified": "true"}, "5-malformed-bool-strings"),
+        ({"removed": True, "verified": True}, "6-missing-residual-field"),
+        ({"removed": True, "residual_file_count": 0}, "6b-missing-verified-field"),
+        ({"verified": True, "residual_file_count": 0}, "6c-missing-removed-field"),
+        (["removed", True, "verified", True], "7-non-dict-list"),
+        ("removed", "7b-non-dict-string"),
+        (None, "7c-non-dict-none"),
+        ({"removed": True, "residual_file_count": True, "verified": True}, "extra-bool-residual-count"),
+        ({"removed": True, "residual_file_count": 1, "verified": True}, "success-flag-but-nonzero-residual"),
+    ],
+)
+def test_outer_cleanup_consumes_the_exact_frozen_removal_return_shape(
+    run_workspace, monkeypatch: pytest.MonkeyPatch, removal_result, case_id
+) -> None:
+    """L1-FU5 PRIMARY BLOCKER, mandatory regressions 1-7: a NORMAL return
+    from ``remove_run_workspace`` -- no exception raised -- is validated
+    against the exact frozen ``ar2.fixtures.remove_disposable_tree``
+    success shape. Only case 1 (and the parametrize case that reproduces it
+    exactly) is accepted; every other shape -- a residual count, an
+    unverified postcondition, malformed boolean-looking strings, a missing
+    field, or a non-dict result entirely -- fails CLOSED. Nothing here uses
+    ``bool(result)``, "no exception means success", or ``.get(...)`` default
+    substitution."""
+    run_i2b_live = _import_run_i2b_live()
+    monkeypatch.setattr(run_i2b_live, "remove_run_workspace", lambda workspace: removal_result)
+    result = run_i2b_live._run_outer_cleanup(run_workspace)
+    expected = removal_result == {"removed": True, "residual_file_count": 0, "verified": True}
+    assert result["workspace_removal_attempted"] is True
+    assert result["workspace_removal_verified"] is expected, case_id
+    assert result["outer_cleanup_verified"] is expected, case_id
+
+
+def test_outer_cleanup_never_uses_truthiness_of_the_removal_return(
+    run_workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Adversarial: a non-empty dict that is truthy but is not the exact
+    frozen success shape must still fail closed -- guards against a
+    ``bool(result)``-style regression."""
+    run_i2b_live = _import_run_i2b_live()
+    truthy_but_not_success = {
+        "removed": False,
+        "residual_file_count": 3,
+        "verified": True,
+        "extra_field": "still truthy",
+    }
+    monkeypatch.setattr(
+        run_i2b_live, "remove_run_workspace", lambda workspace: truthy_but_not_success
+    )
+    result = run_i2b_live._run_outer_cleanup(run_workspace)
+    assert bool(truthy_but_not_success) is True  # sanity: the dict itself is truthy
+    assert result["workspace_removal_verified"] is False
+
+
 def test_main_does_not_report_pass_when_outer_cleanup_failed(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
@@ -1874,7 +2199,7 @@ def test_construction_refuses_substituted_node_executable(patched) -> None:
 
     substituted = replace(SYNTHETIC_IDENTITY, node_executable=r"C:\attacker\node.exe")
     with pytest.raises(LiveAdapterError, match="trusted resolver path exactly"):
-        _adapters(runtime_identity=substituted)
+        _adapters(runtime_identity=_issued(substituted))
 
 
 def test_construction_refuses_substituted_pi_cli_js(patched) -> None:
@@ -1882,7 +2207,7 @@ def test_construction_refuses_substituted_pi_cli_js(patched) -> None:
 
     substituted = replace(SYNTHETIC_IDENTITY, pi_cli_js=r"C:\attacker\pi\dist\cli.js")
     with pytest.raises(LiveAdapterError, match="trusted resolver path exactly"):
-        _adapters(runtime_identity=substituted)
+        _adapters(runtime_identity=_issued(substituted))
 
 
 def test_construction_refuses_substituted_pi_package_root(patched) -> None:
@@ -1890,7 +2215,7 @@ def test_construction_refuses_substituted_pi_package_root(patched) -> None:
 
     substituted = replace(SYNTHETIC_IDENTITY, pi_package_root=r"C:\attacker\pi")
     with pytest.raises(LiveAdapterError, match="trusted resolver path exactly"):
-        _adapters(runtime_identity=substituted)
+        _adapters(runtime_identity=_issued(substituted))
 
 
 def test_construction_refuses_a_non_node_direct_launch_shape(patched) -> None:
@@ -1898,7 +2223,7 @@ def test_construction_refuses_a_non_node_direct_launch_shape(patched) -> None:
 
     substituted = replace(SYNTHETIC_IDENTITY, launch_shape="something_else")
     with pytest.raises(LiveAdapterError, match="node_direct launch shape"):
-        _adapters(runtime_identity=substituted)
+        _adapters(runtime_identity=_issued(substituted))
 
 
 def test_construction_refuses_an_empty_reported_version(patched) -> None:
@@ -1906,7 +2231,7 @@ def test_construction_refuses_an_empty_reported_version(patched) -> None:
 
     substituted = replace(SYNTHETIC_IDENTITY, reported_version="")
     with pytest.raises(LiveAdapterError, match="non-empty observed reported_version"):
-        _adapters(runtime_identity=substituted)
+        _adapters(runtime_identity=_issued(substituted))
 
 
 def test_construction_accepts_a_differing_reported_version_when_paths_match(patched) -> None:
@@ -1917,7 +2242,7 @@ def test_construction_accepts_a_differing_reported_version_when_paths_match(patc
     from dataclasses import replace
 
     substituted = replace(SYNTHETIC_IDENTITY, reported_version="9.9.9-different")
-    adapters = _adapters(runtime_identity=substituted)
+    adapters = _adapters(runtime_identity=_issued(substituted))
     assert adapters is not None
 
 
@@ -2195,13 +2520,20 @@ def test_preflight_config_generator_self_check_fails_when_cleanup_cannot_be_veri
     silently pass."""
     from qualification.i2_cleanup import CleanupResult
 
+    captured = _capture_generated(monkeypatch)
+
     def _unverified_cleanup(generated):
         return CleanupResult(existed=True, removed=False, verified_by_stat=True)
 
     monkeypatch.setattr(live_module, "scrub_generated_qualification_config", _unverified_cleanup)
-    result = preflight_config_generator_self_check()
-    assert result.passed is False
-    assert result.failure_code == "VERIFICATION_FAILED"
+    try:
+        result = preflight_config_generator_self_check()
+        assert result.passed is False
+        assert result.failure_code == "VERIFICATION_FAILED"
+    finally:
+        # FU4: production correctly RETAINS the tree here.
+        for generated in captured:
+            _force_release(generated)
 
 
 # -- L1-FU2: Category-A before Category-B ordering (run_i2b_live.py) --------
@@ -2260,3 +2592,1502 @@ def test_all_category_a_gates_passing_allows_the_version_probe_next(
     gates = (_tracked_gate_factory("gate_a"), _tracked_gate_factory("gate_b"))
     run_i2b_live._require_all_category_a_gates_pass(gates)
     assert calls == ["gate_a", "gate_b"]
+# -- FU3 BLOCKER 2: RuntimeIdentity ISSUANCE, not caller fabrication ---------
+#
+# FU2 removed PATH substitution. It did not remove caller AUTHORSHIP: a
+# supported caller could build a ``RuntimeIdentity`` carrying all three
+# trusted paths and an entirely fabricated ``reported_version``, and the
+# adapter would later publish that fabricated string as
+# ``RuntimeLaunchObservation.observed_pi_version``. Version is NOT an
+# authorization gate here and never becomes one -- this is an evidence-
+# provenance defect, and the fix is an issuance boundary, not a comparison.
+
+FABRICATED_VERSION_IDENTITY = RuntimeIdentity(
+    node_executable=SYNTHETIC_IDENTITY.node_executable,
+    pi_cli_js=SYNTHETIC_IDENTITY.pi_cli_js,
+    pi_package_root=SYNTHETIC_IDENTITY.pi_package_root,
+    reported_version="99.99.99-fabricated-by-the-caller",
+    launch_shape="node_direct",
+)
+
+
+def test_pre_fix_repro_a_fabricated_version_passes_every_fu2_check(patched) -> None:
+    """The pre-fix reproduction, kept as the exact statement of what FU2
+    could NOT catch: this object carries a caller-authored version and
+    satisfies every FU2-era check -- it is a real ``RuntimeIdentity``, its
+    ``launch_shape`` is ``node_direct``, its ``reported_version`` is
+    non-empty, and all three executable paths match the trusted resolver
+    exactly. FU2 would therefore have accepted it and published the
+    fabricated string as evidence."""
+    assert type(FABRICATED_VERSION_IDENTITY) is RuntimeIdentity
+    live_module._require_runtime_identity_matches_trusted_resolution(
+        FABRICATED_VERSION_IDENTITY
+    )
+
+
+def test_a_fabricated_runtime_identity_can_no_longer_authorize_construction(
+    patched,
+) -> None:
+    """...and is now refused, because a bare ``RuntimeIdentity`` -- however
+    well-formed -- is not an issuance."""
+    with pytest.raises(LiveAdapterError, match="ISSUED by this"):
+        _adapters(runtime_identity=FABRICATED_VERSION_IDENTITY)
+
+
+def test_a_fabricated_runtime_identity_can_no_longer_authorize_a_live_launch(
+    run_workspace, patched
+) -> None:
+    """The same refusal reaches the launch path: with no adapter instance
+    there is no ``launch_runtime`` to call, so no fabricated version can
+    reach ``RuntimeLaunchObservation.observed_pi_version``."""
+    with pytest.raises(LiveAdapterError):
+        _adapters(runtime_identity=FABRICATED_VERSION_IDENTITY)
+    assert patched.supervisors == []
+    assert patched.servers == []
+
+
+def test_a_genuinely_issued_identity_is_accepted(patched) -> None:
+    adapters = _adapters(runtime_identity=_issued())
+    assert adapters is not None
+
+
+def test_issued_runtime_identity_cannot_be_constructed_by_a_caller() -> None:
+    """The constructor demands a module-private issuer key object no caller
+    can name -- there is no public construction path, and no
+    caller-supplied ``trusted=True`` boolean anywhere."""
+    with pytest.raises(LiveAdapterError, match="minted"):
+        live_module.IssuedRuntimeIdentity(object(), issuance_token="forged-token")
+    with pytest.raises(LiveAdapterError, match="minted"):
+        live_module.IssuedRuntimeIdentity("issuer", issuance_token="forged-token")
+    with pytest.raises(LiveAdapterError, match="minted"):
+        live_module.IssuedRuntimeIdentity(None, issuance_token="forged-token")
+
+
+def test_an_issuance_token_not_in_this_process_registry_is_refused(patched) -> None:
+    """Even holding the issuer key, a token this process never issued is
+    refused -- the registry, not the object, is the authority."""
+    unregistered = live_module.IssuedRuntimeIdentity(
+        live_module._IDENTITY_ISSUER_KEY, issuance_token="never-issued-0001"
+    )
+    with pytest.raises(LiveAdapterError, match="issuance registry"):
+        _adapters(runtime_identity=unregistered)
+    with pytest.raises(LiveAdapterError, match="issuance registry"):
+        unregistered.node_executable
+
+
+def test_the_issued_object_carries_no_identity_data_of_its_own() -> None:
+    """There is nothing on the object for a caller to author: it holds only
+    an opaque token, and every identity fact is read back from the
+    registry."""
+    issued = _issued()
+    assert issued.__slots__ == ("_issuance_token",)
+    assert not hasattr(issued, "__dict__")
+    assert issued.node_executable == SYNTHETIC_IDENTITY.node_executable
+
+
+def test_the_issued_object_repr_leaks_no_token_and_no_path() -> None:
+    issued = _issued()
+    rendered = repr(issued) + str(issued)
+    assert issued._issuance_token not in rendered
+    assert SYNTHETIC_IDENTITY.node_executable not in rendered
+    assert SYNTHETIC_IDENTITY.pi_package_root not in rendered
+
+
+def test_an_issuance_is_one_shot_and_cannot_be_replayed_into_a_second_run(
+    patched,
+) -> None:
+    """Adversarial item 5: one ``--version`` probe authorizes exactly ONE
+    live attempt. Re-presenting the same issuance to a second adapter --
+    i.e. a second run reusing the first run's probe -- is refused."""
+    issued = _issued()
+    first = _adapters(runtime_identity=issued)
+    assert first is not None
+    with pytest.raises(LiveAdapterError, match="already consumed"):
+        _adapters(runtime_identity=issued)
+
+
+def test_a_refused_construction_still_burns_its_issuance(patched) -> None:
+    """The claim happens before any further validation, so a construction
+    that is then refused can never re-present the same probe's authority."""
+    from dataclasses import replace
+
+    issued = _issued(replace(SYNTHETIC_IDENTITY, node_executable=r"C:\attacker\node.exe"))
+    with pytest.raises(LiveAdapterError, match="trusted resolver path exactly"):
+        _adapters(runtime_identity=issued)
+    with pytest.raises(LiveAdapterError, match="already consumed"):
+        _adapters(runtime_identity=issued)
+
+
+def test_the_adapter_uses_the_registry_identity_not_the_presented_object(
+    run_workspace, patched, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The identity a live attempt runs on is read out of the issuance
+    registry, so ``observed_pi_version`` is exactly what the issuing probe
+    recorded."""
+    from dataclasses import replace
+
+    issued = _issued(replace(SYNTHETIC_IDENTITY, reported_version="0.84.3-issued"))
+    adapters = _adapters(runtime_identity=issued)
+    request = _launch_request_with_registered_broker(adapters, run_workspace, run_id="run-fu3-1")
+
+    def _make_supervisor(*, argv, cwd, environment, bounds):
+        supervisor = _FakeSupervisor(argv=argv, cwd=cwd, environment=environment, bounds=bounds)
+        supervisor.responses["h1"] = (
+            RUNTIME_RESPONSE_RECEIVED,
+            _successful_get_commands_response(run_workspace),
+        )
+        patched.supervisors.append(supervisor)
+        return supervisor
+
+    monkeypatch.setattr(live_module, "PiRpcSupervisor", _make_supervisor)
+    observation = adapters.launch_runtime(request)
+    assert observation.observed_pi_version == "0.84.3-issued"
+    # child-environment PATH narrowing uses that exact issued node executable
+    assert issued.node_executable == SYNTHETIC_IDENTITY.node_executable
+    assert observation.session is not None
+
+
+def test_a_differing_real_observed_version_is_still_permitted(
+    run_workspace, patched, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No exact-version pinning is reintroduced: two genuinely issued
+    identities reporting DIFFERENT real versions are both accepted."""
+    from dataclasses import replace
+
+    for version in ("0.84.3", "1.2.3", "0.90.0-rc1"):
+        adapters = _adapters(
+            runtime_identity=_issued(replace(SYNTHETIC_IDENTITY, reported_version=version))
+        )
+        assert adapters is not None
+
+
+def test_reported_version_is_never_compared_to_anything() -> None:
+    """Adversarial item 7, source-level: ``reported_version`` is read for
+    non-emptiness and recorded, and is NEVER an operand of any comparison --
+    equality, ordering or membership. Version never becomes an
+    authorization gate here, and no exact-version pinning can creep back."""
+    tree = ast.parse(inspect.getsource(live_module))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Compare):
+            continue
+        operands = [node.left, *node.comparators]
+        mentioned: set[str] = set()
+        for operand in operands:
+            for inner in ast.walk(operand):
+                if isinstance(inner, ast.Attribute):
+                    mentioned.add(inner.attr)
+                elif isinstance(inner, ast.Name):
+                    mentioned.add(inner.id)
+        assert "reported_version" not in mentioned, ast.dump(node)
+
+
+def test_exactly_one_version_probe_is_attributable_to_one_live_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Adversarial item 6: the probe runs exactly once, inside the trusted
+    issuing operation, and issues exactly one identity. NOTHING here runs a
+    real subprocess -- ``subprocess.run`` is replaced."""
+    import subprocess as _subprocess
+
+    probes: list[tuple] = []
+
+    class _Completed:
+        returncode = 0
+        stdout = b"0.84.3\n"
+        stderr = b""
+
+    def _fake_run(argv, **kwargs):
+        probes.append(tuple(argv))
+        return _Completed()
+
+    monkeypatch.setattr(_subprocess, "run", _fake_run)
+    monkeypatch.setattr(
+        live_module, "_ar2_resolve_node_executable", lambda: SYNTHETIC_IDENTITY.node_executable
+    )
+    monkeypatch.setattr(
+        live_module, "_ar2_resolve_pi_package_root", lambda: SYNTHETIC_IDENTITY.pi_package_root
+    )
+    monkeypatch.setattr(live_module.os.path, "isfile", lambda path: True)
+
+    before = len(live_module._ISSUED_RUNTIME_IDENTITIES)
+    issued = live_module.resolve_pi_identity()
+
+    assert len(probes) == 1
+    assert probes[0][-1] == "--version"
+    assert type(issued) is live_module.IssuedRuntimeIdentity
+    assert len(live_module._ISSUED_RUNTIME_IDENTITIES) == before + 1
+
+
+def test_no_second_hidden_version_probe_exists_in_this_module() -> None:
+    """``subprocess`` is named in exactly ONE function -- the issuing probe
+    -- so there is no second, hidden probe anywhere, at launch or
+    elsewhere."""
+    tree = ast.parse(inspect.getsource(live_module))
+    probing = sorted(
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+        and "subprocess" in {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+    )
+    assert probing == ["resolve_pi_identity"]
+
+
+def test_resolve_pi_identity_returns_an_issuance_not_a_bare_identity() -> None:
+    """Source-level: the trusted probe hands back an issuance, so no caller
+    ever receives a raw ``RuntimeIdentity`` it could edit and re-present."""
+    signature = inspect.signature(live_module.resolve_pi_identity)
+    assert signature.return_annotation == "IssuedRuntimeIdentity"
+
+
+def test_no_caller_supplied_trust_boolean_or_hash_is_accepted() -> None:
+    """The issuance boundary is mechanical: no ``trusted=`` flag, no
+    caller-supplied version/digest accepted as provenance proof."""
+    parameters = tuple(inspect.signature(LiveCategoryBAdapters.__init__).parameters)
+    assert parameters == ("self", "environ_reader", "runtime_identity", "experiment_id", "bounds")
+    issue_parameters = tuple(inspect.signature(live_module._issue_runtime_identity).parameters)
+    assert issue_parameters == ("identity",)
+
+
+# -- FU3 BLOCKER 3: generated-config self-check cleanup ownership ------------
+#
+# Once ``write_qualification_pi_config`` returns a
+# ``GeneratedQualificationConfig``, the OFFICIAL qualification cleanup path
+# owns cleanup on EVERY later exit -- success and failure alike. A raw
+# ``shutil.rmtree`` deletes files without discarding the process-local
+# ``i2_issuance`` record, so it may never substitute for the discard, and a
+# FAILED preflight must leave no stale issuance authority behind either.
+
+
+def _issuance_live(generated) -> bool:
+    """True while the process-local issuance record still exists."""
+    from pathlib import Path as _Path
+
+    from qualification import i2_issuance
+
+    return (
+        i2_issuance._lookup_issuance(
+            token=generated.authority_token, config_dir=_Path(generated.config_dir)
+        )
+        is not None
+    )
+
+
+def _capture_generated(monkeypatch, *, fail_on_call: int | None = None):
+    """Capture every ``GeneratedQualificationConfig`` a producer issues, and
+    optionally make the Nth generation itself fail."""
+    real_write = live_module.write_qualification_pi_config
+    captured = []
+
+    def _capturing_write(experiment_root, *, model_id, base_url):
+        if fail_on_call is not None and len(captured) + 1 == fail_on_call:
+            raise live_module.QualificationPiConfigError(
+                "config error: synthetic generation failure"
+            )
+        generated = real_write(experiment_root, model_id=model_id, base_url=base_url)
+        captured.append(generated)
+        return generated
+
+    monkeypatch.setattr(live_module, "write_qualification_pi_config", _capturing_write)
+    return captured
+
+
+def _count_official_cleanups(monkeypatch):
+    """Count calls to the official cleanup path, per generated object."""
+    real_scrub = live_module.scrub_generated_qualification_config
+    calls = []
+
+    def _counting_scrub(generated):
+        calls.append(generated.authority_token)
+        return real_scrub(generated)
+
+    monkeypatch.setattr(live_module, "scrub_generated_qualification_config", _counting_scrub)
+    return calls
+
+
+SELF_CHECK_GENERATORS = (
+    ("config_generator_self_check", preflight_config_generator_self_check, 1),
+    ("child_environment_builder_self_check", preflight_child_environment_builder_self_check, 1),
+    ("candidate_route_generator_symmetry", preflight_candidate_route_generator_symmetry, 2),
+)
+
+
+def test_every_generating_self_check_producer_is_audited() -> None:
+    """The audit itself: EXACTLY these three Category-A producers call
+    ``write_qualification_pi_config``. A new generating producer added later
+    fails this test until it is added to
+    :data:`SELF_CHECK_GENERATORS` and covered by the ownership regressions
+    below."""
+    def _calls_the_generator(node) -> bool:
+        return any(
+            isinstance(inner, ast.Call)
+            and isinstance(inner.func, ast.Name)
+            and inner.func.id == "write_qualification_pi_config"
+            for inner in ast.walk(node)
+        )
+
+    generating = sorted(
+        node.name
+        for node in ast.walk(ast.parse(inspect.getsource(live_module)))
+        if isinstance(node, ast.FunctionDef) and _calls_the_generator(node)
+    )
+    assert generating == [
+        "preflight_candidate_route_generator_symmetry",
+        "preflight_child_environment_builder_self_check",
+        "preflight_config_generator_self_check",
+    ]
+    assert sorted(name for name, _, _ in SELF_CHECK_GENERATORS) == [
+        "candidate_route_generator_symmetry",
+        "child_environment_builder_self_check",
+        "config_generator_self_check",
+    ]
+
+
+@pytest.mark.parametrize(("name", "producer", "expected"), SELF_CHECK_GENERATORS)
+def test_success_path_leaves_no_issuance(
+    name, producer, expected, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured = _capture_generated(monkeypatch)
+    cleanups = _count_official_cleanups(monkeypatch)
+    result = producer()
+
+    assert result.passed is True
+    assert len(captured) == expected
+    for generated in captured:
+        assert _issuance_live(generated) is False
+        assert cleanups.count(generated.authority_token) == 1
+
+
+@pytest.mark.parametrize(("name", "producer", "expected"), SELF_CHECK_GENERATORS)
+def test_official_cleanup_failure_fails_the_gate(
+    name, producer, expected, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cleanup that cannot be VERIFIED fails the preflight -- a raw parent
+    delete afterwards can never make the gate appear passed (adversarial
+    item 10)."""
+    from qualification.i2_cleanup import CleanupResult
+
+    captured = _capture_generated(monkeypatch)
+    monkeypatch.setattr(
+        live_module,
+        "scrub_generated_qualification_config",
+        lambda generated: CleanupResult(existed=True, removed=False, verified_by_stat=True),
+    )
+    try:
+        result = producer()
+        assert result.passed is False
+        assert result.failure_code == "VERIFICATION_FAILED"
+    finally:
+        # FU4: production correctly RETAINS the tree here, so this offline
+        # test owns completing the authorized cleanup itself.
+        for generated in captured:
+            _force_release(generated)
+
+
+@pytest.mark.parametrize(("name", "producer", "expected"), SELF_CHECK_GENERATORS)
+def test_official_cleanup_raising_fails_the_gate_and_never_escapes(
+    name, producer, expected, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured = _capture_generated(monkeypatch)
+
+    def _raising_scrub(generated):
+        raise RuntimeError("synthetic cleanup failure")
+
+    monkeypatch.setattr(live_module, "scrub_generated_qualification_config", _raising_scrub)
+    try:
+        result = producer()
+        assert result.passed is False
+        assert result.failure_code == "VERIFICATION_FAILED"
+    finally:
+        for generated in captured:
+            _force_release(generated)
+
+
+def test_config_generator_self_check_failure_after_generation_leaves_no_issuance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The pre-fix defect, per producer: the post-generation failure branch
+    raw-deleted the parent and left the issuance record live."""
+    captured = _capture_generated(monkeypatch)
+    cleanups = _count_official_cleanups(monkeypatch)
+
+    def _failing_verify(**kwargs):
+        raise live_module.QualificationPiConfigError("config error: synthetic verify failure")
+
+    monkeypatch.setattr(live_module, "verify_generated_config_integrity", _failing_verify)
+    result = preflight_config_generator_self_check()
+
+    assert result.passed is False
+    assert result.failure_code == "VERIFICATION_FAILED"
+    assert len(captured) == 1
+    assert _issuance_live(captured[0]) is False
+    assert cleanups.count(captured[0].authority_token) == 1
+
+
+def test_child_environment_builder_failure_after_generation_leaves_no_issuance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured = _capture_generated(monkeypatch)
+    cleanups = _count_official_cleanups(monkeypatch)
+
+    def _failing_builder(**kwargs):
+        raise live_module.EnvironmentPolicyError("environment error: synthetic builder failure")
+
+    monkeypatch.setattr(live_module, "build_child_environment", _failing_builder)
+    result = preflight_child_environment_builder_self_check()
+
+    assert result.passed is False
+    assert result.failure_code == "VERIFICATION_FAILED"
+    assert len(captured) == 1
+    assert _issuance_live(captured[0]) is False
+    assert cleanups.count(captured[0].authority_token) == 1
+
+
+def test_symmetry_validation_failure_after_both_were_issued_cleans_both(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Adversarial item 9: two issued configs, validation failing after BOTH
+    exist -- neither issuance may survive."""
+    real_write = live_module.write_qualification_pi_config
+    captured = []
+
+    def _tampering_write(experiment_root, *, model_id, base_url):
+        generated = real_write(experiment_root, model_id=model_id, base_url=base_url)
+        captured.append(generated)
+        if len(captured) == 2:
+            from pathlib import Path as _Path
+
+            settings_path = _Path(generated.settings_path)
+            text = settings_path.read_text(encoding="utf-8")
+            settings_path.write_text(
+                text.replace('"quietStartup": true', '"quietStartup": false'), encoding="utf-8"
+            )
+        return generated
+
+    monkeypatch.setattr(live_module, "write_qualification_pi_config", _tampering_write)
+    cleanups = _count_official_cleanups(monkeypatch)
+    result = preflight_candidate_route_generator_symmetry()
+
+    assert result.passed is False
+    assert len(captured) == 2
+    for generated in captured:
+        assert _issuance_live(generated) is False
+        assert cleanups.count(generated.authority_token) == 1
+
+
+def test_symmetry_second_generation_failure_still_cleans_the_first(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """First generation succeeded, second raised: the first issuance must
+    still be discarded, and no cleanup is attempted for an object that never
+    existed."""
+    captured = _capture_generated(monkeypatch, fail_on_call=2)
+    cleanups = _count_official_cleanups(monkeypatch)
+    result = preflight_candidate_route_generator_symmetry()
+
+    assert result.passed is False
+    assert result.failure_code == "VERIFICATION_FAILED"
+    assert len(captured) == 1
+    assert _issuance_live(captured[0]) is False
+    assert cleanups == [captured[0].authority_token]
+
+
+def test_symmetry_first_generation_failure_attempts_no_cleanup_at_all(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Generation failing BEFORE returning an object is the one case with
+    nothing to clean -- no official cleanup is attempted, and no fake one is
+    manufactured for uniformity."""
+    captured = _capture_generated(monkeypatch, fail_on_call=1)
+    cleanups = _count_official_cleanups(monkeypatch)
+    result = preflight_candidate_route_generator_symmetry()
+
+    assert result.passed is False
+    assert captured == []
+    assert cleanups == []
+
+
+@pytest.mark.parametrize(("name", "producer", "expected"), SELF_CHECK_GENERATORS)
+def test_no_double_official_cleanup(
+    name, producer, expected, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured = _capture_generated(monkeypatch)
+    cleanups = _count_official_cleanups(monkeypatch)
+    producer()
+    assert len(cleanups) == len(set(cleanups)) == expected == len(captured)
+
+
+def test_raw_rmtree_never_precedes_the_official_cleanup_in_any_producer() -> None:
+    """Source-level ordering AND guarding: in every generating producer the
+    official release runs before the throwaway parent's raw delete, and
+    (FU4 BLOCKER 1) every raw delete is GUARDED by that release's own
+    ``throwaway_parent_may_be_removed`` -- never unconditional."""
+    for producer in (
+        live_module.preflight_config_generator_self_check,
+        live_module.preflight_child_environment_builder_self_check,
+        live_module.preflight_candidate_route_generator_symmetry,
+    ):
+        source = inspect.getsource(producer)
+        body = source.split('"""')[-1]
+        expected = 2 if producer.__name__.endswith("symmetry") else 1
+        assert body.count("shutil.rmtree") == expected
+        assert body.count("_release_generated_self_check_config") == expected
+        assert body.count("throwaway_parent_may_be_removed") == expected
+        assert body.index("_release_generated_self_check_config") < body.index("shutil.rmtree")
+        # every raw delete is the guarded body of an `if ...may_be_removed:`
+        for line in body.splitlines():
+            if "shutil.rmtree" not in line:
+                continue
+            guard = body.splitlines()[body.splitlines().index(line) - 1]
+            assert "throwaway_parent_may_be_removed" in guard
+
+
+def test_no_production_code_touches_the_issuance_registry_globals() -> None:
+    """Production code never reaches into ``i2_issuance``'s private globals
+    (prose mentions in docstrings are not code); cleanup goes through the
+    official path, which owns the discard."""
+    identifiers = _identifiers_used_in_code()
+    assert "i2_issuance" not in identifiers
+    assert "_discard_issuance" not in identifiers
+    assert "_lookup_issuance" not in identifiers
+    assert "_REGISTRY" not in identifiers
+def test_the_whole_category_a_gate_sequence_leaves_no_issuance_behind() -> None:
+    """End to end over the exact eight-gate tuple ``run_i2b_live.py`` runs
+    before the version probe: after every Category-A gate has passed, the
+    process-local issuance registry holds nothing new. Nothing here reads a
+    credential, launches a process, or opens a pipe."""
+    from qualification import i2_issuance
+
+    run_i2b_live = _import_run_i2b_live()
+    before = dict(i2_issuance._REGISTRY)
+
+    gates = (
+        preflight_pi_installed_offline,
+        preflight_config_generator_self_check,
+        preflight_child_environment_builder_self_check,
+        preflight_candidate_route_generator_symmetry,
+        preflight_planned_cli_argv_shape,
+        preflight_artifact_safety_scrub_self_check,
+        preflight_config_generator_no_credential_literal_path,
+        lambda: preflight_environment_forbidden_fragment_audit(ambient_environ={"SystemRoot": "X"}),
+    )
+    run_i2b_live._require_all_category_a_gates_pass(gates)
+
+    assert dict(i2_issuance._REGISTRY) == before
+
+
+def test_a_failing_category_a_gate_also_leaves_no_issuance_behind(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same fact on the FAILURE side, which is the defect FU3 closes: a
+    preflight that fails after a config was generated must leave no stale
+    issuance authority in this process either."""
+    from qualification import i2_issuance
+
+    before = dict(i2_issuance._REGISTRY)
+
+    def _failing_verify(**kwargs):
+        raise live_module.QualificationPiConfigError("config error: synthetic verify failure")
+
+    monkeypatch.setattr(live_module, "verify_generated_config_integrity", _failing_verify)
+    result = preflight_config_generator_self_check()
+
+    assert result.passed is False
+    assert dict(i2_issuance._REGISTRY) == before
+# -- FU4 BLOCKER 1: an UNVERIFIED release must strand nothing ----------------
+#
+# The frozen cleanup primitive deliberately RETAINS the process-local
+# issuance when it could not verify removal, precisely because the directory
+# still exists and a future authorized cleanup must remain possible. FU3's
+# unconditional raw ``shutil.rmtree`` of the throwaway parent therefore
+# destroyed the path while leaving the issuance live -- reintroducing the
+# stale-authority class one line after eliminating it. Every test below
+# asserts the corrected coupling: path and issuance live or die together.
+
+
+def _config_dir_exists(generated) -> bool:
+    return os.path.isdir(generated.config_dir)
+
+
+def _throwaway_parent(generated) -> str:
+    """``write_qualification_pi_config`` creates ``<experiment_root>/
+    i2_pi_config`` (``i2_pi_config.py``), so the throwaway parent these
+    producers ``mkdtemp``'d is exactly the config directory's parent."""
+    from pathlib import Path as _Path
+
+    return str(_Path(generated.config_dir).parent)
+
+
+def _parent_exists(generated) -> bool:
+    return os.path.isdir(_throwaway_parent(generated))
+
+
+def _force_release(generated) -> None:
+    """Test-owned teardown for the failure-only paths where production code
+    correctly leaves the tree in place: complete the authorized cleanup with
+    the REAL (never monkeypatched) primitive, then remove the throwaway
+    parent, so this offline suite leaves neither a temp tree nor a stale
+    issuance behind."""
+    import shutil as _shutil
+
+    from qualification.i2_cleanup import scrub_generated_qualification_config as _real
+
+    parent = _throwaway_parent(generated)
+    try:
+        _real(generated)
+    except Exception:  # pragma: no cover - teardown must never fail a test
+        pass
+    _shutil.rmtree(parent, ignore_errors=True)
+
+
+def _fail_after_generation_in_config_generator(monkeypatch) -> None:
+    def _failing_verify(**kwargs):
+        raise live_module.QualificationPiConfigError("config error: synthetic verify failure")
+
+    monkeypatch.setattr(live_module, "verify_generated_config_integrity", _failing_verify)
+
+
+def _fail_after_generation_in_child_environment(monkeypatch) -> None:
+    def _failing_builder(**kwargs):
+        raise live_module.EnvironmentPolicyError("environment error: synthetic builder failure")
+
+    monkeypatch.setattr(live_module, "build_child_environment", _failing_builder)
+
+
+def _fail_after_generation_in_symmetry(monkeypatch) -> None:
+    """Tamper candidate B's settings.json AFTER both genuine writes, so the
+    field-by-field comparison fails with both objects already issued."""
+    real_write = live_module.write_qualification_pi_config
+    seen = {"n": 0}
+
+    def _tampering_write(experiment_root, *, model_id, base_url):
+        generated = real_write(experiment_root, model_id=model_id, base_url=base_url)
+        seen["n"] += 1
+        if seen["n"] == 2:
+            from pathlib import Path as _Path
+
+            settings_path = _Path(generated.settings_path)
+            text = settings_path.read_text(encoding="utf-8")
+            settings_path.write_text(
+                text.replace('"quietStartup": true', '"quietStartup": false'), encoding="utf-8"
+            )
+        return generated
+
+    monkeypatch.setattr(live_module, "write_qualification_pi_config", _tampering_write)
+
+
+GENERATING_PRODUCERS = (
+    (
+        "config_generator_self_check",
+        preflight_config_generator_self_check,
+        1,
+        _fail_after_generation_in_config_generator,
+    ),
+    (
+        "child_environment_builder_self_check",
+        preflight_child_environment_builder_self_check,
+        1,
+        _fail_after_generation_in_child_environment,
+    ),
+    (
+        "candidate_route_generator_symmetry",
+        preflight_candidate_route_generator_symmetry,
+        2,
+        _fail_after_generation_in_symmetry,
+    ),
+)
+
+
+@pytest.mark.parametrize(("name", "producer", "count", "inject"), GENERATING_PRODUCERS)
+def test_release_case_a_success_removes_issuance_config_and_parent(
+    name, producer, count, inject, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Case A: the official release VERIFIED, so the issuance is discarded,
+    the generated tree is verified absent, and only THEN may the throwaway
+    parent be raw-deleted."""
+    captured = _capture_generated(monkeypatch)
+    result = producer()
+
+    assert result.passed is True
+    assert len(captured) == count
+    for generated in captured:
+        assert _issuance_live(generated) is False
+        assert _config_dir_exists(generated) is False
+        assert _parent_exists(generated) is False
+
+
+@pytest.mark.parametrize(("name", "producer", "count", "inject"), GENERATING_PRODUCERS)
+def test_release_post_generation_failure_with_verified_cleanup_still_releases(
+    name, producer, count, inject, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A post-generation VALIDATION failure whose official cleanup then
+    verifies: the gate fails for the original reason, and nothing is
+    stranded -- issuance discarded, config tree gone, parent removable."""
+    captured = _capture_generated(monkeypatch)
+    inject(monkeypatch)
+    result = producer()
+
+    assert result.passed is False
+    assert result.failure_code == "VERIFICATION_FAILED"
+    assert len(captured) == count
+    for generated in captured:
+        assert _issuance_live(generated) is False
+        assert _config_dir_exists(generated) is False
+        assert _parent_exists(generated) is False
+
+
+@pytest.mark.parametrize(("name", "producer", "count", "inject"), GENERATING_PRODUCERS)
+def test_release_case_c_unverified_cleanup_never_raw_deletes_the_retained_tree(
+    name, producer, count, inject, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Case C, the FU4 defect: the official cleanup returned
+    ``scrub_verified=False``, so the frozen primitive RETAINED the issuance.
+    The gate fails, and the generated tree AND its throwaway parent must
+    both survive -- an issuance may never be left pointing at a path this
+    module deleted behind its back."""
+    from qualification.i2_cleanup import CleanupResult
+
+    captured = _capture_generated(monkeypatch)
+    monkeypatch.setattr(
+        live_module,
+        "scrub_generated_qualification_config",
+        lambda generated: CleanupResult(existed=True, removed=False, verified_by_stat=True),
+    )
+    result = producer()
+
+    assert result.passed is False
+    assert result.failure_code == "VERIFICATION_FAILED"
+    assert len(captured) == count
+    try:
+        for generated in captured:
+            assert _issuance_live(generated) is True
+            assert _config_dir_exists(generated) is True
+            assert _parent_exists(generated) is True
+    finally:
+        for generated in captured:
+            _force_release(generated)
+
+
+@pytest.mark.parametrize(("name", "producer", "count", "inject"), GENERATING_PRODUCERS)
+def test_release_case_c_raising_cleanup_never_raw_deletes_beneath_the_issuance(
+    name, producer, count, inject, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Case C via the primitive RAISING: identical ownership answer. The
+    gate fails and nothing beneath the retained issuance is deleted."""
+    captured = _capture_generated(monkeypatch)
+
+    def _raising_scrub(generated):
+        raise RuntimeError("synthetic cleanup failure")
+
+    monkeypatch.setattr(live_module, "scrub_generated_qualification_config", _raising_scrub)
+    result = producer()
+
+    assert result.passed is False
+    assert result.failure_code == "VERIFICATION_FAILED"
+    assert len(captured) == count
+    try:
+        for generated in captured:
+            assert _issuance_live(generated) is True
+            assert _config_dir_exists(generated) is True
+            assert _parent_exists(generated) is True
+    finally:
+        for generated in captured:
+            _force_release(generated)
+
+
+def _selective_scrub(monkeypatch, *, fail_for_model_id: str):
+    """Make the official cleanup fail for exactly ONE of the two symmetry
+    configs, keyed by its model id."""
+    from qualification.i2_cleanup import CleanupResult
+    from qualification.i2_cleanup import scrub_generated_qualification_config as _real
+
+    def _scrub(generated):
+        if generated.model_id == fail_for_model_id:
+            return CleanupResult(existed=True, removed=False, verified_by_stat=True)
+        return _real(generated)
+
+    monkeypatch.setattr(live_module, "scrub_generated_qualification_config", _scrub)
+
+
+@pytest.mark.parametrize("failing", ["A", "B"])
+def test_symmetry_mixed_release_outcomes_are_decided_per_object(
+    failing, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FU4: one aggregate cleanup bool must never decide whether BOTH
+    parents are raw-deleted. The RELEASED config's issuance, tree and parent
+    all go; the RETAINED config keeps all three."""
+    captured = _capture_generated(monkeypatch)
+    failing_model_id = live_module._CANDIDATE_MODEL_IDS[failing]
+    _selective_scrub(monkeypatch, fail_for_model_id=failing_model_id)
+    result = preflight_candidate_route_generator_symmetry()
+
+    assert result.passed is False
+    assert result.failure_code == "VERIFICATION_FAILED"
+    assert len(captured) == 2
+    retained = [g for g in captured if g.model_id == failing_model_id]
+    released = [g for g in captured if g.model_id != failing_model_id]
+    assert len(retained) == len(released) == 1
+    try:
+        assert _issuance_live(released[0]) is False
+        assert _config_dir_exists(released[0]) is False
+        assert _parent_exists(released[0]) is False
+
+        assert _issuance_live(retained[0]) is True
+        assert _config_dir_exists(retained[0]) is True
+        assert _parent_exists(retained[0]) is True
+    finally:
+        _force_release(retained[0])
+
+
+def test_symmetry_second_generation_failure_releases_the_first_and_strands_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FU4 case B alongside case A: the first config was issued and is
+    released exactly once; the second never returned an object, so there is
+    no issuance and no cleanup for it, and both parent decisions stay
+    truthful."""
+    captured = _capture_generated(monkeypatch, fail_on_call=2)
+    cleanups = _count_official_cleanups(monkeypatch)
+    result = preflight_candidate_route_generator_symmetry()
+
+    assert result.passed is False
+    assert result.failure_code == "VERIFICATION_FAILED"
+    assert len(captured) == 1
+    assert cleanups == [captured[0].authority_token]
+    assert _issuance_live(captured[0]) is False
+    assert _config_dir_exists(captured[0]) is False
+    assert _parent_exists(captured[0]) is False
+
+
+def test_release_record_states_are_exactly_three_and_never_overlap() -> None:
+    """The release record's own decision table, stated once: only a
+    generated-and-VERIFIED release lets the gate pass and the parent go, and
+    "nothing generated" is a distinct history from "generated and
+    released"."""
+    release = live_module._GeneratedConfigRelease
+
+    no_object = release(
+        generated_object_existed=False, cleanup_attempted=False, cleanup_verified=False
+    )
+    verified = release(
+        generated_object_existed=True, cleanup_attempted=True, cleanup_verified=True
+    )
+    retained = release(
+        generated_object_existed=True, cleanup_attempted=True, cleanup_verified=False
+    )
+
+    assert (no_object.gate_ok, no_object.throwaway_parent_may_be_removed) == (True, True)
+    assert no_object.issuance_outstanding is False
+    assert (verified.gate_ok, verified.throwaway_parent_may_be_removed) == (True, True)
+    assert verified.issuance_outstanding is False
+    assert (retained.gate_ok, retained.throwaway_parent_may_be_removed) == (False, False)
+    assert retained.issuance_outstanding is True
+
+
+def test_the_release_helper_never_touches_issuance_internals_or_retries_raw() -> None:
+    """Case C uses no ``i2_issuance`` discard, no registry mutation, and no
+    second unreviewed raw delete."""
+    body = inspect.getsource(live_module._release_generated_self_check_config).split('"""')[-1]
+    for forbidden in ("i2_issuance", "_discard_issuance", "_REGISTRY", "rmtree", "unlink"):
+        assert forbidden not in body
+
+
+# -- FU4 BLOCKER 2: workspace ownership starts at the mint -------------------
+
+
+class _FakeRunWorkspace:
+    """The narrowest stand-in for a minted ``QualificationRunWorkspace``:
+    only what ``_run_outer_cleanup`` reads. Never a real workspace."""
+
+    def __init__(self, experiment_root: str) -> None:
+        self.experiment_root = experiment_root
+        self.workspace_root = experiment_root
+
+
+def _stubbed_harness(monkeypatch, tmp_path, *, removal_raises=None, removal_returns=None):
+    """Install a fully offline ``run_i2b_live`` harness: passing Category-A
+    gates, an issued identity from a replaced probe, a synthetic workspace,
+    and a counting ``remove_run_workspace``. No credential, no process, no
+    pipe, no real workspace.
+
+    ``removal_returns``, when given (and ``removal_raises`` is ``None``),
+    is returned in place of the real removal's own return value -- this is
+    how L1-FU5's mandatory regressions drive a NORMAL (non-raising) return
+    that is not the frozen success shape. Absent both, the stub performs a
+    real ``shutil.rmtree`` and returns the exact frozen
+    ``ar2.fixtures.remove_disposable_tree`` success shape, so every
+    pre-existing test in this harness that expects
+    ``workspace_removal_verified is True`` keeps observing a genuinely
+    valid frozen success dict rather than an untyped ``None``."""
+    run_i2b_live = _import_run_i2b_live()
+
+    for gate in (
+        "preflight_pi_installed_offline",
+        "preflight_config_generator_self_check",
+        "preflight_child_environment_builder_self_check",
+        "preflight_candidate_route_generator_symmetry",
+        "preflight_planned_cli_argv_shape",
+        "preflight_artifact_safety_scrub_self_check",
+        "preflight_config_generator_no_credential_literal_path",
+    ):
+        monkeypatch.setattr(
+            run_i2b_live,
+            gate,
+            (lambda name: lambda: PreflightGateResult(name=name, passed=True))(gate),
+        )
+    monkeypatch.setattr(
+        run_i2b_live,
+        "preflight_environment_forbidden_fragment_audit",
+        lambda *, ambient_environ: PreflightGateResult(name="env_audit", passed=True),
+    )
+
+    probes: list[int] = []
+
+    def _issue_identity():
+        probes.append(1)
+        return live_module._issue_runtime_identity(SYNTHETIC_IDENTITY)
+
+    monkeypatch.setattr(run_i2b_live, "resolve_pi_identity", _issue_identity)
+    monkeypatch.setattr(run_i2b_live, "resolve_git_executable", lambda *, workspace_root: None)
+
+    workspace_dir = tmp_path / "synthetic-run-workspace"
+    workspace_dir.mkdir()
+    workspace = _FakeRunWorkspace(str(workspace_dir))
+    monkeypatch.setattr(run_i2b_live, "mint_qualification_run_workspace", lambda: workspace)
+
+    removals: list[object] = []
+
+    def _remove(run_workspace):
+        removals.append(run_workspace)
+        if removal_raises is not None:
+            raise removal_raises
+        if removal_returns is not None:
+            return removal_returns
+        import shutil as _shutil
+
+        _shutil.rmtree(run_workspace.experiment_root, ignore_errors=True)
+        return {"removed": True, "residual_file_count": 0, "verified": True}
+
+    monkeypatch.setattr(run_i2b_live, "remove_run_workspace", _remove)
+    return SimpleNamespace(
+        module=run_i2b_live, workspace=workspace, removals=removals, probes=probes
+    )
+
+
+def test_adapter_construction_failure_after_mint_still_cleans_the_workspace(
+    patched, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """FU4 BLOCKER 2, the reproduction: a SUPPORTED fail-closed constructor
+    refusal (the frozen extension source/digest check) used to strand the
+    minted qualification workspace, because the constructor sat outside the
+    ownership scope's ``try``. Outer cleanup now runs exactly once."""
+    harness = _stubbed_harness(monkeypatch, tmp_path)
+    monkeypatch.setattr(live_module, "_FROZEN_AR2_EXTENSION_SHA256", "0" * 64)
+
+    with pytest.raises(harness.module.PreControllerRefusal) as caught:
+        harness.module.run_one_category_b_live_attempt(candidate="A")
+
+    refusal = caught.value
+    assert refusal.stage == harness.module.STAGE_ADAPTER_CONSTRUCTION
+    assert refusal.failure_type == "LiveAdapterError"
+    assert len(harness.removals) == 1
+    assert harness.removals[0] is harness.workspace
+
+
+def test_adapter_construction_failure_leaves_no_workspace_when_removal_succeeds(
+    patched, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    harness = _stubbed_harness(monkeypatch, tmp_path)
+    monkeypatch.setattr(live_module, "_FROZEN_AR2_EXTENSION_SHA256", "0" * 64)
+
+    with pytest.raises(harness.module.PreControllerRefusal) as caught:
+        harness.module.run_one_category_b_live_attempt(candidate="A")
+
+    assert os.path.isdir(harness.workspace.experiment_root) is False
+    cleanup = caught.value.outer_cleanup
+    assert cleanup["workspace_removal_attempted"] is True
+    assert cleanup["workspace_removal_verified"] is True
+    assert cleanup["outer_cleanup_verified"] is True
+
+
+def test_adapter_construction_failure_reports_a_failed_removal_truthfully(
+    patched, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """The primary constructor refusal stays primary, and the outer cleanup
+    failure is reported alongside it -- never swallowed, and never allowed
+    to replace the primary failure."""
+    harness = _stubbed_harness(
+        monkeypatch, tmp_path, removal_raises=OSError("synthetic removal failure")
+    )
+    monkeypatch.setattr(live_module, "_FROZEN_AR2_EXTENSION_SHA256", "0" * 64)
+
+    with pytest.raises(harness.module.PreControllerRefusal) as caught:
+        harness.module.run_one_category_b_live_attempt(candidate="A")
+
+    refusal = caught.value
+    assert refusal.failure_type == "LiveAdapterError"  # primary, unchanged
+    assert refusal.stage == harness.module.STAGE_ADAPTER_CONSTRUCTION
+    assert len(harness.removals) == 1
+    assert refusal.outer_cleanup["workspace_removal_attempted"] is True
+    assert refusal.outer_cleanup["workspace_removal_verified"] is False
+    assert refusal.outer_cleanup["outer_cleanup_verified"] is False
+
+
+def test_the_pre_controller_refusal_record_is_bounded_and_secret_free(
+    patched, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """No exception text, runtime path, endpoint or token -- only the
+    failing class NAME, the stage, the cleanup facts, and the zero-prompt
+    fact. No controller result is fabricated."""
+    harness = _stubbed_harness(monkeypatch, tmp_path)
+    monkeypatch.setattr(live_module, "_FROZEN_AR2_EXTENSION_SHA256", "0" * 64)
+
+    with pytest.raises(harness.module.PreControllerRefusal) as caught:
+        harness.module.run_one_category_b_live_attempt(candidate="A")
+
+    record = caught.value.as_refusal_record()
+    assert record["refused"] is True
+    assert record["reason"] == "LiveAdapterError"
+    assert record["semantic_prompts_sent"] == 0
+    assert record["controller_entered"] is False
+    assert record["outer_cleanup"] is not None
+    assert "outcome" not in record and "gate_statuses" not in record
+
+    rendered = json.dumps(record)
+    assert "does not match its authorized digest" not in rendered
+    assert harness.workspace.experiment_root not in rendered
+    assert SYNTHETIC_API_KEY not in rendered
+    assert SYNTHETIC_BASE_URL not in rendered
+    assert SYNTHETIC_IDENTITY.node_executable not in rendered
+
+
+def test_controller_exception_after_construction_still_cleans_up_exactly_once(
+    patched, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """The constructor succeeded and the controller itself raised: the
+    ownership scope still runs outer cleanup exactly once. L1-FU5 nearby
+    gap fix: the raw controller exception no longer propagates bare (that
+    used to silently lose the cleanup truth, discarded as an unused local
+    in ``finally``) -- it is reduced to a bounded
+    ``PostControllerExceptionalFailure`` whose own record carries the
+    cleanup facts alongside the primary failure."""
+    harness = _stubbed_harness(monkeypatch, tmp_path)
+
+    def _raising_controller(**kwargs):
+        raise RuntimeError("synthetic controller failure")
+
+    monkeypatch.setattr(harness.module, "run_category_b_controller", _raising_controller)
+
+    with pytest.raises(harness.module.PostControllerExceptionalFailure) as caught:
+        harness.module.run_one_category_b_live_attempt(candidate="A")
+
+    assert len(harness.removals) == 1
+    assert caught.value.stage == harness.module.STAGE_CONTROLLER_EXECUTION
+    assert caught.value.failure_type == "RuntimeError"
+    assert caught.value.outer_cleanup is not None
+
+
+def test_result_processing_failure_inside_the_scope_still_cleans_up_once(
+    patched, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """Result processing lives INSIDE the ownership scope too, so a failure
+    there cannot strand the workspace either. L1-FU5 nearby gap fix: same
+    bounded reduction as the controller-exception case above, tagged with
+    the result-processing stage."""
+    harness = _stubbed_harness(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        harness.module, "run_category_b_controller", lambda **kwargs: object()
+    )
+
+    def _raising_summary(result):
+        raise RuntimeError("synthetic summary failure")
+
+    monkeypatch.setattr(harness.module, "_safe_result_summary", _raising_summary)
+
+    with pytest.raises(harness.module.PostControllerExceptionalFailure) as caught:
+        harness.module.run_one_category_b_live_attempt(candidate="A")
+
+    assert len(harness.removals) == 1
+    assert caught.value.stage == harness.module.STAGE_RESULT_PROCESSING
+    assert caught.value.failure_type == "RuntimeError"
+    assert caught.value.outer_cleanup is not None
+
+
+# -- L1-FU5 NEARBY GAP: post-controller exceptional-path cleanup reporting --
+
+
+def test_controller_exception_with_verified_cleanup_retains_both_facts(
+    patched, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """Mandatory regression 10: controller raises, cleanup verifies ->
+    bounded primary controller failure, cleanup truth retained."""
+    harness = _stubbed_harness(monkeypatch, tmp_path)
+
+    def _raising_controller(**kwargs):
+        raise RuntimeError("synthetic controller failure")
+
+    monkeypatch.setattr(harness.module, "run_category_b_controller", _raising_controller)
+
+    with pytest.raises(harness.module.PostControllerExceptionalFailure) as caught:
+        harness.module.run_one_category_b_live_attempt(candidate="A")
+
+    failure = caught.value
+    assert failure.stage == harness.module.STAGE_CONTROLLER_EXECUTION
+    assert failure.failure_type == "RuntimeError"
+    assert failure.outer_cleanup["workspace_removal_verified"] is True
+    assert failure.outer_cleanup["outer_cleanup_verified"] is True
+
+    record = failure.as_refusal_record()
+    assert record["controller_entered"] is True
+    assert record["semantic_prompts_sent"] == 0
+    assert record["outer_cleanup"]["outer_cleanup_verified"] is True
+
+
+def test_controller_exception_with_a_normally_failed_removal_shows_both_facts(
+    patched, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """Mandatory regression 11: controller raises, and
+    ``remove_run_workspace`` returns ``removed=False`` WITHOUT raising ->
+    the primary controller failure is retained AND the cleanup failure is
+    visible, never masked by the primary exception."""
+    harness = _stubbed_harness(
+        monkeypatch,
+        tmp_path,
+        removal_returns={"removed": False, "residual_file_count": 4, "verified": True},
+    )
+
+    def _raising_controller(**kwargs):
+        raise RuntimeError("synthetic controller failure")
+
+    monkeypatch.setattr(harness.module, "run_category_b_controller", _raising_controller)
+
+    with pytest.raises(harness.module.PostControllerExceptionalFailure) as caught:
+        harness.module.run_one_category_b_live_attempt(candidate="A")
+
+    failure = caught.value
+    assert failure.stage == harness.module.STAGE_CONTROLLER_EXECUTION
+    assert failure.failure_type == "RuntimeError"
+    assert failure.outer_cleanup["workspace_removal_verified"] is False
+    assert failure.outer_cleanup["outer_cleanup_verified"] is False
+
+
+def test_result_processing_exception_with_a_normally_failed_removal_shows_both_facts(
+    patched, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """Mandatory regression 12: result-summary reduction raises, and
+    ``remove_run_workspace`` returns ``removed=False`` WITHOUT raising ->
+    the primary result-processing failure is retained AND the cleanup
+    failure is visible."""
+    harness = _stubbed_harness(
+        monkeypatch,
+        tmp_path,
+        removal_returns={"removed": False, "residual_file_count": 1, "verified": True},
+    )
+    monkeypatch.setattr(
+        harness.module, "run_category_b_controller", lambda **kwargs: object()
+    )
+
+    def _raising_summary(result):
+        raise RuntimeError("synthetic summary failure")
+
+    monkeypatch.setattr(harness.module, "_safe_result_summary", _raising_summary)
+
+    with pytest.raises(harness.module.PostControllerExceptionalFailure) as caught:
+        harness.module.run_one_category_b_live_attempt(candidate="A")
+
+    failure = caught.value
+    assert failure.stage == harness.module.STAGE_RESULT_PROCESSING
+    assert failure.failure_type == "RuntimeError"
+    assert failure.outer_cleanup["workspace_removal_verified"] is False
+    assert failure.outer_cleanup["outer_cleanup_verified"] is False
+
+
+def test_the_post_controller_failure_record_is_bounded_and_secret_free(
+    patched, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """Mandatory regression 13: no exception text, no runtime path, no
+    endpoint, no token -- only the failing class NAME, the stage, the
+    cleanup facts, and the fixed zero-prompt invariant. No controller
+    result is fabricated."""
+    harness = _stubbed_harness(monkeypatch, tmp_path)
+
+    def _raising_controller(**kwargs):
+        raise RuntimeError(
+            f"synthetic failure leaking {SYNTHETIC_API_KEY} and {SYNTHETIC_BASE_URL} "
+            f"and workspace {harness.workspace.experiment_root}"
+        )
+
+    monkeypatch.setattr(harness.module, "run_category_b_controller", _raising_controller)
+
+    with pytest.raises(harness.module.PostControllerExceptionalFailure) as caught:
+        harness.module.run_one_category_b_live_attempt(candidate="A")
+
+    record = caught.value.as_refusal_record()
+    assert record["refused"] is True
+    assert record["reason"] == "RuntimeError"
+    assert record["stage"] == harness.module.STAGE_CONTROLLER_EXECUTION
+    assert record["semantic_prompts_sent"] == 0
+    assert record["controller_entered"] is True
+    assert record["outer_cleanup"] is not None
+    assert "outcome" not in record and "gate_statuses" not in record
+
+    rendered = json.dumps(record)
+    assert SYNTHETIC_API_KEY not in rendered
+    assert SYNTHETIC_BASE_URL not in rendered
+    assert harness.workspace.experiment_root not in rendered
+    assert "synthetic failure leaking" not in rendered
+
+
+def test_ordinary_controller_refusal_result_is_unaffected_by_the_fu5_guard(
+    patched, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """Mandatory regression 14: an ordinary (non-exceptional)
+    ``CategoryBControllerResult`` refusal must still flow through
+    unchanged -- the FU5 guard reduces unexpected EXCEPTIONS only, and must
+    never turn an ordinary refusal result into one."""
+    harness = _stubbed_harness(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        harness.module, "run_category_b_controller", lambda **kwargs: SimpleNamespace()
+    )
+    monkeypatch.setattr(
+        harness.module,
+        "_safe_result_summary",
+        lambda result: {
+            "candidate": "A",
+            "outcome": "CATEGORY_B_GATE_REFUSED",
+            "failed_gate": "broker_creation",
+        },
+    )
+
+    summary = harness.module.run_one_category_b_live_attempt(candidate="A")
+
+    assert summary["outcome"] == "CATEGORY_B_GATE_REFUSED"
+    assert summary["outer_cleanup"]["workspace_removal_verified"] is True
+    assert summary["outer_cleanup"]["outer_cleanup_verified"] is True
+
+
+def test_ordinary_pass_result_with_verified_cleanup_is_unaffected_by_the_fu5_guard(
+    patched, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """Mandatory regression 15: an ordinary Category-B PASS with a verified
+    outer cleanup is unchanged -- no exception, no
+    ``PostControllerExceptionalFailure``, exactly one removal."""
+    harness = _stubbed_harness(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        harness.module, "run_category_b_controller", lambda **kwargs: SimpleNamespace()
+    )
+    monkeypatch.setattr(
+        harness.module,
+        "_safe_result_summary",
+        lambda result: {
+            "candidate": "A",
+            "outcome": harness.module.CategoryBOutcome.CATEGORY_B_GATE_PASSED.value,
+        },
+    )
+
+    summary = harness.module.run_one_category_b_live_attempt(candidate="A")
+
+    assert len(harness.removals) == 1
+    assert summary["outcome"] == harness.module.CategoryBOutcome.CATEGORY_B_GATE_PASSED.value
+    assert summary["outer_cleanup"]["workspace_removal_verified"] is True
+    assert summary["outer_cleanup"]["outer_cleanup_verified"] is True
+
+
+def test_main_never_exits_0_when_controller_passed_but_removal_returns_false_normally(
+    patched, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """Mandatory regression 9: a controller CATEGORY_B_GATE_PASSED result,
+    an extension scrub that verified (nothing to scrub here), and a
+    workspace removal that returns ``{"removed": False, ...}`` WITHOUT
+    raising must never let ``main()`` exit 0 -- the L1-FU5 primary
+    blocker's exact false-PASS scenario."""
+    harness = _stubbed_harness(
+        monkeypatch,
+        tmp_path,
+        removal_returns={"removed": False, "residual_file_count": 2, "verified": True},
+    )
+    monkeypatch.setattr(
+        harness.module, "run_category_b_controller", lambda **kwargs: SimpleNamespace()
+    )
+    monkeypatch.setattr(
+        harness.module,
+        "_safe_result_summary",
+        lambda result: {
+            "candidate": "A",
+            "outcome": harness.module.CategoryBOutcome.CATEGORY_B_GATE_PASSED.value,
+        },
+    )
+    monkeypatch.setattr(harness.module, "RESULTS_DIR", tmp_path / "results")
+
+    exit_code = harness.module.main(["--candidate", "A", "--run-category-b-live-gate"])
+
+    assert exit_code != 0
+
+
+def test_no_double_workspace_removal_on_the_success_path(
+    patched, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """One mint, one removal -- on the ordinary path too."""
+    harness = _stubbed_harness(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        harness.module,
+        "run_category_b_controller",
+        lambda **kwargs: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        harness.module, "_safe_result_summary", lambda result: {"outcome": "SYNTHETIC"}
+    )
+
+    summary = harness.module.run_one_category_b_live_attempt(candidate="A")
+
+    assert len(harness.removals) == 1
+    assert summary["outer_cleanup"]["workspace_removal_verified"] is True
+
+
+def test_the_ownership_scope_calls_outer_cleanup_from_exactly_one_site() -> None:
+    """Source-level: ``_run_outer_cleanup`` is invoked from exactly ONE
+    place inside the attempt, in a ``finally``, so no path can double-remove
+    and no path can skip it."""
+    run_i2b_live = _import_run_i2b_live()
+    source = inspect.getsource(run_i2b_live.run_one_category_b_live_attempt)
+    body = source.split('"""')[-1]
+    assert body.count("_run_outer_cleanup(") == 1
+    tree = ast.parse(inspect.getsource(run_i2b_live))
+    attempt = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "run_one_category_b_live_attempt"
+    )
+    in_finally = [
+        call
+        for handler in ast.walk(attempt)
+        if isinstance(handler, ast.Try)
+        for statement in handler.finalbody
+        for call in ast.walk(statement)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Name)
+        and call.func.id == "_run_outer_cleanup"
+    ]
+    assert len(in_finally) == 1
+
+
+def test_the_mint_is_immediately_followed_by_the_ownership_scope() -> None:
+    """Nothing that can raise may sit between the mint and the ``try`` that
+    owns its cleanup -- that one-statement gap was the FU4 defect."""
+    run_i2b_live = _import_run_i2b_live()
+    tree = ast.parse(inspect.getsource(run_i2b_live))
+    attempt = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "run_one_category_b_live_attempt"
+    )
+    statements = attempt.body
+    mint_index = next(
+        index
+        for index, statement in enumerate(statements)
+        if "mint_qualification_run_workspace"
+        in {n.id for n in ast.walk(statement) if isinstance(n, ast.Name)}
+    )
+    assert isinstance(statements[mint_index + 1], ast.Try)
+
+
+def test_the_adapter_constructor_is_inside_the_ownership_scope() -> None:
+    """And the constructor specifically -- the statement that used to sit
+    outside it."""
+    run_i2b_live = _import_run_i2b_live()
+    tree = ast.parse(inspect.getsource(run_i2b_live))
+    attempt = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "run_one_category_b_live_attempt"
+    )
+    mint_index = next(
+        index
+        for index, statement in enumerate(attempt.body)
+        if "mint_qualification_run_workspace"
+        in {n.id for n in ast.walk(statement) if isinstance(n, ast.Name)}
+    )
+    scope = attempt.body[mint_index + 1]
+    assert isinstance(scope, ast.Try)
+    assert "LiveCategoryBAdapters" in {
+        n.id for n in ast.walk(scope) if isinstance(n, ast.Name)
+    }
+
+
+def test_a_claimed_identity_stays_refused_after_a_later_constructor_refusal(
+    patched, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FU4 hygiene check on FU3's accepted issuance: the constructor claims
+    the identity BEFORE the extension-digest invariant, so a refusal there
+    still burns the issuance. A claimed record is not reusable authority."""
+    issued = _issued()
+    monkeypatch.setattr(live_module, "_FROZEN_AR2_EXTENSION_SHA256", "0" * 64)
+    with pytest.raises(LiveAdapterError, match="does not match its authorized digest"):
+        _adapters(runtime_identity=issued)
+
+    monkeypatch.undo()
+    with pytest.raises(LiveAdapterError, match="already consumed"):
+        _adapters(runtime_identity=issued)
+
+
+# -- FU4 nearby: truthful LaunchIdentityError reporting ----------------------
+
+
+def _refusal_record_for(monkeypatch, exception) -> dict:
+    """Drive ``main()`` to its bounded refusal record for one exception."""
+    import io as _io
+
+    run_i2b_live = _import_run_i2b_live()
+
+    def _raising_attempt(*, candidate: str):
+        raise exception
+
+    monkeypatch.setattr(run_i2b_live, "run_one_category_b_live_attempt", _raising_attempt)
+    captured = _io.StringIO()
+    monkeypatch.setattr(run_i2b_live.sys, "stdout", captured)
+    code = run_i2b_live.main(["--run-category-b-live-gate"])
+    assert code == 1
+    return json.loads(captured.getvalue())
+
+
+def test_launch_identity_refusal_no_longer_claims_nothing_was_launched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The pre-fix wording claimed "nothing was launched (or the failure
+    happened before any process existed)". That is FALSE for a
+    ``LaunchIdentityError`` raised BECAUSE the provenance-only ``--version``
+    subprocess launched, ran to completion and exited non-zero -- exactly
+    what ``resolve_pi_identity`` raises there. The harness never observed
+    that no process existed, so it must not claim it."""
+    record = _refusal_record_for(
+        monkeypatch,
+        LaunchIdentityError(
+            "launch error: Node-direct Pi launch exited non-zero; no fallback "
+            "launch architecture is attempted"
+        ),
+    )
+    note = record["note"]
+    assert "nothing was launched" not in note
+    assert "before any process existed" not in note
+    assert "MAY have been attempted" in note
+    assert record["semantic_prompts_sent"] == 0
+    assert record["controller_entered"] is False
+    assert record["reason"] == "LaunchIdentityError"
+
+
+@pytest.mark.parametrize(
+    "exception",
+    [
+        LaunchIdentityError("launch error: synthetic"),
+        InfrastructureRefusal("synthetic_gate", "CHECK_FAILED"),
+    ],
+)
+def test_every_pre_controller_refusal_record_stays_bounded_and_secret_free(
+    monkeypatch: pytest.MonkeyPatch, exception
+) -> None:
+    record = _refusal_record_for(monkeypatch, exception)
+    rendered = json.dumps(record)
+    assert record["reason"] == type(exception).__name__
+    assert "synthetic" not in rendered
+    assert SYNTHETIC_API_KEY not in rendered
+    assert SYNTHETIC_BASE_URL not in rendered
+    assert record["semantic_prompts_sent"] == 0
