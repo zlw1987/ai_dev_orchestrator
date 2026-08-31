@@ -20,13 +20,37 @@ pending did not return in ~19 s -- the obvious teardown lever blocks the
 orchestrator. Overlapped operations are cancellable from any thread and reapable
 in microseconds.
 
-Ownership rule, which is what makes the shutdown sequence safe:
+Ownership rule, which is what makes the shutdown sequence safe. It is a
+**partition on two monotonic facts** -- ``pipe_resource_created`` and whether
+``Thread.start()`` itself returned without raising -- not a single blanket
+statement, because 5F3B-I2B-L1-D1 added a partial-start lifecycle in which no
+worker exists to own anything:
 
-    **The broker thread owns its handles. The controller signals; it does not
-    close.** The controller never calls ``CloseHandle`` on the pipe, never
-    releases an ``Overlapped`` buffer, never kills a thread, never calls
+    **A. Worker successfully started** (``Thread.start()`` returned without
+    raising). From that point on, the broker thread owns pipe/event teardown.
+    Controller-side shutdown only signals the shutdown event; it never calls
+    ``CloseHandle`` on the worker-owned pipe or event, never releases an
+    ``Overlapped`` buffer, never kills a thread, never calls
     ``TerminateThread``, never sleeps and assumes, and never claims completion
-    it did not observe. Its ONE escalation lever is ``Overlapped.cancel()``.
+    it did not observe. Its ONE escalation lever is ``Overlapped.cancel()`` on
+    the worker's pending operation. The worker closes its own handles only
+    after that pending overlapped operation has been safely reaped. (See the
+    truthfulness limit below for the one case this can leave incomplete.)
+
+    **B. No worker successfully started, but a pipe resource was created**
+    (``pipe_resource_created`` is True and ``Thread.start()`` never returned
+    successfully -- i.e. it was never called, or it raised). There is no
+    worker to own teardown, so ownership never left the creator.
+    ``BrokerServer.shutdown()`` then runs on the caller/controller thread and
+    directly closes ONLY the pipe and shutdown-event handles that
+    ``BrokerServer`` itself created in this ``start()`` call. Raw handles are
+    never exposed to the caller. ``CLOSED`` is claimed only once every
+    actually-created handle close has succeeded. This is a narrow exception
+    for resources nothing else owns -- it is not permission for the
+    controller to close handles belonging to a running worker.
+
+    **C. Nothing created** (``pipe_resource_created`` is False). No broker OS
+    resource was ever created, so ``shutdown()`` performs no handle cleanup.
 
 Truthfulness limit that must never be softened:
 
@@ -376,6 +400,21 @@ class BrokerServer:
         self._pending_kind: str | None = None
         self._start_called = False
 
+        # -- 5F3B-I2B-L1-D1: partial-start facts, both monotonic -----------
+        # ``_pipe_resource_created`` becomes True ONLY immediately after
+        # ``create_first_instance_pipe`` returns successfully; it never means
+        # "attempted" and it never resets to False, not even after the handle
+        # is later closed. ``_worker_thread_started`` becomes True ONLY
+        # immediately after ``Thread.start()`` returns without raising --
+        # ``self._thread is not None`` alone does NOT mean the worker started
+        # (``Thread.start()`` itself can raise, e.g. "can't start new
+        # thread"), and ``Thread.join()`` on a thread that never started
+        # raises ``RuntimeError``. Kept private: shutdown() is the only
+        # caller that needs it.
+        self._pipe_resource_created = False
+        self._worker_thread_started = False
+        self._partial_start_no_worker = False
+
         self.overlapped_started = 0
         self.overlapped_reaped = 0
         self.handles_closed = False
@@ -398,6 +437,21 @@ class BrokerServer:
         with self._lock:
             self._state = value
         self.handler.run_state.lifecycle_state = value
+
+    @property
+    def pipe_resource_created(self) -> bool:
+        """Monotonic fact: the first-instance pipe was successfully created at
+        least once for this run's ``start()`` call.
+
+        True ONLY immediately after ``winpipe.create_first_instance_pipe``
+        returns. It never means "creation was attempted" or "a resource might
+        exist", and a failure raised by that call before returning leaves this
+        False. It never resets to False afterwards -- not even once
+        ``shutdown()`` has closed the handle -- because it records that the
+        resource WAS created, not that it currently exists. Non-authority-
+        bearing: it grants no access and hands back no handle.
+        """
+        return self._pipe_resource_created
 
     # -- start ------------------------------------------------------------
 
@@ -431,9 +485,19 @@ class BrokerServer:
             )
         finally:
             self._security.release()
+        # The pipe now genuinely exists as an OS resource. Recorded before
+        # anything else in start() can raise, so a later failure in this same
+        # call (shutdown-event creation, Thread construction, Thread.start())
+        # can never leave this fact incorrectly False.
+        self._pipe_resource_created = True
         self._shutdown_event = winpipe.create_shutdown_event()
         self._thread = threading.Thread(target=self._serve, name="ar2-broker", daemon=True)
         self._thread.start()
+        # Thread.start() returned without raising: the worker genuinely
+        # started. self._thread being non-None is NOT this fact -- Thread()
+        # construction can leave self._thread assigned while .start() itself
+        # still fails.
+        self._worker_thread_started = True
         if not self._ready.wait(timeout=ready_deadline_seconds):
             raise winpipe.WindowsPipeError(
                 "pipe error: the broker did not reach READY within its deadline; "
@@ -657,8 +721,60 @@ class BrokerServer:
 
     # -- controller-side shutdown -----------------------------------------
 
+    def _shutdown_no_worker_started(self) -> None:
+        """5F3B-I2B-L1-D1 states B/C/D: an OS resource exists but no worker
+        thread is running, so no worker will ever call ``_teardown_self``.
+
+        This runs on the CONTROLLER thread (there is no worker to own it),
+        closes only the handles BrokerServer itself created in this partial
+        start, and never touches ``self._thread`` -- joining a thread whose
+        ``.start()`` itself raised is unsafe (see ``shutdown``'s docstring).
+        The caller is never handed a handle and never closes one itself.
+        """
+        self._partial_start_no_worker = True
+        self.rung_reached = "N1"
+
+        closed_cleanly = True
+        if self._pipe_handle is not None:
+            try:
+                winpipe.close_handle(self._pipe_handle)
+            except OSError:
+                closed_cleanly = False
+            else:
+                self._pipe_handle = None
+        if self._shutdown_event is not None:
+            try:
+                winpipe.close_handle(self._shutdown_event)
+            except OSError:
+                closed_cleanly = False
+            else:
+                self._shutdown_event = None
+
+        if closed_cleanly:
+            # True whether this call actually closed a handle just now, or
+            # found nothing left to close because a prior call already did --
+            # idempotent, never a double CloseHandle on the same value.
+            self.handles_closed = True
+            self._set_state(STATE_CLOSED)
+        else:
+            # Never claim CLOSED, and never hide the failure. The exact same
+            # bounded vocabulary the worker-owned path uses for a failed
+            # close (FU1 section 7.5).
+            self._set_state(STATE_TEARDOWN_INCOMPLETE)
+        self.rung_reached = "N2"
+
     def shutdown(self, trigger: str) -> dict[str, Any]:
-        """The FU1 section 7.4 sequence, executed and RECORDED exactly as observed."""
+        """The FU1 section 7.4 sequence, executed and RECORDED exactly as observed.
+
+        5F3B-I2B-L1-D1: this now branches on the two partial-start facts
+        recorded by ``start()``, not merely on ``self._thread is None``. That
+        single check used to treat "nothing was ever created" (state A) and
+        "a resource WAS created but no worker thread is running" (states
+        B/C/D) identically -- an immediate no-op return -- which silently
+        leaked the pipe and/or shutdown-event handle in B/C, and would have
+        called ``Thread.join()`` on an unstarted thread in D (CPython raises
+        ``RuntimeError: cannot join thread before it is started`` there).
+        """
         started = time.monotonic()
         self.shutdown_trigger = trigger
         self.rung_reached = "B0"
@@ -668,11 +784,27 @@ class BrokerServer:
         # all (nothing else would ever release the descriptor in that case).
         self._security.release()
 
-        if self._thread is None:
+        if not self._pipe_resource_created:
+            # A: start() was never called, or its first call
+            # (create_first_instance_pipe) failed before returning. Nothing
+            # was ever created, so there is nothing to close. Unchanged from
+            # the pre-existing "shutdown before start" semantics.
             self.rung_reached = "B0"
             self.teardown_elapsed_seconds = 0.0
             return self.lifecycle_record()
 
+        if not self._worker_thread_started:
+            # B/C/D: an OS resource was created (the pipe, and possibly the
+            # shutdown event too) but no worker thread is running to call
+            # _teardown_self. BrokerServer's OWN shutdown path must close
+            # only what it created here -- the caller never touches these
+            # handles -- and must NEVER join self._thread, started or not.
+            self._shutdown_no_worker_started()
+            self.teardown_elapsed_seconds = round(time.monotonic() - started, 4)
+            return self.lifecycle_record()
+
+        # _worker_thread_started implies self._thread is not None and
+        # Thread.start() returned without raising, so join() below is safe.
         if self._shutdown_event is not None:
             winpipe.set_event(self._shutdown_event)
         self.rung_reached = "B1"
@@ -694,6 +826,7 @@ class BrokerServer:
                     pass
             self.rung_reached = "B3"
 
+        assert self._thread is not None  # guaranteed by _worker_thread_started
         self._thread.join(timeout=self.teardown_deadline_seconds)
         self.rung_reached = "B4"
         self.worker_termination_observed = not self._thread.is_alive()
@@ -739,7 +872,29 @@ class BrokerServer:
                 ),
             },
         }
-        if closed:
+        if closed and self._partial_start_no_worker:
+            # 5F3B-I2B-L1-D1 states B/C/D: no worker ever ran, so the worker-
+            # thread claims below would be false. BrokerServer's own
+            # shutdown path closed only what it created directly.
+            record["claims_permitted"] = [
+                "no broker worker thread ever started for this run",
+                "every OS resource this partial start actually created (the "
+                "pipe handle, and the shutdown-event handle if it was also "
+                "created) was closed by BrokerServer's own shutdown path, "
+                "directly, on the controller thread",
+                "the pipe name no longer resolves for a new client",
+                "AIDO performed no broker-mediated filesystem operation on the "
+                "delegated root, because no worker ever served a request",
+            ]
+            record["claims_forbidden"] = [
+                "a broker worker thread was observed to terminate -- none ever "
+                "started, so there was nothing to join or observe",
+                "nothing about Pi, Node, the model, the provider, or GPU occupancy "
+                "-- AIDO's broker closing is not Pi stopping",
+                "not 'sandboxed', 'isolated', 'OS-confined', or 'no host file "
+                "outside the workspace was touched'",
+            ]
+        elif closed:
             record["claims_permitted"] = [
                 "the broker thread was OBSERVED to terminate (join returned and "
                 "is_alive() was false)",
@@ -757,6 +912,24 @@ class BrokerServer:
                 "outside the workspace was touched'",
                 "not 'no process holds a handle to the pipe' -- the client's "
                 "handle is the client's",
+            ]
+        elif self._partial_start_no_worker:
+            record["residual_statement"] = (
+                "No broker worker thread ever started for this run. "
+                "BrokerServer's own shutdown path attempted to close the pipe "
+                "handle and/or the shutdown-event handle it created directly, "
+                "on the controller thread, and at least one CloseHandle call "
+                "did not succeed. The unclosed handle may still exist and the "
+                "pipe name may still resolve for a new client."
+            )
+            record["claims_forbidden"] = [
+                "a broker worker thread was ever started, terminated, stopped, "
+                "killed, cancelled or cleaned up",
+                "every handle this partial start created was released, or the "
+                "pipe name is retired",
+                "the capability was revoked -- it was REQUESTED to be withdrawn",
+                "clean_expected, or any clean classification resting on a "
+                "teardown that did not complete",
             ]
         else:
             record["residual_statement"] = (
