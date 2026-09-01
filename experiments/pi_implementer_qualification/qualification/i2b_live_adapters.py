@@ -45,11 +45,19 @@ What is reused, unmodified, from frozen AR2 (composition, never copying):
                            direct field read, per the brief's "no
                            independent H2 callback" instruction)
     ar2.supervisor         PiRpcSupervisor, RunBounds, RUNTIME_RESPONSE_RECEIVED
-    ar2.route_check        check_route_serves_model, passed to the frozen
-                           controller's ``route_checker`` parameter DIRECTLY
-                           (its call shape already matches
-                           ``run_offline_route_check``'s expectation exactly
-                           -- no wrapper is needed or added)
+
+**``ar2.route_check`` is deliberately NOT imported here (5F3B-I2B-L1-LF2).**
+It was, until Candidate-A's second live attempt proved the assumption behind
+that reuse wrong. AR2's ``check_route_serves_model`` sends no
+``Authorization`` header and accepts no credential parameter, so on a
+credential-bearing route its single ``configured_model_served=False`` cannot
+distinguish an auth rejection from a genuinely absent model. The live route
+checker is now :class:`AuthenticatedB300RouteObserver`, built by
+:func:`build_authenticated_route_checker` and bound to THIS run's consumed
+connection values. The import is gone rather than merely unused, so the
+unauthenticated checker cannot be reintroduced into live wiring by accident;
+an offline test asserts this module has no reference to it. AR2's own module
+stays frozen and unmodified for AR2.
 
 **Never reused, and never will be:** ``ar2.launch.resolve_runtime_identity``
 (pins an EXACT Pi version as an authorization gate -- this package, like
@@ -295,7 +303,6 @@ from ar2.pi_config import (
     GeneratedExtension,
     write_disposable_extension,
 )
-from ar2.route_check import check_route_serves_model
 from ar2.supervisor import (
     RUNTIME_DEADLINE_EXPIRED,
     RUNTIME_EVENT_CAP_EXCEEDED,
@@ -317,6 +324,13 @@ from .i2_environment import (
     build_child_environment,
 )
 from .i2_identity import CREDENTIAL_ENV_VAR_NAME
+from .i2_b300_route_observation import (
+    ROUTE_AUTHORITY_REFUSED,
+    ROUTE_DIAGNOSTIC_CODES,
+    ROUTE_NOT_OBSERVED,
+    B300RouteObservation,
+    observe_b300_route_serves_model,
+)
 from .i2_cleanup import scrub_generated_qualification_config
 from .i2_pi_config import (
     CleanupAuthorityError,
@@ -2116,12 +2130,49 @@ class LiveCategoryBAdapters:
         #: L1 live entry point for the run artifact; never passed to, or
         #: observed by, the frozen controller.
         self._launch_diagnostics: dict[str, LaunchDiagnostic] = {}
+        #: LF2 OBJECTIVE 6. The connection values the frozen controller
+        #: ACTUALLY consumed on this run, recorded at the one credential
+        #: boundary below so the authenticated route observer can derive its
+        #: authority from the same object rather than from anything a caller
+        #: hands it. ``None`` until the controller has read them, which is
+        #: itself a refusal condition for the observer: a route observation
+        #: can never precede the credential read it depends on.
+        self._consumed_connection: ConnectionValues | None = None
 
     # -- credential boundary -------------------------------------------------
 
     def read_connection(self) -> ConnectionValues:
-        """The ONLY credential read in this module. Reused, unmodified."""
-        return read_connection_values(self._environ_reader)
+        """The ONLY credential read in this module. Reused, unmodified.
+
+        **5F3B-I2B-L1-LF2.** The resolved values are additionally RECORDED on
+        this instance, so :class:`AuthenticatedB300RouteObserver` binds to the
+        exact ``ConnectionValues`` the frozen controller consumed rather than
+        to a base URL or credential supplied at the route boundary. The read
+        itself is unchanged, and this is not a second read: a repeat call must
+        resolve to identical values or the adapter refuses, so the recorded
+        authority can never be quietly replaced mid-run.
+        """
+        values = read_connection_values(self._environ_reader)
+        recorded = self._consumed_connection
+        if recorded is not None and (
+            recorded.base_url != values.base_url or recorded.api_key != values.api_key
+        ):
+            raise LiveAdapterError(
+                "connection read refused: this run already consumed a different "
+                "set of B300 connection values"
+            )
+        self._consumed_connection = values
+        return values
+
+    def consumed_connection_values(self) -> ConnectionValues | None:
+        """The connection values this run actually consumed, or ``None``.
+
+        Read only by :class:`AuthenticatedB300RouteObserver`. The returned
+        object is the accepted, valid-by-construction
+        :class:`~qualification.i2_credentials.ConnectionValues`, whose own
+        ``__repr__`` redacts both fields.
+        """
+        return self._consumed_connection
 
     # -- broker authority ------------------------------------------------------
 
@@ -2686,9 +2737,178 @@ class LiveCategoryBAdapters:
         )
 
 
-#: Passed DIRECTLY to ``run_category_b_controller``'s ``route_checker``
-#: parameter. Its call shape (``checker(base_url, model_id=...)`` returning
-#: an object with ``.reachable``/``.configured_model_served``) already
-#: matches what ``qualification.i2_route.run_offline_route_check`` expects
-#: exactly -- no wrapper is needed or added.
-route_checker = check_route_serves_model
+class AuthenticatedB300RouteObserver:
+    """The live route checker (5F3B-I2B-L1-LF2). Same-run authority, or nothing.
+
+    Replaces the unauthenticated ``ar2.route_check.check_route_serves_model``
+    that frozen I2A Sec. 15 item 9 mandated. It presents the SAME call shape
+    the frozen controller and
+    :func:`qualification.i2_route.run_offline_route_check` already expect --
+    ``checker(base_url, model_id=...)`` returning an object with exact-``bool``
+    ``.reachable`` / ``.configured_model_served`` -- so neither of those is
+    reopened, modified, or wrapped.
+
+    **Its authority is not its arguments.** The base URL and the credential
+    come from the ``ConnectionValues`` the frozen controller already consumed
+    on this run, read back from the adapter instance; the model id comes from
+    the frozen I1 candidate pairing for the candidate this observer was built
+    for. The arguments it receives are treated as claims to be CHECKED against
+    that authority, never as instructions:
+
+    - a ``base_url`` that is not byte-identical to the consumed one is
+      refused (substituted route);
+    - a ``model_id`` that is not exactly the frozen pairing's id for this
+      candidate is refused (substituted model, and specifically a Candidate-B
+      model id offered during a Candidate-A run);
+    - a call made before the controller's credential read is refused (there is
+      no authority to derive yet);
+    - a SECOND call is refused outright, so one Category-B run issues exactly
+      one non-inference GET.
+
+    There is deliberately no parameter anywhere on this class for a base URL,
+    an API key, a provider id, an endpoint, or a model id. None can be
+    supplied at the live adapter boundary at all.
+
+    **LF2-FU1 BLOCKER 1: no transport/client/request-injection parameter
+    either.** An earlier revision accepted a public ``transport=`` keyword
+    "for offline testing" and forwarded it into
+    :func:`observe_b300_route_serves_model`. That is a public substitution
+    point for the live observation channel itself: a caller could construct a
+    genuine same-run observer while injecting an ``httpx.MockTransport`` that
+    fabricates ``HTTP 200`` / model-present evidence without ever contacting
+    B300, and every logical authority check above would still pass. Calling
+    the parameter "test-only" in a comment was never an enforcement of that.
+    This constructor now accepts **exactly** ``candidate`` and ``adapters`` --
+    no ``transport``, ``client``, ``requester``, ``sender``, ``session``,
+    ``http_client`` or ``request_callback`` parameter under any name -- so the
+    production observer always calls the real mechanism function with its
+    normal live transport. Offline tests inject a synthetic transport at a
+    PRIVATE substitution point instead: by monkeypatching the module-internal
+    ``observe_b300_route_serves_model`` name this class calls, which is not
+    reachable through this public constructor or through
+    :func:`build_authenticated_route_checker`.
+
+    **LF2-FU1 BLOCKER 2: the adapter authority check is exact-type, not
+    ``isinstance``.** ``isinstance(adapters, LiveCategoryBAdapters)`` is true
+    for any subclass, including one whose ``__init__`` never runs the real
+    constructor and whose ``consumed_connection_values`` is overridden to
+    return attacker-selected values -- deriving route authority from an
+    object the frozen controller never actually consumed. The check below is
+    ``type(adapters) is LiveCategoryBAdapters`` -- the exact live adapter
+    type, and nothing a subclass can satisfy by inheritance alone.
+
+    Every refusal raises :class:`LiveAdapterError`, which
+    ``run_offline_route_check`` already reduces to its bounded
+    ``ROUTE_CHECK_ERROR`` without reading the exception text -- and the
+    observer records :data:`ROUTE_AUTHORITY_REFUSED` first, so the L1 harness
+    can still attribute the refusal truthfully.
+    """
+
+    def __init__(
+        self,
+        *,
+        candidate: str,
+        adapters: LiveCategoryBAdapters,
+    ) -> None:
+        if type(adapters) is not LiveCategoryBAdapters:
+            raise LiveAdapterError(
+                "route observer refused: the live adapter instance for this run "
+                "is required as the authority source"
+            )
+        # ``route_descriptor_for_candidate`` is the frozen, already-accepted
+        # pairing: it refuses an unknown candidate and cannot be talked into
+        # an arbitrary model id, provider id, gateway class, or credential
+        # carrier. The observer derives the model id here rather than
+        # accepting one.
+        self._descriptor = route_descriptor_for_candidate(candidate)
+        self._candidate = self._descriptor.candidate
+        self._adapters = adapters
+        self._diagnostic_code: str = ROUTE_NOT_OBSERVED
+        self._observations = 0
+
+    @property
+    def candidate(self) -> str:
+        """The candidate this observer is bound to. Read by the L1 harness."""
+        return self._candidate
+
+    def _refuse(self, message: str) -> LiveAdapterError:
+        self._diagnostic_code = ROUTE_AUTHORITY_REFUSED
+        return LiveAdapterError(message)
+
+    def __call__(self, base_url: str, *, model_id: str) -> B300RouteObservation:
+        if self._observations:
+            raise self._refuse(
+                "route observation refused: one Category-B run issues exactly "
+                "one non-inference model-listing request"
+            )
+
+        values = self._adapters.consumed_connection_values()
+        if values is None:
+            raise self._refuse(
+                "route observation refused: this run has not consumed its B300 "
+                "connection values, so there is no route authority to derive"
+            )
+        if type(base_url) is not str or base_url != values.base_url:
+            # Never echoes either URL.
+            raise self._refuse(
+                "route observation refused: the requested base URL is not the "
+                "one this run consumed"
+            )
+        if type(model_id) is not str or model_id != self._descriptor.model_id:
+            # Never echoes either model id.
+            raise self._refuse(
+                "route observation refused: the requested model id is not the "
+                "frozen pairing's id for this run's candidate"
+            )
+
+        self._observations += 1
+        # No ``transport=`` forwarded: this class no longer accepts one from
+        # a caller at all (LF2-FU1 BLOCKER 1), so the real mechanism function
+        # always opens its own live ``httpx`` transport here.
+        observation = observe_b300_route_serves_model(
+            base_url=values.base_url,
+            api_key=values.api_key,
+            model_id=self._descriptor.model_id,
+        )
+        self._diagnostic_code = observation.diagnostic_code
+        return observation
+
+    def route_diagnostics(self) -> dict[str, str]:
+        """LF2 OBJECTIVE 5: the bounded route diagnostic, for the L1 artifact.
+
+        Declared codes only (:data:`ROUTE_DIAGNOSTIC_CODES`). Never a status
+        code, a served-model-id list, a response body, an endpoint, a host, a
+        base URL, a credential, or exception text. Defaults to
+        ``route_not_observed``, which is what an earlier gate failing first
+        truthfully leaves behind.
+
+        This is **attribution, not verdict authority**: the frozen controller
+        still owns ``ROUTE_CHECK_FAILED`` and
+        ``exact_candidate_model_served``, and this record never contradicts,
+        overrides, or softens either.
+        """
+        if self._diagnostic_code not in ROUTE_DIAGNOSTIC_CODES:  # pragma: no cover
+            raise LiveAdapterError(
+                "route diagnostic refused: the recorded code is not a declared code"
+            )
+        return {
+            "candidate": self._candidate,
+            "route_observation": self._diagnostic_code,
+            "observation_requests_issued": str(self._observations),
+        }
+
+
+def build_authenticated_route_checker(
+    *,
+    candidate: str,
+    adapters: LiveCategoryBAdapters,
+) -> AuthenticatedB300RouteObserver:
+    """The ONE live route checker factory. No endpoint or credential parameter.
+
+    The live entry point passes the result as ``run_category_b_controller``'s
+    ``route_checker`` argument. ``candidate`` must be the same candidate that
+    run is for; if it ever is not, the observer refuses at call time rather
+    than observing the wrong route, because the model id the frozen controller
+    passes will not match the frozen pairing this observer derived.
+    """
+    return AuthenticatedB300RouteObserver(candidate=candidate, adapters=adapters)

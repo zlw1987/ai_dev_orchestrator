@@ -400,6 +400,7 @@ def _run(
     harness: _Harness | None = None,
     non_secret_gates=None,
     read_connection=None,
+    route_checker=None,
 ) -> tuple[CategoryBControllerResult, _Harness]:
     harness = harness or _Harness(model_id=CANDIDATE_MODEL_IDS[candidate])
     result = run_category_b_controller(
@@ -420,7 +421,10 @@ def _run(
         get_commands=harness.get_commands,
         get_state=harness.get_state,
         observe_protocol=harness.observe_protocol,
-        route_checker=harness.route_checker,
+        # 5F3B-I2B-L1-LF2: tests-only override, so the LF2 matrix can drive
+        # the frozen controller with the REAL authenticated observation shape.
+        # The controller itself is unchanged and still owns every verdict.
+        route_checker=route_checker if route_checker is not None else harness.route_checker,
         shutdown_runtime=harness.shutdown_runtime,
         shutdown_broker=harness.shutdown_broker,
     )
@@ -6599,3 +6603,214 @@ def test_fu2f_evidence_origin_is_not_a_finding_code_taxonomy() -> None:
             "safety_context_unprovable",
             "evidence_not_yet_built",
         )
+
+
+# =============================================================================
+# 5F3B-I2B-L1-LF2 -- matrix items 20-22, at the FROZEN CONTROLLER's level
+# =============================================================================
+#
+# **NO NETWORK.** Each case drives the real
+# ``qualification.i2_b300_route_observation.observe_b300_route_serves_model``
+# over an injected ``httpx.MockTransport``, and hands the resulting
+# observation to the UNMODIFIED ``run_category_b_controller`` through its
+# existing ``route_checker`` parameter.
+#
+# What is proven:
+#
+#   20. the controller PASSES when the authenticated observation proves the
+#       exact candidate model is served;
+#   21. the controller produces its single, unchanged
+#       ``ROUTE_CHECK_FAILED`` for EVERY bounded failure shape -- frozen I2B
+#       is not reopened, and the verdict vocabulary does not grow;
+#   22. the bounded route diagnostic retains WHICH failure it was, alongside
+#       that generic verdict -- attribution, never verdict authority.
+
+import httpx as _lf2_httpx  # noqa: E402
+
+from qualification.i2_b300_route_observation import (  # noqa: E402
+    ROUTE_AUTH_REJECTED,
+    ROUTE_DIAGNOSTIC_CODES,
+    ROUTE_HTTP_REJECTED,
+    ROUTE_LISTING_MALFORMED,
+    ROUTE_MODEL_NOT_LISTED,
+    ROUTE_MODEL_SERVED,
+    ROUTE_NOT_OBSERVED,
+    ROUTE_RESULT_MALFORMED,
+    ROUTE_TRANSPORT_UNREACHABLE,
+    observe_b300_route_serves_model,
+)
+
+
+class _LF2ObservingChecker:
+    """The authenticated observation, in the frozen ``route_checker`` shape.
+
+    Deliberately NOT the live ``AuthenticatedB300RouteObserver`` (that one
+    binds to a real ``LiveCategoryBAdapters``, which this controller suite
+    has no business constructing). It exercises the same real observation
+    function and records the same bounded diagnostic, so what is proven here
+    is the controller's behavior, not a stand-in's.
+    """
+
+    def __init__(self, responder, *, api_key: str = SYNTHETIC_API_KEY) -> None:
+        self.requests: list = []
+        self._responder = responder
+        self._api_key = api_key
+        self.diagnostic_code = ROUTE_NOT_OBSERVED
+
+    def _handle(self, request):
+        self.requests.append(request)
+        return self._responder(request)
+
+    def __call__(self, base_url: str, *, model_id: str):
+        observation = observe_b300_route_serves_model(
+            base_url=base_url,
+            api_key=self._api_key,
+            model_id=model_id,
+            transport=_lf2_httpx.MockTransport(self._handle),
+        )
+        self.diagnostic_code = observation.diagnostic_code
+        return observation
+
+
+def _lf2_models_body(*model_ids: str) -> bytes:
+    return json.dumps({"object": "list", "data": [{"id": mid} for mid in model_ids]}).encode()
+
+
+def _lf2_raise_connect_error(request):
+    raise _lf2_httpx.ConnectError("synthetic connect failure", request=request)
+
+
+# -- 20: the controller PASSES on a proven served route ----------------------
+
+
+@pytest.mark.parametrize("candidate", ["A", "B"])
+def test_lf2_controller_passes_when_the_authenticated_route_serves_the_model(
+    run_workspace: QualificationRunWorkspace, candidate: str
+) -> None:
+    model_id = CANDIDATE_MODEL_IDS[candidate]
+    checker = _LF2ObservingChecker(
+        lambda request: _lf2_httpx.Response(200, content=_lf2_models_body(model_id))
+    )
+    result, _ = _run(run_workspace, candidate=candidate, route_checker=checker)
+
+    assert result.outcome is CategoryBOutcome.CATEGORY_B_GATE_PASSED
+    assert result.semantic_prompts_sent == 0
+    assert result.facts.exact_candidate_model_served is True
+    assert result.gate_statuses[CategoryBGateName.ROUTE_CHECK.value] == "PASSED"
+    assert checker.diagnostic_code == ROUTE_MODEL_SERVED
+    # ONE non-inference GET, carrying this run's credential.
+    assert len(checker.requests) == 1
+    assert checker.requests[0].method == "GET"
+    assert checker.requests[0].headers["Authorization"] == "Bearer " + SYNTHETIC_API_KEY
+
+
+def test_lf2_the_controller_passes_the_candidates_own_model_to_the_observation(
+    run_workspace: QualificationRunWorkspace,
+) -> None:
+    """No fallback model: only Candidate A's id is ever asked about."""
+    checker = _LF2ObservingChecker(
+        lambda request: _lf2_httpx.Response(
+            200, content=_lf2_models_body("qwen3-coder-next", "minimax-m2.7")
+        )
+    )
+    result, _ = _run(run_workspace, candidate="A", route_checker=checker)
+    assert result.outcome is CategoryBOutcome.CATEGORY_B_GATE_PASSED
+    assert len(checker.requests) == 1
+
+
+# -- 21 + 22: every bounded failure shape -> ONE verdict, DISTINCT attribution
+
+
+_LF2_FAILURE_SHAPES = {
+    ROUTE_TRANSPORT_UNREACHABLE: _lf2_raise_connect_error,
+    ROUTE_AUTH_REJECTED: lambda request: _lf2_httpx.Response(401, content=b"unauthorized"),
+    ROUTE_HTTP_REJECTED: lambda request: _lf2_httpx.Response(500, content=b"bad gateway"),
+    ROUTE_LISTING_MALFORMED: lambda request: _lf2_httpx.Response(200, content=b"{not json"),
+    ROUTE_MODEL_NOT_LISTED: lambda request: _lf2_httpx.Response(
+        200, content=_lf2_models_body("minimax-m2.7")
+    ),
+}
+
+
+@pytest.mark.parametrize("expected_diagnostic", sorted(_LF2_FAILURE_SHAPES))
+def test_lf2_controller_refuses_with_the_unchanged_verdict_for_every_shape(
+    run_workspace: QualificationRunWorkspace, expected_diagnostic: str
+) -> None:
+    """21. The frozen controller's verdict vocabulary does not grow."""
+    checker = _LF2ObservingChecker(_LF2_FAILURE_SHAPES[expected_diagnostic])
+    result, _ = _run(run_workspace, candidate="A", route_checker=checker)
+
+    _assert_refusal(result)
+    assert result.failed_gate == CategoryBGateName.ROUTE_CHECK.value
+    assert result.failure_code == CategoryBFailureCode.ROUTE_CHECK_FAILED.value
+    assert result.facts.exact_candidate_model_served is False
+    assert (
+        result.gate_statuses[CategoryBGateName.ROUTE_CHECK.value]
+        == "FAILED:" + CategoryBFailureCode.ROUTE_CHECK_FAILED.value
+    )
+
+
+@pytest.mark.parametrize("expected_diagnostic", sorted(_LF2_FAILURE_SHAPES))
+def test_lf2_the_bounded_diagnostic_retains_which_failure_it_actually_was(
+    run_workspace: QualificationRunWorkspace, expected_diagnostic: str
+) -> None:
+    """22. Attribution survives ALONGSIDE the generic verdict."""
+    checker = _LF2ObservingChecker(_LF2_FAILURE_SHAPES[expected_diagnostic])
+    result, _ = _run(run_workspace, candidate="A", route_checker=checker)
+
+    assert result.failure_code == CategoryBFailureCode.ROUTE_CHECK_FAILED.value
+    assert checker.diagnostic_code == expected_diagnostic
+    assert checker.diagnostic_code in ROUTE_DIAGNOSTIC_CODES
+
+
+def test_lf2_an_auth_rejection_is_never_recorded_as_the_model_being_absent(
+    run_workspace: QualificationRunWorkspace, second_run_workspace: QualificationRunWorkspace
+) -> None:
+    """THE CORRECTION, end to end at the controller boundary.
+
+    Both runs refuse identically, exactly as the frozen controller should.
+    What LF2 adds is that they are now distinguishable AFTERWARDS.
+    """
+    auth = _LF2ObservingChecker(_LF2_FAILURE_SHAPES[ROUTE_AUTH_REJECTED])
+    absent = _LF2ObservingChecker(_LF2_FAILURE_SHAPES[ROUTE_MODEL_NOT_LISTED])
+
+    auth_result, _ = _run(run_workspace, candidate="A", route_checker=auth)
+    absent_result, _ = _run(second_run_workspace, candidate="A", route_checker=absent)
+
+    assert auth_result.failure_code == absent_result.failure_code
+    assert (
+        auth_result.facts.exact_candidate_model_served
+        is absent_result.facts.exact_candidate_model_served
+        is False
+    )
+    assert auth.diagnostic_code == ROUTE_AUTH_REJECTED
+    assert absent.diagnostic_code == ROUTE_MODEL_NOT_LISTED
+    assert auth.diagnostic_code != absent.diagnostic_code
+
+
+def test_lf2_the_frozen_controller_gained_no_new_route_failure_code() -> None:
+    """Frozen I2B is not reopened: exactly one route failure code exists."""
+    route_codes = {
+        code for code in CategoryBFailureCode if code.value.startswith("ROUTE_CHECK")
+    }
+    assert route_codes == {CategoryBFailureCode.ROUTE_CHECK_FAILED}
+    assert not any(
+        code.value in ROUTE_DIAGNOSTIC_CODES for code in CategoryBFailureCode
+    )
+
+
+def test_lf2_the_route_diagnostic_is_not_a_compatibility_fact() -> None:
+    """The diagnostic lives OUTSIDE the frozen evidence, like LF1's launch one."""
+    from dataclasses import fields
+
+    fact_names = {field.name for field in fields(CompatibilityFacts)}
+    for code in ROUTE_DIAGNOSTIC_CODES:
+        assert code not in fact_names
+    assert "route_diagnostic" not in fact_names
+    assert "route_diagnostics" not in fact_names
+
+
+def test_lf2_route_result_malformed_is_declared_but_never_a_controller_verdict() -> None:
+    """A non-conforming checker RESULT still reduces to the frozen code."""
+    assert ROUTE_RESULT_MALFORMED in ROUTE_DIAGNOSTIC_CODES
+    assert ROUTE_RESULT_MALFORMED not in {code.value for code in CategoryBFailureCode}

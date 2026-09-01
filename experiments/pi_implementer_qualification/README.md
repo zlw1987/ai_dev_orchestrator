@@ -38,6 +38,29 @@
 > `RuntimeLaunchObservation` or the frozen controller. See
 > [FINDINGS.md](FINDINGS.md) section "5F3B-I2B-L1-LF1-FU1".
 
+> **A SECOND zero-prompt Category-B live attempt has since occurred**
+> (Candidate A, `results/i2b_live_A_20260831T224840Z.json`, observed Pi
+> `0.84.4`). It is a **VALID FAIL-CLOSED RUN**: it passed every runtime-side
+> compatibility gate, refused at `route_check` with `ROUTE_CHECK_FAILED` and
+> `exact_candidate_model_served = false`, sent **zero** semantic prompts, and
+> tore down, shut down, cleaned up and scrubbed verifiably. The artifact is
+> retained unedited.
+>
+> **`route_check` did not establish that the exact candidate model is
+> served. It did NOT establish that `qwen3-coder-next` is absent from B300.**
+> The live checker was the unmodified `ar2.route_check.check_route_serves_model`,
+> which sends no `Authorization` header and accepts no credential parameter,
+> so a transport failure, a 401, a 403, any other non-200, a malformed listing
+> and a genuinely absent model all produce the identical result. **5F3B-I2B-L1-LF2**
+> reproduced that collapse offline, corrected the design assumption behind it
+> (frozen I2A §15 item 9 — see
+> [`docs/PHASE_5F3B_I2B_L1_LF2_ROUTE_BOUNDARY_CORRECTION.md`](../../docs/PHASE_5F3B_I2B_L1_LF2_ROUTE_BOUNDARY_CORRECTION.md)),
+> and replaced the live checker with a qualification-owned, credential-bearing,
+> same-run-bound observation plus a bounded route diagnostic. **AR2's own
+> `route_check.py` is untouched and stays frozen.** LF2 performed **no live
+> activity of any kind**. See [FINDINGS.md](FINDINGS.md) section
+> "5F3B-I2B-L1-LF2". **No further live attempt is authorized.**
+
 > **HOW TO READ THE HISTORICAL SECTIONS IN THIS FILE.** The per-phase status
 > blocks below are records written when each phase was accepted. Where one
 > says "Category-B live execution not run", read it as a fact **as of that
@@ -466,6 +489,10 @@ experiments/pi_implementer_qualification/
         i2_secret_context.py     I2-1 run-scoped secret context (repr-safe, no evidence helper)
         i2_pi_config.py          I2-2 disposable settings.json/models.json generator (offline)
         i2_route.py              I2-3 route descriptors + offline route-check wiring
+        i2_b300_route_observation.py
+                                 5F3B-I2B-L1-LF2: the authenticated, credential-bearing B300 /models
+                                 observation + the bounded route diagnostic vocabulary (one GET, no
+                                 retry, no redirect, nothing raw retained). Imports NOTHING from ar2.
         i2_credentials.py        I2-4 credential read ordering + connection contract (offline)
         i2_cleanup.py            I2-5 cleanup, phase-aware failure classification, diagnostic safety
         i2_identity.py           5F3B-I2-FU3: the leaf module for CREDENTIAL_ENV_VAR_NAME/PROVIDER_ID
@@ -492,7 +519,14 @@ experiments/pi_implementer_qualification/
         test_i2_environment.py   I2-1 child-environment builder
         test_i2_secret_context.py I2-1 run-scoped secret context safety
         test_i2_pi_config.py     I2-2 disposable config generator
-        test_i2_route.py         I2-3 route descriptors + offline route-check wiring
+        test_i2_route.py         I2-3 route descriptors + offline route-check wiring, plus the
+                                 5F3B-I2B-L1-LF2 attribution-collapse reproduction against the
+                                 UNMODIFIED AR2 checker (MockTransport only)
+        test_i2_b300_route_observation.py
+                                 5F3B-I2B-L1-LF2: the authenticated route observation matrix --
+                                 auth/transport/malformed/absent classification, exact
+                                 case-sensitive matching, redirect refusal, trust_env, no retry,
+                                 and the secret-retention proof (MockTransport only)
         test_i2_credentials.py   I2-4 credential read ordering
         test_i2_cleanup.py       I2-5 cleanup, classification, diagnostic safety
         test_safety_repr.py      5F3B-I2-FU1: ArtifactSafetyContext repr-safety proof
@@ -889,3 +923,59 @@ run, and no candidate model had run. Exactly one zero-prompt live gate
 attempt has since occurred (5F3B-I2B-L1 -- see the corrected note at the head
 of this file); **no candidate model has run, then or now**, and 5F3B-Q1/Q2
 (the first live candidate sweeps) remain **NOT authorized**.
+
+### 5F3B-I2B-L1-LF2 — Credentialed B300 Route Observation + Route Failure Attribution
+
+**Verdict: COMPLETE, pending independent review. No live activity was
+performed.**
+
+Candidate-A live attempt #2 refused at `route_check` with
+`ROUTE_CHECK_FAILED`. That refusal is accepted. What it could not do is say
+*why*, because the live checker was the frozen, **unauthenticated**
+`ar2.route_check.check_route_serves_model`: a transport failure, HTTP 401,
+HTTP 403, any other non-200, a malformed listing, a genuinely absent model and
+a malformed checker result all collapse into one `configured_model_served =
+false`. LF2 reproduces that collapse offline against the real, unmodified
+function, and corrects the assumption behind it.
+
+What changed:
+
+- **AR2's `route_check.py` stays frozen and unmodified.** It is no longer
+  imported by the live adapters at all — the import is deleted, not left
+  unused, and the former `route_checker` module attribute is gone.
+- **A new qualification-owned observation**,
+  `i2_b300_route_observation.observe_b300_route_serves_model`: exactly one
+  non-inference `GET <base_url>/models` carrying this run's
+  `Authorization: Bearer` header (the shape established from Pi's
+  `openai-completions` provider type *and* from AIDO's own shipped LiteLLM
+  client, which already uses it against the same two environment variables),
+  with `trust_env=False`, **redirects disabled**, a bounded timeout, no retry,
+  no fallback endpoint, no fallback model, strict bounded response-shape
+  validation, and exact case-sensitive matching.
+- **Same-run authority, not caller-supplied.** The live checker is
+  `AuthenticatedB300RouteObserver`, bound to this run's consumed
+  `ConnectionValues` and the frozen I1 candidate pairing. There is no
+  `base_url`, `api_key`, `endpoint`, `provider` or `model_id` parameter
+  anywhere at that boundary; a substituted URL, model, candidate or forged
+  authority object is refused **before any request is issued**, and a second
+  observation is refused outright.
+- **A bounded route diagnostic** (`route_model_served`,
+  `route_transport_unreachable`, `route_auth_rejected`, `route_http_rejected`,
+  `route_listing_malformed`, `route_model_not_listed`, `route_result_malformed`,
+  `route_authority_refused`, `route_not_observed`), recorded by the harness
+  **alongside** the frozen result exactly as LF1's launch diagnostic is. It is
+  **attribution, never verdict authority**: the frozen controller keeps its
+  single `ROUTE_CHECK_FAILED` and gained no new failure code, and
+  `CategoryBEvidence` is untouched.
+- **Nothing raw is retained**: no response body, no served-model-id list, no
+  status code, no endpoint, no host, no base URL, no credential, and no
+  exception message or traceback on any path.
+
+What LF2 does **not** establish: that `qwen3-coder-next` is served by B300 or
+that it is not; that the B300 proxy validates the `Authorization` header (I2A
+§24 item 1 stays open, and a differential auth probe is **not** authorized);
+and nothing about the retained live artifacts, which are unedited.
+
+**Candidate A: NOT YET QUALIFIED. Candidate A further live: NO-GO until
+independent LF2 review. Candidate B: NO-GO. Q1/Q2: NO-GO. Real-workspace
+authority: NO-GO.**

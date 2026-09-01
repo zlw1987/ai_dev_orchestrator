@@ -626,3 +626,173 @@ def test_route_check_outcome_accepts_valid_pass_and_valid_fail():
         configured_model_served=False,
         failure_code=RouteFailureCode.ROUTE_UNREACHABLE,
     )
+
+
+# =============================================================================
+# 5F3B-I2B-L1-LF2 OBJECTIVE 1 -- reproducing the route ATTRIBUTION COLLAPSE
+# =============================================================================
+#
+# These tests drive the REAL, UNMODIFIED ``ar2.route_check.
+# check_route_serves_model`` -- the exact function frozen I2A Sec. 15 item 9
+# mandated, and the exact function Candidate-A's second live attempt used --
+# through the exact ``run_offline_route_check`` wiring the frozen Category-B
+# controller uses, and prove that SEVEN distinct source facts all collapse
+# into one indistinguishable result.
+#
+# **STILL NO NETWORK.** ``ar2.route_check``'s own module-level ``httpx``
+# reference is replaced, for the duration of one test, by a namespace whose
+# ``Client`` is backed by an ``httpx.MockTransport``. No socket is opened, no
+# real endpoint is contacted, and the frozen module's SOURCE is never touched
+# -- ``monkeypatch`` restores the attribute afterwards.
+#
+# This reproduction is the evidence for the LF2 design correction. It is
+# deliberately NOT deleted once the authenticated checker exists: it is the
+# proof of what the retained live artifact can, and cannot, mean.
+
+import json as _json  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+
+import httpx  # noqa: E402
+
+from ar2 import route_check as _frozen_ar2_route_check  # noqa: E402
+
+
+def _install_mock_ar2_transport(monkeypatch, handler) -> None:
+    """Back the FROZEN checker's own ``httpx.Client`` with a mock transport."""
+
+    def _client(**kwargs):
+        # Every kwarg the frozen module passes (``trust_env=False``) is
+        # forwarded verbatim -- its behavior is not altered, only its socket.
+        return httpx.Client(transport=httpx.MockTransport(handler), **kwargs)
+
+    monkeypatch.setattr(_frozen_ar2_route_check, "httpx", SimpleNamespace(Client=_client))
+
+
+def _unauthenticated_outcome(monkeypatch, handler):
+    """One ``run_offline_route_check`` through the UNMODIFIED AR2 checker."""
+    _install_mock_ar2_transport(monkeypatch, handler)
+    return run_offline_route_check(
+        descriptor=route_descriptor_for_candidate("A"),
+        secret_context=_secret_context(),
+        checker=_frozen_ar2_route_check.check_route_serves_model,
+    )
+
+
+def _models_body(*model_ids: str) -> bytes:
+    return _json.dumps({"object": "list", "data": [{"id": mid} for mid in model_ids]}).encode()
+
+
+def _raise_transport_error(request):
+    raise httpx.ConnectError("synthetic connect failure", request=request)
+
+
+#: The six response-level source facts, and the ONE result each produces.
+_COLLAPSE_SHAPES = {
+    "A_transport_unreachable": _raise_transport_error,
+    "B_http_401": lambda request: httpx.Response(401, content=b"unauthorized"),
+    "C_http_403": lambda request: httpx.Response(403, content=b"forbidden"),
+    "D_http_500": lambda request: httpx.Response(500, content=b"bad gateway"),
+    "E_http_200_malformed_body": lambda request: httpx.Response(200, content=b"{not json"),
+    "F_http_200_model_absent": lambda request: httpx.Response(
+        200, content=_models_body("minimax-m2.7")
+    ),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(_COLLAPSE_SHAPES))
+def test_lf2_every_unauthenticated_failure_shape_collapses_to_one_outcome(shape, monkeypatch):
+    """A, B, C, D, E and F are indistinguishable at the wiring boundary."""
+    outcome = _unauthenticated_outcome(monkeypatch, _COLLAPSE_SHAPES[shape])
+    assert outcome.passed is False
+    assert outcome.configured_model_served is False
+
+
+def test_lf2_a_401_is_indistinguishable_from_a_genuinely_absent_model(monkeypatch):
+    """THE FINDING. An AUTH fact and a MODEL fact produce the same outcome.
+
+    Candidate-A live attempt #2 recorded exactly this outcome. It therefore
+    cannot mean "B300 does not serve qwen3-coder-next".
+    """
+    auth = _unauthenticated_outcome(monkeypatch, _COLLAPSE_SHAPES["B_http_401"])
+    monkeypatch.undo()
+    absent = _unauthenticated_outcome(monkeypatch, _COLLAPSE_SHAPES["F_http_200_model_absent"])
+    assert (auth.passed, auth.configured_model_served) == (False, False)
+    assert (absent.passed, absent.configured_model_served) == (False, False)
+    # They agree on the wiring's own bounded failure code too, so not even
+    # that distinguishes them -- and the frozen controller reduces both to a
+    # single ROUTE_CHECK_FAILED regardless.
+    assert auth.failure_code == RouteFailureCode.MODEL_NOT_SERVED
+    assert absent.failure_code == RouteFailureCode.MODEL_NOT_SERVED
+
+
+def test_lf2_malformed_listing_is_indistinguishable_from_an_absent_model(monkeypatch):
+    malformed = _unauthenticated_outcome(monkeypatch, _COLLAPSE_SHAPES["E_http_200_malformed_body"])
+    monkeypatch.undo()
+    absent = _unauthenticated_outcome(monkeypatch, _COLLAPSE_SHAPES["F_http_200_model_absent"])
+    assert malformed.failure_code == absent.failure_code == RouteFailureCode.MODEL_NOT_SERVED
+    assert malformed.configured_model_served is absent.configured_model_served is False
+
+
+def test_lf2_shape_g_a_malformed_checker_result_also_collapses():
+    """G. A non-conforming checker RESULT fails closed the same way."""
+
+    class _NonBoolResult:
+        reachable = "true"
+        configured_model_served = "true"
+
+    outcome = run_offline_route_check(
+        descriptor=route_descriptor_for_candidate("A"),
+        secret_context=_secret_context(),
+        checker=lambda base_url, *, model_id: _NonBoolResult(),
+    )
+    assert outcome.passed is False
+    assert outcome.configured_model_served is False
+
+
+def test_lf2_the_unauthenticated_checker_sends_no_authorization_header(monkeypatch):
+    """The mechanical cause of the collapse, observed rather than asserted."""
+    seen = []
+
+    def _handler(request):
+        seen.append(request)
+        return httpx.Response(200, content=_models_body("qwen3-coder-next"))
+
+    outcome = _unauthenticated_outcome(monkeypatch, _handler)
+    assert outcome.passed is True  # an unauthenticated route CAN pass, when it answers
+    assert len(seen) == 1
+    assert "authorization" not in {name.lower() for name in seen[0].headers}
+
+
+def test_lf2_the_frozen_ar2_checker_accepts_no_credential_parameter():
+    """It cannot express a credential, so it cannot be handed one."""
+    import inspect
+
+    parameters = set(
+        inspect.signature(_frozen_ar2_route_check.check_route_serves_model).parameters
+    )
+    assert parameters == {"base_url", "model_id"}
+    assert "api_key" not in parameters
+    assert "headers" not in parameters
+
+
+def test_lf2_run_offline_route_check_cannot_forward_a_credential_to_a_checker():
+    """The wiring passes exactly two values; a credential is not one of them."""
+    captured = {}
+
+    class _Result:
+        reachable = True
+        configured_model_served = True
+
+    def _checker(base_url, **kwargs):
+        captured["base_url"] = base_url
+        captured["kwargs"] = kwargs
+        return _Result()
+
+    run_offline_route_check(
+        descriptor=route_descriptor_for_candidate("A"),
+        secret_context=_secret_context(),
+        checker=_checker,
+    )
+    assert captured["base_url"] == SYNTHETIC_BASE_URL
+    assert set(captured["kwargs"]) == {"model_id"}
+    assert SYNTHETIC_API_KEY not in str(captured)

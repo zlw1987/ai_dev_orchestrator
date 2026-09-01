@@ -4,7 +4,10 @@
 the frozen ``AIDO_LITELLM_BASE_URL``/``AIDO_LITELLM_API_KEY`` environment
 variables), creates a real broker (a real Windows named pipe and a real
 daemon thread), launches a real Node/Pi process, and performs a real,
-non-inference ``GET /models`` HTTP request. It sends **zero semantic
+**credential-bearing**, non-inference ``GET /models`` HTTP request
+(5F3B-I2B-L1-LF2: that request now carries this run's own
+``Authorization: Bearer`` header, so a 401/403 is attributable as an auth
+fact instead of collapsing into "the model is absent"). It sends **zero semantic
 prompts** -- there is no code path here, in
 ``qualification.i2b_live_adapters``, or in the frozen
 ``qualification.i2b_controller``/``qualification.i2b_session`` it drives,
@@ -63,6 +66,7 @@ from qualification.i2b_controller import (  # noqa: E402
 )
 from qualification.i2b_live_adapters import (  # noqa: E402
     LiveCategoryBAdapters,
+    build_authenticated_route_checker,
     preflight_artifact_safety_scrub_self_check,
     preflight_candidate_route_generator_symmetry,
     preflight_child_environment_builder_self_check,
@@ -72,7 +76,6 @@ from qualification.i2b_live_adapters import (  # noqa: E402
     preflight_pi_installed_offline,
     preflight_planned_cli_argv_shape,
     resolve_pi_identity,
-    route_checker,
 )
 from qualification.i2b_workspace import (  # noqa: E402
     mint_qualification_run_workspace,
@@ -470,6 +473,17 @@ def run_one_category_b_live_attempt(*, candidate: str) -> dict[str, Any]:
             )
             raise refusal from None
 
+        # 5F3B-I2B-L1-LF2. The live route checker is no longer the
+        # unauthenticated, frozen ``ar2.route_check.check_route_serves_model``
+        # -- it is an observer bound to THIS attempt's candidate and to the
+        # very ``ConnectionValues`` the frozen controller is about to consume
+        # through ``adapters.read_connection``. There is no base URL, API key,
+        # provider id or model id expressible here, and the same ``candidate``
+        # local drives both this binding and the controller call below.
+        route_observer = build_authenticated_route_checker(
+            candidate=candidate, adapters=adapters
+        )
+
         # L1-FU5 nearby gap: the controller call and the result-summary
         # reduction are each individually guarded now. Before this fix, an
         # exception from either one propagated bare through the ``finally``
@@ -493,7 +507,7 @@ def run_one_category_b_live_attempt(*, candidate: str) -> dict[str, Any]:
                 get_commands=adapters.get_commands,
                 get_state=adapters.get_state,
                 observe_protocol=adapters.observe_protocol,
-                route_checker=route_checker,
+                route_checker=route_observer,
                 shutdown_runtime=adapters.shutdown_runtime,
                 shutdown_broker=adapters.shutdown_broker,
                 git_executable=git_executable,
@@ -532,6 +546,21 @@ def run_one_category_b_live_attempt(*, candidate: str) -> dict[str, Any]:
             # (``launch_window_protocol``), and it never alters the flag
             # state.
             summary["launch_diagnostics"] = adapters.launch_diagnostics()
+            # 5F3B-I2B-L1-LF2 OBJECTIVE 5. The bounded route diagnostic,
+            # recorded ALONGSIDE the frozen controller's result exactly as
+            # LF1's launch diagnostic already is, and for the same reason:
+            # the frozen ``CategoryBEvidence`` schema is not touched and
+            # frozen I2B is not reopened. Every value is one of
+            # ``i2_b300_route_observation.ROUTE_DIAGNOSTIC_CODES``.
+            #
+            # It exists because Candidate-A's second live attempt produced
+            # ``route_check: FAILED:ROUTE_CHECK_FAILED`` with
+            # ``exact_candidate_model_served: false`` and NOTHING that could
+            # separate an auth rejection, a transport failure, a malformed
+            # listing and a genuinely absent model. The controller's verdict
+            # is unchanged and remains authoritative; this record only says
+            # which of those the observation actually was.
+            summary["route_diagnostics"] = route_observer.route_diagnostics()
         except Exception as exc:  # noqa: BLE001 - reduced to a bounded, no-secret record
             post_controller_failure = PostControllerExceptionalFailure(
                 stage=STAGE_RESULT_PROCESSING, failure_type=type(exc).__name__

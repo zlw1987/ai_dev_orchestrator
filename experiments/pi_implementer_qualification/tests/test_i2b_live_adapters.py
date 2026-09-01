@@ -2256,13 +2256,42 @@ def test_shutdown_runtime_reports_the_observed_exit_not_the_call_returning(
     assert shutdown_observation.orchestrator_direct_child_reported_exit is False
 
 
-# -- route_checker / TOOL_ALLOWLIST identity ---------------------------------
+# -- route checker identity (5F3B-I2B-L1-LF2) --------------------------------
 
 
-def test_route_checker_is_the_real_unmodified_ar2_function() -> None:
-    from ar2.route_check import check_route_serves_model
+def test_the_unauthenticated_ar2_checker_is_no_longer_in_live_wiring() -> None:
+    """LF2 ADVERSARIAL ITEM 1: it must not be reachable here by accident.
 
-    assert live_module.route_checker is check_route_serves_model
+    The former ``live_module.route_checker = check_route_serves_model``
+    binding is GONE, and the import that produced it is deleted rather than
+    left unused -- so there is no module attribute a future edit could
+    silently pass to ``run_category_b_controller``'s ``route_checker``
+    parameter again.
+    """
+    assert not hasattr(live_module, "route_checker")
+    assert not hasattr(live_module, "check_route_serves_model")
+
+    tree = ast.parse(inspect.getsource(live_module))
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("ar2.route_check"):
+            imported.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.Import):
+            imported.update(
+                alias.name for alias in node.names if alias.name.startswith("ar2.route_check")
+            )
+    assert imported == set()
+
+
+def test_ar2s_own_route_check_module_is_untouched_and_still_unauthenticated() -> None:
+    """AR2 stays frozen. LF2 corrects the ASSUMPTION, never the checker."""
+    from ar2 import route_check
+
+    source = inspect.getsource(route_check)
+    assert "Authorization" not in source
+    assert "api_key" not in source
+    parameters = set(inspect.signature(route_check.check_route_serves_model).parameters)
+    assert parameters == {"base_url", "model_id"}
 
 
 def test_tool_allowlist_agrees_with_ar2s_own() -> None:
@@ -5776,3 +5805,546 @@ def test_fu1_the_stderr_double_matches_the_real_supervisor_contract() -> None:
     assert type(double["bytes_retained"]) is int
     assert type(double["text_tail"]) is str
     assert "error: str | None = None" in inspect.getsource(BoundedStreamState)
+
+
+
+# =============================================================================
+# 5F3B-I2B-L1-LF2 -- the authenticated route observer's SAME-RUN AUTHORITY
+# =============================================================================
+#
+# **NO NETWORK.** Every observation below runs through an injected
+# ``httpx.MockTransport``; the credential is the synthetic
+# ``SYNTHETIC_API_KEY`` this module already uses for its environ double.
+#
+# What is proven: the observer's route/model/credential authority is derived
+# from THIS run's consumed connection values and the frozen I1 candidate
+# pairing, and every substitution attempt is refused BEFORE any HTTP request
+# is issued.
+#
+# **LF2-FU1: the mock transport is injected at a PRIVATE, test-only
+# substitution point, never through the public live checker constructor or
+# factory.** ``AuthenticatedB300RouteObserver.__init__`` and
+# ``build_authenticated_route_checker`` accept exactly ``candidate`` and
+# ``adapters`` -- no ``transport`` parameter exists on either. Offline tests
+# instead monkeypatch the module-internal ``observe_b300_route_serves_model``
+# name that ``i2b_live_adapters`` calls (see ``_install_synthetic_transport``
+# below); the replacement still calls the REAL, unmodified mechanism
+# function -- imported directly here, never through the monkeypatched name --
+# passing the injected transport at THAT function's own accepted
+# test-injection parameter, so every status/body-parsing path under test is
+# still the real mechanism, never a hand-rolled double.
+
+import httpx as _httpx  # noqa: E402
+
+from qualification.i2_b300_route_observation import (  # noqa: E402
+    ROUTE_AUTH_REJECTED,
+    ROUTE_AUTHORITY_REFUSED,
+    ROUTE_DIAGNOSTIC_CODES,
+    ROUTE_MODEL_NOT_LISTED,
+    ROUTE_MODEL_SERVED,
+    ROUTE_NOT_OBSERVED,
+    ROUTE_TRANSPORT_UNREACHABLE,
+)
+from qualification.i2_b300_route_observation import (  # noqa: E402
+    observe_b300_route_serves_model as _lf2_real_observe_b300_route_serves_model,
+)
+from qualification.i2_route import run_offline_route_check  # noqa: E402
+from qualification.i2_secret_context import build_secret_context  # noqa: E402
+from qualification.records import CANDIDATE_MODEL_IDS as _LF2_CANDIDATE_MODEL_IDS  # noqa: E402
+
+_LF2_OTHER_BASE_URL = "https://attacker-chosen.example.invalid/v1"
+
+
+class _LF2Recorder:
+    def __init__(self, responder) -> None:
+        self.requests: list = []
+        self._responder = responder
+
+    def __call__(self, request):
+        self.requests.append(request)
+        return self._responder(request)
+
+    @property
+    def transport(self):
+        return _httpx.MockTransport(self)
+
+
+def _lf2_listing(*model_ids: str) -> bytes:
+    return json.dumps({"object": "list", "data": [{"id": mid} for mid in model_ids]}).encode()
+
+
+def _lf2_serves(*model_ids: str):
+    return lambda request: _httpx.Response(
+        200, content=_lf2_listing(*model_ids), headers={"content-type": "application/json"}
+    )
+
+
+def _install_synthetic_transport(
+    monkeypatch: pytest.MonkeyPatch, recorder: "_LF2Recorder"
+) -> None:
+    """The PRIVATE, test-only mock-transport substitution point (LF2-FU1).
+
+    The public ``AuthenticatedB300RouteObserver``/
+    ``build_authenticated_route_checker`` surface accepts no transport
+    parameter of any name, so this monkeypatches the module-internal
+    ``observe_b300_route_serves_model`` binding that
+    ``AuthenticatedB300RouteObserver.__call__`` invokes -- a substitution
+    point that cannot be selected through either public callable. The
+    replacement still calls the REAL, unmodified mechanism function
+    (``_lf2_real_observe_b300_route_serves_model``, imported directly from
+    ``qualification.i2_b300_route_observation`` and never itself
+    monkeypatched), forwarding the injected transport to ITS OWN accepted
+    ``transport=`` test-injection parameter.
+    """
+
+    def _synthetic_observe(*, base_url: str, api_key: str, model_id: str):
+        return _lf2_real_observe_b300_route_serves_model(
+            base_url=base_url,
+            api_key=api_key,
+            model_id=model_id,
+            transport=recorder.transport,
+        )
+
+    monkeypatch.setattr(live_module, "observe_b300_route_serves_model", _synthetic_observe)
+
+
+def _lf2_observer(
+    *,
+    monkeypatch: pytest.MonkeyPatch,
+    candidate: str = "A",
+    responder=None,
+    consume_connection: bool = True,
+):
+    """One adapter + one observer, wired exactly as the live entry point does."""
+    adapters = _adapters()
+    if consume_connection:
+        adapters.read_connection()
+    recorder = _LF2Recorder(
+        responder if responder is not None else _lf2_serves(_LF2_CANDIDATE_MODEL_IDS[candidate])
+    )
+    _install_synthetic_transport(monkeypatch, recorder)
+    observer = live_module.AuthenticatedB300RouteObserver(candidate=candidate, adapters=adapters)
+    return observer, adapters, recorder
+
+
+class _ForgedLiveCategoryBAdapters(live_module.LiveCategoryBAdapters):
+    """LF2-FU1 BLOCKER 2: a subclass whose ``__init__`` skips the real one.
+
+    ``isinstance(forged, LiveCategoryBAdapters)`` is ``True`` for an instance
+    of this class, even though the frozen controller never consumed it and no
+    real credential/broker/runtime state was ever established through it.
+    """
+
+    def __init__(self) -> None:  # deliberately never calls super().__init__
+        pass
+
+    def consumed_connection_values(self):
+        return SimpleNamespace(base_url=_LF2_OTHER_BASE_URL, api_key="attacker-selected")
+
+
+class _ForgedAdaptersThatExplodeIfConsulted(live_module.LiveCategoryBAdapters):
+    """A forged subclass whose ``consumed_connection_values`` must never be
+    reached: the exact-type check must refuse it at construction, before any
+    attribute is read and before any HTTP mechanism call could occur."""
+
+    def __init__(self) -> None:
+        pass
+
+    def consumed_connection_values(self):
+        raise AssertionError(
+            "consumed_connection_values must never be consulted for a forged "
+            "adapter type -- the exact-type check must refuse it first"
+        )
+
+
+# -- the credential boundary now records what the controller consumed --------
+
+
+def test_read_connection_records_the_consumed_values(patched) -> None:
+    adapters = _adapters()
+    assert adapters.consumed_connection_values() is None
+    values = adapters.read_connection()
+    assert adapters.consumed_connection_values() is values
+    assert values.base_url == SYNTHETIC_BASE_URL
+    assert values.api_key == SYNTHETIC_API_KEY
+
+
+def test_a_repeat_connection_read_with_identical_values_is_accepted(patched) -> None:
+    adapters = _adapters()
+    first = adapters.read_connection()
+    second = adapters.read_connection()
+    assert (first.base_url, first.api_key) == (second.base_url, second.api_key)
+
+
+def test_a_repeat_connection_read_with_different_values_is_refused(patched) -> None:
+    """The recorded route authority can never be quietly replaced mid-run."""
+    values = {
+        "AIDO_LITELLM_BASE_URL": SYNTHETIC_BASE_URL,
+        "AIDO_LITELLM_API_KEY": SYNTHETIC_API_KEY,
+    }
+    adapters = _adapters(environ_reader=lambda name: values.get(name))
+    adapters.read_connection()
+    values["AIDO_LITELLM_BASE_URL"] = _LF2_OTHER_BASE_URL
+    with pytest.raises(LiveAdapterError):
+        adapters.read_connection()
+
+
+def test_consumed_connection_values_never_leak_through_repr(patched) -> None:
+    adapters = _adapters()
+    values = adapters.read_connection()
+    assert SYNTHETIC_API_KEY not in repr(values)
+    assert SYNTHETIC_BASE_URL not in repr(values)
+    assert SYNTHETIC_API_KEY not in repr(adapters)
+
+
+# -- a real served route -----------------------------------------------------
+
+
+def test_the_observer_reports_served_for_the_exact_candidate_model(patched, monkeypatch) -> None:
+    observer, _, recorder = _lf2_observer(monkeypatch=monkeypatch, candidate="A")
+    observation = observer(SYNTHETIC_BASE_URL, model_id=_LF2_CANDIDATE_MODEL_IDS["A"])
+    assert observation.reachable is True
+    assert observation.configured_model_served is True
+    assert observation.diagnostic_code == ROUTE_MODEL_SERVED
+    assert len(recorder.requests) == 1
+    assert recorder.requests[0].headers["Authorization"] == "Bearer " + SYNTHETIC_API_KEY
+
+
+def test_the_observer_result_is_accepted_unmodified_by_run_offline_route_check(
+    patched, monkeypatch
+) -> None:
+    """The frozen wiring consumes the new observation with no change at all."""
+    observer, _, _ = _lf2_observer(monkeypatch=monkeypatch, candidate="A")
+    outcome = run_offline_route_check(
+        descriptor=route_descriptor_for_candidate("A"),
+        secret_context=build_secret_context(
+            base_url=SYNTHETIC_BASE_URL,
+            api_key=SYNTHETIC_API_KEY,
+            model_id=_LF2_CANDIDATE_MODEL_IDS["A"],
+        ),
+        checker=observer,
+    )
+    assert outcome.passed is True
+    assert outcome.configured_model_served is True
+    assert outcome.failure_code is None
+
+
+def test_an_auth_rejection_reaches_the_diagnostic_but_still_fails_the_gate(
+    patched, monkeypatch
+) -> None:
+    """LF2's whole point: the VERDICT is unchanged, the ATTRIBUTION is not."""
+    observer, _, _ = _lf2_observer(
+        monkeypatch=monkeypatch,
+        candidate="A",
+        responder=lambda request: _httpx.Response(401, content=b"denied"),
+    )
+    outcome = run_offline_route_check(
+        descriptor=route_descriptor_for_candidate("A"),
+        secret_context=build_secret_context(
+            base_url=SYNTHETIC_BASE_URL,
+            api_key=SYNTHETIC_API_KEY,
+            model_id=_LF2_CANDIDATE_MODEL_IDS["A"],
+        ),
+        checker=observer,
+    )
+    assert outcome.passed is False
+    assert observer.route_diagnostics()["route_observation"] == ROUTE_AUTH_REJECTED
+    assert observer.route_diagnostics()["route_observation"] != ROUTE_MODEL_NOT_LISTED
+
+
+# -- OBJECTIVE 6: substitution attacks, all refused before any request -------
+
+
+def test_a_substituted_base_url_is_refused_and_issues_no_request(patched, monkeypatch) -> None:
+    observer, _, recorder = _lf2_observer(monkeypatch=monkeypatch, candidate="A")
+    with pytest.raises(LiveAdapterError):
+        observer(_LF2_OTHER_BASE_URL, model_id=_LF2_CANDIDATE_MODEL_IDS["A"])
+    assert recorder.requests == []
+    assert observer.route_diagnostics()["route_observation"] == ROUTE_AUTHORITY_REFUSED
+
+
+def test_a_substituted_candidate_model_is_refused_and_issues_no_request(
+    patched, monkeypatch
+) -> None:
+    observer, _, recorder = _lf2_observer(monkeypatch=monkeypatch, candidate="A")
+    with pytest.raises(LiveAdapterError):
+        observer(SYNTHETIC_BASE_URL, model_id="some-other-model")
+    assert recorder.requests == []
+    assert observer.route_diagnostics()["route_observation"] == ROUTE_AUTHORITY_REFUSED
+
+
+def test_candidate_bs_model_during_a_candidate_a_run_is_refused(patched, monkeypatch) -> None:
+    """LF2 OBJECTIVE 6: the cross-candidate attack, mechanically closed."""
+    observer, _, recorder = _lf2_observer(monkeypatch=monkeypatch, candidate="A")
+    with pytest.raises(LiveAdapterError):
+        observer(SYNTHETIC_BASE_URL, model_id=_LF2_CANDIDATE_MODEL_IDS["B"])
+    assert recorder.requests == []
+    assert observer.route_diagnostics()["route_observation"] == ROUTE_AUTHORITY_REFUSED
+
+
+def test_a_case_folded_candidate_model_is_refused(patched, monkeypatch) -> None:
+    observer, _, recorder = _lf2_observer(monkeypatch=monkeypatch, candidate="A")
+    with pytest.raises(LiveAdapterError):
+        observer(SYNTHETIC_BASE_URL, model_id=_LF2_CANDIDATE_MODEL_IDS["A"].upper())
+    assert recorder.requests == []
+
+
+def test_a_non_string_base_url_or_model_id_is_refused(patched, monkeypatch) -> None:
+    observer, _, recorder = _lf2_observer(monkeypatch=monkeypatch, candidate="A")
+    with pytest.raises(LiveAdapterError):
+        observer(None, model_id=_LF2_CANDIDATE_MODEL_IDS["A"])
+    assert recorder.requests == []
+    observer2, _, recorder2 = _lf2_observer(monkeypatch=monkeypatch, candidate="A")
+    with pytest.raises(LiveAdapterError):
+        observer2(SYNTHETIC_BASE_URL, model_id=None)
+    assert recorder2.requests == []
+
+
+def test_an_observation_before_the_credential_read_is_refused(patched, monkeypatch) -> None:
+    """No consumed values means no authority to derive. Ordering is preserved."""
+    observer, _, recorder = _lf2_observer(
+        monkeypatch=monkeypatch, candidate="A", consume_connection=False
+    )
+    with pytest.raises(LiveAdapterError):
+        observer(SYNTHETIC_BASE_URL, model_id=_LF2_CANDIDATE_MODEL_IDS["A"])
+    assert recorder.requests == []
+    assert observer.route_diagnostics()["route_observation"] == ROUTE_AUTHORITY_REFUSED
+
+
+def test_a_second_observation_is_refused_so_one_run_issues_one_get(patched, monkeypatch) -> None:
+    observer, _, recorder = _lf2_observer(monkeypatch=monkeypatch, candidate="A")
+    observer(SYNTHETIC_BASE_URL, model_id=_LF2_CANDIDATE_MODEL_IDS["A"])
+    with pytest.raises(LiveAdapterError):
+        observer(SYNTHETIC_BASE_URL, model_id=_LF2_CANDIDATE_MODEL_IDS["A"])
+    assert len(recorder.requests) == 1
+
+
+# -- LF2-FU1 BLOCKER 1: no transport/client/request-injection parameter ------
+
+
+def test_the_observer_exposes_no_endpoint_credential_provider_or_model_parameter(patched) -> None:
+    """There is nowhere at this boundary to express an independent route."""
+    for callable_ in (
+        live_module.AuthenticatedB300RouteObserver.__init__,
+        live_module.build_authenticated_route_checker,
+    ):
+        parameters = set(inspect.signature(callable_).parameters)
+        for forbidden in (
+            "base_url",
+            "api_key",
+            "endpoint",
+            "provider",
+            "provider_id",
+            "model",
+            "model_id",
+            "secret_context",
+            "connection_values",
+            "transport",
+            "client",
+            "requester",
+            "sender",
+            "session",
+            "http_client",
+            "request_callback",
+        ):
+            assert forbidden not in parameters, (callable_, forbidden)
+
+
+def test_the_public_constructor_signature_is_exactly_candidate_and_adapters(patched) -> None:
+    """No transport/client/request-injection parameter under ANY name -- the
+    exact, complete parameter set, not merely an absence of specific names."""
+    parameters = set(inspect.signature(live_module.AuthenticatedB300RouteObserver.__init__).parameters)
+    assert parameters == {"self", "candidate", "adapters"}
+
+
+def test_the_factory_signature_is_exactly_candidate_and_adapters(patched) -> None:
+    parameters = set(inspect.signature(live_module.build_authenticated_route_checker).parameters)
+    assert parameters == {"candidate", "adapters"}
+
+
+def test_passing_a_mock_transport_to_the_public_constructor_raises_type_error(patched) -> None:
+    """MANDATORY REGRESSION (LF2-FU1 BLOCKER 1). Before this fix, the public
+    constructor accepted a ``transport=`` keyword and forwarded it straight
+    into the live observation mechanism -- a caller could construct a genuine
+    same-run observer while substituting the observation channel itself. The
+    parameter no longer exists at all, so supplying it is a plain, mechanical
+    ``TypeError`` from Python's own keyword-argument binding -- not a runtime
+    refusal this class could ever be talked out of.
+    """
+    adapters = _adapters()
+    adapters.read_connection()
+    fabricated_transport = _httpx.MockTransport(
+        lambda request: _httpx.Response(
+            200,
+            content=_lf2_listing(_LF2_CANDIDATE_MODEL_IDS["A"]),
+            headers={"content-type": "application/json"},
+        )
+    )
+    with pytest.raises(TypeError):
+        live_module.AuthenticatedB300RouteObserver(
+            candidate="A", adapters=adapters, transport=fabricated_transport
+        )
+
+
+def test_passing_a_mock_transport_to_the_factory_raises_type_error(patched) -> None:
+    adapters = _adapters()
+    adapters.read_connection()
+    with pytest.raises(TypeError):
+        live_module.build_authenticated_route_checker(
+            candidate="A",
+            adapters=adapters,
+            transport=_httpx.MockTransport(lambda request: _httpx.Response(200)),
+        )
+
+
+# -- LF2-FU1 BLOCKER 2: exact adapter TYPE, never isinstance ------------------
+
+
+def test_pre_fix_repro_isinstance_wrongly_accepts_a_forged_subclass() -> None:
+    """Pre-fix reproduction, preserved as a permanent regression record.
+
+    ``isinstance`` alone cannot distinguish a forged subclass -- one whose
+    ``__init__`` never ran the real constructor -- from the genuine live
+    adapter instance the frozen controller actually consumed.
+    """
+    forged = _ForgedLiveCategoryBAdapters()
+    assert isinstance(forged, live_module.LiveCategoryBAdapters) is True
+    assert type(forged) is not live_module.LiveCategoryBAdapters
+
+
+def test_an_ordinary_exact_adapter_instance_is_accepted(patched) -> None:
+    adapters = _adapters()
+    observer = live_module.AuthenticatedB300RouteObserver(candidate="A", adapters=adapters)
+    assert observer.candidate == "A"
+
+
+def test_the_observer_refuses_anything_that_is_not_the_live_adapter(patched) -> None:
+    for forged in (
+        None,
+        "adapters",
+        SimpleNamespace(consumed_connection_values=lambda: None),
+        SimpleNamespace(
+            consumed_connection_values=lambda: SimpleNamespace(
+                base_url=_LF2_OTHER_BASE_URL, api_key="forged"
+            )
+        ),
+    ):
+        with pytest.raises(LiveAdapterError):
+            live_module.AuthenticatedB300RouteObserver(candidate="A", adapters=forged)
+
+
+def test_a_forged_subclass_whose_init_skips_the_real_constructor_is_refused(patched) -> None:
+    forged = _ForgedLiveCategoryBAdapters()
+    with pytest.raises(LiveAdapterError):
+        live_module.AuthenticatedB300RouteObserver(candidate="A", adapters=forged)
+
+
+def test_a_forged_subclass_is_refused_before_any_http_mechanism_call(patched) -> None:
+    """The exact-type check runs BEFORE any attribute of the forged object is
+    ever read: a forged ``consumed_connection_values`` that would raise if
+    consulted proves the refusal is a construction-time type check, not a
+    later-failing attribute read."""
+    forged = _ForgedAdaptersThatExplodeIfConsulted()
+    with pytest.raises(LiveAdapterError):
+        live_module.AuthenticatedB300RouteObserver(candidate="A", adapters=forged)
+
+
+def test_the_factory_also_enforces_the_exact_adapter_type(patched) -> None:
+    forged = _ForgedLiveCategoryBAdapters()
+    with pytest.raises(LiveAdapterError):
+        live_module.build_authenticated_route_checker(candidate="A", adapters=forged)
+
+
+def test_an_unknown_candidate_is_refused_at_observer_construction(patched) -> None:
+    from qualification.i2_route import RouteDescriptorError
+
+    with pytest.raises(RouteDescriptorError):
+        live_module.AuthenticatedB300RouteObserver(candidate="Z", adapters=_adapters())
+
+
+def test_the_factory_binds_the_candidate_it_was_given(patched) -> None:
+    adapters = _adapters()
+    for candidate in sorted(_LF2_CANDIDATE_MODEL_IDS):
+        observer = live_module.build_authenticated_route_checker(
+            candidate=candidate, adapters=adapters
+        )
+        assert observer.candidate == candidate
+        assert observer.route_diagnostics()["candidate"] == candidate
+
+
+# -- the bounded diagnostic vocabulary ---------------------------------------
+
+
+def test_the_default_diagnostic_is_route_not_observed(patched, monkeypatch) -> None:
+    """An earlier gate failing first leaves exactly this, truthfully."""
+    observer, _, recorder = _lf2_observer(monkeypatch=monkeypatch, candidate="A")
+    diagnostics = observer.route_diagnostics()
+    assert diagnostics["route_observation"] == ROUTE_NOT_OBSERVED
+    assert diagnostics["observation_requests_issued"] == "0"
+    assert recorder.requests == []
+
+
+@pytest.mark.parametrize(
+    ("responder", "expected"),
+    [
+        (_lf2_serves("qwen3-coder-next"), ROUTE_MODEL_SERVED),
+        (_lf2_serves("minimax-m2.7"), ROUTE_MODEL_NOT_LISTED),
+        (lambda request: _httpx.Response(401), ROUTE_AUTH_REJECTED),
+        (lambda request: _httpx.Response(403), ROUTE_AUTH_REJECTED),
+        (lambda request: _httpx.Response(500), "route_http_rejected"),
+        (lambda request: _httpx.Response(200, content=b"{"), "route_listing_malformed"),
+    ],
+)
+def test_every_recorded_diagnostic_is_a_declared_code(
+    patched, monkeypatch, responder, expected
+) -> None:
+    observer, _, _ = _lf2_observer(monkeypatch=monkeypatch, candidate="A", responder=responder)
+    observer(SYNTHETIC_BASE_URL, model_id=_LF2_CANDIDATE_MODEL_IDS["A"])
+    diagnostics = observer.route_diagnostics()
+    assert diagnostics["route_observation"] == expected
+    assert diagnostics["route_observation"] in ROUTE_DIAGNOSTIC_CODES
+    assert diagnostics["observation_requests_issued"] == "1"
+
+
+def test_a_transport_failure_is_recorded_as_unreachable_not_model_absent(
+    patched, monkeypatch
+) -> None:
+    def _boom(request):
+        raise _httpx.ConnectError("synthetic", request=request)
+
+    observer, _, _ = _lf2_observer(monkeypatch=monkeypatch, candidate="A", responder=_boom)
+    observer(SYNTHETIC_BASE_URL, model_id=_LF2_CANDIDATE_MODEL_IDS["A"])
+    assert observer.route_diagnostics()["route_observation"] == ROUTE_TRANSPORT_UNREACHABLE
+
+
+def test_no_credential_or_endpoint_survives_into_the_route_diagnostic(
+    patched, monkeypatch
+) -> None:
+    for responder in (
+        _lf2_serves("qwen3-coder-next"),
+        lambda request: _httpx.Response(401, content=b"denied"),
+        lambda request: _httpx.Response(200, content=b"{not json"),
+    ):
+        observer, _, _ = _lf2_observer(monkeypatch=monkeypatch, candidate="A", responder=responder)
+        observer(SYNTHETIC_BASE_URL, model_id=_LF2_CANDIDATE_MODEL_IDS["A"])
+        rendered = json.dumps(observer.route_diagnostics()) + repr(observer)
+        for needle in (SYNTHETIC_API_KEY, SYNTHETIC_BASE_URL, "Bearer"):
+            assert needle not in rendered
+
+
+def test_a_refusal_message_never_echoes_a_url_or_a_credential(patched, monkeypatch) -> None:
+    observer, _, _ = _lf2_observer(monkeypatch=monkeypatch, candidate="A")
+    with pytest.raises(LiveAdapterError) as excinfo:
+        observer(_LF2_OTHER_BASE_URL, model_id=_LF2_CANDIDATE_MODEL_IDS["A"])
+    message = str(excinfo.value)
+    for needle in (_LF2_OTHER_BASE_URL, SYNTHETIC_BASE_URL, SYNTHETIC_API_KEY, "Bearer"):
+        assert needle not in message
+
+
+def test_the_observer_sends_no_semantic_prompt(patched, monkeypatch) -> None:
+    observer, _, recorder = _lf2_observer(monkeypatch=monkeypatch, candidate="A")
+    observer(SYNTHETIC_BASE_URL, model_id=_LF2_CANDIDATE_MODEL_IDS["A"])
+    request = recorder.requests[0]
+    assert request.method == "GET"
+    assert request.content == b""
+    assert str(request.url).endswith("/v1/models")

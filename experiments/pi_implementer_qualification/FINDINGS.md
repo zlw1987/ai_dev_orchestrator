@@ -5139,3 +5139,405 @@ read, no semantic prompt, no real project workspace, no commit/push/PR.
   implementer, no second candidate, no semantic prompt path, no agent loop,
   no descendant/inference/GPU claim, no real-workspace authority, and
   redaction/scrubbing remain backstops, not guarantees.
+
+
+---
+
+# 5F3B-I2B-L1-LF2 — Credentialed B300 Route Observation + Route Failure Attribution Closure
+
+**No live activity was performed in this phase.** Candidate A was not rerun,
+Candidate B was not run, no real `/models` request was made, no real
+credential was read, no Node/Pi process was launched, no broker was opened, no
+semantic prompt was sent, no real project workspace was used, and neither
+Candidate-A live result artifact was edited.
+
+## 0. The live record LF2 is about
+
+`results/i2b_live_A_20260831T224840Z.json` — Candidate A's second real
+zero-prompt Category-B attempt — passed every runtime-side compatibility gate
+(`broker_ready`, `runtime_launch`, `rpc_launch_shape`, `required_launch_flags`,
+`lf_jsonl_correlation`, `get_commands`, `h1_extension_identity`,
+`extension_command_namespace`, `get_state`, `h2_provider_model_identity`,
+`protocol_integrity`, `pi_version_observed`) and then failed exactly one:
+
+```text
+failed_gate  = route_check
+failure_code = ROUTE_CHECK_FAILED
+exact_candidate_model_served = false
+semantic_prompts_sent        = 0
+```
+
+All runtime teardown, broker shutdown, generated-config cleanup, outer cleanup
+and evidence scrub verified. **The gate-level refusal is accepted:** the route
+gate did not establish success, and refusing was correct.
+
+## 1. Why that record cannot distinguish 401, transport failure, malformed listing and true absence
+
+The live adapter passed the frozen AR2 checker directly:
+
+```python
+route_checker = ar2.route_check.check_route_serves_model
+```
+
+That function performs `GET <base_url>/models` through
+`httpx.Client(trust_env=False)` and **sends no `Authorization` header**. Its
+signature is exactly `(base_url, *, model_id)` — proven mechanically in
+`test_lf2_the_frozen_ar2_checker_accepts_no_credential_parameter` — so it
+**cannot express a credential at all**, and `run_offline_route_check` passes it
+exactly two values, neither of them a credential
+(`test_lf2_run_offline_route_check_cannot_forward_a_credential_to_a_checker`).
+
+Its single `configured_model_served=False` is therefore produced identically by
+seven distinct source facts, of which only one is about the model:
+
+| Shape | Source fact | Actually about |
+|---|---|---|
+| A | transport unreachable | the network |
+| B | HTTP 401 | **authentication** |
+| C | HTTP 403 | **authorization** |
+| D | another non-200 | the gateway |
+| E | HTTP 200, malformed body | the response shape |
+| F | HTTP 200, valid listing, candidate absent | **the model** |
+| G | malformed checker result | the checker |
+
+The frozen controller then reduces every one of them to a single
+`ROUTE_CHECK_FAILED` with `exact_candidate_model_served=false`, retaining
+nothing that says which. **Fail-closed and correct as a verdict; too coarse to
+be read as an attribution.**
+
+Consequently:
+
+> `qwen3-coder-next` being absent from B300 is **NOT** established by the
+> retained evidence. Candidate-A live #2 is a **VALID FAIL-CLOSED RUN** whose
+> **route failure cause is UNDERDETERMINED**.
+
+### 1.1 The reproduction (Objective 1)
+
+`tests/test_i2_route.py` now drives the **real, unmodified**
+`ar2.route_check.check_route_serves_model` through the **exact**
+`run_offline_route_check` wiring the frozen controller uses, for shapes A–F,
+and a synthetic non-conforming result for shape G. Still no network: the frozen
+module's own module-level `httpx` reference is monkeypatched, for the duration
+of one test, to a namespace whose `Client` is backed by an
+`httpx.MockTransport`. The frozen module's source is never touched and the
+attribute is restored afterwards.
+
+Every shape yields `passed=False, configured_model_served=False`. A 401 and a
+genuine absence agree even on the wiring's own bounded
+`RouteFailureCode.MODEL_NOT_SERVED`, so not even that distinguishes them. The
+mechanical cause is observed rather than asserted: the request the frozen
+checker issues carries no `authorization` header.
+
+This reproduction is deliberately **kept**, not deleted once the authenticated
+checker exists — it is the proof of what the retained live artifact can and
+cannot mean.
+
+## 2. The credential/header contract (Objective 2), established offline
+
+Established mechanically from two independent in-repository sources. No live
+traffic, no credential read, no endpoint contacted.
+
+1. **What credential Pi receives.** `qualification/i2_pi_config.py` writes
+   `providers.b300_pi_qualification.apiKey = "$PI_QUALIFICATION_B300_ROUTE_KEY"`
+   — `$ENV` interpolation, never a literal, never `!shell` — and the child
+   environment carries that variable, whose value is the `AIDO_LITELLM_API_KEY`
+   resolved by `qualification.i2_credentials.read_connection_values` alongside
+   `AIDO_LITELLM_BASE_URL`.
+2. **What header shape it produces.** The provider is declared
+   `api: "openai-completions"`. I2A §5's provider table records that this api
+   type **already sends** `Authorization: Bearer <key>` — precisely why
+   `authHeader: true` is documented as unnecessary for it and is not emitted.
+3. **Whether AIDO's existing B300 integration already uses that shape.**
+   **Yes.** `src/ai_dev_orchestrator/llm/client.py` builds
+   `{"Authorization": f"Bearer {api_key}"}` from `AIDO_LITELLM_API_KEY`, loaded
+   beside `AIDO_LITELLM_BASE_URL` by `llm/config.py`. Same two variables, same
+   value, same header.
+4. **Whether `/models` uses the same authenticated route identity.** It is a
+   path on the same OpenAI-compatible route named by `AIDO_LITELLM_BASE_URL`,
+   reached under the same provider identity Pi is configured with. Observing it
+   anonymously asks a *different* question than the one the run depends on.
+
+**This is an expectation about which identity the request is made under. It is
+NOT a claim that the endpoint enforces it.** I2A §24 item 1 — does the B300
+proxy validate `Authorization` for this route — remains **unresolved**. LF2
+does not answer it. A differential probe (one call with a good credential, one
+with a bad one) would, and is **not authorized**: not designed, not
+implemented, not performed.
+
+## 3. Exact design text superseded (Objective 3)
+
+A narrow superseding correction now exists at
+`docs/PHASE_5F3B_I2B_L1_LF2_ROUTE_BOUNDARY_CORRECTION.md`. Historical I2A is
+**not** rewritten. Two clauses are superseded, and nothing else:
+
+* **I2A §15 item 9** ("…via the **unmodified**
+  `ar2.route_check.check_route_serves_model` non-inference `/models` GET …
+  reused exactly as 5F3B §15.2 specifies") is superseded by:
+
+  > AR2's original route checker remains frozen and unmodified for AR2.
+  > Category-B B300 qualification may not reuse it as the live checker when the
+  > selected route is credential-bearing and the checker cannot express that
+  > credential.
+
+  The gate's *meaning* is unchanged: one non-inference `GET /models`, no
+  prompt, no generation, no inference, never one of the four semantic prompts,
+  exact case-sensitive matching, nothing substituted or auto-selected, and a
+  failure means zero prompts.
+
+* **I2A §23 slice I2-4**'s "wiring reuse of the unmodified
+  `check_route_serves_model`" is superseded the same way. The
+  credential-read-ordering half of that slice is **unchanged and still
+  binding**.
+
+Explicitly **not** superseded: I2A §16's two-path failure attribution, §8's
+credential read ordering, §24 item 1's honesty, and the frozen controller's
+`ROUTE_CHECK_FAILED` verdict code, gate ordering and `CategoryBEvidence`.
+
+## 4. The authenticated checker, and its authority binding (Objectives 4, 6)
+
+`qualification/i2_b300_route_observation.py` is new, qualification-owned, and
+imports **nothing** from `ar2` — asserted by parsing its own AST, not its prose
+(`test_this_module_does_not_reuse_the_frozen_ar2_checker`).
+`experiments/pi_external_runtime_ar2/ar2/route_check.py` is **unmodified**, and
+a test asserts it still sends no `Authorization` header and still accepts no
+credential parameter.
+
+`observe_b300_route_serves_model` performs **exactly one** non-inference
+`GET <base_url>/models`, with `trust_env=False`, `follow_redirects=False`, a
+bounded 20 s timeout, an `Authorization: Bearer <key>` header, no retry, no
+fallback endpoint, no fallback model, strict bounded response-shape validation,
+and exact case-sensitive `==` matching written as an explicit per-entry
+equality loop (never set membership, never truthiness).
+
+**Authority is not its arguments.** The live checker is
+`qualification.i2b_live_adapters.AuthenticatedB300RouteObserver`, built by
+`build_authenticated_route_checker(candidate=…, adapters=…)`:
+
+| Value | Derived from |
+|---|---|
+| base URL | the `ConnectionValues` the frozen controller consumed via `adapters.read_connection()` **on this run** |
+| credential | the same `ConnectionValues` |
+| model id | `route_descriptor_for_candidate(candidate).model_id` — the frozen I1 pairing |
+| provider | not a parameter anywhere |
+
+There is **no** `base_url`, `api_key`, `endpoint`, `provider`, `provider_id`,
+`model`, `model_id`, `secret_context` or `connection_values` parameter on
+either the observer's constructor or its factory — asserted by signature
+inspection. The arguments the frozen controller passes are treated as **claims
+to be checked**:
+
+* base URL not byte-identical to the consumed one → refused;
+* model id not exactly the frozen pairing's id for this candidate → refused
+  (this is what closes "Candidate B's route during a Candidate A run");
+* case-folded model id → refused;
+* non-string base URL or model id → refused;
+* no consumed connection values yet → refused (ordering preserved);
+* a second call → refused, so one run issues exactly one GET;
+* anything that is not the real `LiveCategoryBAdapters` (including a
+  `SimpleNamespace` forging `consumed_connection_values`) → refused at
+  construction;
+* an unknown candidate → refused at construction by the frozen descriptor.
+
+Every refusal happens **before** any HTTP request (the recorder sees zero
+requests in each case), records `route_authority_refused`, and is reduced by the
+unmodified `run_offline_route_check` to its existing bounded
+`ROUTE_CHECK_ERROR`.
+
+`read_connection` additionally refuses a repeat read that resolves to
+**different** values, so the recorded route authority cannot be quietly replaced
+mid-run.
+
+`qualification/i2b_live_adapters.py` no longer imports
+`ar2.route_check.check_route_serves_model` **at all** — the import is deleted
+rather than left unused, and the former `route_checker` module attribute is
+gone, so there is no symbol a future edit could pass to the controller's
+`route_checker` parameter again. Asserted by AST.
+
+## 5. Bounded route diagnostic vocabulary (Objective 5)
+
+Declared literals only, in `qualification/i2_b300_route_observation.py`:
+
+```text
+route_model_served            HTTP 200 + valid bounded listing + exact id present
+route_transport_unreachable   no HTTP response at all
+route_auth_rejected           HTTP 401 or 403 — an AUTH fact, never a model fact
+route_http_rejected           any other non-200, including an unfollowed 3xx
+route_listing_malformed       HTTP 200, body not a strict bounded listing
+route_model_not_listed        HTTP 200 + valid bounded listing + exact id ABSENT
+route_result_malformed        a checker RESULT object that did not conform
+route_authority_refused       same-run authority failed; NO request was issued
+route_not_observed            the route stage was never reached (the default)
+```
+
+`exact_candidate_model_served = true` requires **all three** of HTTP 200, a
+valid bounded listing shape, and the exact case-sensitive candidate id. Success
+is never inferred from HTTP 200 alone — the observation type refuses to
+construct any other combination.
+
+The harness records it as `route_diagnostics`, **alongside** the frozen
+controller's result and never inside `CategoryBEvidence` — exactly the LF1
+`launch_diagnostics` precedent. It is **attribution, not verdict authority**:
+the frozen controller keeps a single `ROUTE_CHECK_FAILED` for every failure
+shape, and gained no new failure code (asserted:
+`{c for c in CategoryBFailureCode if c.value.startswith("ROUTE_CHECK")} ==
+{ROUTE_CHECK_FAILED}`). No diagnostic code is a `CompatibilityFacts` field.
+
+## 6. Redirect policy
+
+**Redirects are disabled**, explicitly (`follow_redirects=False`), not inherited
+from an httpx default a future version could change.
+
+A credential-bearing request must never be moved to an authority this run never
+approved: httpx re-sends the `Authorization` header across a same-origin
+redirect, and a cross-origin redirect would either leak the credential or
+silently change which endpoint answered the question. **No redirect target is
+"proven to remain within the authorized origin", because none is followed at
+all.** A 3xx is simply a non-200 and classifies as `route_http_rejected`;
+tested for 301, 302, 303, 307 and 308, each issuing exactly one request whose
+URL is the approved one. Nothing upgrades, rewrites, or tunnels the URL.
+
+`trust_env=False` is likewise explicit — asserted mechanically on the real
+client object (`client.trust_env is False`, `client.follow_redirects is False`),
+not read out of a docstring.
+
+## 7. Secret-retention proof
+
+A finished observation carries **two exact bools and one declared code**.
+`as_dict()` contains no `status_code`, no `served_model_ids`, no `failure`
+prose, no host, no scheme, no base URL and no credential — and declares
+`status_code_recorded`, `served_model_ids_recorded`, `response_body_recorded`,
+`endpoint_host_recorded`, `base_url_recorded`, `credential_recorded` and
+`redirects_followed` all `false`. AR2's checker retains a status code and the
+served ids; this one deliberately does not, because this request carries a
+credential.
+
+Proven, not asserted:
+
+* across served / absent / 401 / 500 / malformed / transport-failure paths,
+  neither the synthetic key, `"Bearer"`, the synthetic host nor the synthetic
+  base URL appears in `repr(observation)`, `as_dict()`, or the JSON-serialized
+  record;
+* a response body that deliberately embeds
+  `Authorization: Bearer <synthetic key>` never reaches the observation;
+* a transport exception whose **message** deliberately embeds the base URL and
+  the credential never reaches the observation — the handler is `except
+  Exception:` with no `as exc`, so no message, type name, or traceback is
+  retained on that path;
+* the observer's own refusal messages echo neither URL nor credential;
+* `route_diagnostics()` output plus `repr(observer)` contain none of the
+  needles;
+* `ConnectionValues.__repr__` still redacts both fields, and the adapter's repr
+  carries neither.
+
+## 8. Route failure matrix
+
+| Response / condition | Diagnostic | `configured_model_served` | Controller verdict |
+|---|---|---|---|
+| 200, listing contains exact id | `route_model_served` | `true` | **PASSED** |
+| 200, listing lacks exact id | `route_model_not_listed` | `false` | `ROUTE_CHECK_FAILED` |
+| 200, case-mismatched id | `route_model_not_listed` | `false` | `ROUTE_CHECK_FAILED` |
+| 200, prefix/suffix/namespaced id | `route_model_not_listed` | `false` | `ROUTE_CHECK_FAILED` |
+| 401 | `route_auth_rejected` | `false` | `ROUTE_CHECK_FAILED` |
+| 403 | `route_auth_rejected` | `false` | `ROUTE_CHECK_FAILED` |
+| 400/404/429/500/502/503 | `route_http_rejected` | `false` | `ROUTE_CHECK_FAILED` |
+| 301/302/303/307/308 (not followed) | `route_http_rejected` | `false` | `ROUTE_CHECK_FAILED` |
+| 200, unparseable JSON | `route_listing_malformed` | `false` | `ROUTE_CHECK_FAILED` |
+| 200, non-object payload | `route_listing_malformed` | `false` | `ROUTE_CHECK_FAILED` |
+| 200, `data` not a list | `route_listing_malformed` | `false` | `ROUTE_CHECK_FAILED` |
+| 200, any malformed entry | `route_listing_malformed` | `false` | `ROUTE_CHECK_FAILED` |
+| 200, over-size / over-count / over-long id | `route_listing_malformed` | `false` | `ROUTE_CHECK_FAILED` |
+| transport exception / timeout | `route_transport_unreachable` | `false` | `ROUTE_CHECK_FAILED` |
+| substituted base URL / model / candidate | `route_authority_refused` | — (no request) | `ROUTE_CHECK_FAILED` |
+| observation before credential read | `route_authority_refused` | — (no request) | `ROUTE_CHECK_FAILED` |
+| second observation attempt | `route_authority_refused` | — (no request) | `ROUTE_CHECK_FAILED` |
+| non-conforming checker result | `route_result_malformed` | `false` | `ROUTE_CHECK_FAILED` |
+| route stage never reached | `route_not_observed` | `false` | (an earlier gate's code) |
+
+A 401 and a genuine absence still refuse **identically** at the controller —
+which is correct — and are now **distinguishable afterwards**.
+
+## 9. Second adversarial review
+
+| Attack | Result |
+|---|---|
+| unauthenticated checker accidentally used in live wiring | **Closed.** Import deleted, module attribute gone, asserted by AST. |
+| 401 interpreted as "model absent" | **Closed.** Distinct declared code; a 401 never parses a body. |
+| malformed listing interpreted as "model absent" | **Closed.** Distinct declared code. |
+| wrong-route successful listing accepted | **Closed.** Base URL must equal the consumed one; refused before any request. |
+| wrong candidate id accepted | **Closed.** Must equal the frozen pairing's id for this candidate. |
+| credential appears in repr/exception/result | **Closed.** No `as exc` anywhere; needle scans across every path. |
+| ambient proxy influences the request | **Closed.** `trust_env=False`, asserted on the client object. |
+| redirect changes route authority | **Closed.** `follow_redirects=False`; every 3xx refused, one request only. |
+| automatic HTTP retry | **Closed.** Exactly one request on every path, asserted per shape. |
+| response body retained | **Closed.** Body is parsed and discarded; ids never retained. |
+| model-id case folding | **Closed.** Explicit `==` loop; four case variants tested. |
+| success inferred merely from HTTP 200 | **Closed.** The observation type refuses `configured_model_served=True` without the `route_model_served` code. |
+| forged secret/adapter object supplying authority | **Closed.** Only a real `LiveCategoryBAdapters` is accepted. |
+| duplicate ids as a set-membership authority issue | **Closed.** Per-entry equality; duplicates harmless either way. |
+| malformed entry manufacturing a match | **Closed.** Any malformed entry invalidates the whole listing. |
+
+## 10. Files changed
+
+```text
+NEW  qualification/i2_b300_route_observation.py    the authenticated, bounded route observation
+NEW  tests/test_i2_b300_route_observation.py       offline matrix items 1-19 (MockTransport only)
+NEW  docs/PHASE_5F3B_I2B_L1_LF2_ROUTE_BOUNDARY_CORRECTION.md
+                                                   the narrow superseding design correction
+MOD  qualification/i2b_live_adapters.py            ar2.route_check import + route_checker attribute
+                                                   REMOVED; read_connection records the consumed
+                                                   values; AuthenticatedB300RouteObserver +
+                                                   build_authenticated_route_checker added
+MOD  run_i2b_live.py                               builds the bound observer; records the bounded
+                                                   route_diagnostics alongside the result
+MOD  tests/test_i2_route.py                        Objective 1 attribution-collapse reproduction
+MOD  tests/test_i2b_live_adapters.py               observer authority/substitution/retention matrix;
+                                                   the old "route_checker is the AR2 function" test
+                                                   inverted
+MOD  tests/test_i2b_controller.py                  tests-only route_checker override on _run;
+                                                   matrix items 20-22
+MOD  FINDINGS.md, README.md                        this record
+```
+
+**Not modified:** `ar2/route_check.py`, `i2b_controller.py`, `i2b_session.py`,
+`i2b_workspace.py`, D1, AR1, AR2, O1, `src/`, `projects/`, `CLAUDE.md`, and
+**either Candidate-A live result artifact**.
+
+## 11. Offline regression counts
+
+```text
+experiments/pi_implementer_qualification    1420 passed, 0 failed   (was 1258)
+experiments/pi_external_runtime_ar2           298 passed, 0 failed
+experiments/pi_external_runtime_ar1            96 passed, 0 failed
+experiments/pi_external_runtime_ar2_o1         89 passed, 0 failed
+root production tests (tests/)               3504 passed, 0 failed
+```
+
+Run separately, offline.
+
+## 12. No-live confirmation
+
+No Candidate-A rerun, no Candidate-B run, no real `/models` request, no real
+credential read, no Node/Pi launch, no broker or named pipe, no semantic
+prompt, no Q1/Q2, no real project workspace, no commit/push/PR, no CLAUDE.md
+edit. Every HTTP interaction in the suite is served by `httpx.MockTransport`;
+no socket is opened and no API key is needed to run it.
+
+## 13. What LF2 does NOT establish
+
+* It does **not** establish that `qwen3-coder-next` is served by B300, or that
+  it is not. LF2 makes the question *answerable next time*; it does not answer
+  it retroactively.
+* It does **not** establish that the B300 proxy validates the `Authorization`
+  header. That remains I2A §24 item 1, open.
+* It does **not** reinterpret the retained live artifact. That artifact is
+  unedited, LF2 re-ran nothing, and its `ROUTE_CHECK_FAILED` continues to mean
+  exactly what it meant: **the route gate did not establish success**.
+* Recording `route_auth_rejected` says what AIDO **observed**, never why the
+  server chose it — a proxy may answer 401 for reasons unrelated to the key.
+* It does **not** qualify Candidate A, authorize a further live attempt,
+  authorize Candidate B, authorize Q1/Q2, or grant real-workspace authority.
+* Nothing here weakens any standing scope claim: no fixer, no model-backed
+  implementer, no second reviewer, no agent loop, no fallback endpoint or
+  model, no provider registry, no retry, no differential auth probe, and no
+  descendant/inference/GPU claim. Redaction and scrubbing remain backstops,
+  not guarantees.
