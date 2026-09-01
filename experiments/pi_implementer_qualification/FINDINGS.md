@@ -5728,3 +5728,77 @@ implementer, no second reviewer, no agent loop, no fallback endpoint or
 model, no provider registry, no retry, no differential auth probe, and no
 descendant/inference/GPU claim. Redaction and scrubbing remain backstops,
 not guarantees.
+
+
+---
+
+# 5F3B-I2B-L2 — Candidate B Category-B Live Authorization (attempt not yet run)
+
+**Paper-trail update only. No live activity of any kind occurred in this
+phase.** No Candidate B run, no Candidate A rerun, no Q1/Q2 activity, no
+differential auth probe, no real project workspace, no live network call, no
+Pi/Node process, no broker, no credential read, and no `/models` request.
+No implementation code changed.
+
+## 0. What this records
+
+Independent review of Candidate A Category-B live attempt #3
+(`5F3B-I2B-L1`, §"Candidate A Category-B Live Attempt #3" above) is
+complete, and that attempt's `ACCEPT / VALID PASS` verdict stands unchanged.
+The existing offline controller and the live CLI already prove candidate
+symmetry: Candidate A and Candidate B execute the identical
+`run_one_category_b_live_attempt` controller path and the identical
+Category-B compatibility policy, differing only by the frozen
+candidate/model identity —
+
+```text
+Candidate A -> qwen3-coder-next
+Candidate B -> minimax-m2.7
+```
+
+Independent review now authorizes **exactly one** future Candidate B
+Category-B zero-prompt live attempt. This authorization is for Candidate B
+(`minimax-m2.7`) only.
+
+## 1. What is authorized
+
+```text
+Candidate B Category-B live attempt #1:   AUTHORIZED, exactly once, zero-prompt
+```
+
+## 2. What is explicitly NOT authorized
+
+* a Candidate A rerun (Candidate A Category-B stays `QUALIFIED / FROZEN`,
+  established by live attempt #3; no further Candidate A live attempt is
+  authorized);
+* a second Candidate B attempt (this authorization is for exactly one
+  attempt);
+* any semantic prompt (the authorized attempt remains zero-prompt, exactly
+  as every prior Category-B attempt has been);
+* 5F3B-Q1 / Q2 (the first live candidate sweeps remain a wholly separate,
+  unauthorized activity);
+* model scoring of any kind;
+* real project workspace of any kind;
+* a fallback model, provider, endpoint, or runtime;
+* differential auth probing;
+* code changes of any kind;
+* automatic repair;
+* commit, push, or PR.
+
+## 3. Current state as of this authorization
+
+```text
+Candidate A Category-B compatibility:        QUALIFIED / FROZEN
+Candidate A implementer qualification:       NOT YET QUALIFIED
+Candidate B Category-B:                      NOT YET RUN (attempt #1 AUTHORIZED)
+Candidate B implementer qualification:       NOT YET QUALIFIED
+Q1/Q2:                                       NO-GO
+Real-workspace authority:                    NO-GO
+```
+
+Nothing here weakens any standing scope claim: no fixer, no model-backed
+implementer, no second reviewer, no agent loop, no fallback endpoint or
+model, no provider registry, no retry beyond the one already-frozen
+single-request discipline, no differential auth probe, and no
+descendant/inference/GPU claim. Redaction and scrubbing remain backstops,
+not guarantees.

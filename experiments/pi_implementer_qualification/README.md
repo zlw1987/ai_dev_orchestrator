@@ -4,7 +4,10 @@
 > **NO CANDIDATE PASS/FAIL EXISTS YET.**
 > **NO SEMANTIC PROMPT HAS EVER BEEN SENT.**
 > **5F3B-Q1 / Q2 ARE NOT AUTHORIZED.**
-> **CANDIDATE A IS NOT YET QUALIFIED. CANDIDATE B IS NO-GO.**
+> **CANDIDATE A IS NOT YET QUALIFIED (Category-B compatibility QUALIFIED /
+> FROZEN; implementer qualification NOT YET QUALIFIED). CANDIDATE B
+> IMPLEMENTER QUALIFICATION IS NOT YET QUALIFIED; exactly ONE Candidate B
+> Category-B zero-prompt live attempt is AUTHORIZED and NOT YET RUN.**
 
 > **Corrected 5F3B-I2B-L1: exactly ONE zero-prompt Category-B live attempt
 > has now occurred** (Candidate A, `results/i2b_live_A_20260831T192543Z.json`,
@@ -101,8 +104,35 @@
 > scoring, Q1/Q2 qualification, an active-tool-registry observation, or
 > real-workspace authority. **Candidate A implementer qualification remains
 > NOT YET QUALIFIED. Candidate B Category-B remains NOT YET RUN. Q1/Q2 remain
-> NO-GO. Real-workspace authority remains NO-GO. No further live attempt is
-> authorized.**
+> NO-GO. Real-workspace authority remains NO-GO.** (Superseded below: exactly
+> one future Candidate B Category-B live attempt is now authorized. No
+> further Candidate A live attempt is authorized.)
+
+> **5F3B-I2B-L2: independent review of Candidate A Category-B live attempt #3
+> is complete, and now authorizes exactly ONE future Candidate B Category-B
+> zero-prompt live attempt** (`minimax-m2.7`). The existing offline
+> controller and the live CLI already prove candidate symmetry: Candidate A
+> and Candidate B execute the identical `run_one_category_b_live_attempt`
+> controller path and the identical Category-B compatibility policy,
+> differing only by the frozen candidate/model identity (A ->
+> `qwen3-coder-next`, B -> `minimax-m2.7`). This is a **paper-trail-only**
+> update -- no live network call, Pi/Node process, broker, credential read,
+> or `/models` request occurred, and no implementation code changed. See
+> [FINDINGS.md](FINDINGS.md) section "5F3B-I2B-L2 — Candidate B Category-B
+> Live Authorization".
+>
+> ```text
+> Candidate B Category-B live attempt #1:   AUTHORIZED, exactly once, zero-prompt
+> Candidate B implementer qualification:    NOT YET QUALIFIED
+> Candidate A Category-B compatibility:     QUALIFIED / FROZEN (unchanged)
+> Q1/Q2:                                    NO-GO (unchanged)
+> Real-workspace authority:                 NO-GO (unchanged)
+> ```
+>
+> This authorization does **NOT** cover: a Candidate A rerun; a second
+> Candidate B attempt; semantic prompts; Q1/Q2; model scoring; a real project
+> workspace; a fallback model, provider, endpoint, or runtime; differential
+> auth probing; code changes; automatic repair; or commit/push/PR.
 
 > **HOW TO READ THE HISTORICAL SECTIONS IN THIS FILE.** The per-phase status
 > blocks below are records written when each phase was accepted. Where one
