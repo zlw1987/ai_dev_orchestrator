@@ -59,7 +59,29 @@
 > same-run-bound observation plus a bounded route diagnostic. **AR2's own
 > `route_check.py` is untouched and stays frozen.** LF2 performed **no live
 > activity of any kind**. See [FINDINGS.md](FINDINGS.md) section
-> "5F3B-I2B-L1-LF2". **No further live attempt is authorized.**
+> "5F3B-I2B-L1-LF2".
+
+> **5F3B-I2B-L1-LF2-FU1 (independent review, completed outside this
+> repository's own tooling) closed LF2's two remaining public-authority
+> blockers on the live route checker:** `AuthenticatedB300RouteObserver` and
+> `build_authenticated_route_checker` expose only `candidate` and `adapters`
+> — no public transport/client/request-injection parameter exists at that
+> boundary, so a caller cannot inject a fabricated transport that manufactures
+> route-served evidence without contacting B300; and route authority now
+> requires `type(adapters) is LiveCategoryBAdapters` exactly, so a forged
+> subclass is refused before its authority or HTTP mechanism is ever
+> consulted. Strict malformed-listing handling, authenticated `Bearer`
+> `/models`, the bounded route diagnostic vocabulary, no redirects,
+> `trust_env=False`, one request/no retry/no fallback, the frozen AR2
+> checker, and the frozen I2B controller all remain accepted, unchanged.
+> **Verdict: `5F3B-I2B-L1-LF2-FU1: ACCEPT` / `5F3B-I2B-L1-LF2: ACCEPT /
+> FREEZE`.** See [FINDINGS.md](FINDINGS.md) section
+> "5F3B-I2B-L1-LF2-FU1". **Candidate A remains NOT YET QUALIFIED.**
+> Independent review authorizes exactly **one** further Candidate-A
+> Category-B zero-prompt live attempt (attempt #3), and only once this
+> documentation state is committed by the operator. **No live attempt has
+> occurred as a result of recording this review.** Candidate B, Q1/Q2, a
+> differential auth probe and real-workspace authority all remain **NO-GO**.
 
 > **HOW TO READ THE HISTORICAL SECTIONS IN THIS FILE.** The per-phase status
 > blocks below are records written when each phase was accepted. Where one

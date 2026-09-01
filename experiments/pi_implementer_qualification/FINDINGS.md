@@ -5541,3 +5541,89 @@ no socket is opened and no API key is needed to run it.
   model, no provider registry, no retry, no differential auth probe, and no
   descendant/inference/GPU claim. Redaction and scrubbing remain backstops,
   not guarantees.
+
+
+---
+
+# 5F3B-I2B-L1-LF2-FU1 — Independent Review: Public-Authority Blockers Closed
+
+**No live activity was performed in this phase.** This is a documentation
+record of an independent review completed outside this repository's own
+tooling. No real `/models` request was made, no real credential was read, no
+Node/Pi process was launched, no broker was opened, no semantic prompt was
+sent, no real project workspace was used, and neither Candidate-A live result
+artifact was edited. No implementation code changed as part of recording this
+review.
+
+## 0. What was reviewed
+
+LF2's own "READY FOR FINAL FREEZE REVIEW" state (see the "5F3B-I2B-L1-LF2"
+section above) against two public-authority blockers on the live route
+checker introduced by that phase, `AuthenticatedB300RouteObserver` and its
+factory `build_authenticated_route_checker` (`qualification/
+i2b_live_adapters.py`).
+
+## 1. Blocker 1 — transport/client/request injection surface
+
+**Finding, now closed:** `AuthenticatedB300RouteObserver.__init__` and
+`build_authenticated_route_checker` accept exactly two keyword parameters,
+`candidate` and `adapters`. There is no `transport=`, `client=`, or
+request-injection parameter anywhere on the class's public surface. A
+caller cannot construct a genuine same-run observer while substituting an
+`httpx.MockTransport` (or any other fabricated transport) that would
+manufacture `HTTP 200` / model-present evidence without ever contacting
+B300. Any `httpx.MockTransport` injection used by the offline test suite
+exists strictly below this boundary — inside
+`qualification.i2_b300_route_observation.observe_b300_route_serves_model`'s
+own test doubles, never reachable from the live adapter's own constructor.
+
+## 2. Blocker 2 — forged/subclassed authority object
+
+**Finding, now closed:** `AuthenticatedB300RouteObserver.__init__` requires
+`type(adapters) is LiveCategoryBAdapters` exactly — not `isinstance`. A
+forged subclass of `LiveCategoryBAdapters` supplying attacker-controlled
+`consumed_connection_values()` (or any other overridden method) is refused
+before its authority or HTTP mechanism is ever consulted, because the type
+check runs first and raises `LiveAdapterError` immediately.
+
+## 3. What remains accepted, unchanged by this review
+
+Strict malformed-listing handling, authenticated `Bearer` `/models`
+observation, the bounded route diagnostic vocabulary (§5 of the LF2
+section above), no redirects (`follow_redirects=False`), `trust_env=False`,
+exactly one request per run with no retry and no fallback endpoint or model,
+the frozen and unmodified `ar2.route_check` checker (still not reused for
+Category-B), and the frozen `i2b_controller` state machine. None of these
+were reopened or modified by this review.
+
+## 4. Standing facts this review does not change
+
+The retained live artifact `results/i2b_live_A_20260831T224840Z.json` is
+unedited and its verdict is unchanged:
+
+```text
+VALID FAIL-CLOSED RUN / ROUTE FAILURE CAUSE UNDERDETERMINED
+```
+
+**Candidate A: NOT YET QUALIFIED.** This review does not qualify Candidate A,
+does not authorize Candidate B, does not authorize Q1/Q2, and does not grant
+real-workspace authority. It authorizes exactly what §5 below states, and
+nothing more.
+
+## 5. Verdict
+
+```text
+5F3B-I2B-L1-LF2-FU1: ACCEPT
+5F3B-I2B-L1-LF2:     ACCEPT / FREEZE
+```
+
+Independent review authorizes exactly **one** further Candidate-A
+Category-B zero-prompt live attempt (attempt #3), and only once this
+documentation state is committed by the operator. It does not authorize
+Candidate B, Q1/Q2, a differential auth probe, a second `/models` request per
+attempt, any semantic prompt, or any real project workspace. Nothing here
+weakens any standing scope claim: no fixer, no model-backed implementer, no
+second reviewer, no agent loop, no fallback endpoint or model, no provider
+registry, no retry beyond the one already-frozen single-request discipline,
+and no descendant/inference/GPU claim. Redaction and scrubbing remain
+backstops, not guarantees.
