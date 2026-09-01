@@ -5802,3 +5802,127 @@ model, no provider registry, no retry beyond the one already-frozen
 single-request discipline, no differential auth probe, and no
 descendant/inference/GPU claim. Redaction and scrubbing remain backstops,
 not guarantees.
+
+
+---
+
+# 5F3B-I2B-L1 — Candidate B Category-B Live Attempt #1: ACCEPT / VALID PASS
+
+**Exactly one live activity occurred in this phase: the single authorized
+Candidate-B Category-B zero-prompt live attempt itself.** No Candidate A
+rerun, no second Candidate B attempt, no Q1/Q2 activity, no differential
+auth probe, no extra `/models` request beyond the one frozen route
+observation owned by the attempt, and no real project workspace. No
+implementation code changed as part of this attempt or as part of recording
+this review.
+
+## 0. The accepted live artifact
+
+```text
+results/i2b_live_B_20260901T180415Z.json
+```
+
+Retained unedited. This is Candidate B's first, and only authorized,
+zero-prompt Category-B attempt, run under the same identical
+`run_one_category_b_live_attempt` controller path and authenticated route
+observer that qualified Candidate A (`5F3B-I2B-L1-LF2-FU1`), differing only
+by the frozen candidate/model identity (`minimax-m2.7`).
+
+## 1. What the run established
+
+```text
+exact command                 = /c/dev/ai_dev_orchestrator/.venv/Scripts/python.exe \
+                                     run_i2b_live.py --candidate B --run-category-b-live-gate
+git HEAD (pre-run)             = 2e7c1cef562a57ab6e0c8a43b55a8dc167aa27ac
+offline qualification result   = 1429 passed, 0 failed
+live exit code                 = 0
+controller outcome             = CATEGORY_B_GATE_PASSED
+failed_gate                    = null
+failure_code                   = null
+route_observation              = route_model_served
+observation_requests_issued    = 1
+observed_pi_version             = 0.84.4  (provenance only, never a gate)
+semantic_prompts_sent          = 0
+runtime_teardown_status        = SUCCEEDED
+broker_shutdown_status         = CLOSED
+generated_config_cleanup       = VERIFIED_REMOVED
+outer_cleanup_verified         = true
+evidence_retention_ready       = true
+evidence_scrub_findings        = []
+```
+
+All 13 Category-B compatibility facts are `true`:
+`broker_reached_required_ready_state`, `exact_candidate_model_served`,
+`get_commands_response_shape_understood`,
+`get_state_response_shape_understood`, `h1_extension_identity_matched`,
+`h2_provider_model_identity_matched`, `lf_jsonl_correlation_succeeded`,
+`no_extension_error_observed`, `no_protocol_violation_observed`,
+`no_unexpected_extension_command_observed`, `pi_version_observed`,
+`required_launch_flags_accepted`, `rpc_launch_shape_valid`.
+
+Every gate in `gate_statuses` is `PASSED` (or its own terminal-success
+literal: `broker_shutdown: CLOSED`, `generated_config_cleanup:
+VERIFIED_REMOVED`, `runtime_teardown: SUCCEEDED`). No gate failed.
+
+The route observation is the credential-bearing, same-run-bound observer
+LF2/LF2-FU1 established (never the frozen, unauthenticated AR2 checker):
+exactly one non-inference `GET /models`, HTTP 200, a valid bounded listing,
+and the exact candidate id (`minimax-m2.7`) present — `route_model_served`,
+the only code in the declared vocabulary that permits
+`exact_candidate_model_served = true`.
+
+The run's own `claim_scope` text reiterates the standing bounds explicitly:
+this is not a claim that a descendant process was terminated, that
+Pi/provider inference stopped, or that GPU work stopped; `get_commands`
+proves extension identity and command provenance only, never an active
+tool-registry observation; and no semantic prompt was sent, so no candidate
+model was scored.
+
+## 2. Verdict
+
+```text
+Candidate B Category-B live attempt #1:               ACCEPT / VALID PASS
+Candidate B Category-B compatibility:                 QUALIFIED / FROZEN
+Candidate A Category-B compatibility:                 remains QUALIFIED / FROZEN
+5F3B-I2B-L1 Category-B compatibility workstream:       COMPLETE / FROZEN for both first-round candidates
+```
+
+## 3. Frozen claim scope — what this PASS does and does NOT establish
+
+**This PASS qualifies Candidate B only for the Category-B runtime/route
+compatibility boundary** — that a real Node/Pi process launches with AIDO's
+argv, speaks the frozen RPC/LF-JSONL protocol correctly, presents the
+expected extension and provider/model identity, and that the authenticated
+B300 route serves the exact candidate model id. It is a compatibility
+result, not a capability result.
+
+It does **NOT** constitute:
+
+* semantic implementer qualification (zero semantic prompts were sent; no
+  candidate task was attempted, scored, or even offered);
+* model-quality scoring of any kind;
+* Q1/Q2 qualification (the first live candidate sweeps remain a wholly
+  separate, unauthorized activity);
+* an active-tool-registry observation (`get_commands` enumerates slash
+  commands and proves extension identity/command provenance only — Pi
+  exposes no RPC command that enumerates the active tool registry, and none
+  was queried);
+* real-workspace authority of any kind.
+
+## 4. Current state after this review
+
+```text
+Candidate A Category-B:                   QUALIFIED / FROZEN
+Candidate B Category-B:                   QUALIFIED / FROZEN
+Candidate A implementer qualification:    NOT YET QUALIFIED
+Candidate B implementer qualification:    NOT YET QUALIFIED
+Q1/Q2:                                    NOT YET EXECUTED
+Real-workspace authority:                 NO-GO
+```
+
+Nothing here weakens any standing scope claim: no fixer, no model-backed
+implementer, no second reviewer, no agent loop, no fallback endpoint or
+model, no provider registry, no retry, no differential auth probe, and no
+descendant/inference/GPU claim. Redaction and scrubbing remain backstops,
+not guarantees. No further Category-B live attempt is authorized for either
+candidate; this workstream is now COMPLETE / FROZEN.

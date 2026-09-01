@@ -5,9 +5,12 @@
 > **NO SEMANTIC PROMPT HAS EVER BEEN SENT.**
 > **5F3B-Q1 / Q2 ARE NOT AUTHORIZED.**
 > **CANDIDATE A IS NOT YET QUALIFIED (Category-B compatibility QUALIFIED /
-> FROZEN; implementer qualification NOT YET QUALIFIED). CANDIDATE B
-> IMPLEMENTER QUALIFICATION IS NOT YET QUALIFIED; exactly ONE Candidate B
-> Category-B zero-prompt live attempt is AUTHORIZED and NOT YET RUN.**
+> FROZEN; implementer qualification NOT YET QUALIFIED). CANDIDATE B IS NOT
+> YET QUALIFIED (Category-B compatibility QUALIFIED / FROZEN, established by
+> the single authorized zero-prompt live attempt; implementer qualification
+> NOT YET QUALIFIED). The 5F3B-I2B-L1 Category-B compatibility workstream is
+> now COMPLETE / FROZEN for both first-round candidates. No further
+> Category-B live attempt is authorized for either candidate.**
 
 > **Corrected 5F3B-I2B-L1: exactly ONE zero-prompt Category-B live attempt
 > has now occurred** (Candidate A, `results/i2b_live_A_20260831T192543Z.json`,
@@ -133,6 +136,42 @@
 > Candidate B attempt; semantic prompts; Q1/Q2; model scoring; a real project
 > workspace; a fallback model, provider, endpoint, or runtime; differential
 > auth probing; code changes; automatic repair; or commit/push/PR.
+
+> **Candidate B Category-B live attempt #1 has since occurred and is
+> ACCEPTED, following independent review** (Candidate B, `minimax-m2.7`,
+> `results/i2b_live_B_20260901T180415Z.json`, observed Pi `0.84.4`).
+> Controller outcome `CATEGORY_B_GATE_PASSED`, no failed gate, no failure
+> code, all 13 Category-B compatibility facts `true`, authenticated route
+> observation `route_model_served` from exactly one route observation
+> request, **zero** semantic prompts, runtime teardown `SUCCEEDED`, broker
+> shutdown `CLOSED`, generated-config cleanup `VERIFIED_REMOVED`, outer
+> cleanup verified, evidence retention ready, and no evidence-scrub findings.
+> This was the single authorized invocation -- no retry occurred, Candidate A
+> was not rerun, no semantic prompt was sent, and Q1/Q2 were not run.
+>
+> **Verdict: `Candidate B Category-B live attempt #1: ACCEPT / VALID PASS`;
+> `Candidate B Category-B compatibility: QUALIFIED / FROZEN`; `Candidate A
+> Category-B compatibility: remains QUALIFIED / FROZEN`; `5F3B-I2B-L1
+> Category-B compatibility workstream: COMPLETE / FROZEN for both
+> first-round candidates`.** See [FINDINGS.md](FINDINGS.md) section
+> "5F3B-I2B-L1 — Candidate B Category-B Live Attempt #1".
+>
+> **Frozen claim scope.** This PASS qualifies Candidate B only for the
+> frozen Category-B runtime/route compatibility boundary. It does **NOT**
+> constitute semantic implementer qualification, model-quality scoring,
+> Q1/Q2 qualification, an active-tool-registry observation, or real-workspace
+> authority.
+>
+> ```text
+> Candidate A Category-B:                   QUALIFIED / FROZEN
+> Candidate B Category-B:                   QUALIFIED / FROZEN
+> Candidate A implementer qualification:    NOT YET QUALIFIED
+> Candidate B implementer qualification:    NOT YET QUALIFIED
+> Q1/Q2:                                    NOT YET EXECUTED
+> Real-workspace authority:                 NO-GO
+> ```
+>
+> No further Category-B live attempt is authorized for either candidate.
 
 > **HOW TO READ THE HISTORICAL SECTIONS IN THIS FILE.** The per-phase status
 > blocks below are records written when each phase was accepted. Where one
