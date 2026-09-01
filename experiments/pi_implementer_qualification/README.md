@@ -76,12 +76,33 @@
 > checker, and the frozen I2B controller all remain accepted, unchanged.
 > **Verdict: `5F3B-I2B-L1-LF2-FU1: ACCEPT` / `5F3B-I2B-L1-LF2: ACCEPT /
 > FREEZE`.** See [FINDINGS.md](FINDINGS.md) section
-> "5F3B-I2B-L1-LF2-FU1". **Candidate A remains NOT YET QUALIFIED.**
-> Independent review authorizes exactly **one** further Candidate-A
-> Category-B zero-prompt live attempt (attempt #3), and only once this
-> documentation state is committed by the operator. **No live attempt has
-> occurred as a result of recording this review.** Candidate B, Q1/Q2, a
-> differential auth probe and real-workspace authority all remain **NO-GO**.
+> "5F3B-I2B-L1-LF2-FU1".
+
+> **Candidate A Category-B live attempt #3 has since occurred and is
+> ACCEPTED** (Candidate A, `results/i2b_live_A_20260901T174244Z.json`,
+> observed Pi `0.84.4`). Controller outcome `CATEGORY_B_GATE_PASSED`, no
+> failed gate, all 13 Category-B compatibility facts `true`, authenticated
+> route observation `route_model_served` from exactly one route observation
+> request, **zero** semantic prompts, runtime teardown `SUCCEEDED`, broker
+> shutdown `CLOSED`, generated-config cleanup `VERIFIED_REMOVED`, outer
+> cleanup verified, evidence retention ready, and no evidence-scrub findings.
+> **Verdict: `Candidate A Category-B live attempt #3: ACCEPT / VALID PASS`;
+> `Candidate A Category-B compatibility: QUALIFIED / FROZEN`; `5F3B-I2B-L1
+> live compatibility path (Candidate A): ACCEPT / FROZEN`.** See
+> [FINDINGS.md](FINDINGS.md) section "5F3B-I2B-L1 — Candidate A Category-B
+> Live Attempt #3".
+>
+> **Frozen claim scope.** This PASS qualifies Candidate A only for the
+> Category-B runtime/route compatibility boundary — that a real Node/Pi
+> process launches correctly, speaks the frozen RPC/LF-JSONL protocol,
+> presents the expected extension and provider/model identity, and that the
+> authenticated B300 route serves the exact candidate model id. It does
+> **NOT** constitute semantic implementer qualification, model-quality
+> scoring, Q1/Q2 qualification, an active-tool-registry observation, or
+> real-workspace authority. **Candidate A implementer qualification remains
+> NOT YET QUALIFIED. Candidate B Category-B remains NOT YET RUN. Q1/Q2 remain
+> NO-GO. Real-workspace authority remains NO-GO. No further live attempt is
+> authorized.**
 
 > **HOW TO READ THE HISTORICAL SECTIONS IN THIS FILE.** The per-phase status
 > blocks below are records written when each phase was accepted. Where one

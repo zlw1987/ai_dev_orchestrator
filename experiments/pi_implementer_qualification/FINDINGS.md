@@ -5627,3 +5627,104 @@ second reviewer, no agent loop, no fallback endpoint or model, no provider
 registry, no retry beyond the one already-frozen single-request discipline,
 and no descendant/inference/GPU claim. Redaction and scrubbing remain
 backstops, not guarantees.
+
+
+---
+
+# 5F3B-I2B-L1 — Candidate A Category-B Live Attempt #3: ACCEPT / VALID PASS
+
+**Exactly one live activity occurred in this phase: the single authorized
+Candidate-A Category-B zero-prompt live attempt itself.** No Candidate B run,
+no Q1/Q2 activity, no differential auth probe, no second `/models` request,
+and no real project workspace. No implementation code changed as part of
+this attempt or as part of recording this review.
+
+## 0. The accepted live artifact
+
+```text
+results/i2b_live_A_20260901T174244Z.json
+```
+
+Retained unedited. This is Candidate A's third real zero-prompt Category-B
+attempt, run under the authority `5F3B-I2B-L1-LF2-FU1` established (the
+authenticated, same-run-bound B300 route observer with no public
+transport-injection surface and an exact-type adapter check).
+
+## 1. What the run established
+
+```text
+controller outcome            = CATEGORY_B_GATE_PASSED
+failed_gate                   = null
+failure_code                  = null
+route_observation             = route_model_served
+observation_requests_issued   = 1
+observed_pi_version           = 0.84.4  (provenance only, never a gate)
+semantic_prompts_sent         = 0
+runtime_teardown_status       = SUCCEEDED
+broker_shutdown_status        = CLOSED
+generated_config_cleanup      = VERIFIED_REMOVED
+outer_cleanup_verified        = true
+evidence_retention_ready      = true
+evidence_scrub_findings       = []
+```
+
+All 13 Category-B compatibility facts are `true`:
+`broker_reached_required_ready_state`, `exact_candidate_model_served`,
+`get_commands_response_shape_understood`,
+`get_state_response_shape_understood`, `h1_extension_identity_matched`,
+`h2_provider_model_identity_matched`, `lf_jsonl_correlation_succeeded`,
+`no_extension_error_observed`, `no_protocol_violation_observed`,
+`no_unexpected_extension_command_observed`, `pi_version_observed`,
+`required_launch_flags_accepted`, `rpc_launch_shape_valid`.
+
+Every gate in `gate_statuses` is `PASSED` (or its own terminal-success
+literal: `broker_shutdown: CLOSED`, `generated_config_cleanup:
+VERIFIED_REMOVED`, `runtime_teardown: SUCCEEDED`). No gate failed.
+
+The route observation is the credential-bearing, same-run-bound observer
+LF2/LF2-FU1 established (never the frozen, unauthenticated AR2 checker):
+exactly one non-inference `GET /models`, HTTP 200, a valid bounded listing,
+and the exact candidate id present — `route_model_served`, the only code in
+the declared vocabulary (§5 of the LF2 section above) that permits
+`exact_candidate_model_served = true`.
+
+## 2. Verdict
+
+```text
+Candidate A Category-B live attempt #3:              ACCEPT / VALID PASS
+Candidate A Category-B compatibility:                QUALIFIED / FROZEN
+5F3B-I2B-L1 live compatibility path (Candidate A):    ACCEPT / FROZEN
+```
+
+## 3. Frozen claim scope — what this PASS does and does NOT establish
+
+**This PASS qualifies Candidate A only for the Category-B runtime/route
+compatibility boundary** — that a real Node/Pi process launches with AIDO's
+argv, speaks the frozen RPC/LF-JSONL protocol correctly, presents the
+expected extension and provider/model identity, and that the authenticated
+B300 route serves the exact candidate model id. It is a compatibility result,
+not a capability result.
+
+It does **NOT** constitute:
+
+* semantic implementer qualification (zero semantic prompts were sent; no
+  candidate task was attempted, scored, or even offered);
+* model-quality scoring of any kind;
+* Q1/Q2 qualification (the first live candidate sweeps remain a wholly
+  separate, unauthorized activity);
+* an active-tool-registry observation (`get_commands` enumerates slash
+  commands and proves extension identity/command provenance only — Pi
+  exposes no RPC command that enumerates the active tool registry, and none
+  was queried);
+* real-workspace authority of any kind.
+
+**Candidate A implementer qualification: remains NOT YET QUALIFIED.**
+**Candidate B Category-B: remains NOT YET RUN.**
+**Q1/Q2: remain NO-GO.**
+**Real-workspace authority: remains NO-GO.**
+
+Nothing here weakens any standing scope claim: no fixer, no model-backed
+implementer, no second reviewer, no agent loop, no fallback endpoint or
+model, no provider registry, no retry, no differential auth probe, and no
+descendant/inference/GPU claim. Redaction and scrubbing remain backstops,
+not guarantees.
