@@ -5926,3 +5926,122 @@ model, no provider registry, no retry, no differential auth probe, and no
 descendant/inference/GPU claim. Redaction and scrubbing remain backstops,
 not guarantees. No further Category-B live attempt is authorized for either
 candidate; this workstream is now COMPLETE / FROZEN.
+
+---
+
+# 5F3B-Q1-PRE1-DESIGN-FU1 — Semantic Dispatch Authority + Indeterminate Evidence Contract
+
+**DESIGN / SOURCE INSPECTION ONLY. No code was written or modified in this
+phase, and no live activity of any kind occurred** — no semantic prompt, no
+Pi/Node launch, no credential read, no socket, no B300 contact, no Q1/Q2 run,
+no candidate run, no commit/push/PR.
+
+Full design: [`docs/PHASE_5F3B_Q1_PRE1_DESIGN_FU1_SEMANTIC_DISPATCH_AUTHORITY.md`](../../docs/PHASE_5F3B_Q1_PRE1_DESIGN_FU1_SEMANTIC_DISPATCH_AUTHORITY.md).
+
+## 0. Why this exists
+
+Independent review put `5F3B-Q1-PRE1` and `5F3B-Q1-PRE1-FU1` on **HOLD**. FU1's
+three-state dispatch fact (`CONFIRMED_SENT` / `CONFIRMED_NOT_SENT` /
+`SEND_STATE_INDETERMINATE`) was the right correction, but implementation had
+crossed a boundary that was supposed to stop for review, and two properties of
+it were never established against the real Pi seam.
+
+## 1. The seam, established from Pi 0.84.4 source
+
+The semantic task turn starts with exactly one RPC command,
+`{"id": ..., "type": "prompt", "message": ...}`, written as one LF-terminated
+JSON line. It **does** have an ordinary correlated response —
+`{type:"response", command:"prompt", id, success:true|false}` — and
+`dist/modes/rpc/rpc-mode.js` emits it from a `preflightResult` callback
+**after** Pi accepts the prompt and **strictly before** `agent_start` and before
+any provider inference. `agent_settled` has exactly one emission site
+(`_runAgentPrompt`'s `finally`), and `agent_start` is emitted by both
+`runAgentLoop` **and** `runAgentLoopContinue`, so it is not a prompt count.
+
+A successful JSONL write/flush proves **local transport issuance only** — Pi
+exposes no receipt between "AIDO flushed the bytes" and "Pi emitted a response",
+and that gap is a real property of the seam, not a modelling gap to paper over.
+
+## 2. Blocker 1 — dispatch authority is not separable in the FU1 architecture
+
+FU1 embeds `SemanticPromptDispatchObservation` inside `SemanticTurnObservation`
+and drives both from one adapter, so the send fact only exists if the whole turn
+adapter returns normally. But `SemanticTurnObservation` admits only two terminal
+shapes for a `CONFIRMED_SENT` dispatch (`agent_settled` xor `deadline_reached`),
+while `PiRpcSupervisor._wait` genuinely returns `RUNTIME_PROTOCOL_VIOLATION`,
+`RUNTIME_OUTPUT_CAP_EXCEEDED`, `RUNTIME_EVENT_CAP_EXCEEDED`,
+`RUNTIME_READ_ERROR` and `RUNTIME_EXITED_EARLY` **after** a correlated
+acknowledgement. A live adapter in that state must either fabricate
+`deadline_reached` or raise — and raising reaches `_DispatchIndeterminate`,
+which **erases an already-established `CONFIRMED_SENT` back to
+`SEND_STATE_INDETERMINATE`**. The same erasure applies to a post-send teardown
+or broker-shutdown failure.
+
+The correction is a two-phase contract with a durable dispatch observation
+recorded before the turn wait begins, a third turn outcome
+(`OBSERVATION_FAILED`), a closed `dispatch_evidence_code` vocabulary, and a
+write-once `semantic_prompts_sent`. Merely calling the dispatch function still
+establishes nothing.
+
+## 3. Blocker 2 — an indeterminate attempt currently leaves NO evidence
+
+`run_semantic_task_attempt` sets `qualification_record = None` for an
+indeterminate dispatch and writes **no file at all**. The one outcome in which
+AIDO cannot prove whether the candidate's single authorized prompt was spent is
+the one outcome that retains nothing.
+
+Decisions: the frozen `pi-implementer-qualification.v1` schema is **not**
+widened (`_validate_run_shape` admits only `semantic_prompts_sent in (0, 1)`,
+and both shapes would be false statements). A separate attempt-level artifact,
+`pi-implementer-qualification-attempt.v1`, is emitted through the **same**
+`emit_evidence_or_refuse` choke point, omitting `semantic_prompts_sent`
+entirely rather than encoding a sentinel. The artifact-emission-refusal record
+must **not** be reused — it asserts a scrub failure that did not occur — and
+lineage cannot link the attempt today, because `_require_run_record_shape`
+demands a real run record; a narrow, separately-authorized lineage extension
+(reason `indeterminate_semantic_dispatch`) is specified but not implemented.
+
+An indeterminate send **consumes** the one-shot attempt (it is not a proven
+zero), **no automatic retry is ever allowed**, replacement is operator-only
+under §15.1, and the sweep **stops immediately** rather than spending further
+one-shot attempts against uncharacterised infrastructure. A second counter,
+`semantic_dispatch_attempts`, is required so the per-candidate budget cannot
+permit a possible fourth prompt.
+
+## 4. Counts kept distinct
+
+`semantic_prompts_sent`, Pi provider inference requests, RPC command count and
+model HTTP request count remain four different things. Frozen I2A §7.1/§19's
+invariant — one semantic prompt may cause one or many provider requests, and
+AIDO has no authoritative numeric observer for them — is preserved unchanged.
+
+## 5. Verdicts
+
+```text
+5F3B-Q1-PRE1-DESIGN-FU1        HOLD  (pending FU1A review; was READY FOR INDEPENDENT REVIEW)
+5F3B-Q1-PRE1-FU1               HOLD
+5F3B-Q1-PRE1                   HOLD
+Q1 / Q2                        NO-GO
+Real-workspace authority       NO-GO
+```
+
+**`5F3B-Q1-PRE1-DESIGN-FU1A`** (design documentation only, not implemented)
+found four gaps between the above and the actual `semantic_workspace.py` /
+`semantic_controller.py` / `semantic_sweep.py` / `safety.py` /
+`i2_secret_context.py` / `i2b_workspace.py` source: no semantic workspace
+removal on any closure path (the frozen `i2b_workspace.remove_run_workspace`
+exists but "the controller never calls it," verbatim from its own
+docstring); an artifact-safety-context builder whose field-independence is
+currently a fact about gate *order*, not a proven invariant of the function
+itself; a final-report-collection failure that today routes through the same
+gate-failure machinery as verification/repository observation and wrongly
+drives an otherwise-valid, fully-closed run to `ATTRIBUTION_UNDETERMINED`
+and unscorable; and mutable `dict`/`list` fields on
+`SemanticTaskAttemptResult.gate_statuses`/`qualification_record` and
+`PrimarySweepResult.task_results` that nothing prevents a caller from
+mutating after validation, including after hard-bar evaluation. All four are
+frozen as closure contracts in
+[`docs/PHASE_5F3B_Q1_PRE1_DESIGN_FU1_SEMANTIC_DISPATCH_AUTHORITY.md`](../../docs/PHASE_5F3B_Q1_PRE1_DESIGN_FU1_SEMANTIC_DISPATCH_AUTHORITY.md)'s
+§9, with an adversarial check in §10. Verdict: `5F3B-Q1-PRE1-DESIGN-FU1A:
+READY FOR INDEPENDENT REVIEW`; `5F3B-Q1-PRE1-DESIGN-FU1: HOLD pending FU1A
+review`. No live activity of any kind occurred in this turn either.

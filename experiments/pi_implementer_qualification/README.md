@@ -1091,3 +1091,50 @@ and nothing about the retained live artifacts, which are unedited.
 **Candidate A: NOT YET QUALIFIED. Candidate A further live: NO-GO until
 independent LF2 review. Candidate B: NO-GO. Q1/Q2: NO-GO. Real-workspace
 authority: NO-GO.**
+
+---
+
+## 5F3B-Q1-PRE1 / PRE1-FU1: ON HOLD (design correction pending)
+
+The untracked `qualification/semantic_*.py` modules and their tests are
+**5F3B-Q1-PRE1 / PRE1-FU1 work that independent review placed on HOLD.** They
+are not accepted, not frozen, and must not be treated as the qualification
+package's semantic path.
+
+`5F3B-Q1-PRE1-DESIGN-FU1` inspected the locally installed Pi `0.84.4` RPC seam
+and established two blockers against them:
+
+1. **Dispatch authority is not separable.** FU1 embeds the send/no-send fact
+   inside the whole-turn observation, so a post-acknowledgement turn-read
+   failure or a post-send teardown failure can **erase** an already-established
+   `CONFIRMED_SENT` back to `SEND_STATE_INDETERMINATE`. Pi's real seam emits a
+   correlated `prompt` response strictly before `agent_start` and before any
+   inference, so the two facts are genuinely separable and must be separated.
+2. **An indeterminate attempt currently retains no evidence at all.** The one
+   outcome in which AIDO cannot prove whether the candidate's single authorized
+   prompt was spent is the one outcome that writes no artifact.
+
+The design correction — a two-phase dispatch/turn contract, a write-once
+`semantic_prompts_sent`, a separate `pi-implementer-qualification-attempt.v1`
+artifact (the frozen primary schema is **not** widened), no automatic retry, an
+indeterminate send **consuming** the one-shot attempt, and the sweep stopping
+immediately — is specified in
+[`docs/PHASE_5F3B_Q1_PRE1_DESIGN_FU1_SEMANTIC_DISPATCH_AUTHORITY.md`](../../docs/PHASE_5F3B_Q1_PRE1_DESIGN_FU1_SEMANTIC_DISPATCH_AUTHORITY.md)
+and summarized in [FINDINGS.md](FINDINGS.md). **It is not implemented.**
+
+**`5F3B-Q1-PRE1-DESIGN-FU1A` (design documentation only; also not
+implemented) found four further gaps against the actual `semantic_*.py`
+source** — no semantic workspace removal on any closure path, an
+artifact-safety-context builder whose correctness depends on gate order
+rather than being proven independently per field, a final-report-collection
+failure that today wrongly drives an otherwise-valid run to
+`ATTRIBUTION_UNDETERMINED`, and mutable `dict`/`list` fields on
+`SemanticTaskAttemptResult`/`PrimarySweepResult` that a caller could mutate
+after validation — and freezes the closing contracts for all four in the
+same document's §9. **`5F3B-Q1-PRE1-DESIGN-FU1` is therefore now `HOLD
+pending FU1A review`** (previously `READY FOR INDEPENDENT REVIEW`).
+
+That design phase performed **no live activity of any kind**: no semantic
+prompt, no Pi/Node launch, no credential read, no socket, no B300 contact.
+**NO SEMANTIC PROMPT HAS EVER BEEN SENT.** Q1: NO-GO. Q2: NO-GO.
+Real-workspace authority: NO-GO.
