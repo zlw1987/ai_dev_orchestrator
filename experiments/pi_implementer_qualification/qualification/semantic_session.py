@@ -1,5 +1,5 @@
-"""5F3B-Q1-PRE1 / 5F3B-Q1-PRE1-FU1 -- bounded value objects for the ONE
-semantic-prompt turn.
+"""5F3B-Q1-PRE1 / -FU1 / -FU2 -- bounded value objects for the ONE
+semantic-prompt dispatch and the ONE semantic turn that may follow it.
 
 **OFFLINE ONLY. This module launches nothing, opens no socket, calls no
 model, and reads no credential.** It defines value objects only, in exactly
@@ -34,12 +34,31 @@ function:
   does not provide -- CONFIRMED_SENT/CONFIRMED_NOT_SENT are reserved for
   whatever a live adapter's OWN real seam can mechanically establish, not
   invented by this module.
-- :class:`SemanticTurnObservation` now EMBEDS a
-  :class:`SemanticPromptDispatchObservation` and enforces, at construction,
-  that only a ``CONFIRMED_SENT`` dispatch may also report ``call_succeeded``
-  or any turn-completion fact -- a ``CONFIRMED_NOT_SENT`` or
-  ``SEND_STATE_INDETERMINATE`` observation structurally cannot smuggle in a
-  turn-completion claim.
+
+**5F3B-Q1-PRE1-FU2 -- dispatch and turn observation are now TWO phases.**
+Independent review established, from Pi 0.84.4's own source, that FU1's
+single whole-turn observation is not faithful to the real seam
+(``docs/PHASE_5F3B_Q1_PRE1_DESIGN_FU1_SEMANTIC_DISPATCH_AUTHORITY.md``
+Sec. 1-2). Pi emits a correlated ``prompt`` response STRICTLY BEFORE agent
+start and before any provider inference, so the send fact is established
+long before turn completion is. FU1 embedded the dispatch fact INSIDE the
+whole-turn observation, which left every reachable post-acknowledgement
+failure -- protocol violation, output cap, event cap, read error, early
+child exit, a phase-2 adapter bug -- with only two options, both wrong:
+fabricate ``deadline_reached``, or raise and thereby ERASE an
+already-established ``CONFIRMED_SENT``. This module now splits them:
+
+- PHASE 1 :class:`SemanticPromptDispatchObservation` -- the send fact,
+  alone, carrying a bounded :class:`SemanticDispatchEvidenceCode` naming
+  WHICH mechanical fact established it. Once ``CONFIRMED_SENT``, that fact
+  is write-once for the attempt.
+- PHASE 2 :class:`SemanticTurnRequest` -> :class:`SemanticTurnObservation`
+  -- entered ONLY after ``CONFIRMED_SENT`` (structurally: a turn request
+  cannot even be constructed otherwise), reporting a THREE-valued
+  :class:`SemanticTurnOutcome` (``SETTLED`` / ``DEADLINE_REACHED`` /
+  ``OBSERVATION_FAILED``). It carries no dispatch object and no
+  ``call_succeeded`` flag, so there is no field through which a phase-2
+  outcome could rewrite a phase-1 truth.
 
 Why this module exists
 -----------------------
@@ -68,14 +87,17 @@ Claim scope, exactly like the rest of this package
 ----------------------------------------------------
 
 :class:`SemanticTurnObservation` reports only what AIDO's own wait for
-runtime-turn completion observed: whether the runtime reported
-``agent_settled`` (Pi's own turn-completion signal, per the frozen AR2
-supervisor's ``await_settled``/``activity.settled`` semantics -- **not** the
-task succeeding), whether an ``agent_end`` was separately observed (which
-never by itself means completion), and whether AIDO's own configured turn
-deadline was reached before settlement. It never claims backend inference
-stopped, never claims a descendant process was terminated, and never carries
-reasoning-bearing content -- there is no field here that could hold it.
+runtime-turn completion observed: ``SETTLED`` (the runtime reported
+``agent_settled`` -- Pi's own turn-completion signal, per the frozen AR2
+supervisor's ``await_settled``/``activity.settled`` semantics, **not** the
+task succeeding), ``DEADLINE_REACHED`` (AIDO's own configured turn deadline
+elapsed first), or ``OBSERVATION_FAILED`` (the turn became unobservable to
+AIDO), plus the independent ``agent_end_observed`` fact, which never by
+itself means completion. Every one of the three says only that AIDO stopped
+being able to establish completion: none claims Pi stopped, that the
+underlying request was cancelled, that backend inference stopped, or that a
+descendant process was terminated. Nothing here carries reasoning-bearing
+content -- there is no field that could hold it.
 
 :class:`BrokerActivityObservation` reports the run's own accumulated
 read/edit operation counts and refusal events, exactly as
@@ -94,6 +116,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from enum import Enum
+from types import MappingProxyType
+from typing import Mapping
 
 from .i2b_session import (
     _ID_PATTERN,
@@ -205,24 +229,127 @@ class SemanticPromptDispatchState(str, Enum):
     SEND_STATE_INDETERMINATE = "SEND_STATE_INDETERMINATE"
 
 
+class SemanticDispatchEvidenceCode(str, Enum):
+    """WHICH mechanical fact established a :class:`SemanticPromptDispatchState`.
+
+    5F3B-Q1-PRE1-DESIGN-FU1 Sec. 2.3. A **closed, declared** vocabulary --
+    never raw runtime text, never a supervisor outcome string retained
+    verbatim, never free-form prose. It mirrors the accepted
+    ``LaunchDiagnostic.required_flags_code`` discipline, and like the
+    accepted reviewer supervisor's ``stall_source`` it is **audit-only**:
+    nothing in this package branches on it.
+
+    Each member maps to EXACTLY ONE :class:`SemanticPromptDispatchState`
+    (:data:`DISPATCH_EVIDENCE_CODE_STATES`), and
+    :class:`SemanticPromptDispatchObservation` refuses any pairing that
+    disagrees -- so an evidence code can never be attached to a state it
+    does not actually establish.
+    """
+
+    # -- CONFIRMED_NOT_SENT ------------------------------------------------
+    #: AIDO's own dispatch gate refused; the write was never entered.
+    GATE_REFUSED_BEFORE_WRITE = "GATE_REFUSED_BEFORE_WRITE"
+    #: A correlated prompt response reporting success false. Sec. 1.5:
+    #: nothing reached the agent loop.
+    PROMPT_RESPONSE_REFUSED = "PROMPT_RESPONSE_REFUSED"
+    #: An uncorrelated parse-failure response observed in the dispatch
+    #: window with no prompt response for AIDO's id. Admissible ONLY under
+    #: Sec. 2.5's single-writer rule.
+    COMMAND_UNPARSEABLE_REFUSED = "COMMAND_UNPARSEABLE_REFUSED"
+    # -- CONFIRMED_SENT ----------------------------------------------------
+    #: A correlated prompt response reporting success true, for AIDO's id.
+    PROMPT_RESPONSE_ACCEPTED = "PROMPT_RESPONSE_ACCEPTED"
+    #: An agent-run record observed for this session after dispatch, when the
+    #: correlated response itself was missed. Sec. 1.6 makes this
+    #: independently sufficient.
+    AGENT_RUN_OBSERVED = "AGENT_RUN_OBSERVED"
+    # -- SEND_STATE_INDETERMINATE ------------------------------------------
+    #: The write/flush raised. Sec. 1.7: a failed write is not proof of
+    #: not-sent, and a successful one is not proof of sent.
+    WRITE_FAILED_TRANSMISSION_UNKNOWN = "WRITE_FAILED_TRANSMISSION_UNKNOWN"
+    #: AIDO's own dispatch deadline elapsed with no correlated response.
+    NO_CORRELATED_RESPONSE_DEADLINE = "NO_CORRELATED_RESPONSE_DEADLINE"
+    #: The record stream terminated (protocol violation / output cap / event
+    #: cap / read error / early exit) before any acknowledgement.
+    NO_CORRELATED_RESPONSE_STREAM_TERMINAL = "NO_CORRELATED_RESPONSE_STREAM_TERMINAL"
+    #: The phase-1 adapter raised.
+    ADAPTER_RAISED = "ADAPTER_RAISED"
+    #: The phase-1 adapter returned the wrong type, or an observation that
+    #: does not provably answer THIS request.
+    OBSERVATION_MALFORMED_OR_FOREIGN = "OBSERVATION_MALFORMED_OR_FOREIGN"
+
+
+#: The one authoritative code -> state mapping (Sec. 2.3's table). A
+#: read-only proxy over a private copy: a caller cannot add, remove, or
+#: repoint an entry and thereby make a code establish a different state.
+DISPATCH_EVIDENCE_CODE_STATES: Mapping[
+    SemanticDispatchEvidenceCode, SemanticPromptDispatchState
+] = MappingProxyType(
+    {
+        SemanticDispatchEvidenceCode.GATE_REFUSED_BEFORE_WRITE: (
+            SemanticPromptDispatchState.CONFIRMED_NOT_SENT
+        ),
+        SemanticDispatchEvidenceCode.PROMPT_RESPONSE_REFUSED: (
+            SemanticPromptDispatchState.CONFIRMED_NOT_SENT
+        ),
+        SemanticDispatchEvidenceCode.COMMAND_UNPARSEABLE_REFUSED: (
+            SemanticPromptDispatchState.CONFIRMED_NOT_SENT
+        ),
+        SemanticDispatchEvidenceCode.PROMPT_RESPONSE_ACCEPTED: (
+            SemanticPromptDispatchState.CONFIRMED_SENT
+        ),
+        SemanticDispatchEvidenceCode.AGENT_RUN_OBSERVED: (
+            SemanticPromptDispatchState.CONFIRMED_SENT
+        ),
+        SemanticDispatchEvidenceCode.WRITE_FAILED_TRANSMISSION_UNKNOWN: (
+            SemanticPromptDispatchState.SEND_STATE_INDETERMINATE
+        ),
+        SemanticDispatchEvidenceCode.NO_CORRELATED_RESPONSE_DEADLINE: (
+            SemanticPromptDispatchState.SEND_STATE_INDETERMINATE
+        ),
+        SemanticDispatchEvidenceCode.NO_CORRELATED_RESPONSE_STREAM_TERMINAL: (
+            SemanticPromptDispatchState.SEND_STATE_INDETERMINATE
+        ),
+        SemanticDispatchEvidenceCode.ADAPTER_RAISED: (
+            SemanticPromptDispatchState.SEND_STATE_INDETERMINATE
+        ),
+        SemanticDispatchEvidenceCode.OBSERVATION_MALFORMED_OR_FOREIGN: (
+            SemanticPromptDispatchState.SEND_STATE_INDETERMINATE
+        ),
+    }
+)
+
+
 @dataclass(frozen=True)
 class SemanticPromptDispatchObservation:
-    """The ONE typed, provenance-bound fact about whether a semantic command
-    was sent.
+    """PHASE 1's ONE typed, provenance-bound fact: was the command sent?
+
+    **This is the whole of phase 1's output.** 5F3B-Q1-PRE1-FU2 separated it
+    from the turn observation entirely (DESIGN-FU1 Sec. 2.2): the real Pi
+    0.84.4 seam emits a correlated prompt-response acknowledgement STRICTLY
+    BEFORE agent start and before any provider inference, so the send fact
+    exists long before turn completion does. Embedding it inside a
+    whole-turn observation -- FU1's shape -- meant a post-acknowledgement
+    read failure could only be represented by fabricating a deadline or by
+    ERASING an already-established ``CONFIRMED_SENT``. Neither is truthful,
+    and both are now structurally impossible: phase 2
+    (:class:`SemanticTurnObservation`) cannot carry, contradict, or rewrite
+    this object.
 
     Bound to the exact ``run_id``/``runtime_session_id``/``task_id``/
     ``task_revision`` it answers -- a caller must use
     :func:`require_dispatch_matches_request` to prove this observation
     actually answers a given :class:`SemanticPromptRequest` before trusting
-    it (5F3B-Q1-PRE1-FU1 adversarial: a dispatch observation minted for a
-    different run/session/task can never be silently accepted as this
-    request's own answer).
+    it (adversarial: a dispatch observation minted for a different
+    run/session/task can never be silently accepted as this request's own
+    answer).
 
-    There is no seam here for an acknowledgement a real future Pi/RPC channel
-    does not provide: a live adapter must derive ``dispatch_state`` from
-    whatever ITS OWN real seam mechanically establishes, and
-    ``CONFIRMED_SENT``/``CONFIRMED_NOT_SENT`` are reserved for facts that seam
-    can actually prove -- never invented here.
+    ``dispatch_evidence_code`` is REQUIRED and has no default: a live
+    adapter must state WHICH mechanical fact established the state, and the
+    pairing is re-checked here against :data:`DISPATCH_EVIDENCE_CODE_STATES`.
+    There is no seam here for an acknowledgement a real Pi/RPC channel does
+    not provide -- ``CONFIRMED_SENT``/``CONFIRMED_NOT_SENT`` are reserved for
+    facts that seam can actually prove, never invented here.
     """
 
     run_id: str
@@ -230,6 +357,7 @@ class SemanticPromptDispatchObservation:
     task_id: str
     task_revision: str
     dispatch_state: SemanticPromptDispatchState
+    dispatch_evidence_code: SemanticDispatchEvidenceCode
 
     def __post_init__(self) -> None:
         _require_pattern(
@@ -249,6 +377,19 @@ class SemanticPromptDispatchObservation:
             raise ObservationError(
                 "SemanticPromptDispatchObservation.dispatch_state must be exactly a "
                 "SemanticPromptDispatchState"
+            )
+        if type(self.dispatch_evidence_code) is not SemanticDispatchEvidenceCode:
+            raise ObservationError(
+                "SemanticPromptDispatchObservation.dispatch_evidence_code must be "
+                "exactly a SemanticDispatchEvidenceCode -- never raw runtime text"
+            )
+        established = DISPATCH_EVIDENCE_CODE_STATES[self.dispatch_evidence_code]
+        if established is not self.dispatch_state:
+            raise ObservationError(
+                "SemanticPromptDispatchObservation: dispatch_evidence_code "
+                f"{self.dispatch_evidence_code.value!r} establishes "
+                f"{established.value!r}, not {self.dispatch_state.value!r} -- an "
+                "evidence code may never be attached to a state it does not establish"
             )
 
 
@@ -272,81 +413,149 @@ def require_dispatch_matches_request(
 
 
 @dataclass(frozen=True)
+class SemanticTurnRequest:
+    """What AIDO hands its PHASE 2 turn-observation adapter.
+
+    Carries the phase-1 :class:`SemanticPromptDispatchObservation` as an
+    INPUT, so phase 2 structurally cannot rewrite, contradict, or re-report
+    the send fact -- it can only describe what AIDO's own wait for turn
+    completion observed afterwards.
+
+    Constructing one REQUIRES a ``CONFIRMED_SENT`` dispatch that provably
+    answers this same run/session/task. That is the type-level half of
+    DESIGN-FU1 Sec. 2.2's "phase 2 is entered ONLY when phase 1 returned
+    CONFIRMED_SENT"; the controller enforces the control-flow half.
+    """
+
+    run_id: str
+    runtime_session: RuntimeSession
+    task_id: str
+    task_revision: str
+    dispatch: SemanticPromptDispatchObservation
+
+    def __post_init__(self) -> None:
+        _require_pattern("SemanticTurnRequest.run_id", self.run_id, _ID_PATTERN)
+        if type(self.runtime_session) is not RuntimeSession:
+            raise ObservationError(
+                "SemanticTurnRequest.runtime_session must be a RuntimeSession"
+            )
+        if self.runtime_session.run_id != self.run_id:
+            raise ObservationError(
+                "SemanticTurnRequest: the runtime session belongs to a different run"
+            )
+        _require_task_id("SemanticTurnRequest.task_id", self.task_id)
+        if not isinstance(self.task_revision, str) or not self.task_revision:
+            raise ObservationError("SemanticTurnRequest.task_revision must be non-blank")
+        if type(self.dispatch) is not SemanticPromptDispatchObservation:
+            raise ObservationError(
+                "SemanticTurnRequest.dispatch must be exactly a "
+                "SemanticPromptDispatchObservation"
+            )
+        if self.dispatch.dispatch_state is not SemanticPromptDispatchState.CONFIRMED_SENT:
+            raise ObservationError(
+                "SemanticTurnRequest: a semantic turn may only be observed after the "
+                "dispatch was mechanically established as CONFIRMED_SENT"
+            )
+        if (
+            self.dispatch.run_id != self.run_id
+            or self.dispatch.runtime_session_id != self.runtime_session.runtime_session_id
+            or self.dispatch.task_id != self.task_id
+            or self.dispatch.task_revision != self.task_revision
+        ):
+            raise ObservationError(
+                "SemanticTurnRequest: the dispatch observation answers a different "
+                "run/session/task"
+            )
+
+
+class SemanticTurnOutcome(str, Enum):
+    """PHASE 2's bounded terminal outcome. Exactly three values.
+
+    ``OBSERVATION_FAILED`` is the third terminal state FU1's two-valued
+    shape denied (DESIGN-FU1 Sec. 1.10 / Sec. 2.2). It is what makes "the
+    acknowledgement arrived, and then AIDO's own view of the turn broke"
+    representable WITHOUT either fabricating a deadline or erasing an
+    already-established ``CONFIRMED_SENT``.
+    """
+
+    #: The runtime reported ``agent_settled`` -- Pi's own turn-completion
+    #: signal, never a claim that the task succeeded.
+    SETTLED = "SETTLED"
+    #: AIDO's OWN configured turn deadline elapsed first. Never a claim that
+    #: the underlying request was cancelled or that backend inference
+    #: stopped.
+    DEADLINE_REACHED = "DEADLINE_REACHED"
+    #: The turn became unobservable to AIDO -- protocol violation, output
+    #: cap, event cap, read error, early child exit, or a raised/malformed
+    #: phase-2 adapter result. AIDO stopped being able to watch; nothing
+    #: here claims Pi stopped.
+    OBSERVATION_FAILED = "OBSERVATION_FAILED"
+
+
+@dataclass(frozen=True)
 class SemanticTurnObservation:
-    """ONE correlated observation of the semantic turn's completion state.
+    """ONE correlated observation of the semantic turn's terminal state.
 
-    ``dispatch`` is the mechanically-established send/no-send fact (5F3B-Q1-
-    PRE1-FU1) -- see :class:`SemanticPromptDispatchObservation`. Only a
-    ``CONFIRMED_SENT`` dispatch may also report ``call_succeeded`` or any
-    turn-completion fact; a ``CONFIRMED_NOT_SENT``/``SEND_STATE_INDETERMINATE``
-    dispatch structurally cannot carry one.
+    **It no longer carries the dispatch fact at all** (5F3B-Q1-PRE1-FU2).
+    Phase 1 owns that, permanently; this object describes only what AIDO's
+    own wait observed afterwards, and there is no field here through which a
+    phase-2 result could contradict or erase ``semantic_prompts_sent = 1``.
 
-    ``agent_settled`` and ``agent_end_observed`` are two INDEPENDENT facts,
+    ``agent_end_observed`` stays an INDEPENDENT, non-completion fact,
     exactly mirroring the frozen AR2 supervisor's own distinction
-    (``ar2.supervisor.PiRpcSupervisor._absorb``): an ``agent_end`` is never
-    by itself completion (it may carry ``willRetry``), and only
-    ``agent_settled`` sets the runtime's own turn-completion signal.
-    ``deadline_reached`` records whether AIDO's own configured turn deadline
-    (the accepted ``RunBounds.turn_deadline_seconds``) elapsed before
-    settlement -- never a claim that the underlying request was cancelled or
-    that backend inference stopped.
-
-    **Exactly one of ``agent_settled`` or ``deadline_reached`` may be true**
-    for a call that succeeded; a turn that neither settled nor reached its
-    deadline is not yet a terminal observation at all, and this object
-    cannot represent it as one.
+    (``ar2.supervisor.PiRpcSupervisor._absorb``) and Pi's own emission sites:
+    ``agent_end`` may carry ``willRetry`` and is emitted once per loop
+    iteration, while ``agent_settled`` has exactly one emission site
+    (``_runAgentPrompt``'s ``finally``). An ``agent_end`` therefore never by
+    itself upgrades an outcome to ``SETTLED``.
     """
 
     runtime_session_id: str
-    dispatch: SemanticPromptDispatchObservation
-    call_succeeded: bool
-    agent_settled: bool = False
+    turn_outcome: SemanticTurnOutcome
     agent_end_observed: bool = False
-    deadline_reached: bool = False
 
     def __post_init__(self) -> None:
         _require_pattern(
-            "SemanticTurnObservation.runtime_session_id", self.runtime_session_id, _ID_PATTERN
+            "SemanticTurnObservation.runtime_session_id",
+            self.runtime_session_id,
+            _ID_PATTERN,
         )
-        if type(self.dispatch) is not SemanticPromptDispatchObservation:
+        if type(self.turn_outcome) is not SemanticTurnOutcome:
             raise ObservationError(
-                "SemanticTurnObservation.dispatch must be exactly a "
-                "SemanticPromptDispatchObservation"
+                "SemanticTurnObservation.turn_outcome must be exactly a "
+                "SemanticTurnOutcome"
             )
-        if self.dispatch.runtime_session_id != self.runtime_session_id:
-            raise ObservationError(
-                "SemanticTurnObservation: the dispatch observation belongs to a "
-                "different runtime session"
-            )
-        require_exact_bool("SemanticTurnObservation.call_succeeded", self.call_succeeded)
-        require_exact_bool("SemanticTurnObservation.agent_settled", self.agent_settled)
         require_exact_bool(
             "SemanticTurnObservation.agent_end_observed", self.agent_end_observed
         )
-        require_exact_bool("SemanticTurnObservation.deadline_reached", self.deadline_reached)
 
-        if self.dispatch.dispatch_state is not SemanticPromptDispatchState.CONFIRMED_SENT:
-            if self.call_succeeded or self.agent_settled or self.agent_end_observed or self.deadline_reached:
-                raise ObservationError(
-                    "SemanticTurnObservation: only a CONFIRMED_SENT dispatch may report "
-                    "call_succeeded or any turn-completion fact"
-                )
-            return
-        if not self.call_succeeded:
-            raise ObservationError(
-                "SemanticTurnObservation: a CONFIRMED_SENT dispatch requires "
-                "call_succeeded == True"
-            )
-        if self.agent_settled and self.deadline_reached:
-            raise ObservationError(
-                "SemanticTurnObservation: a turn cannot both settle and reach the "
-                "deadline -- these are mutually exclusive terminal facts"
-            )
-        if not self.agent_settled and not self.deadline_reached:
-            raise ObservationError(
-                "SemanticTurnObservation: a successful call must report either "
-                "agent_settled or deadline_reached -- there is no third terminal state"
-            )
+    @property
+    def agent_settled(self) -> bool:
+        """Derived, read-only: Pi reported its own turn-completion signal."""
+        return self.turn_outcome is SemanticTurnOutcome.SETTLED
+
+    @property
+    def deadline_reached(self) -> bool:
+        """Derived, read-only: AIDO's own turn deadline elapsed first."""
+        return self.turn_outcome is SemanticTurnOutcome.DEADLINE_REACHED
+
+    @property
+    def observation_failed(self) -> bool:
+        """Derived, read-only: the turn became unobservable to AIDO."""
+        return self.turn_outcome is SemanticTurnOutcome.OBSERVATION_FAILED
+
+
+def require_turn_matches_request(
+    observation: SemanticTurnObservation, request: SemanticTurnRequest
+) -> bool:
+    """Whether ``observation`` truthfully answers exactly ``request``'s turn.
+
+    Exact type (a subclass is refused, exactly as for phase 1) and the same
+    runtime session the dispatch was acknowledged on.
+    """
+    if type(observation) is not SemanticTurnObservation:
+        return False
+    return observation.runtime_session_id == request.runtime_session.runtime_session_id
 
 
 @dataclass(frozen=True)

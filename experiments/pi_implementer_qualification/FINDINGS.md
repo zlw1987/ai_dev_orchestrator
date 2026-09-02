@@ -6045,3 +6045,194 @@ frozen as closure contracts in
 §9, with an adversarial check in §10. Verdict: `5F3B-Q1-PRE1-DESIGN-FU1A:
 READY FOR INDEPENDENT REVIEW`; `5F3B-Q1-PRE1-DESIGN-FU1: HOLD pending FU1A
 review`. No live activity of any kind occurred in this turn either.
+
+---
+
+# 5F3B-Q1-PRE1-FU2 — Semantic Executor Design-Conformance Closure
+
+**OFFLINE IMPLEMENTATION ONLY.** No candidate was run, no semantic prompt was
+sent, no Pi/Node process was launched, no credential was read, no socket or
+named pipe was opened, B300 was not contacted, Q1/Q2 were not run, no real
+project workspace was used, and nothing was committed, pushed, or opened as a
+PR. `CLAUDE.md` was not modified. No frozen I1/I2/I2B/AR1/AR2/O1 module was
+modified — every frozen contract this phase needed was consumed through its
+existing public surface.
+
+This turn implemented the now-frozen
+[`docs/PHASE_5F3B_Q1_PRE1_DESIGN_FU1_SEMANTIC_DISPATCH_AUTHORITY.md`](../../docs/PHASE_5F3B_Q1_PRE1_DESIGN_FU1_SEMANTIC_DISPATCH_AUTHORITY.md)
+(DESIGN-FU1 + FU1A). None of its contracts was redesigned.
+
+## 1. Two-phase semantic dispatch (§2)
+
+`send_semantic_prompt(SemanticPromptRequest) -> SemanticTurnObservation` is
+gone. In its place:
+
+```text
+PHASE 1  dispatch_semantic_prompt(SemanticPromptRequest)
+           -> SemanticPromptDispatchObservation
+                CONFIRMED_NOT_SENT | CONFIRMED_SENT | SEND_STATE_INDETERMINATE
+                + a bounded SemanticDispatchEvidenceCode
+              |
+              v   semantic_prompts_sent fixed HERE, once, write-once
+PHASE 2  observe_semantic_turn(SemanticTurnRequest)
+           -> SemanticTurnObservation
+                SETTLED | DEADLINE_REACHED | OBSERVATION_FAILED
+                + the independent agent_end_observed fact
+```
+
+`SemanticTurnObservation` no longer carries a dispatch object or a
+`call_succeeded` flag: there is no field through which a phase-2 outcome
+could rewrite a phase-1 truth. `SemanticTurnRequest` refuses construction
+from a non-`CONFIRMED_SENT` dispatch, so phase 2 is unreachable without the
+send fact both structurally and by control flow.
+
+`OBSERVATION_FAILED` is the third terminal state FU1's two-boolean shape
+denied. Every reachable post-acknowledgement failure — protocol violation,
+output cap, event cap, read error, early child exit, a raised or wrong-typed
+or foreign phase-2 result — now lands there, and `semantic_prompts_sent`
+stays `1`. Under FU1 those shapes could only fabricate `deadline_reached` or
+raise, and raising reached `_DispatchIndeterminate`, converting a **known
+spent** prompt into an **unknown** one.
+
+`_DispatchIndeterminate` is now raised from inside the phase-1 block and
+nowhere else — the mechanical half of invariant I-1.
+
+The ten `SemanticDispatchEvidenceCode` members map to exactly one dispatch
+state each through one read-only `DISPATCH_EVIDENCE_CODE_STATES` proxy, and a
+forged pairing is refused at construction. The code is audit-only; nothing
+branches on it.
+
+## 2. The indeterminate-attempt artifact (§3)
+
+`pi-implementer-qualification.v1` is **not widened**. A new sibling module,
+`qualification/semantic_attempt.py`, builds
+`pi-implementer-qualification-attempt.v1` and emits it through the same
+`safety.emit_evidence_or_refuse` choke point. It **omits
+`semantic_prompts_sent` entirely** — proved recursively before the payload is
+returned — and carries `semantic_prompts_sent_established: false`,
+`attempt_consumed: true`, the bounded evidence code, the identity/compatibility
+facts, the raw closure facts (including workspace removal), the explicit
+scoped negatives, and a fixed `claim_scope`.
+
+The artifact-emission-refusal record's *meaning* is not reused; the shared
+choke point is. If the attempt artifact itself fails the scrub, the existing
+bounded refusal record stands in its place, exactly as for a primary record.
+
+Rule now enforced: **every invoked attempt leaves exactly one immutable
+retained artifact — never zero, never both.**
+
+The separately-deferred lineage extension (§3.I) was **not** implemented.
+
+## 3. Sweep stop policy and count ownership (§3.J, §4)
+
+The primary sweep stops immediately on the first indeterminate dispatch.
+Later tasks are never invoked — `build_adapters` is not even called for them —
+and appear in `not_attempted_task_ids` with no artifact. The two counts are
+distinct and both validated:
+
+- `confirmed_semantic_prompts_sent` (FU1's `total_semantic_prompts_sent`,
+  **renamed, not aliased**, because the old name reads as though the actual
+  number of accepted prompts were known);
+- `semantic_dispatch_attempts` — how many times phase 1 was entered. **This
+  is the budget the sweep enforces.**
+
+## 4. Semantic workspace ownership and verified removal (§9.1)
+
+The frozen closure order is now declared by `CLOSURE_GATES` and executed in
+that order: runtime teardown → broker shutdown → generated-config cleanup →
+**semantic workspace removal + verification** → evidence construction / scrub
+/ emission. `remove_run_workspace` is called exactly once on every terminal
+path after a successful mint; before FU2 the controller never called it at
+all, so every attempt left its disposable Git fixture tree on disk
+indefinitely.
+
+Acceptance is the strict frozen predicate `run_i2b_live._workspace_removal_succeeded`
+already applies — identity `is True`, `type(x) is int`, `== 0`, no
+truthiness, no absence-of-exception shortcut. A raised removal is
+`attempted=True, verified=False`, reported and never allowed to skip evidence
+construction. An unverified removal folds into `closure_established` exactly
+as teardown/shutdown/config-cleanup already do, and under an indeterminate
+dispatch it records the same honest unavailable-classification reason rather
+than a fabricated 0/1 classification.
+
+## 5. Full artifact safety context (§9.2)
+
+`build_run_safety_context` is now field-independent: the workspace needle is
+declared whenever a workspace exists, the broker needles whenever a broker
+session exists, and the endpoint/key whenever a secret context exists — no
+field's absence gates another field's source object. The previously-unused
+`route_descriptor` parameter now has its job: the credential mechanism is
+asserted, and an unexpected one **refuses** construction rather than silently
+defaulting `bearer_token`. `none_declared()` is returned only for the true
+all-absent case. One context per attempt protects the primary record, the
+attempt artifact and the refusal fallback alike.
+
+## 6. The final assistant report is optional and untrusted (§9.3)
+
+`FINAL_REPORT_CLAIMS` no longer routes through `_GateFailure`. It produces a
+closed `ReportAvailability` (`AVAILABLE` / `UNAVAILABLE` / `MALFORMED`, or
+`None` when collection was never reached), which cannot set `failed_gate`,
+cannot reach `attribute_protocol_anomaly`, and therefore can no longer turn a
+fully-verified, fully-closed run into `ATTRIBUTION_UNDETERMINED`. The bounded
+failure code `FINAL_REPORT_CLAIMS_COLLECTION_FAILED` was **removed**, so the
+seam it would be re-wired through no longer exists. An available report is
+still compared conservatively; a contradiction remains a report-accuracy
+finding only. No retry is triggered by a bad or missing report.
+
+## 7. Deep immutability (§9.4)
+
+`SemanticTaskAttemptResult.gate_statuses`, both record projections, and
+`PrimarySweepResult.task_results` are read-only proxies over private,
+recursively-immutable **copies** — copy before wrapping, since a proxy over a
+caller-held dict stays a live view of it. Nested `findings` lists become
+tuples. A new narrow frozen `EvidenceEmission` is what the hard bar's
+`artifact_scrub_passed` reads, and the result cross-checks it against the
+projection it describes. `report_accuracy_comparisons` is type-checked as a
+tuple of `ClaimComparison`.
+
+## 8. Verdicts
+
+```text
+5F3B-Q1-PRE1-FU2               COMPLETE (offline; awaiting independent review)
+5F3B-Q1-PRE1                   HOLD pending independent FU2 review
+Q1                             NO-GO
+Q2                             NO-GO
+Real-workspace authority       NO-GO
+```
+
+**NO SEMANTIC PROMPT HAS EVER BEEN SENT.** No candidate implementer PASS/FAIL
+exists. Candidate A and Candidate B remain Category-B **compatibility**
+qualified/frozen only.
+
+## 9. One stale statement left deliberately uncorrected
+
+`qualification/i2b_workspace.remove_run_workspace`'s docstring still says
+*"This is a fixture/teardown convenience for the offline suite; the
+controller never calls it."* As of FU2 the controller **does** call it. The
+module is frozen and this phase is instructed not to modify frozen modules,
+and DESIGN-FU1 §9.1.1 quotes that exact sentence as the gap it closes, so it
+was left byte-identical. It is flagged here so independent review can
+authorize the one-line correction.
+
+## 10. Offline validation
+
+Run separately, offline. No live run followed.
+
+```text
+pi_implementer_qualification   1628 passed   (1526 before FU2; +102 new cases)
+pi_external_runtime_ar2         298 passed
+pi_external_runtime_ar1          96 passed
+pi_external_runtime_ar2_o1       89 passed
+root production tests          3504 passed
+```
+
+New regression cases, by file:
+
+```text
+tests/test_semantic_fu2.py         93   (new file)
+tests/test_semantic_session.py     +5   (13 -> 18)
+tests/test_semantic_sweep.py       +4   (12 -> 16)
+tests/test_semantic_controller.py  +-0  (68 -> 68; several rewritten in place)
+                                  ----
+                                   102
+```

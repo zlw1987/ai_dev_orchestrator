@@ -33,10 +33,13 @@ from qualification.report_accuracy import ReportClaims
 from qualification.semantic_session import (
     BrokerActivityObservation,
     FinalReportClaimsObservation,
+    SemanticDispatchEvidenceCode,
     SemanticPromptDispatchObservation,
     SemanticPromptDispatchState,
     SemanticPromptRequest,
     SemanticTurnObservation,
+    SemanticTurnOutcome,
+    SemanticTurnRequest,
 )
 from qualification.semantic_sweep import (
     MAX_SEMANTIC_PROMPTS_PER_CANDIDATE,
@@ -176,20 +179,24 @@ def _make_build_adapters(
         def route_checker(base_url, *, model_id):
             return SimpleNamespace(reachable=True, configured_model_served=True)
 
-        def send_semantic_prompt(request: SemanticPromptRequest):
+        def dispatch_semantic_prompt(request: SemanticPromptRequest):
             if task.task_id in indeterminate_task_ids:
                 raise RuntimeError("synthetic: dispatch send-state unknown")
+            return SemanticPromptDispatchObservation(
+                run_id=request.run_id,
+                runtime_session_id=request.runtime_session.runtime_session_id,
+                task_id=request.task_id,
+                task_revision=request.task_revision,
+                dispatch_state=SemanticPromptDispatchState.CONFIRMED_SENT,
+                dispatch_evidence_code=(
+                    SemanticDispatchEvidenceCode.PROMPT_RESPONSE_ACCEPTED
+                ),
+            )
+
+        def observe_semantic_turn(request: SemanticTurnRequest):
             return SemanticTurnObservation(
                 runtime_session_id=request.runtime_session.runtime_session_id,
-                dispatch=SemanticPromptDispatchObservation(
-                    run_id=request.run_id,
-                    runtime_session_id=request.runtime_session.runtime_session_id,
-                    task_id=request.task_id,
-                    task_revision=request.task_revision,
-                    dispatch_state=SemanticPromptDispatchState.CONFIRMED_SENT,
-                ),
-                call_succeeded=True,
-                agent_settled=True,
+                turn_outcome=SemanticTurnOutcome.SETTLED,
             )
 
         def collect_broker_activity(session):
@@ -236,7 +243,8 @@ def _make_build_adapters(
             get_state=get_state,
             observe_protocol=observe_protocol,
             route_checker=route_checker,
-            send_semantic_prompt=send_semantic_prompt,
+            dispatch_semantic_prompt=dispatch_semantic_prompt,
+            observe_semantic_turn=observe_semantic_turn,
             collect_broker_activity=collect_broker_activity,
             collect_final_report_claims=collect_final_report_claims,
             shutdown_runtime=shutdown_runtime,
@@ -278,7 +286,9 @@ def test_full_three_task_sweep_qualifies_a_correct_candidate(
 ) -> None:
     result, fresh_calls = _run_sweep("A", git_executable, tmp_path, correct=True)
     assert fresh_calls == ["IQ-1", "IQ-2", "IQ-3"]
-    assert result.total_semantic_prompts_sent == 3
+    assert result.confirmed_semantic_prompts_sent == 3
+    assert result.semantic_dispatch_attempts == 3
+    assert result.not_attempted_task_ids == ()
     assert result.hard_bar_result.qualification_state is QualificationState.AUTONOMOUS_QUALIFIED
     for task_id, task_result in result.task_results.items():
         assert task_result.autonomous_classification is AutonomousClassification.AUTONOMOUS_PASS
@@ -331,7 +341,8 @@ def test_max_semantic_prompts_per_candidate_is_three(
     git_executable: str, tmp_path: Path
 ) -> None:
     result, _ = _run_sweep("A", git_executable, tmp_path, correct=True)
-    assert result.total_semantic_prompts_sent <= MAX_SEMANTIC_PROMPTS_PER_CANDIDATE
+    assert result.confirmed_semantic_prompts_sent <= MAX_SEMANTIC_PROMPTS_PER_CANDIDATE
+    assert result.semantic_dispatch_attempts <= MAX_SEMANTIC_PROMPTS_PER_CANDIDATE
 
 
 def test_unknown_candidate_refused(git_executable: str, tmp_path: Path) -> None:
@@ -363,26 +374,107 @@ def test_build_adapters_must_return_exact_bundle_type(
 
 
 # ===========================================================================
-# 5F3B-Q1-PRE1-FU1 -- sweep-level indeterminate-dispatch handling
+# 5F3B-Q1-PRE1-FU2 -- sweep-level indeterminate dispatch STOPS the sweep
+#
+# DESIGN-FU1 Sec. 3.J supersedes FU1's "keep going" behavior these tests
+# previously asserted. Continuing after an ambiguous attempt would spend
+# one-shot attempts against uncharacterised infrastructure, launch a fresh
+# runtime/broker while a possibly-live turn may still be running, and make
+# the three-prompt budget unprovable (confirmed 0, possible 1) -- all for a
+# verdict that is already fixed at INCOMPLETE.
 # ===========================================================================
 
 
-def test_one_task_indeterminate_dispatch_never_inflates_total_prompts_sent(
+def test_indeterminate_iq1_stops_the_sweep_immediately(
+    git_executable: str, tmp_path: Path
+) -> None:
+    result, fresh_calls = _run_sweep(
+        "A", git_executable, tmp_path, correct=True, indeterminate_task_ids=frozenset({"IQ-1"})
+    )
+    # IQ-2 and IQ-3 are never invoked -- `build_adapters` is not even called
+    # for them, so no runtime, broker, workspace or dispatch exists.
+    assert fresh_calls == ["IQ-1"]
+    assert tuple(result.task_results) == ("IQ-1",)
+    assert result.not_attempted_task_ids == ("IQ-2", "IQ-3")
+    assert result.indeterminate_dispatch_task_ids == ("IQ-1",)
+    # The CONFIRMED count never claims the unknown prompt, and the dispatch
+    # budget counts the attempt that was actually made.
+    assert result.confirmed_semantic_prompts_sent == 0
+    assert result.semantic_dispatch_attempts == 1
+    assert result.hard_bar_result.qualification_state is QualificationState.INCOMPLETE
+    assert "IQ-2" in result.hard_bar_result.missing_or_ineligible_tasks
+    assert "IQ-3" in result.hard_bar_result.missing_or_ineligible_tasks
+
+
+def test_indeterminate_mid_sweep_keeps_earlier_confirmed_prompts(
     git_executable: str, tmp_path: Path
 ) -> None:
     result, fresh_calls = _run_sweep(
         "A", git_executable, tmp_path, correct=True, indeterminate_task_ids=frozenset({"IQ-2"})
     )
-    assert fresh_calls == ["IQ-1", "IQ-2", "IQ-3"]  # sweep still runs every task
-    assert result.task_results["IQ-2"].semantic_prompts_sent is None
-    # Only IQ-1 and IQ-3 confirmed-sent -- IQ-2's unestablished fact
-    # contributes 0, never silently counted as either 0 or 1 confirmed.
-    assert result.total_semantic_prompts_sent == 2
+    assert fresh_calls == ["IQ-1", "IQ-2"]
+    assert result.not_attempted_task_ids == ("IQ-3",)
+    assert result.confirmed_semantic_prompts_sent == 1
+    assert result.semantic_dispatch_attempts == 2
     assert result.indeterminate_dispatch_task_ids == ("IQ-2",)
-    # An incomplete/unscoreable task keeps the whole sweep INCOMPLETE --
-    # never a false qualification verdict built on a missing task.
     assert result.hard_bar_result.qualification_state is QualificationState.INCOMPLETE
-    assert "IQ-2" in result.hard_bar_result.missing_or_ineligible_tasks
+
+
+def test_not_attempted_tasks_leave_no_artifact(git_executable: str, tmp_path: Path) -> None:
+    """Sec. 3.F's "exactly one artifact per attempt" rule is scoped to
+    INVOKED attempts: a task the sweep never started has no attempt, so it
+    correctly has nothing on disk."""
+    result, _ = _run_sweep(
+        "A", git_executable, tmp_path, correct=True, indeterminate_task_ids=frozenset({"IQ-1"})
+    )
+    assert (tmp_path / "A_IQ-1.json").exists()
+    for task_id in result.not_attempted_task_ids:
+        assert not (tmp_path / f"A_{task_id}.json").exists()
+
+
+def test_indeterminate_attempt_still_leaves_its_own_artifact(
+    git_executable: str, tmp_path: Path
+) -> None:
+    import json
+
+    result, _ = _run_sweep(
+        "A", git_executable, tmp_path, correct=True, indeterminate_task_ids=frozenset({"IQ-1"})
+    )
+    payload = json.loads((tmp_path / "A_IQ-1.json").read_text(encoding="utf-8"))
+    assert payload["record_version"] == "pi-implementer-qualification-attempt.v1"
+    assert "semantic_prompts_sent" not in payload
+    assert result.task_results["IQ-1"].qualification_record is None
+    assert result.task_results["IQ-1"].attempt_record is not None
+
+
+def test_no_replacement_or_retry_after_an_indeterminate_attempt(
+    git_executable: str, tmp_path: Path
+) -> None:
+    """Sec. 3.H: no automatic retry, ever -- not immediately, not after a
+    delay, not with a fresh session for the same task within the same
+    sweep."""
+    fresh_calls: list[str] = []
+    build_adapters = _make_build_adapters(
+        "A", correct=True, fresh_calls=fresh_calls, indeterminate_task_ids=frozenset({"IQ-1"})
+    )
+    seen: list[str] = []
+
+    def counting_build_adapters(task):
+        seen.append(task.task_id)
+        return build_adapters(task)
+
+    result = run_primary_sweep(
+        candidate="A",
+        ambient_environ={},
+        node_executable=sys.executable,
+        git_executable=git_executable,
+        python_executable=sys.executable,
+        build_adapters=counting_build_adapters,
+        evidence_dir=str(tmp_path),
+    )
+    assert seen == ["IQ-1"]
+    assert seen.count("IQ-1") == 1
+    assert result.semantic_dispatch_attempts == 1
 
 
 def test_zero_task_indeterminate_dispatch_has_empty_tuple(
@@ -390,6 +482,7 @@ def test_zero_task_indeterminate_dispatch_has_empty_tuple(
 ) -> None:
     result, _ = _run_sweep("A", git_executable, tmp_path, correct=True)
     assert result.indeterminate_dispatch_task_ids == ()
+    assert result.not_attempted_task_ids == ()
 
 
 @pytest.mark.parametrize("candidate", ["A", "B"])
@@ -397,14 +490,17 @@ def test_candidate_a_and_b_indeterminate_dispatch_sweep_semantics_are_identical(
     git_executable: str, tmp_path: Path, candidate: str
 ) -> None:
     (tmp_path / candidate).mkdir(exist_ok=True)
-    result, _ = _run_sweep(
+    result, fresh_calls = _run_sweep(
         candidate,
         git_executable,
         tmp_path / candidate,
         correct=True,
         indeterminate_task_ids=frozenset({"IQ-1"}),
     )
+    assert fresh_calls == ["IQ-1"]
     assert result.task_results["IQ-1"].semantic_prompts_sent is None
     assert result.indeterminate_dispatch_task_ids == ("IQ-1",)
-    assert result.total_semantic_prompts_sent == 2
+    assert result.not_attempted_task_ids == ("IQ-2", "IQ-3")
+    assert result.confirmed_semantic_prompts_sent == 0
+    assert result.semantic_dispatch_attempts == 1
     assert result.candidate == candidate

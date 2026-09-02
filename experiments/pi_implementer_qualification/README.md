@@ -1094,12 +1094,24 @@ authority: NO-GO.**
 
 ---
 
-## 5F3B-Q1-PRE1 / PRE1-FU1: ON HOLD (design correction pending)
+## 5F3B-Q1-PRE1 / PRE1-FU1 / PRE1-FU2: STILL ON HOLD
 
 The untracked `qualification/semantic_*.py` modules and their tests are
-**5F3B-Q1-PRE1 / PRE1-FU1 work that independent review placed on HOLD.** They
-are not accepted, not frozen, and must not be treated as the qualification
-package's semantic path.
+**5F3B-Q1-PRE1 work that independent review placed on HOLD.** They are not
+accepted, not frozen, and must not be treated as the qualification package's
+semantic path.
+
+**`5F3B-Q1-PRE1-FU2` implemented the now-frozen DESIGN-FU1/FU1A contracts**
+(§2 two-phase dispatch/turn, §3 the indeterminate-attempt evidence contract,
+§3.J the sweep stop policy, §4 distinct count ownership, §9.1 semantic
+workspace ownership and verified removal, §9.2 the full artifact safety
+context, §9.3 the optional/untrusted final report, §9.4 deep result/sweep
+immutability). That work is **OFFLINE IMPLEMENTATION ONLY** and changes none
+of the standing verdicts below: `5F3B-Q1-PRE1` remains **HOLD pending
+independent FU2 review**, and Q1 / Q2 / real-workspace authority remain
+**NO-GO**. No candidate was run, no semantic prompt was sent, no Pi/Node
+process was launched, no credential was read, no socket or named pipe was
+opened, and B300 was not contacted.
 
 `5F3B-Q1-PRE1-DESIGN-FU1` inspected the locally installed Pi `0.84.4` RPC seam
 and established two blockers against them:
@@ -1131,8 +1143,10 @@ failure that today wrongly drives an otherwise-valid run to
 `ATTRIBUTION_UNDETERMINED`, and mutable `dict`/`list` fields on
 `SemanticTaskAttemptResult`/`PrimarySweepResult` that a caller could mutate
 after validation — and freezes the closing contracts for all four in the
-same document's §9. **`5F3B-Q1-PRE1-DESIGN-FU1` is therefore now `HOLD
-pending FU1A review`** (previously `READY FOR INDEPENDENT REVIEW`).
+same document's §9. Independent review subsequently **ACCEPTED and FROZE**
+both `5F3B-Q1-PRE1-DESIGN-FU1` and `5F3B-Q1-PRE1-DESIGN-FU1A`, and
+`5F3B-Q1-PRE1-FU2` implemented them; the design document itself is unchanged
+by that implementation turn.
 
 That design phase performed **no live activity of any kind**: no semantic
 prompt, no Pi/Node launch, no credential read, no socket, no B300 contact.

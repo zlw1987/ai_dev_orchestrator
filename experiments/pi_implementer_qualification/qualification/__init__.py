@@ -58,3 +58,12 @@ RECORD_VERSION = "pi-implementer-qualification.v1"
 FIXTURE_SCHEMA_VERSION = "pi-implementer-qualification-fixture.v1"
 LINEAGE_RECORD_VERSION = "pi-implementer-qualification-lineage.v1"
 REFUSAL_RECORD_VERSION = "pi-implementer-qualification-refusal.v1"
+
+#: 5F3B-Q1-PRE1-FU2 (DESIGN-FU1 Sec. 3.B) -- the SIBLING attempt-level
+#: artifact kind for a task attempt whose semantic dispatch send state could
+#: not be mechanically established. It is deliberately NOT a widening of
+#: :data:`RECORD_VERSION`: the frozen primary schema admits exactly
+#: ``semantic_prompts_sent in (0, 1)``, and an unestablished send fact has no
+#: truthful slot there. This artifact OMITS ``semantic_prompts_sent``
+#: entirely rather than encoding the gap as ``null``, ``0``, or a sentinel.
+ATTEMPT_RECORD_VERSION = "pi-implementer-qualification-attempt.v1"

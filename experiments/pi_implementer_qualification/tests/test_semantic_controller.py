@@ -48,6 +48,7 @@ from qualification.report_accuracy import ReportClaims
 from qualification.scope import RefusalEvent
 from qualification.semantic_controller import (
     CLOSURE_GATES,
+    ReportAvailability,
     POST_PROMPT_GATES,
     PRE_PROMPT_GATES,
     CREDENTIAL_READ_GATE,
@@ -59,10 +60,13 @@ from qualification.semantic_controller import (
 from qualification.semantic_session import (
     BrokerActivityObservation,
     FinalReportClaimsObservation,
+    SemanticDispatchEvidenceCode,
     SemanticPromptDispatchObservation,
     SemanticPromptDispatchState,
     SemanticPromptRequest,
     SemanticTurnObservation,
+    SemanticTurnOutcome,
+    SemanticTurnRequest,
 )
 from qualification.validity import RunValidity
 
@@ -109,8 +113,15 @@ class Harness:
         self.route_reachable = True
         self.route_model_served = True
         self.dispatch_state = SemanticPromptDispatchState.CONFIRMED_SENT
+        #: When None, derived from ``dispatch_state`` by
+        #: :meth:`_evidence_code_for` -- a test only sets it to exercise a
+        #: specific bounded code.
+        self.dispatch_evidence_code: SemanticDispatchEvidenceCode | None = None
         self.agent_settled = True
         self.deadline_reached = False
+        #: When None, derived from ``agent_settled``/``deadline_reached``.
+        self.turn_outcome: SemanticTurnOutcome | None = None
+        self.agent_end_observed = False
         self.repair_files: dict[str, str] = {}
         self.edited_paths: frozenset[str] = frozenset()
         self.refusals: tuple[RefusalEvent, ...] = ()
@@ -227,21 +238,50 @@ class Harness:
             reachable=self.route_reachable, configured_model_served=self.route_model_served
         )
 
-    def send_semantic_prompt(self, request: SemanticPromptRequest) -> SemanticTurnObservation:
-        dispatch = SemanticPromptDispatchObservation(
+    def _evidence_code_for(
+        self, state: SemanticPromptDispatchState
+    ) -> SemanticDispatchEvidenceCode:
+        if self.dispatch_evidence_code is not None:
+            return self.dispatch_evidence_code
+        return {
+            SemanticPromptDispatchState.CONFIRMED_SENT: (
+                SemanticDispatchEvidenceCode.PROMPT_RESPONSE_ACCEPTED
+            ),
+            SemanticPromptDispatchState.CONFIRMED_NOT_SENT: (
+                SemanticDispatchEvidenceCode.PROMPT_RESPONSE_REFUSED
+            ),
+            SemanticPromptDispatchState.SEND_STATE_INDETERMINATE: (
+                SemanticDispatchEvidenceCode.NO_CORRELATED_RESPONSE_DEADLINE
+            ),
+        }[state]
+
+    def dispatch_semantic_prompt(
+        self, request: SemanticPromptRequest
+    ) -> SemanticPromptDispatchObservation:
+        """PHASE 1 only -- the send fact, and nothing about the turn."""
+        return SemanticPromptDispatchObservation(
             run_id=request.run_id,
             runtime_session_id=request.runtime_session.runtime_session_id,
             task_id=request.task_id,
             task_revision=request.task_revision,
             dispatch_state=self.dispatch_state,
+            dispatch_evidence_code=self._evidence_code_for(self.dispatch_state),
         )
-        confirmed_sent = self.dispatch_state is SemanticPromptDispatchState.CONFIRMED_SENT
+
+    def observe_semantic_turn(self, request: SemanticTurnRequest) -> SemanticTurnObservation:
+        """PHASE 2 only -- reachable exclusively after a CONFIRMED_SENT phase 1."""
+        if self.turn_outcome is not None:
+            outcome = self.turn_outcome
+        elif self.agent_settled:
+            outcome = SemanticTurnOutcome.SETTLED
+        elif self.deadline_reached:
+            outcome = SemanticTurnOutcome.DEADLINE_REACHED
+        else:
+            outcome = SemanticTurnOutcome.OBSERVATION_FAILED
         return SemanticTurnObservation(
             runtime_session_id=request.runtime_session.runtime_session_id,
-            dispatch=dispatch,
-            call_succeeded=confirmed_sent,
-            agent_settled=self.agent_settled if confirmed_sent else False,
-            deadline_reached=self.deadline_reached if confirmed_sent else False,
+            turn_outcome=outcome,
+            agent_end_observed=self.agent_end_observed,
         )
 
     def collect_broker_activity(self, session: RuntimeSession) -> BrokerActivityObservation:
@@ -298,7 +338,8 @@ class Harness:
             get_state=self.get_state,
             observe_protocol=self.observe_protocol,
             route_checker=self.route_checker,
-            send_semantic_prompt=self.send_semantic_prompt,
+            dispatch_semantic_prompt=self.dispatch_semantic_prompt,
+            observe_semantic_turn=self.observe_semantic_turn,
             collect_broker_activity=self.collect_broker_activity,
             collect_final_report_claims=self.collect_final_report_claims,
             shutdown_runtime=self.shutdown_runtime,
@@ -342,6 +383,9 @@ def test_iq1_full_autonomous_pass(harness: Harness, evidence_path: str) -> None:
         SemanticGateName.RUNTIME_TEARDOWN.value: result.runtime_teardown.status_text,
         SemanticGateName.BROKER_SHUTDOWN.value: result.broker_shutdown.status_text,
         SemanticGateName.GENERATED_CONFIG_CLEANUP.value: result.cleanup.status_text,
+        SemanticGateName.SEMANTIC_WORKSPACE_REMOVAL.value: (
+            result.workspace_removal.status_text
+        ),
     }
     for gate, status in result.gate_statuses.items():
         if gate in closure_gate_values:
@@ -436,33 +480,44 @@ def test_premature_settle_on_incomplete_implementation(
 
 
 def test_agent_end_alone_is_never_completion(harness: Harness, evidence_path: str) -> None:
-    # An observation that reports neither settled nor deadline_reached is not
-    # constructible (SemanticTurnObservation's own invariant) -- proving,
-    # structurally, that "agent_end alone" can never reach TURN_COMPLETION as
-    # a pass. Model the only OTHER way completion is not reached: the
-    # deadline was hit without ever settling.
+    """An ``agent_end`` is an INDEPENDENT, non-completion fact: it may carry
+    ``willRetry`` and is emitted once per loop iteration, while
+    ``agent_settled`` has exactly one emission site. Reporting one alongside
+    a deadline must never upgrade the outcome to SETTLED.
+    """
     harness.agent_settled = False
     harness.deadline_reached = True
+    harness.agent_end_observed = True
     result = harness.run(IQ1_TASK, evidence_path)
+    assert result.turn_outcome is SemanticTurnOutcome.DEADLINE_REACHED
+    assert result.agent_end_observed is True
     assert result.autonomous_classification is AutonomousClassification.AUTONOMOUS_FAIL
     assert result.diagnostic_subclassification is DiagnosticSubclassification.RUNTIME_TIMEOUT
 
 
-def test_semantic_turn_observation_rejects_neither_settled_nor_deadline() -> None:
+def test_semantic_turn_observation_outcome_is_exactly_three_valued() -> None:
+    """5F3B-Q1-PRE1-FU2: the terminal outcome is a closed three-value enum --
+    ``OBSERVATION_FAILED`` is the third state FU1's two-boolean shape denied,
+    and there is no way to construct a turn observation from raw text or from
+    an unbounded value."""
+    assert {member.value for member in SemanticTurnOutcome} == {
+        "SETTLED",
+        "DEADLINE_REACHED",
+        "OBSERVATION_FAILED",
+    }
     with pytest.raises(Exception):
-        SemanticTurnObservation(
-            runtime_session_id="rsess-1",
-            dispatch=SemanticPromptDispatchObservation(
-                run_id="run-1",
-                runtime_session_id="rsess-1",
-                task_id="IQ-1",
-                task_revision="IQ-1@abc",
-                dispatch_state=SemanticPromptDispatchState.CONFIRMED_SENT,
-            ),
-            call_succeeded=True,
-            agent_settled=False,
-            deadline_reached=False,
-        )
+        SemanticTurnObservation(runtime_session_id="rsess-1", turn_outcome="SETTLED")
+    observation = SemanticTurnObservation(
+        runtime_session_id="rsess-1", turn_outcome=SemanticTurnOutcome.SETTLED
+    )
+    # The derived properties are read-only projections of the ONE outcome --
+    # there is no second, independently-settable settled/deadline flag pair
+    # that could disagree with it.
+    assert observation.agent_settled is True
+    assert observation.deadline_reached is False
+    assert observation.observation_failed is False
+    with pytest.raises(AttributeError):
+        observation.agent_settled = False  # type: ignore[misc]
 
 
 # ===========================================================================
@@ -614,8 +669,10 @@ def test_pre_prompt_refusal_never_calls_the_prompt_adapter(
 ) -> None:
     harness.non_secret_gate_passed = False
     calls: list[object] = []
-    original = harness.send_semantic_prompt
-    harness.send_semantic_prompt = lambda request: calls.append(request) or original(request)
+    original = harness.dispatch_semantic_prompt
+    harness.dispatch_semantic_prompt = (
+        lambda request: calls.append(request) or original(request)
+    )
     harness.run(IQ1_TASK, evidence_path)
     assert calls == []
 
@@ -727,13 +784,13 @@ def test_prompt_dispatch_confirmed_not_sent_is_a_pre_prompt_refusal(
 def test_exactly_one_prompt_adapter_call_per_attempt(harness: Harness, evidence_path: str) -> None:
     _iq1_correct_repair(harness)
     call_count = {"n": 0}
-    original = harness.send_semantic_prompt
+    original = harness.dispatch_semantic_prompt
 
     def counting(request):
         call_count["n"] += 1
         return original(request)
 
-    harness.send_semantic_prompt = counting
+    harness.dispatch_semantic_prompt = counting
     harness.run(IQ1_TASK, evidence_path)
     assert call_count["n"] == 1
 
@@ -910,7 +967,12 @@ def test_unknown_candidate_is_refused(git_executable: str, evidence_path: str) -
             get_state=lambda s: (_ for _ in ()).throw(AssertionError("must not be called")),
             observe_protocol=lambda s: (_ for _ in ()).throw(AssertionError("must not be called")),
             route_checker=lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not be called")),
-            send_semantic_prompt=lambda r: (_ for _ in ()).throw(AssertionError("must not be called")),
+            dispatch_semantic_prompt=lambda r: (_ for _ in ()).throw(
+                AssertionError("must not be called")
+            ),
+            observe_semantic_turn=lambda r: (_ for _ in ()).throw(
+                AssertionError("must not be called")
+            ),
             collect_broker_activity=lambda s: (_ for _ in ()).throw(AssertionError("must not be called")),
             collect_final_report_claims=lambda s: (_ for _ in ()).throw(AssertionError("must not be called")),
             shutdown_runtime=lambda s: (_ for _ in ()).throw(AssertionError("must not be called")),
@@ -1015,7 +1077,7 @@ def test_closure_gate_status_text_matches_the_typed_object(
 # 5F3B-Q1-PRE1-FU1 -- semantic prompt dispatch truthfulness closure
 #
 # PRE-FIX DEFECT: `semantic_prompts_sent = 1` was assigned BEFORE the
-# dispatch adapter (`send_semantic_prompt`) was ever called, so ANY
+# dispatch adapter (`dispatch_semantic_prompt`) was ever called, so ANY
 # dispatch-gate outcome -- including one mechanically established as never
 # having been sent, or one AIDO could never establish either way -- was
 # recorded as though the one authorized prompt had been spent. This section
@@ -1042,7 +1104,15 @@ def _assert_indeterminate(result) -> None:
         result.gate_statuses[SemanticGateName.SEMANTIC_PROMPT_DISPATCH.value]
         == f"FAILED:{SemanticFailureCode.SEMANTIC_PROMPT_SEND_STATE_INDETERMINATE.value}"
     )
-    assert result.gate_statuses[SemanticGateName.EVIDENCE_SAFETY.value] == "NOT_REQUIRED"
+    # 5F3B-Q1-PRE1-FU2: an indeterminate attempt is no longer the one outcome
+    # that leaves nothing on disk. It emits the SIBLING attempt artifact --
+    # never the primary record, and never both.
+    assert result.gate_statuses[SemanticGateName.EVIDENCE_SAFETY.value] == "PASSED"
+    assert result.attempt_record is not None
+    assert result.attempt_record["emitted"] is True
+    assert result.attempt_record["refused"] is False
+    assert result.evidence_emission is not None
+    assert result.evidence_emission.refused is False
 
 
 # -- 1: dispatch is never called before same-run compatibility PASS --------
@@ -1053,8 +1123,10 @@ def test_dispatch_never_called_before_compatibility_established(
 ) -> None:
     monkeypatch.setattr(harness, "h2_ok", False)  # a late PRE_PROMPT gate fails
     calls: list[object] = []
-    original = harness.send_semantic_prompt
-    harness.send_semantic_prompt = lambda request: calls.append(request) or original(request)
+    original = harness.dispatch_semantic_prompt
+    harness.dispatch_semantic_prompt = (
+        lambda request: calls.append(request) or original(request)
+    )
     result = harness.run(IQ1_TASK, evidence_path)
     assert calls == []
     assert result.failed_gate in PRE_PROMPT_GATES
@@ -1079,7 +1151,7 @@ def test_semantic_prompts_sent_assigned_only_after_dispatch_confirmed_source_lev
     assert len(assignment_matches) == 1
     assignment_idx = assignment_matches[0].start()
     dispatch_call_idx = source.index(
-        "turn_observation = send_semantic_prompt(prompt_request)"
+        "dispatch_observation = dispatch_semantic_prompt(prompt_request)"
     )
     confirmed_sent_check_idx = source.index(
         "if dispatch_state is SemanticPromptDispatchState.CONFIRMED_NOT_SENT:"
@@ -1121,7 +1193,7 @@ def test_generic_dispatch_exception_is_send_state_indeterminate(
     def _raises(request: SemanticPromptRequest):
         raise RuntimeError("adapter blew up -- unknown whether the wire write happened")
 
-    harness.send_semantic_prompt = _raises
+    harness.dispatch_semantic_prompt = _raises
     result = harness.run(IQ1_TASK, evidence_path)
     _assert_indeterminate(result)
 
@@ -1141,7 +1213,7 @@ def test_exception_after_possible_send_is_still_indeterminate_never_sent(
         sent_marker["maybe_sent"] = True
         raise ConnectionResetError("wire dropped after (maybe) writing the request")
 
-    harness.send_semantic_prompt = _raises_after_side_effect
+    harness.dispatch_semantic_prompt = _raises_after_side_effect
     result = harness.run(IQ1_TASK, evidence_path)
     assert sent_marker["maybe_sent"] is True
     _assert_indeterminate(result)
@@ -1153,7 +1225,7 @@ def test_exception_after_possible_send_is_still_indeterminate_never_sent(
 def test_wrong_type_dispatch_result_is_send_state_indeterminate(
     harness: Harness, evidence_path: str
 ) -> None:
-    harness.send_semantic_prompt = lambda request: SimpleNamespace(
+    harness.dispatch_semantic_prompt = lambda request: SimpleNamespace(
         runtime_session_id=request.runtime_session.runtime_session_id, call_succeeded=True
     )
     result = harness.run(IQ1_TASK, evidence_path)
@@ -1185,7 +1257,7 @@ def test_subclass_of_turn_observation_is_send_state_indeterminate(
             agent_settled=True,
         )
 
-    harness.send_semantic_prompt = _returns_subclass
+    harness.dispatch_semantic_prompt = _returns_subclass
     result = harness.run(IQ1_TASK, evidence_path)
     _assert_indeterminate(result)
 
@@ -1214,7 +1286,7 @@ def test_wholly_foreign_but_internally_consistent_observation_is_indeterminate(
             agent_settled=True,
         )
 
-    harness.send_semantic_prompt = _wrong_session_entirely
+    harness.dispatch_semantic_prompt = _wrong_session_entirely
     result = harness.run(IQ1_TASK, evidence_path)
     _assert_indeterminate(result)
 
@@ -1250,7 +1322,7 @@ def test_mismatched_dispatch_provenance_is_send_state_indeterminate(
             agent_settled=True,
         )
 
-    harness.send_semantic_prompt = _mismatched
+    harness.dispatch_semantic_prompt = _mismatched
     result = harness.run(IQ1_TASK, evidence_path)
     _assert_indeterminate(result)
 
@@ -1283,7 +1355,7 @@ def test_indeterminate_dispatch_causes_no_retry(
         call_count["n"] += 1
         raise RuntimeError("boom")
 
-    harness.send_semantic_prompt = _raises_once_counted
+    harness.dispatch_semantic_prompt = _raises_once_counted
     result = harness.run(IQ1_TASK, evidence_path)
     assert call_count["n"] == 1
     _assert_indeterminate(result)
@@ -1356,7 +1428,7 @@ def test_cleanup_classification_after_indeterminate_dispatch_invents_nothing(
     def _raises(request: SemanticPromptRequest):
         raise RuntimeError("boom")
 
-    harness.send_semantic_prompt = _raises
+    harness.dispatch_semantic_prompt = _raises
     monkeypatch.setattr(
         mod,
         "scrub_generated_qualification_config",
@@ -1397,7 +1469,7 @@ def test_result_semantic_prompts_sent_cannot_contradict_indeterminate(
     def _raises(request: SemanticPromptRequest):
         raise RuntimeError("boom")
 
-    harness.send_semantic_prompt = _raises
+    harness.dispatch_semantic_prompt = _raises
     result = harness.run(IQ1_TASK, evidence_path)
     assert result.dispatch_state is SemanticPromptDispatchState.SEND_STATE_INDETERMINATE
     with pytest.raises(ValueError):
@@ -1430,7 +1502,7 @@ def test_candidate_a_and_b_indeterminate_dispatch_semantics_are_identical(
     def _raises(request: SemanticPromptRequest):
         raise RuntimeError("boom")
 
-    h.send_semantic_prompt = _raises
+    h.dispatch_semantic_prompt = _raises
     result = h.run(IQ1_TASK, evidence_path)
     _assert_indeterminate(result)
     assert result.candidate == candidate
@@ -1484,11 +1556,11 @@ def test_pre_fix_counterexample_is_closed(git_executable: str, tmp_path: Path) -
     scenarios.append(h1.run(IQ1_TASK, str(tmp_path / "a.json")))
 
     h2 = Harness("A", git_executable)
-    h2.send_semantic_prompt = lambda request: (_ for _ in ()).throw(RuntimeError("boom"))
+    h2.dispatch_semantic_prompt = lambda request: (_ for _ in ()).throw(RuntimeError("boom"))
     scenarios.append(h2.run(IQ1_TASK, str(tmp_path / "b.json")))
 
     h3 = Harness("A", git_executable)
-    h3.send_semantic_prompt = lambda request: object()
+    h3.dispatch_semantic_prompt = lambda request: object()
     scenarios.append(h3.run(IQ1_TASK, str(tmp_path / "c.json")))
 
     for result in scenarios:

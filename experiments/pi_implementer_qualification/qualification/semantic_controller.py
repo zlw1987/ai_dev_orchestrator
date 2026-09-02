@@ -103,27 +103,88 @@ Gate order
       -> no protocol/extension error       (injected, session-bound)
       -> exact candidate model served      (reused i2_route, unmodified)
       -- compatibility facts end here; same 13 facts as Category-B --
-      -> ONE semantic prompt dispatched    (injected)   [NEW]
-      -> turn completion observed          (agent_settled / deadline_reached)   [NEW]
-      -> broker activity collected         (injected)   [NEW]
-      -> repository observed               (reused ar2.observation, unmodified)   [NEW]
-      -> authoritative verification        (reused ar2.verification, unmodified)   [NEW]
-      -> final report claims collected     (injected)   [NEW]
+      -> PHASE 1: ONE semantic prompt dispatched   (injected)
+           -> CONFIRMED_SENT / CONFIRMED_NOT_SENT / SEND_STATE_INDETERMINATE
+      -> PHASE 2: turn completion observed         (injected; ONLY after
+           CONFIRMED_SENT) -> SETTLED / DEADLINE_REACHED / OBSERVATION_FAILED
+      -> broker activity collected         (injected)
+      -> repository observed               (reused ar2.observation, unmodified)
+      -> authoritative verification        (reused ar2.verification, unmodified)
+      -> final report claims collected     (injected; OPTIONAL, NEVER GATING)
       -- post-turn facts end here --
       -> runtime teardown                  (frozen O1 order: runtime first)
       -> broker shutdown                   (frozen O1 order: broker second)
       -> generated-config cleanup          (reused i2_cleanup, unmodified)
+      -> semantic workspace removal + verification   (reused i2b_workspace)
       -> retained-evidence safety gate     (reused qualification.safety)
 
-Exactly ONE semantic prompt
-----------------------------
+Exactly ONE semantic prompt, in TWO observation phases
+-------------------------------------------------------
 
 :data:`MAX_SEMANTIC_PROMPTS_PER_ATTEMPT` is a module constant ``1``. This
-module defines no retry, no continuation, and no second call to the prompt
+module defines no retry, no continuation, and no second call to the dispatch
 adapter for any reason -- not a stall, not a wrong result, not an adapter
-error.
+error. There is exactly one call site for ``dispatch_semantic_prompt`` and
+exactly one for ``observe_semantic_turn``, and the second is reachable only
+after the first established ``CONFIRMED_SENT``.
+
+**5F3B-Q1-PRE1-FU2 -- dispatch authority is separate from turn completion.**
+Independent review established, from Pi 0.84.4's own source, that FU1's
+single whole-turn adapter is not faithful to the real seam: Pi emits a
+correlated ``prompt`` response after preflight and STRICTLY BEFORE agent
+start and any provider inference, so the send fact exists long before turn
+completion does. Every reachable post-acknowledgement failure --
+``RUNTIME_PROTOCOL_VIOLATION``, ``RUNTIME_OUTPUT_CAP_EXCEEDED``,
+``RUNTIME_EVENT_CAP_EXCEEDED``, ``RUNTIME_READ_ERROR``,
+``RUNTIME_EXITED_EARLY``, or a phase-2 adapter bug -- left FU1's live adapter
+exactly two options, both wrong: fabricate ``deadline_reached``, or raise and
+have the controller ERASE an already-established ``CONFIRMED_SENT`` into
+``SEND_STATE_INDETERMINATE``. The second is the fairness-critical one: it
+converts a KNOWN SPENT prompt into an UNKNOWN one.
+
+So the send fact and the turn fact are now two adapters and two types:
+
+.. code-block:: text
+
+    PHASE 1  dispatch_semantic_prompt(SemanticPromptRequest)
+               -> SemanticPromptDispatchObservation
+             CONFIRMED_NOT_SENT | CONFIRMED_SENT | SEND_STATE_INDETERMINATE
+                  |
+                  v
+             PROMPT-COUNT TRUTH FIXED HERE, ONCE, AND NEVER REWRITTEN
+                  |
+                  v  (only for CONFIRMED_SENT)
+    PHASE 2  observe_semantic_turn(SemanticTurnRequest)
+               -> SemanticTurnObservation
+             SETTLED | DEADLINE_REACHED | OBSERVATION_FAILED
+
+Invariant I-1 (monotonicity), mechanically: ``_DispatchIndeterminate`` is
+raised from inside the phase-1 block and NOWHERE ELSE, and
+``semantic_prompts_sent = 1`` dominates every statement that follows it. No
+phase-2 outcome, no broker/repository/verification/report-claims failure, no
+runtime-teardown, broker-shutdown, generated-config-cleanup, **workspace
+removal** (Sec. 9.1.6) or evidence-emission failure can move it back to
+``SEND_STATE_INDETERMINATE`` or to ``0``.
+
+Invariant I-2 (no send by convention): calling the adapter establishes
+nothing. ``CONFIRMED_SENT``/``CONFIRMED_NOT_SENT`` may be produced ONLY by a
+returned, well-typed, provenance-matched observation carrying a bounded
+evidence code -- never by an exception, and never by having called a Python
+function.
+
+Exactly ONE retained artifact per invoked attempt
+--------------------------------------------------
+
+Sec. 3.F. A determinate send state emits the frozen
+``pi-implementer-qualification.v1`` primary record; an indeterminate one
+emits the sibling ``pi-implementer-qualification-attempt.v1``
+(:mod:`qualification.semantic_attempt`) through the SAME
+``safety.emit_evidence_or_refuse`` choke point. Never zero -- which is what
+FU1 left behind for the one outcome where AIDO cannot prove whether the
+candidate's single authorized prompt was spent -- and never two.
 
 **5F3B-Q1-PRE1-FU1 -- ``semantic_prompts_sent`` is truth, not timing.**
+(Retained for provenance; FU2 above supersedes its single-adapter shape.)
 Independent review reproduced a defect in this module's ORIGINAL PRE1 form:
 ``semantic_prompts_sent = 1`` was assigned immediately BEFORE the dispatch
 adapter (``send_semantic_prompt``) was even called, so ANY dispatch-gate
@@ -163,8 +224,12 @@ are both repository-controlled code, not confined.
 
 from __future__ import annotations
 
+import hashlib
+import json
+import secrets
 from dataclasses import dataclass, field, fields
 from enum import Enum
+from types import MappingProxyType
 from typing import Any, Callable, Mapping, Sequence
 
 from ar2.observation import (
@@ -199,6 +264,7 @@ from .i2_pi_config import (
     write_qualification_pi_config,
 )
 from .i2_route import (
+    CREDENTIAL_MECHANISM,
     RouteCheckOutcome,
     RouteDescriptor,
     RouteDescriptorError,
@@ -238,19 +304,31 @@ from .i2b_workspace import (
     WorkspaceAuthorityError,
     claim_run_workspace,
     mint_qualification_run_workspace,
+    remove_run_workspace,
 )
 from .outcomes import AutonomousClassification, DiagnosticSubclassification, OutcomeClassification, RunFacts, classify_outcome
 from .records import CANDIDATE_MODEL_IDS, build_qualification_record, emit_or_refuse
 from .report_accuracy import ClaimComparison, ObservedFacts, ReportClaims, bucket_report_accuracy, compare_report
 from .safety import ArtifactSafetyContext, qualification_scrub_check
+from .semantic_attempt import (
+    CLASSIFICATION_UNAVAILABLE_REASON,
+    build_attempt_record,
+    emit_attempt_or_refuse,
+)
 from .scope import RefusalEvent, ScopeResult, attribute_protocol_anomaly, build_scope_result, has_hard_disqualifier
 from .semantic_session import (
+    DISPATCH_EVIDENCE_CODE_STATES,
     BrokerActivityObservation,
     FinalReportClaimsObservation,
+    SemanticDispatchEvidenceCode,
+    SemanticPromptDispatchObservation,
     SemanticPromptDispatchState,
     SemanticPromptRequest,
     SemanticTurnObservation,
+    SemanticTurnOutcome,
+    SemanticTurnRequest,
     require_dispatch_matches_request,
+    require_turn_matches_request,
 )
 from .semantic_workspace import SemanticTaskWorkspace, SemanticWorkspaceError, populate_semantic_task_workspace
 from .validity import RunValidity, ValidityResult, resolve_run_validity
@@ -302,6 +380,13 @@ class SemanticGateName(str, Enum):
     RUNTIME_TEARDOWN = "runtime_teardown"
     BROKER_SHUTDOWN = "broker_shutdown"
     GENERATED_CONFIG_CLEANUP = "generated_config_cleanup"
+    #: 5F3B-Q1-PRE1-FU2 / DESIGN-FU1 Sec. 9.1: the attempt OWNS its
+    #: workspace from the instant mint returns, and every terminal path
+    #: after mint attempts removal exactly once -- AFTER runtime teardown
+    #: and broker shutdown (whose cwd/capability scope are bound to that
+    #: tree) and AFTER the authority-scoped generated-config scrub, but
+    #: strictly BEFORE any evidence is constructed or emitted.
+    SEMANTIC_WORKSPACE_REMOVAL = "semantic_workspace_removal"
     EVIDENCE_SAFETY = "evidence_safety"
 
 
@@ -345,10 +430,37 @@ POST_PROMPT_GATES: tuple[SemanticGateName, ...] = (
     SemanticGateName.FINAL_REPORT_CLAIMS,
 )
 
+#: 5F3B-Q1-PRE1-FU2 / DESIGN-FU1 Sec. 9.3: the model's own final assistant
+#: report is **OPTIONAL, UNTRUSTED** evidence and is NOT a qualification
+#: gate. Its unavailability -- an adapter exception, a wrong-type return, a
+#: foreign-session observation, or claims that fail bounded parsing -- must
+#: never route through the shared ``_GateFailure``/``failed_gate`` machinery
+#: that genuinely gating post-prompt facts use, because that path feeds
+#: ``attribute_protocol_anomaly`` and would turn a fully-verified,
+#: fully-closed run into ``ATTRIBUTION_UNDETERMINED`` and unscorable. The
+#: authority hierarchy is repository observation, authoritative
+#: verification, broker/Git cross-check and scope/refusal facts FIRST; the
+#: model's self-report is never promoted to implementation authority by a
+#: collection failure any more than by its content.
+NON_GATING_POST_PROMPT_GATES: tuple[SemanticGateName, ...] = (
+    SemanticGateName.FINAL_REPORT_CLAIMS,
+)
+
+#: The post-prompt gates whose failure MAY set ``failed_gate``.
+GATING_POST_PROMPT_GATES: tuple[SemanticGateName, ...] = tuple(
+    gate for gate in POST_PROMPT_GATES if gate not in NON_GATING_POST_PROMPT_GATES
+)
+
+#: The FROZEN closure order (DESIGN-FU1 Sec. 9.1.3), which is also the
+#: order this tuple declares and the order the controller executes:
+#: runtime teardown -> broker shutdown -> generated-config cleanup ->
+#: semantic workspace removal + verification -> retained-evidence
+#: construction/scrub/emission.
 CLOSURE_GATES: tuple[SemanticGateName, ...] = (
     SemanticGateName.RUNTIME_TEARDOWN,
     SemanticGateName.BROKER_SHUTDOWN,
     SemanticGateName.GENERATED_CONFIG_CLEANUP,
+    SemanticGateName.SEMANTIC_WORKSPACE_REMOVAL,
     SemanticGateName.EVIDENCE_SAFETY,
 )
 
@@ -376,11 +488,25 @@ class SemanticFailureCode(str, Enum):
     #: Dispatch was attempted but AIDO cannot mechanically establish whether
     #: it was sent (5F3B-Q1-PRE1-FU1). Never `semantic_prompts_sent` 0 or 1.
     SEMANTIC_PROMPT_SEND_STATE_INDETERMINATE = "SEMANTIC_PROMPT_SEND_STATE_INDETERMINATE"
-    TURN_DID_NOT_TERMINATE = "TURN_DID_NOT_TERMINATE"
+    #: 5F3B-Q1-PRE1-FU2: PHASE 2 reported ``OBSERVATION_FAILED`` -- the
+    #: turn became unobservable to AIDO (protocol violation, output cap,
+    #: event cap, read error, early child exit, or a raised/malformed
+    #: phase-2 adapter result). This NEVER contests the already-established
+    #: ``CONFIRMED_SENT`` / ``semantic_prompts_sent = 1``, and it is never
+    #: reported as a deadline: AIDO stopped being able to watch, which is
+    #: not a claim that Pi stopped or that inference stopped. It replaces
+    #: FU1's ``TURN_DID_NOT_TERMINATE``, which existed only because the old
+    #: two-valued turn type could not represent this reachable state.
+    TURN_OBSERVATION_FAILED = "TURN_OBSERVATION_FAILED"
     BROKER_ACTIVITY_COLLECTION_FAILED = "BROKER_ACTIVITY_COLLECTION_FAILED"
     REPOSITORY_OBSERVATION_FAILED = "REPOSITORY_OBSERVATION_FAILED"
     VERIFICATION_EXECUTION_FAILED = "VERIFICATION_EXECUTION_FAILED"
-    FINAL_REPORT_CLAIMS_COLLECTION_FAILED = "FINAL_REPORT_CLAIMS_COLLECTION_FAILED"
+    # 5F3B-Q1-PRE1-FU2 removed FINAL_REPORT_CLAIMS_COLLECTION_FAILED. There
+    # is deliberately no bounded FAILURE code for the final-report gate any
+    # more: DESIGN-FU1 Sec. 9.3 makes report availability a non-gating,
+    # descriptive `ReportAvailability` fact, and leaving a failure code in
+    # this enum is exactly the seam through which it would be re-wired into
+    # `failed_gate` -> `attribute_protocol_anomaly` -> ATTRIBUTION_UNDETERMINED.
     MALFORMED_ADAPTER_RESULT = "MALFORMED_ADAPTER_RESULT"
     ADAPTER_RAISED = "ADAPTER_RAISED"
     #: A cleanup-verification failure occurred while this run's dispatch
@@ -391,12 +517,422 @@ class SemanticFailureCode(str, Enum):
     GENERATED_CONFIG_CLEANUP_UNVERIFIED_INDETERMINATE_DISPATCH = (
         "GENERATED_CONFIG_CLEANUP_UNVERIFIED_INDETERMINATE_DISPATCH"
     )
+    #: 5F3B-Q1-PRE1-FU2 / DESIGN-FU1 Sec. 9.1.4: the semantic workspace's
+    #: removal was attempted and NOT proven. "Not proven" is the strict
+    #: frozen predicate, never truthiness and never absence-of-exception.
+    SEMANTIC_WORKSPACE_REMOVAL_UNVERIFIED = "SEMANTIC_WORKSPACE_REMOVAL_UNVERIFIED"
+    #: The same removal failure, under a dispatch send state that was
+    #: mechanically indeterminate. No 0/1 cleanup classifier is fabricated
+    #: for workspace removal any more than for the generated-config scrub.
+    SEMANTIC_WORKSPACE_REMOVAL_UNVERIFIED_INDETERMINATE_DISPATCH = (
+        "SEMANTIC_WORKSPACE_REMOVAL_UNVERIFIED_INDETERMINATE_DISPATCH"
+    )
 
 
 #: Either failure-code family may appear in a result. Both are exact-value
 #: ``str`` enums; a gate-status text is always ``FAILED:<member.value>`` for
 #: exactly one of them, never a hand-built string.
 FailureCode = CategoryBFailureCode | SemanticFailureCode
+
+
+# ===========================================================================
+# 5F3B-Q1-PRE1-FU2 / DESIGN-FU1 Sec. 9.4 -- DEEP in-memory immutability
+# ===========================================================================
+# ``@dataclass(frozen=True)`` only refuses reassigning the FIELD; it never
+# refuses MUTATING the object the field refers to. A frozen result whose
+# ``gate_statuses`` is a plain ``dict``, or whose record projection holds a
+# live reference to a nested mutable ``list``, is therefore NOT immutable in
+# the sense classification, the hard bar, ranking, evidence generation and
+# audit all depend on -- a caller could rewrite a validated gate outcome, or
+# flip the ``refused`` flag the sweep derives ``artifact_scrub_passed`` from,
+# after every validation had already run.
+#
+# Two rules make the helpers below sufficient rather than decorative:
+#
+# 1. **Copy BEFORE wrapping.** ``MappingProxyType`` is a live VIEW: it keeps
+#    reflecting mutations of the dict it wraps. Wrapping a caller-supplied
+#    dict would leave the caller holding a mutation handle. Every helper here
+#    builds a fresh container and wraps THAT, and the fresh container is a
+#    throwaway the constructing scope never retains.
+# 2. **Recurse.** A proxy over a dict whose values are lists is still
+#    mutable one level down, so nested lists/tuples become tuples, sets
+#    become frozensets, and nested mappings become proxies over their own
+#    fresh copies.
+#
+# This is in-memory immutability ONLY. Disk-artifact immutability is the
+# separate, already-accepted ``safety.write_evidence_exclusively``
+# ``O_CREAT | O_EXCL`` property, and satisfying one has never satisfied the
+# other -- this whole section exists precisely because the first was already
+# true while the second was not.
+
+
+def freeze_value(value: Any) -> Any:
+    """Recursively project ``value`` onto an immutable equivalent."""
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: freeze_value(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(freeze_value(item) for item in value)
+    if isinstance(value, (set, frozenset)):
+        return frozenset(freeze_value(item) for item in value)
+    return value
+
+
+def freeze_mapping(mapping: Mapping[Any, Any]) -> Mapping[Any, Any]:
+    """A read-only proxy over a fresh, recursively-immutable COPY of ``mapping``.
+
+    The backing dict is created here and never returned, stored, or otherwise
+    reachable, so no supported caller holds a handle that could mutate what
+    the proxy shows.
+    """
+    return MappingProxyType({key: freeze_value(item) for key, item in mapping.items()})
+
+
+#: 5F3B-Q1-PRE1-FU2A-FU1A-FU1: byte length of the per-attempt authority token
+#: minted once per :func:`run_semantic_task_attempt` invocation -- same
+#: length as ``i2_pi_config``'s own ``_AUTHORITY_TOKEN_BYTES`` precedent.
+_ATTEMPT_AUTHORITY_TOKEN_BYTES = 16
+
+
+# ===========================================================================
+# 5F3B-Q1-PRE1-FINAL-CLOSURE: ONE-SHOT attempt-authority ISSUANCE REGISTRY
+# ===========================================================================
+# 5F3B-Q1-PRE1-FU2A-FU1A-FU1-FU1 first closed the "borrow a genuine,
+# internally-self-consistent evidence bundle from a DIFFERENT attempt"
+# replay by binding each token to a fingerprint of the facts OUTSIDE that
+# bundle (gate chronology, dispatch outcome, run validity, scoring
+# eligibility, classification, verification). Independent review then
+# reproduced a STRONGER replay: the fingerprint itself is derived entirely
+# from caller-replaceable `SemanticTaskAttemptResult` fields, so a
+# `replace()` call that ALSO copies the foreign attempt's own
+# `gate_statuses` (or, for two otherwise-identical correct attempts,
+# whatever OTHER fingerprinted field happens to differ) reconstructs a
+# fingerprint that matches the foreign token's registered one -- because
+# nothing stops the SAME facts from simply being copied alongside the
+# bundle. Adding more fields to the fingerprint only enlarges the set that a
+# `replace()` call can copy; it does not close the seam.
+#
+# The actual fix: `SemanticTaskAttemptResult` construction now consumes a
+# ONE-SHOT issuance, mirroring `qualification.i2_issuance`'s own
+# register/finalize/one-shot precedent (a token already finalized there
+# refuses a SECOND finalization; here, a token already consumed refuses a
+# SECOND consumption, full stop):
+#
+#     `run_semantic_task_attempt` REGISTERS one PENDING (token, fingerprint)
+#     pair -- ONCE, immediately before constructing its own genuine
+#     `SemanticTaskAttemptResult`.
+#
+#     `SemanticTaskAttemptResult.__post_init__`, after every other
+#     invariant already holds, ATOMICALLY requires-and-consumes that pending
+#     issuance: the token must currently be pending, the re-derived
+#     fingerprint must match what was registered, and -- regardless of
+#     whether the match succeeds -- the entry is deleted as part of the SAME
+#     step. A token can therefore back AT MOST ONE `SemanticTaskAttemptResult`
+#     construction, ever, successful or not.
+#
+# **This makes `SemanticTaskAttemptResult` a valid-by-construction,
+# one-shot authority object, not a freely reconstructible DTO.** After the
+# genuine controller-created result has consumed its issuance, NO later
+# `dataclasses.replace(genuine_result, ...)` can ever construct another
+# authority-bearing instance from it -- including one that touches only an
+# "unrelated" field, and including one that faithfully copies the ENTIRE
+# caller-visible field set of a DIFFERENT genuine result. That is
+# intentional: it is no longer possible to distinguish "copies the whole
+# foreign result" from "copies the whole foreign result plus grafts it onto
+# different other facts" by inspecting fields alone, so the only sound
+# boundary is that the issuance itself is single-use.
+#
+# **EPHEMERAL PROCESS MEMORY ONLY** -- exactly like `i2_issuance._REGISTRY`:
+# a plain module-level ``dict``, never written to disk, never an evidence
+# field, carries no claim of surviving a process restart. This is NOT a
+# generic provenance framework: there is no public mutation API, no path or
+# directory concept, and the ONE fingerprinted field set is fixed and named,
+# not caller-configurable.
+_PENDING_ATTEMPT_AUTHORITY: dict[str, str] = {}
+
+
+def _register_attempt_authority(token: str, fingerprint: str) -> None:
+    """Register ONE pending issuance. Package-internal only -- called
+    EXACTLY ONCE per genuine attempt, by :func:`run_semantic_task_attempt`
+    itself, immediately before it constructs its own
+    :class:`SemanticTaskAttemptResult`. Not part of any supported public
+    API.
+    """
+    if token in _PENDING_ATTEMPT_AUTHORITY:
+        raise ValueError(
+            "attempt authority token already registered -- a fresh, random "
+            "token must never collide"
+        )
+    _PENDING_ATTEMPT_AUTHORITY[token] = fingerprint
+
+
+def _consume_pending_attempt_authority(token: str, fingerprint: str) -> None:
+    """Atomically require-and-consume ONE pending attempt-authority issuance.
+
+    Package-internal only -- called EXACTLY ONCE per
+    :class:`SemanticTaskAttemptResult` construction, from its own
+    ``__post_init__``, after every other invariant already holds.
+
+    Raises :class:`ValueError` unless ``token`` is CURRENTLY a pending
+    (unconsumed) issuance whose registered fingerprint equals ``fingerprint``
+    exactly. The entry is deleted as part of THIS SAME call regardless of
+    whether the match succeeds -- a token is consumed by exactly one
+    construction attempt, successful or not, so a failed/mismatched
+    construction can never leave a consumed issuance reusable, and a
+    genuinely successful one leaves no registry entry behind at all.
+    """
+    registered = _PENDING_ATTEMPT_AUTHORITY.pop(token, None)
+    if registered is None:
+        raise ValueError(
+            "SemanticTaskAttemptResult: no pending attempt authority for this "
+            "identity_provenance.attempt_authority_token -- it was never issued, "
+            "or it has already been consumed by an earlier construction. A "
+            "SemanticTaskAttemptResult is a one-shot, valid-by-construction "
+            "authority object: its issuance can back at most ONE construction, "
+            "ever, including a dataclasses.replace() that touches only an "
+            "unrelated field"
+        )
+    if registered != fingerprint:
+        raise ValueError(
+            "SemanticTaskAttemptResult: this result's own facts disagree with "
+            "the fingerprint its identity_provenance.attempt_authority_token was "
+            "genuinely issued for -- an evidence bundle borrowed from a "
+            "DIFFERENT attempt, even when every object in it is genuine and "
+            "internally self-consistent, cannot authorize a different attempt's "
+            "own facts. The token is now consumed regardless: this same "
+            "mismatched attempt can never be retried into a match"
+        )
+
+
+def _authorized_facts_fingerprint(
+    *,
+    gate_statuses: Mapping[str, str],
+    dispatch_state: SemanticPromptDispatchState,
+    semantic_prompts_sent: int | None,
+    run_validity: RunValidity | None,
+    scoring_eligible: bool,
+    autonomous_classification: AutonomousClassification | None,
+    diagnostic_subclassification: DiagnosticSubclassification | None,
+    verification_passed: bool | None,
+) -> str:
+    """A deterministic SHA-256 fingerprint of exactly the facts THIS
+    attempt's authority is issued for -- everything meaningfully OUTSIDE the
+    ``identity_provenance``/``evidence_emission``/``qualification_record``/
+    ``attempt_record`` bundle itself, so it can never be satisfied merely by
+    that bundle's own internal consistency. ``gate_statuses`` alone already
+    guarantees divergence between a scrub-refused attempt and a successful
+    one -- ``gate_statuses[EVIDENCE_SAFETY]`` is set to a materially
+    different literal status for each (see ``_fail_status``/``_pass`` at the
+    ``EVIDENCE_SAFETY`` gate below) -- but the full set is included so a
+    borrowed bundle cannot be reattached to a result whose OUTCOME differs in
+    any of these dimensions either.
+
+    Genuine construction always passes real enum members here, but this
+    function is also reachable from ``SemanticTaskAttemptResult.__post_init__``
+    BEFORE that field's own type is otherwise validated in the general
+    (non-``SEND_STATE_INDETERMINATE``) case -- so a malformed/forged
+    ``run_validity``/``autonomous_classification``/``diagnostic_subclassification``
+    (e.g. a plain string substituted via ``replace()``) must never crash this
+    function; :func:`_safe_enum_value` renders it as a value that simply
+    cannot equal any GENUINE enum's own ``.value``, which is exactly the
+    correct (divergent, never falsely-matching) outcome.
+    """
+
+    def _safe_enum_value(value: object) -> object:
+        if value is None:
+            return None
+        rendered = getattr(value, "value", None)
+        if isinstance(rendered, (str, int, float, bool)):
+            return rendered
+        return repr(value)
+
+    canonical = json.dumps(
+        {
+            "gate_statuses": dict(gate_statuses),
+            "dispatch_state": _safe_enum_value(dispatch_state),
+            "semantic_prompts_sent": semantic_prompts_sent,
+            "run_validity": _safe_enum_value(run_validity),
+            "scoring_eligible": scoring_eligible,
+            "autonomous_classification": _safe_enum_value(autonomous_classification),
+            "diagnostic_subclassification": _safe_enum_value(diagnostic_subclassification),
+            "verification_passed": verification_passed,
+        },
+        sort_keys=True,
+        default=repr,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _require_evidence_emission_field_shape(
+    *,
+    emitted: object,
+    refused: object,
+    path: object,
+    scrub_checked: object,
+    clean: object,
+    findings: object,
+    attempt_authority_token: object = None,
+) -> None:
+    """The full field-shape contract EVERY :class:`EvidenceEmission` instance
+    must satisfy, genuine or not. Shared by the public constructor's
+    ``__post_init__`` AND the one genuine, bypass-minted success path inside
+    :func:`run_semantic_task_attempt`, so neither can drift from the other.
+
+    ``attempt_authority_token`` is ``None`` for every instance built through
+    the class's own public constructor (5F3B-Q1-PRE1-FU2A-FU1A-FU1) -- only
+    ``run_semantic_task_attempt``'s internal minting bypass ever sets a real
+    one, so a ``None`` value here can never satisfy the pairing check in
+    ``SemanticTaskAttemptResult.__post_init__``.
+    """
+    require_exact_bool("EvidenceEmission.emitted", emitted)
+    require_exact_bool("EvidenceEmission.refused", refused)
+    require_exact_bool("EvidenceEmission.scrub_checked", scrub_checked)
+    require_exact_bool("EvidenceEmission.clean", clean)
+    if attempt_authority_token is not None and (
+        not isinstance(attempt_authority_token, str) or not attempt_authority_token
+    ):
+        raise ValueError(
+            "EvidenceEmission.attempt_authority_token must be None or a non-blank str"
+        )
+    if not isinstance(path, str) or not path:
+        raise ValueError("EvidenceEmission.path must be a non-blank str")
+    if not isinstance(findings, tuple) or not all(
+        isinstance(entry, str) for entry in findings
+    ):
+        raise ValueError("EvidenceEmission.findings must be a tuple of str")
+    if refused == clean:
+        raise ValueError(
+            "EvidenceEmission: a refused emission is exactly an unclean scrub, "
+            "and a clean scrub is exactly a non-refused emission"
+        )
+    # 5F3B-Q1-PRE1-FU2A: both of `emit_evidence_or_refuse`'s own return
+    # shapes always carry `emitted=True` and `scrub_checked=True` -- it
+    # never returns any other combination (a write failure raises instead of
+    # returning). Neither field is EVER genuinely False.
+    if not emitted:
+        raise ValueError(
+            "EvidenceEmission.emitted must be True -- a real evidence emission "
+            "always completed a write attempt; False can never describe a "
+            "genuine outcome"
+        )
+    if not scrub_checked:
+        raise ValueError(
+            "EvidenceEmission.scrub_checked must be True -- a real evidence "
+            "emission is always scrub-checked before either branch returns"
+        )
+    if refused is False and findings:
+        raise ValueError(
+            "EvidenceEmission: a non-refused (successful) emission must carry "
+            "no scrub findings"
+        )
+
+
+@dataclass(frozen=True)
+class EvidenceEmission:
+    """The NARROW typed projection of one evidence-emission outcome.
+
+    DESIGN-FU1 Sec. 9.4.2 names this the preferred shape over re-exposing
+    ``safety.emit_evidence_or_refuse``'s raw return object by reference: the
+    ON-DISK artifact is the actual evidence, and this is only the bounded
+    in-memory statement of what happened to it. ``findings`` is a tuple of
+    bounded finding CODES -- never a needle, never a value, and never a
+    mutable list.
+
+    This is the field the sweep's hard-bar projection reads for H-14
+    (``artifact_scrub_passed``); it cannot be mutated after construction, so
+    that fact can no longer drift from the immutable file it describes.
+
+    5F3B-Q1-PRE1-FU2A-FU1A -- **the public constructor can NEVER produce a
+    successful (``refused=False``) instance, under ANY arguments.**
+    Independent review proved the FU2A-FU1 ``_issuance`` sentinel field
+    still forgeable: ``EvidenceEmission(..., refused=False, ...,
+    _issuance=object())`` satisfied the old ``self._issuance is not None``
+    check, because ANY non-``None`` object -- not one specific, unobtainable
+    value -- passed it. There is no field, sentinel, or token value left to
+    steal: ``__post_init__`` below refuses ``refused=False``
+    UNCONDITIONALLY, for every call that reaches it through this class's own
+    ``__init__``.
+
+    The ONE genuine success instance is minted a completely DIFFERENT way,
+    by a function nested inside :func:`run_semantic_task_attempt` (never a
+    module attribute, never importable): via ``object.__new__(EvidenceEmission)``
+    plus ``object.__setattr__`` for each field, which bypasses ``__init__``/
+    ``__post_init__`` entirely -- the identical technique this package's own
+    frozen dataclasses already use internally (e.g. deep-immutability
+    freezing) to populate a frozen instance without going through its public
+    constructor. That bypass path still runs the FULL field-shape contract
+    (:func:`_require_evidence_emission_field_shape`, shared with
+    ``__post_init__``) before minting, so it can never mint a malformed
+    instance either -- only the "``refused=False`` is unconditionally
+    refused" rule is specific to the public path.
+
+    5F3B-Q1-PRE1-FU2A-FU1A-FU1 -- **``attempt_authority_token`` binds a
+    genuine instance to the ONE attempt it was minted for.** Independent
+    review proved that unforgeability as a class instance was not enough: a
+    caller cannot construct a NEW successful ``EvidenceEmission``, but it did
+    not need to -- it could REPLAY a genuine successful instance minted for a
+    DIFFERENT attempt (a different run, task, or candidate) by attaching it
+    to a result whose own ``path``/``refused`` projection was forged to
+    match. ``attempt_authority_token`` is a fresh, random, per-attempt value
+    minted once inside :func:`run_semantic_task_attempt` and threaded into
+    BOTH this instance and that SAME call's ``identity_provenance``
+    (:class:`_AttemptIdentityProvenance`); ``SemanticTaskAttemptResult.__post_init__``
+    requires the two tokens to agree exactly. A replayed emission from
+    another attempt carries a DIFFERENT token (freshly, randomly minted per
+    call), so the pairing disagrees and construction is refused -- even
+    though the emission and the projection it is attached to agree with each
+    other. ``None`` on the public path (5F3B-Q1-PRE1-FU2A-FU1A-FU1's own
+    ``_require_evidence_emission_field_shape`` change): only the internal
+    minting bypass ever sets a real token, so a caller-built instance can
+    never satisfy the pairing check.
+    """
+
+    emitted: bool
+    refused: bool
+    path: str
+    scrub_checked: bool
+    clean: bool
+    findings: tuple[str, ...]
+    attempt_authority_token: str | None = None
+
+    def __post_init__(self) -> None:
+        _require_evidence_emission_field_shape(
+            emitted=self.emitted,
+            refused=self.refused,
+            path=self.path,
+            scrub_checked=self.scrub_checked,
+            clean=self.clean,
+            findings=self.findings,
+            attempt_authority_token=self.attempt_authority_token,
+        )
+        if self.refused is False:
+            raise ValueError(
+                "EvidenceEmission: its own public constructor can NEVER produce a "
+                "successful (refused=False) instance, under any arguments -- H-14 "
+                "success requires a real emit/scrub/write, established only "
+                "through run_semantic_task_attempt's own internal, unimportable "
+                "minting path"
+            )
+
+
+class ReportAvailability(str, Enum):
+    """Whether the model's OPTIONAL, UNTRUSTED final report could be used.
+
+    DESIGN-FU1 Sec. 9.3.3. A closed three-value classification that is
+    **orthogonal to ``failed_gate``**: none of these values may change
+    repository truth, verification truth, scope truth, ``run_validity``,
+    ``scoring_eligible``, or any of the hard bar's H-1..H-9 conjunctive
+    checks. Their ONLY effect is whether report accuracy is evaluable at
+    all.
+    """
+
+    #: A well-typed, session-matched observation whose claims were compared.
+    AVAILABLE = "AVAILABLE"
+    #: The harness could not collect it -- the adapter raised, or returned
+    #: the wrong type.
+    UNAVAILABLE = "UNAVAILABLE"
+    #: A well-typed observation that is nonetheless unusable -- it answers a
+    #: foreign session, or its claims failed bounded parsing/comparison.
+    MALFORMED = "MALFORMED"
 
 
 class SemanticControllerInputError(ValueError):
@@ -698,6 +1234,238 @@ def _attempt_cleanup(
     )
 
 
+#: DESIGN-FU1 Sec. 9.1.5: the ONE fixed reason recorded wherever a frozen
+#: 0/1 classifier could not truthfully be called for this attempt. Imported
+#: from the attempt-artifact module so the controller and the artifact can
+#: never drift into two wordings for the identical honest gap.
+WORKSPACE_REMOVAL_CLASSIFICATION_UNAVAILABLE_REASON = CLASSIFICATION_UNAVAILABLE_REASON
+
+
+def workspace_removal_succeeded(result: object) -> bool:
+    """Strict, fail-CLOSED validation of the frozen
+    ``ar2.fixtures.remove_disposable_tree`` return shape, as returned
+    unmodified by ``i2b_workspace.remove_run_workspace``.
+
+    **This is the identical predicate ``run_i2b_live._workspace_removal_succeeded``
+    already applies to Category-B's own outer cleanup** (DESIGN-FU1
+    Sec. 9.1.4 freezes it verbatim, because it is the same frozen return
+    shape, not a new one). A normal return does NOT mean removal succeeded:
+    the frozen contract can return, without raising,
+    ``{"removed": False, "residual_file_count": N, "verified": True}`` --
+    where ``verified=True`` means only that the postcondition was inspected
+    truthfully, never that removal happened.
+
+    The ONLY shape accepted as success is the frozen success shape exactly::
+
+        {"removed": True, "residual_file_count": 0, "verified": True}
+
+    Every other shape fails CLOSED: a non-dict, a missing key, ``removed``
+    or ``verified`` not exactly the ``True`` singleton (a truthy non-bool
+    like the string ``"true"`` is rejected), or ``residual_file_count`` not
+    exactly the ``int`` ``0``. ``bool`` is deliberately excluded even though
+    it is an ``int`` subclass, since ``type(x) is int`` is ``False`` for a
+    ``bool``. No ``bool(result)``, no ``.get(...)`` default substitution,
+    and no reliance on a field's absence to mean success.
+    """
+    if type(result) is not dict:
+        return False
+    if not {"removed", "residual_file_count", "verified"} <= result.keys():
+        return False
+    if result["removed"] is not True:
+        return False
+    if result["verified"] is not True:
+        return False
+    residual = result["residual_file_count"]
+    if type(residual) is not int or residual != 0:
+        return False
+    return True
+
+
+def _bounded_removal_facts(result: object) -> dict[str, Any]:
+    """A bounded projection of a removal result. Never raw adapter text.
+
+    The frozen success/failure dicts carry no path, token or output text --
+    only two bools and one int -- so those three values are retained
+    verbatim. Anything else about the returned object is reduced to the
+    single bool ``result_shape_recognized``: a malformed result must never
+    be able to inject arbitrary content into a retained artifact.
+    """
+
+    def _exact_bool(value: object) -> bool | None:
+        return value if type(value) is bool else None
+
+    def _exact_int(value: object) -> int | None:
+        return value if type(value) is int else None
+
+    if type(result) is not dict:
+        return {
+            "result_shape_recognized": False,
+            "removed": None,
+            "residual_file_count": None,
+            "verified": None,
+        }
+    return {
+        "result_shape_recognized": (
+            {"removed", "residual_file_count", "verified"} <= result.keys()
+        ),
+        "removed": _exact_bool(result.get("removed")),
+        "residual_file_count": _exact_int(result.get("residual_file_count")),
+        "verified": _exact_bool(result.get("verified")),
+    }
+
+
+@dataclass(frozen=True)
+class SemanticWorkspaceRemovalStatus:
+    """Whether this attempt's OWN semantic workspace was removed, and proven so.
+
+    DESIGN-FU1 Sec. 9.1. The attempt owns its
+    :class:`~qualification.i2b_workspace.QualificationRunWorkspace` from the
+    instant ``mint_qualification_run_workspace()`` returns inside its own
+    call to :func:`run_semantic_task_attempt`; ownership implies exactly one
+    obligation, which is that this attempt and no other code removes it.
+    Before FU2, the controller never called removal at all, so every
+    attempt -- pass, fail, or indeterminate -- left its disposable Git
+    fixture tree on disk indefinitely.
+
+    ``verified`` is the strict :func:`workspace_removal_succeeded`
+    predicate, never truthiness and never "the call did not raise". A raised
+    ``remove_run_workspace`` is ``attempted=True, verified=False`` --
+    reported, never swallowed, and never allowed to skip the evidence
+    construction that follows it.
+
+    ``classification_unavailable_reason`` mirrors
+    :class:`SemanticCleanupStatus`'s own honest gap exactly: when this
+    attempt's dispatch send state was mechanically indeterminate, no 0/1
+    classification is fabricated for a removal failure either.
+    """
+
+    attempted: bool
+    verified: bool
+    facts: Mapping[str, Any] | None
+    semantic_prompts_sent: int | None
+    classification_unavailable_reason: str | None
+
+    def __post_init__(self) -> None:
+        require_exact_bool("SemanticWorkspaceRemovalStatus.attempted", self.attempted)
+        require_exact_bool("SemanticWorkspaceRemovalStatus.verified", self.verified)
+        if self.semantic_prompts_sent is not None and (
+            type(self.semantic_prompts_sent) is not int
+            or self.semantic_prompts_sent not in (0, 1)
+        ):
+            raise ValueError(
+                "SemanticWorkspaceRemovalStatus.semantic_prompts_sent must be 0, 1, "
+                "or None (an indeterminate dispatch send-state)"
+            )
+        if not self.attempted:
+            if self.verified or self.facts is not None:
+                raise ValueError(
+                    "SemanticWorkspaceRemovalStatus: attempted=False carries no "
+                    "removal facts and is never 'verified'"
+                )
+            if self.classification_unavailable_reason is not None:
+                raise ValueError(
+                    "SemanticWorkspaceRemovalStatus: attempted=False carries no "
+                    "unavailable-classification reason"
+                )
+            return
+        if self.verified:
+            if self.classification_unavailable_reason is not None:
+                raise ValueError(
+                    "SemanticWorkspaceRemovalStatus: a verified removal carries no "
+                    "unavailable-classification reason"
+                )
+        elif self.semantic_prompts_sent is None:
+            if (
+                self.classification_unavailable_reason
+                != WORKSPACE_REMOVAL_CLASSIFICATION_UNAVAILABLE_REASON
+            ):
+                raise ValueError(
+                    "SemanticWorkspaceRemovalStatus: a removal failure under an "
+                    "indeterminate dispatch must record the fixed unavailable-"
+                    "classification reason, never a fabricated classification"
+                )
+        elif self.classification_unavailable_reason is not None:
+            raise ValueError(
+                "SemanticWorkspaceRemovalStatus: a determinate dispatch state has no "
+                "unavailable-classification reason"
+            )
+        if self.facts is not None and not isinstance(self.facts, Mapping):
+            raise ValueError(
+                "SemanticWorkspaceRemovalStatus.facts must be a Mapping or None"
+            )
+        if self.facts is not None:
+            object.__setattr__(self, "facts", freeze_mapping(self.facts))
+
+    @property
+    def closure_satisfied(self) -> bool:
+        """Nothing to remove is satisfied; an unproven removal never is."""
+        if not self.attempted:
+            return True
+        return self.verified
+
+    @property
+    def status_text(self) -> str:
+        if not self.attempted:
+            return _STATUS_NOT_REQUIRED
+        if self.verified:
+            return "VERIFIED_REMOVED"
+        if self.semantic_prompts_sent is None:
+            return (
+                "FAILED:"
+                f"{SemanticFailureCode.SEMANTIC_WORKSPACE_REMOVAL_UNVERIFIED_INDETERMINATE_DISPATCH.value}"
+            )
+        return f"FAILED:{SemanticFailureCode.SEMANTIC_WORKSPACE_REMOVAL_UNVERIFIED.value}"
+
+
+def _remove_semantic_workspace(
+    run_workspace: QualificationRunWorkspace | None,
+    *,
+    semantic_prompts_sent: int | None,
+) -> SemanticWorkspaceRemovalStatus:
+    """Remove this attempt's own workspace, exactly once, and PROVE it.
+
+    Delegates to the frozen, unmodified
+    :func:`qualification.i2b_workspace.remove_run_workspace` -- itself a
+    pass-through to the frozen ``ar2.fixtures.remove_disposable_tree``. This
+    function adds only the two things Sec. 9.1.4 requires and the frozen
+    helper deliberately does not do for its caller: the strict acceptance
+    predicate, and the ``try``/``except Exception`` that turns a raised
+    removal into a recorded ``attempted=True, verified=False`` rather than
+    an escape that would skip evidence construction entirely.
+    """
+    unavailable = (
+        WORKSPACE_REMOVAL_CLASSIFICATION_UNAVAILABLE_REASON
+        if semantic_prompts_sent is None
+        else None
+    )
+    if run_workspace is None:
+        return SemanticWorkspaceRemovalStatus(
+            attempted=False,
+            verified=False,
+            facts=None,
+            semantic_prompts_sent=semantic_prompts_sent,
+            classification_unavailable_reason=None,
+        )
+    try:
+        result = remove_run_workspace(run_workspace)
+    except Exception:  # noqa: BLE001 - reported truthfully, never swallowed
+        return SemanticWorkspaceRemovalStatus(
+            attempted=True,
+            verified=False,
+            facts=_bounded_removal_facts(None),
+            semantic_prompts_sent=semantic_prompts_sent,
+            classification_unavailable_reason=unavailable,
+        )
+    verified = workspace_removal_succeeded(result)
+    return SemanticWorkspaceRemovalStatus(
+        attempted=True,
+        verified=verified,
+        facts=_bounded_removal_facts(result),
+        semantic_prompts_sent=semantic_prompts_sent,
+        classification_unavailable_reason=None if verified else unavailable,
+    )
+
+
 def build_run_safety_context(
     *,
     secret_context: QualificationRouteSecretContext | None,
@@ -705,24 +1473,88 @@ def build_run_safety_context(
     run_workspace: QualificationRunWorkspace | None,
     route_descriptor: RouteDescriptor | None,
 ) -> ArtifactSafetyContext:
-    """Build the run's FULL artifact safety context from whatever it actually has.
+    """Build the run's FULL artifact safety context, FIELD-INDEPENDENTLY.
 
-    Mirrors ``qualification.i2b_controller.build_run_safety_context`` exactly:
-    a run that failed before some value existed still declares whatever it
-    does have, rather than falling back to an empty context. ``bearer_token``
-    is always ``None`` as a DERIVED absence -- this route's credential
-    mechanism (``models_json_env_interpolation``) mints no separate bearer
-    value.
+    **5F3B-Q1-PRE1-FU2 / DESIGN-FU1 Sec. 9.2.** The pre-FU2 version returned
+    ``ArtifactSafetyContext.none_declared()`` whenever ``secret_context`` was
+    ``None``, which happened to be correct only because
+    ``run_semantic_task_attempt``'s linear gate order puts ``SECRET_CONTEXT``
+    strictly before ``BROKER_SESSION``. That made its correctness a fact
+    about CALLER CONTROL FLOW rather than about the function -- and a real,
+    already-minted workspace needle was droppable even today, since
+    ``WORKSPACE_AUTHORITY`` runs strictly BEFORE ``SECRET_CONTEXT``. A
+    future refactor, a caught-and-recovered secret-context failure, or a
+    second call site would silently reintroduce the exact I2B-FU1 defect
+    this rule exists to close.
+
+    The frozen rule, restated as the per-field rule this function now
+    implements -- the presence or absence of ANY one field's source object
+    never gates whether ANOTHER field's source object is consulted:
+
+    ===========================  ==========================================
+    ``workspace_absolute_path``  whenever ``run_workspace is not None``
+    ``broker_token``             whenever ``broker_session is not None``
+    ``pipe_name``                whenever ``broker_session is not None``
+    ``capability_id``            whenever ``broker_session is not None``
+    ``endpoint_host``            whenever ``secret_context is not None``
+    ``api_key``                  whenever ``secret_context is not None``
+    ``bearer_token``             DERIVED -- see below
+    ===========================  ==========================================
+
+    **The workspace needle is the EXPERIMENT ROOT, deliberately** -- the
+    identical reasoning ``i2b_controller.build_run_safety_context`` already
+    records: the repository root and the generated-config directory both sit
+    strictly beneath it, and ``ar2.record.scrub_check`` matches substrings,
+    so the enclosing root is a strictly stronger needle drawn from the same
+    one verified workspace identity.
+
+    **``bearer_token`` is DERIVED, not defaulted.** This route's frozen
+    credential mechanism is
+    ``i2_route.CREDENTIAL_MECHANISM == "models_json_env_interpolation"``: the
+    credential travels as the generated ``models.json`` env interpolation of
+    the one child carrier, and no separate bearer value is ever minted. The
+    previously-unused ``route_descriptor`` parameter now has exactly this
+    job -- it is asserted, and an unexpected mechanism REFUSES safety-context
+    construction (:class:`SemanticSafetyContextError`) rather than silently
+    defaulting ``bearer_token`` to ``None``. ``RouteDescriptor.__post_init__``
+    already refuses any other mechanism at construction, so this is currently
+    unreachable in practice; the contract exists so it stays refused, not
+    silently accepted, the day a second mechanism is added.
+
+    ``ArtifactSafetyContext.none_declared()`` is returned ONLY for the true
+    all-absent case -- never while any of ``secret_context``,
+    ``broker_session`` or ``run_workspace`` is non-``None``.
     """
-    if secret_context is None:
+    if route_descriptor is not None:
+        if type(route_descriptor) is not RouteDescriptor:
+            raise SemanticSafetyContextError("ROUTE_DESCRIPTOR_TYPE_UNEXPECTED")
+        if route_descriptor.credential_mechanism != CREDENTIAL_MECHANISM:
+            raise SemanticSafetyContextError("UNEXPECTED_CREDENTIAL_MECHANISM")
+
+    broker_token = broker_session.broker_token if broker_session is not None else None
+    pipe_name = broker_session.pipe_name if broker_session is not None else None
+    capability_id = broker_session.capability_id if broker_session is not None else None
+    workspace_absolute_path = (
+        run_workspace.experiment_root if run_workspace is not None else None
+    )
+
+    if secret_context is not None:
+        return secret_context.to_safety_context(
+            broker_token=broker_token,
+            pipe_name=pipe_name,
+            capability_id=capability_id,
+            workspace_absolute_path=workspace_absolute_path,
+        )
+    if broker_session is None and run_workspace is None:
         return ArtifactSafetyContext.none_declared()
-    return secret_context.to_safety_context(
-        broker_token=broker_session.broker_token if broker_session is not None else None,
-        pipe_name=broker_session.pipe_name if broker_session is not None else None,
-        capability_id=broker_session.capability_id if broker_session is not None else None,
-        workspace_absolute_path=(
-            run_workspace.experiment_root if run_workspace is not None else None
-        ),
+    return ArtifactSafetyContext(
+        endpoint_host=None,
+        api_key=None,
+        bearer_token=None,
+        broker_token=broker_token,
+        pipe_name=pipe_name,
+        capability_id=capability_id,
+        workspace_absolute_path=workspace_absolute_path,
     )
 
 
@@ -766,12 +1598,40 @@ def _project_scope_result(scope_result: ScopeResult | None) -> dict[str, Any]:
     }
 
 
-def _project_report_accuracy(comparisons: tuple[ClaimComparison, ...]) -> dict[str, Any]:
+def _project_report_accuracy(
+    comparisons: tuple[ClaimComparison, ...],
+    *,
+    availability: "ReportAvailability | None",
+) -> dict[str, Any]:
+    """A bounded projection of the OPTIONAL, UNTRUSTED report layer.
+
+    DESIGN-FU1 Sec. 9.3.3: an ``UNAVAILABLE``/``MALFORMED`` report is
+    recorded here as a purely DESCRIPTIVE not-evaluable fact -- it is never
+    scored, never fed to the hard bar (``report_accuracy`` is not one of the
+    H-1..H-9 checks, and this contract keeps it that way), and never allowed
+    to change ``run_validity`` or ``scoring_eligible``. The bounded
+    ``reason`` distinguishes "the harness could not collect it" from "the
+    model produced nothing usable", which the pre-FU2 ``{"attempted": False}``
+    shape could not say at all.
+    """
+    if availability is None:
+        # Collection was never reached (a pre-prompt refusal, or a failure
+        # before the post-turn gates). "AIDO never asked" is a different
+        # fact from "AIDO asked and got nothing usable", and this shape --
+        # the pre-FU2 one -- is the truthful one for it.
+        return {"attempted": False}
+    if availability is not ReportAvailability.AVAILABLE:
+        return {
+            "attempted": True,
+            "available": False,
+            "reason": availability.value,
+        }
     if not comparisons:
         return {"attempted": False}
     bucket = bucket_report_accuracy(comparisons)
     return {
         "attempted": True,
+        "available": True,
         "bucket": bucket.value,
         "comparisons": [
             {"claim": c.claim, "verdict": c.verdict.value, "detail": c.detail}
@@ -798,7 +1658,20 @@ class _DispatchIndeterminate(Exception):
     ``infrastructure_refusal`` (which would falsely claim CONFIRMED_NOT_SENT)
     or a genuine post-prompt contamination (which would falsely claim
     CONFIRMED_SENT). Never escapes that function.
+
+    **5F3B-Q1-PRE1-FU2 (invariant I-1).** This signal is now raised from
+    inside the PHASE 1 block and NOWHERE ELSE. That is the mechanical half
+    of monotonicity: once phase 1 establishes ``CONFIRMED_SENT``, no phase-2
+    outcome, no broker/repository/verification/report failure, and no
+    closure failure can reach this handler, so none of them can move
+    ``semantic_prompts_sent`` back off ``1``. It carries the bounded
+    :class:`~qualification.semantic_session.SemanticDispatchEvidenceCode`
+    that establishes WHICH mechanical fact left the send state unknown.
     """
+
+    def __init__(self, evidence_code: SemanticDispatchEvidenceCode) -> None:
+        super().__init__(evidence_code.value)
+        self.evidence_code = evidence_code
 
 
 def _invoke(
@@ -827,6 +1700,74 @@ def _invoke(
 
 
 @dataclass(frozen=True)
+class _AttemptIdentityProvenance:
+    """An unforgeable proof of WHICH candidate/task this attempt's identity
+    actually is -- never constructible through its own public constructor.
+
+    5F3B-Q1-PRE1-FU2A-FU1A. Independent review proved FU2A-FU1's identity
+    check -- comparing ``self.candidate``/etc. against a plain string copy
+    embedded in ``qualification_record``/``attempt_record`` -- insufficient:
+    both copies are ordinary caller-editable dataclass/dict fields, so a
+    caller can relabel BOTH together
+    (``replace(result, candidate="B", ..., qualification_record=forged)``)
+    and the two agree with each other while both lying.
+
+    The fix is the SAME pattern already accepted for :class:`EvidenceEmission`'s
+    own success state, applied to identity instead: this type's
+    ``__post_init__`` unconditionally refuses ANY construction attempt
+    through its own public constructor, so a caller can never build a NEW
+    instance of this type at all, forged or otherwise. The ONE genuine
+    instance -- proving the actual candidate/model/task/revision this
+    attempt was minted for -- is created by a function nested inside
+    :func:`run_semantic_task_attempt`, bypassing ``__init__``/``__post_init__``
+    via ``object.__new__``, from the SAME trusted local variables used to
+    build the attempt itself.
+
+    ``SemanticTaskAttemptResult.__post_init__`` requires
+    ``self.identity_provenance``'s own embedded fields to agree with
+    ``self.candidate``/etc. A plain field-level relabel changes only the
+    OUTER fields; ``dataclasses.replace()`` leaves ``identity_provenance``
+    itself untouched (the SAME already-genuine instance, still naming the
+    ORIGINAL candidate/task) unless the caller also overrides it -- and
+    overriding it requires constructing a NEW instance of this type, which
+    its own constructor unconditionally refuses.
+
+    5F3B-Q1-PRE1-FU2A-FU1A-FU1 -- **``attempt_authority_token`` binds this
+    instance to the ONE attempt it was minted for, not merely to the
+    candidate/model/task/revision VALUE TUPLE it carries.** Independent
+    review proved the FU2A-FU1A field-tuple check insufficient: a caller
+    cannot forge a NEW ``_AttemptIdentityProvenance``, but it did not need
+    to -- it could take a GENUINE instance minted for a DIFFERENT result
+    (another run of the same candidate/task, another task, or another
+    candidate) and attach it to a result whose OUTER
+    candidate/model_id/task_id/task_revision were relabelled to match that
+    instance's own tuple. Two genuine instances of the same
+    candidate/task pair (e.g. two separate runs of Candidate B on IQ-1)
+    carry EQUAL field values but are minted by DIFFERENT calls, so a
+    value-tuple check alone cannot tell them apart. ``attempt_authority_token``
+    is a fresh, random value minted once per :func:`run_semantic_task_attempt`
+    call and shared with that SAME call's ``evidence_emission``
+    (:class:`EvidenceEmission`); ``SemanticTaskAttemptResult.__post_init__``
+    requires the two tokens to agree exactly whenever an evidence emission
+    is present, so a provenance instance minted for one attempt can never
+    back a different attempt's retained evidence.
+    """
+
+    candidate: str
+    model_id: str
+    task_id: str
+    task_revision: str
+    attempt_authority_token: str
+
+    def __post_init__(self) -> None:
+        raise ValueError(
+            "_AttemptIdentityProvenance can never be constructed through its own "
+            "public constructor, under any arguments -- it is minted only by "
+            "run_semantic_task_attempt's own internal, unimportable bypass"
+        )
+
+
+@dataclass(frozen=True)
 class SemanticTaskAttemptResult:
     """The controller's one, complete, truthful result for ONE task attempt.
 
@@ -847,6 +1788,12 @@ class SemanticTaskAttemptResult:
     model_id: str
     task_id: str
     task_revision: str
+    #: 5F3B-Q1-PRE1-FU2A-FU1A. An unforgeable proof of WHICH
+    #: candidate/model/task/revision this attempt's identity actually is,
+    #: minted only by ``run_semantic_task_attempt``'s own internal bypass --
+    #: see :class:`_AttemptIdentityProvenance`'s own docstring for why a
+    #: plain string comparison (FU2A-FU1's own fix) was insufficient.
+    identity_provenance: _AttemptIdentityProvenance
     #: ``None`` iff ``dispatch_state`` is ``SEND_STATE_INDETERMINATE``
     #: (5F3B-Q1-PRE1-FU1) -- never coerced to 0 or 1 for an unestablished fact.
     semantic_prompts_sent: int | None
@@ -855,6 +1802,24 @@ class SemanticTaskAttemptResult:
     #: attempt that never reached the dispatch gate at all -- structurally
     #: the strongest form of "not sent" (never even attempted).
     dispatch_state: SemanticPromptDispatchState
+    #: WHICH mechanical fact established ``dispatch_state`` (DESIGN-FU1
+    #: Sec. 2.3). Audit-only: nothing branches on it.
+    dispatch_evidence_code: SemanticDispatchEvidenceCode
+    #: Whether PHASE 1 was actually entered -- i.e. the dispatch adapter was
+    #: invoked. This, not a guessed prompt count, is what the sweep's
+    #: ``semantic_dispatch_attempts`` budget counts (DESIGN-FU1 Sec. 4).
+    semantic_dispatch_attempted: bool
+    #: PHASE 2's three-valued terminal outcome, or ``None`` when phase 2 was
+    #: never entered (which is every non-``CONFIRMED_SENT`` dispatch).
+    turn_outcome: SemanticTurnOutcome | None
+    #: An INDEPENDENT, non-completion fact. Never upgrades an outcome.
+    agent_end_observed: bool
+    #: The bounded availability of the OPTIONAL, UNTRUSTED final report, or
+    #: ``None`` when collection was never reached at all (a pre-prompt
+    #: refusal, or any failure before the post-turn gates). Never gating
+    #: (DESIGN-FU1 Sec. 9.3). ``None`` and ``UNAVAILABLE`` are deliberately
+    #: distinct: "AIDO never asked" is not "AIDO asked and got nothing".
+    report_availability: ReportAvailability | None
     infrastructure_refusal: bool
     gate_statuses: Mapping[str, str]
     failed_gate: SemanticGateName | None
@@ -877,15 +1842,218 @@ class SemanticTaskAttemptResult:
     runtime_teardown: RuntimeTeardownStatus
     broker_shutdown: BrokerShutdownStatus
     cleanup: SemanticCleanupStatus
-    qualification_record: dict[str, Any] | None
+    #: This attempt's OWN workspace-removal truth (DESIGN-FU1 Sec. 9.1),
+    #: established BEFORE any evidence was constructed or emitted.
+    workspace_removal: SemanticWorkspaceRemovalStatus
+    #: An immutable projection of the primary-record emission outcome, or
+    #: ``None`` for an indeterminate dispatch (which emits the sibling
+    #: attempt artifact instead). Deeply frozen -- see Sec. 9.4.
+    qualification_record: Mapping[str, Any] | None
+    #: The same, for the ``pi-implementer-qualification-attempt.v1``
+    #: artifact. Exactly one of these two is non-``None`` for any INVOKED
+    #: attempt whose safety context was provable (Sec. 3.F).
+    attempt_record: Mapping[str, Any] | None
+    #: The NARROW typed projection of whichever of the two was emitted --
+    #: this is what the hard bar's ``artifact_scrub_passed`` reads.
+    evidence_emission: EvidenceEmission | None
 
     def __post_init__(self) -> None:
+        # 5F3B-Q1-PRE1-FU2A: mechanically bind identity BEFORE anything else
+        # is checked. Independent review reproduced a "result identity
+        # substitution" bypass: `dataclasses.replace` (or direct
+        # construction) could relabel a genuine A run's facts as Candidate
+        # B's, mismatch candidate/model, or attach a task_revision that
+        # merely shares a task's prefix rather than being that frozen
+        # task's own exact revision. None of that was previously refused
+        # here -- only `PrimarySweepResult`'s OWN `task_id` key check caught
+        # a narrower slice of it.
+        from .corpus import TASKS_BY_ID
+
+        if self.candidate not in CANDIDATE_MODEL_IDS:
+            raise ValueError(
+                f"SemanticTaskAttemptResult.candidate must be one of "
+                f"{sorted(CANDIDATE_MODEL_IDS)}; got {self.candidate!r}"
+            )
+        if self.model_id != CANDIDATE_MODEL_IDS[self.candidate]:
+            raise ValueError(
+                "SemanticTaskAttemptResult.model_id does not match "
+                f"candidate {self.candidate!r}'s frozen pairing "
+                f"{CANDIDATE_MODEL_IDS[self.candidate]!r} -- a cross-candidate "
+                "relabelling is refused"
+            )
+        frozen_task = TASKS_BY_ID.get(self.task_id)
+        if frozen_task is None:
+            raise ValueError(
+                f"SemanticTaskAttemptResult.task_id {self.task_id!r} is not one of "
+                "the frozen qualification.corpus tasks"
+            )
+        if self.task_revision != frozen_task.task_revision:
+            raise ValueError(
+                "SemanticTaskAttemptResult.task_revision does not equal task "
+                f"{self.task_id!r}'s own frozen revision -- a revision that merely "
+                "shares the task's id prefix is refused, never accepted as "
+                "equivalent"
+            )
+        # 5F3B-Q1-PRE1-FU2A-FU1A: bind identity to MECHANICALLY ISSUED
+        # provenance, not merely to a second caller-editable copy. Independent
+        # review proved the FU2A-FU1 fix (comparing against a plain string
+        # embedded in qualification_record/attempt_record) insufficient: a
+        # caller can relabel BOTH the top-level fields AND that embedded copy
+        # together, consistently. `identity_provenance` can only ever be a
+        # genuine `_AttemptIdentityProvenance` -- its own constructor
+        # unconditionally refuses construction, so a caller cannot mint a
+        # matching forged one no matter what they change here.
+        if type(self.identity_provenance) is not _AttemptIdentityProvenance:
+            raise ValueError(
+                "SemanticTaskAttemptResult.identity_provenance must be exactly a "
+                "genuine _AttemptIdentityProvenance"
+            )
+        if (
+            self.identity_provenance.candidate,
+            self.identity_provenance.model_id,
+            self.identity_provenance.task_id,
+            self.identity_provenance.task_revision,
+        ) != (self.candidate, self.model_id, self.task_id, self.task_revision):
+            raise ValueError(
+                "SemanticTaskAttemptResult: this result's own "
+                "candidate/model_id/task_id/task_revision disagrees with the "
+                "mechanically issued identity_provenance it was minted with -- a "
+                "post-construction identity relabel is refused, even when the "
+                "artifact projection is relabelled to match"
+            )
+        # 5F3B-Q1-PRE1-FU2A-FU1A-FU1: bind identity_provenance to THIS
+        # attempt's own retained evidence, not merely to the candidate/
+        # model/task/revision VALUE TUPLE it carries. Independent review
+        # reproduced two supported replays that the tuple check alone could
+        # not catch, because both sides of each replay are GENUINE objects
+        # that agree with each other:
+        #   (a) a genuine successful EvidenceEmission minted for a DIFFERENT
+        #       attempt, attached to a result whose own path/refused
+        #       projection was forged to match it -- H-14 authority replay;
+        #   (b) a genuine _AttemptIdentityProvenance minted for a DIFFERENT
+        #       result (another run of the same candidate/task, another
+        #       task, or another candidate), attached to a result whose
+        #       outer candidate/model_id/task_id/task_revision were
+        #       relabelled to match its tuple -- identity provenance replay.
+        # `attempt_authority_token` is a fresh, random value minted exactly
+        # once per `run_semantic_task_attempt` call and shared between that
+        # SAME call's `identity_provenance` and `evidence_emission`. Neither
+        # value can be forged (both types unconditionally refuse public
+        # construction of a genuine/successful instance), so the only way to
+        # make the tokens agree is to use the identity_provenance and the
+        # evidence_emission this SAME call actually minted together -- a
+        # replay from any other call mints a DIFFERENT random token and the
+        # pairing disagrees, even when every other check above passes.
+        if (
+            not isinstance(self.identity_provenance.attempt_authority_token, str)
+            or not self.identity_provenance.attempt_authority_token
+        ):
+            raise ValueError(
+                "SemanticTaskAttemptResult.identity_provenance.attempt_authority_token "
+                "must be a non-blank str -- a genuinely minted provenance always "
+                "carries one"
+            )
+        if self.evidence_emission is not None and (
+            self.evidence_emission.attempt_authority_token
+            != self.identity_provenance.attempt_authority_token
+        ):
+            raise ValueError(
+                "SemanticTaskAttemptResult: evidence_emission.attempt_authority_token "
+                "disagrees with identity_provenance.attempt_authority_token -- this "
+                "evidence emission was not minted for this attempt's own identity, "
+                "even though its path/refused projection agrees"
+            )
         if type(self.dispatch_state) is not SemanticPromptDispatchState:
             raise ValueError(
                 "SemanticTaskAttemptResult.dispatch_state must be exactly a "
                 "SemanticPromptDispatchState"
             )
+        if type(self.dispatch_evidence_code) is not SemanticDispatchEvidenceCode:
+            raise ValueError(
+                "SemanticTaskAttemptResult.dispatch_evidence_code must be exactly a "
+                "SemanticDispatchEvidenceCode"
+            )
+        if (
+            DISPATCH_EVIDENCE_CODE_STATES[self.dispatch_evidence_code]
+            is not self.dispatch_state
+        ):
+            raise ValueError(
+                "SemanticTaskAttemptResult: dispatch_evidence_code establishes a "
+                "different dispatch_state than this result reports"
+            )
+        require_exact_bool(
+            "SemanticTaskAttemptResult.semantic_dispatch_attempted",
+            self.semantic_dispatch_attempted,
+        )
+        require_exact_bool(
+            "SemanticTaskAttemptResult.agent_end_observed", self.agent_end_observed
+        )
+        # 5F3B-Q1-PRE1-FU2A-FU1: `scoring_eligible` is a hard-bar authority
+        # fact (`_is_scorable` in `hard_bar.py` reads it directly) and must
+        # therefore be exact bool, never truthiness -- `replace(result,
+        # scoring_eligible="yes")` must fail HERE, before this result could
+        # ever reach `_task_hard_bar_facts`.
+        require_exact_bool("SemanticTaskAttemptResult.scoring_eligible", self.scoring_eligible)
+        if self.report_availability is not None and (
+            type(self.report_availability) is not ReportAvailability
+        ):
+            raise ValueError(
+                "SemanticTaskAttemptResult.report_availability must be None or "
+                "exactly a ReportAvailability"
+            )
+        # 5F3B-Q1-PRE1-FU2A: every optional-bool fact classification, the
+        # hard bar and audit consume must be EXACT bool when present -- never
+        # a truthy non-bool. Independent review reproduced
+        # `dataclasses.replace(result, verification_passed="false")` reaching
+        # `qualification.semantic_sweep._task_hard_bar_facts` unrefused,
+        # where `bool("false")` silently became `True`. Refusing the
+        # malformed fact HERE, at construction, is what makes it safe for
+        # that projection to stop coercing at all.
+        for _field_name in (
+            "verification_passed",
+            "expected_changed_paths_satisfied",
+            "head_unchanged",
+            "index_clean",
+            "protected_witness_untouched",
+            "no_unexpected_untracked_or_create_delete_rename",
+            "broker_git_cross_check_agrees",
+        ):
+            _value = getattr(self, _field_name)
+            if _value is not None and type(_value) is not bool:
+                raise ValueError(
+                    f"SemanticTaskAttemptResult.{_field_name} must be None or "
+                    "exactly a bool -- a truthy non-bool (e.g. the string "
+                    "'false') is refused, never coerced"
+                )
         indeterminate = self.dispatch_state is SemanticPromptDispatchState.SEND_STATE_INDETERMINATE
+        confirmed_sent = self.dispatch_state is SemanticPromptDispatchState.CONFIRMED_SENT
+        if self.turn_outcome is not None:
+            if type(self.turn_outcome) is not SemanticTurnOutcome:
+                raise ValueError(
+                    "SemanticTaskAttemptResult.turn_outcome must be None or exactly a "
+                    "SemanticTurnOutcome"
+                )
+            if not confirmed_sent:
+                raise ValueError(
+                    "SemanticTaskAttemptResult: a turn outcome exists only after the "
+                    "dispatch was mechanically established as CONFIRMED_SENT -- phase 2 "
+                    "is never entered otherwise"
+                )
+        if self.agent_end_observed and not confirmed_sent:
+            raise ValueError(
+                "SemanticTaskAttemptResult: an agent_end can only have been observed "
+                "for a turn that was actually dispatched"
+            )
+        if not self.semantic_dispatch_attempted and (
+            confirmed_sent
+            or indeterminate
+            or self.dispatch_evidence_code
+            is not SemanticDispatchEvidenceCode.GATE_REFUSED_BEFORE_WRITE
+        ):
+            raise ValueError(
+                "SemanticTaskAttemptResult: a dispatch state other than a gate refusal "
+                "before the write requires that phase 1 was actually entered"
+            )
         if indeterminate:
             if self.semantic_prompts_sent is not None:
                 raise ValueError(
@@ -936,6 +2104,17 @@ class SemanticTaskAttemptResult:
                     "run_validity, must not be scoring_eligible, must carry no "
                     "autonomous_classification, and must emit no qualification_record"
                 )
+        elif self.attempt_record is not None:
+            raise ValueError(
+                "SemanticTaskAttemptResult: the attempt-level artifact exists ONLY for "
+                "a SEND_STATE_INDETERMINATE dispatch -- a determinate attempt emits a "
+                "primary qualification record instead, never both"
+            )
+        if self.qualification_record is not None and self.attempt_record is not None:
+            raise ValueError(
+                "SemanticTaskAttemptResult: exactly one retained artifact per invoked "
+                "attempt -- never both a primary record and an attempt artifact"
+            )
         if type(self.facts) is not CompatibilityFacts:
             raise ValueError("SemanticTaskAttemptResult.facts must be a CompatibilityFacts")
         if type(self.runtime_teardown) is not RuntimeTeardownStatus:
@@ -955,6 +2134,155 @@ class SemanticTaskAttemptResult:
                 "SemanticTaskAttemptResult.cleanup.semantic_prompts_sent disagrees "
                 "with this result's own semantic_prompts_sent"
             )
+        if not isinstance(self.report_accuracy_comparisons, tuple) or not all(
+            type(entry) is ClaimComparison for entry in self.report_accuracy_comparisons
+        ):
+            raise ValueError(
+                "SemanticTaskAttemptResult.report_accuracy_comparisons must be a "
+                "tuple of ClaimComparison -- never a mutable list a caller could "
+                "still be holding"
+            )
+        if (
+            self.report_accuracy_comparisons
+            and self.report_availability is not ReportAvailability.AVAILABLE
+        ):
+            raise ValueError(
+                "SemanticTaskAttemptResult: report comparisons exist only for an "
+                "AVAILABLE report -- an unavailable or malformed report is not "
+                "evaluable, and cannot carry a comparison"
+            )
+        if type(self.workspace_removal) is not SemanticWorkspaceRemovalStatus:
+            raise ValueError(
+                "SemanticTaskAttemptResult.workspace_removal must be a "
+                "SemanticWorkspaceRemovalStatus"
+            )
+        if self.workspace_removal.semantic_prompts_sent != self.semantic_prompts_sent:
+            raise ValueError(
+                "SemanticTaskAttemptResult.workspace_removal.semantic_prompts_sent "
+                "disagrees with this result's own semantic_prompts_sent"
+            )
+        if self.evidence_emission is not None:
+            if type(self.evidence_emission) is not EvidenceEmission:
+                raise ValueError(
+                    "SemanticTaskAttemptResult.evidence_emission must be None or "
+                    "exactly an EvidenceEmission"
+                )
+            projection = (
+                self.qualification_record
+                if self.qualification_record is not None
+                else self.attempt_record
+            )
+            if projection is None:
+                raise ValueError(
+                    "SemanticTaskAttemptResult: an evidence_emission requires the "
+                    "artifact projection it describes"
+                )
+            # 5F3B-Q1-PRE1-FU2A: exact type, never coerced. `bool(...)`/
+            # `str(...)` would let a malformed projection value (e.g. the
+            # string "false", which is truthy) silently pass as agreement
+            # with a genuine bool/str fact -- a malformed projection is an
+            # integrity failure, not a value to normalize.
+            projected_refused = projection.get("refused")
+            projected_path = projection.get("path")
+            if type(projected_refused) is not bool or type(projected_path) is not str:
+                raise ValueError(
+                    "SemanticTaskAttemptResult: the artifact projection's own "
+                    "'refused'/'path' fields must be exactly bool/str -- a "
+                    "malformed projection is refused, never coerced into a "
+                    "plausible fact"
+                )
+            if (
+                projected_refused is not self.evidence_emission.refused
+                or projected_path != self.evidence_emission.path
+            ):
+                raise ValueError(
+                    "SemanticTaskAttemptResult: evidence_emission disagrees with the "
+                    "artifact projection it is supposed to describe"
+                )
+            # 5F3B-Q1-PRE1-FU2A-FU1: bind identity to the PROVENANCE that
+            # actually produced this attempt, not merely to an internally
+            # self-consistent pair. `run_semantic_task_attempt` embeds this
+            # attempt's candidate/model/task identity into `qualification_record`/
+            # `attempt_record` from the SAME trusted local variables it uses
+            # to build `self.candidate`/etc -- so genuine construction always
+            # agrees. `dataclasses.replace(result, candidate="B",
+            # model_id=CANDIDATE_MODEL_IDS["B"])` (or an equivalent
+            # simultaneous task_id/task_revision relabel) only overrides the
+            # TOP-LEVEL field; the embedded copy inside the immutable
+            # projection is untouched and still names the genuine identity,
+            # so the two disagree and this is refused.
+            for _field_name, _projected_key in (
+                ("candidate", "candidate"),
+                ("model_id", "model_id"),
+                ("task_id", "task_id"),
+                ("task_revision", "task_revision"),
+            ):
+                _projected_value = projection.get(_projected_key)
+                if type(_projected_value) is not str:
+                    raise ValueError(
+                        f"SemanticTaskAttemptResult: the artifact projection's own "
+                        f"{_projected_key!r} must be exactly a str"
+                    )
+                if _projected_value != getattr(self, _field_name):
+                    raise ValueError(
+                        "SemanticTaskAttemptResult: this result's "
+                        f"{_field_name}={getattr(self, _field_name)!r} disagrees with "
+                        f"the identity ({_projected_value!r}) embedded in its own "
+                        "retained artifact projection at construction time -- a "
+                        "post-construction identity relabel is refused"
+                    )
+        elif self.qualification_record is not None or self.attempt_record is not None:
+            raise ValueError(
+                "SemanticTaskAttemptResult: a retained artifact requires its narrow "
+                "typed evidence_emission projection"
+            )
+        # 5F3B-Q1-PRE1-FINAL-CLOSURE: consume THIS construction's ONE-SHOT
+        # issuance. Independent review proved the fingerprint-equality-only
+        # check (FU2A-FU1A-FU1-FU1) still insufficient: the fingerprint is
+        # itself derived entirely from caller-replaceable fields, so a
+        # `replace()` call that ALSO copies the foreign attempt's
+        # `gate_statuses` (or whatever other fingerprinted field happens to
+        # differ) reconstructs a fingerprint that matches the foreign
+        # token's registered one. Enlarging the fingerprinted field set only
+        # enlarges the set `replace()` can copy alongside it -- it cannot
+        # close this. The actual fix: `identity_provenance.attempt_authority_token`
+        # now authorizes AT MOST ONE `SemanticTaskAttemptResult` construction,
+        # ever. `_consume_pending_attempt_authority` requires the token to be
+        # CURRENTLY pending and the re-derived fingerprint to match, and
+        # deletes the pending entry as part of that SAME atomic step
+        # regardless of outcome -- so this call, successful or not, is the
+        # LAST time this token can ever authorize a construction. A borrowed
+        # bundle's token was already consumed by the FOREIGN attempt's own
+        # genuine construction, so it is never even pending here.
+        _authorized_facts_fingerprint_value = _authorized_facts_fingerprint(
+            gate_statuses=self.gate_statuses,
+            dispatch_state=self.dispatch_state,
+            semantic_prompts_sent=self.semantic_prompts_sent,
+            run_validity=self.run_validity,
+            scoring_eligible=self.scoring_eligible,
+            autonomous_classification=self.autonomous_classification,
+            diagnostic_subclassification=self.diagnostic_subclassification,
+            verification_passed=self.verification_passed,
+        )
+        _consume_pending_attempt_authority(
+            self.identity_provenance.attempt_authority_token,
+            _authorized_facts_fingerprint_value,
+        )
+        # -- DESIGN-FU1 Sec. 9.4: deep immutability, COPY BEFORE WRAPPING --
+        # Every publicly reachable container is replaced, here, by a
+        # read-only proxy over a private, recursively-immutable copy. The
+        # dict a caller passed in stays theirs and is no longer reachable
+        # through this result, so mutating it afterwards cannot change what
+        # classification, the hard bar, ranking, evidence or audit reads.
+        object.__setattr__(self, "gate_statuses", freeze_mapping(self.gate_statuses))
+        if self.qualification_record is not None:
+            object.__setattr__(
+                self, "qualification_record", freeze_mapping(self.qualification_record)
+            )
+        if self.attempt_record is not None:
+            object.__setattr__(
+                self, "attempt_record", freeze_mapping(self.attempt_record)
+            )
 
 
 def run_semantic_task_attempt(
@@ -973,7 +2301,10 @@ def run_semantic_task_attempt(
     get_state: Callable[[RuntimeSession], GetStateObservation],
     observe_protocol: Callable[[RuntimeSession], ProtocolObservation],
     route_checker: Callable[..., Any],
-    send_semantic_prompt: Callable[[SemanticPromptRequest], SemanticTurnObservation],
+    dispatch_semantic_prompt: Callable[
+        [SemanticPromptRequest], SemanticPromptDispatchObservation
+    ],
+    observe_semantic_turn: Callable[[SemanticTurnRequest], SemanticTurnObservation],
     collect_broker_activity: Callable[[RuntimeSession], BrokerActivityObservation],
     collect_final_report_claims: Callable[[RuntimeSession], FinalReportClaimsObservation],
     shutdown_runtime: Callable[[RuntimeSession], RuntimeShutdownObservation],
@@ -1043,8 +2374,20 @@ def run_semantic_task_attempt(
     #: reaches the SEMANTIC_PROMPT_DISPATCH gate has mechanically never sent
     #: the command (5F3B-Q1-PRE1-FU1).
     dispatch_state: SemanticPromptDispatchState = SemanticPromptDispatchState.CONFIRMED_NOT_SENT
+    #: The matching bounded evidence code. A gate refusal before the write
+    #: is the structurally strongest form of "not sent" and is the only
+    #: state reachable without entering phase 1 at all.
+    dispatch_evidence_code: SemanticDispatchEvidenceCode = (
+        SemanticDispatchEvidenceCode.GATE_REFUSED_BEFORE_WRITE
+    )
     dispatch_indeterminate = False
+    semantic_dispatch_attempted = False
+    dispatch_observation: SemanticPromptDispatchObservation | None = None
     turn_observation: SemanticTurnObservation | None = None
+    #: ``None`` until the FINAL_REPORT_CLAIMS gate is actually reached --
+    #: a run that never asked for a report must never be recorded as having
+    #: asked and been given nothing.
+    report_availability: ReportAvailability | None = None
     broker_activity: BrokerActivityObservation | None = None
     classification = None
     verification_outcome: VerificationOutcome | None = None
@@ -1391,17 +2734,34 @@ def run_semantic_task_attempt(
 
         # ================= compatibility facts end; PRE-PROMPT PREFIX satisfied =================
 
-        # -- SEMANTIC_PROMPT_DISPATCH: exactly ONE prompt, ever, for this attempt --
-        # 5F3B-Q1-PRE1-FU1: `semantic_prompts_sent` is NEVER set before this
-        # point, and is set to 1 in exactly ONE place below -- only once a
-        # returned, well-typed dispatch observation mechanically establishes
-        # CONFIRMED_SENT. A raised exception, a wrong-type result, or a
-        # result that does not provably answer THIS request is NEVER
-        # evidence of either NOT_SENT or SENT -- it becomes
-        # SEND_STATE_INDETERMINATE via `_DispatchIndeterminate`, which the
-        # outer handler below never folds into `infrastructure_refusal`
-        # (that would falsely claim CONFIRMED_NOT_SENT) or a scored run
-        # (that would falsely claim CONFIRMED_SENT).
+        # ============ PHASE 1: SEMANTIC_PROMPT_DISPATCH ============
+        # Exactly ONE dispatch, ever, for this attempt.
+        #
+        # 5F3B-Q1-PRE1-FU2 / DESIGN-FU1 Sec. 2. Dispatch and turn
+        # observation are now TWO adapter calls, because Pi 0.84.4's own
+        # seam has an acknowledgement boundary STRICTLY EARLIER than turn
+        # completion: the correlated prompt response is emitted after
+        # preflight and BEFORE agent start and any provider inference. FU1
+        # collapsed the two into one whole-turn adapter, which made every
+        # reachable post-acknowledgement failure -- protocol violation,
+        # output cap, event cap, read error, early child exit, a phase-2
+        # adapter bug, a wrong-type or foreign phase-2 result -- either a
+        # fabricated deadline or an ERASURE of an already-established
+        # CONFIRMED_SENT. Both were wrong, and the erasure was wrong in the
+        # direction that matters most for fairness: it converted a KNOWN
+        # SPENT prompt into an UNKNOWN one.
+        #
+        # `semantic_prompts_sent` is NEVER set before this point, and is set
+        # to 1 in exactly ONE place below -- only once a returned,
+        # well-typed, provenance-matched dispatch observation mechanically
+        # establishes CONFIRMED_SENT. Calling the adapter establishes
+        # nothing (invariant I-2). A raised exception, a wrong-type result,
+        # or a result that does not provably answer THIS request is evidence
+        # of NEITHER state and becomes SEND_STATE_INDETERMINATE via
+        # `_DispatchIndeterminate` -- which the outer handler never folds
+        # into `infrastructure_refusal` (that would falsely claim
+        # CONFIRMED_NOT_SENT) or into a scored run (that would falsely claim
+        # CONFIRMED_SENT).
         _current_gate = SemanticGateName.SEMANTIC_PROMPT_DISPATCH
         prompt_request = SemanticPromptRequest(
             run_id=run_id,
@@ -1409,26 +2769,38 @@ def run_semantic_task_attempt(
             task_id=task.task_id,
             task_revision=task.task_revision,
         )
+        semantic_dispatch_attempted = True
         try:
-            turn_observation = send_semantic_prompt(prompt_request)
+            dispatch_observation = dispatch_semantic_prompt(prompt_request)
         except Exception:
-            # A generic adapter exception is proof of NEITHER NOT_SENT NOR
-            # SENT -- the command may have crossed the send boundary and then
-            # the call errored before returning, or it may never have been
-            # sent at all. This function cannot mechanically distinguish
-            # those from an exception alone, and never guesses.
-            raise _DispatchIndeterminate() from None
-        if type(turn_observation) is not SemanticTurnObservation:
-            # A wrong-type result is equally not evidence of either state.
-            raise _DispatchIndeterminate()
-        if not require_dispatch_matches_request(turn_observation.dispatch, prompt_request):
-            # A dispatch observation that does not provably answer THIS
-            # request (different run/session/task) cannot be trusted to
-            # describe what happened to it.
-            raise _DispatchIndeterminate()
-        dispatch_state = turn_observation.dispatch.dispatch_state
+            # Sec. 1.7: a raised write/flush does not tell AIDO how many
+            # bytes reached the pipe, and a raised adapter cannot be
+            # distinguished from "raised after the command already crossed
+            # the boundary". Never guessed either way.
+            raise _DispatchIndeterminate(
+                SemanticDispatchEvidenceCode.ADAPTER_RAISED
+            ) from None
+        if type(dispatch_observation) is not SemanticPromptDispatchObservation:
+            # A wrong type (a subclass included -- this is an exact-type
+            # check) is equally not evidence of either state.
+            raise _DispatchIndeterminate(
+                SemanticDispatchEvidenceCode.OBSERVATION_MALFORMED_OR_FOREIGN
+            )
+        if not require_dispatch_matches_request(dispatch_observation, prompt_request):
+            # An observation that does not provably answer THIS request
+            # (different run/session/task/revision) cannot be trusted to
+            # describe what happened to it, however internally coherent it
+            # is on its own terms.
+            raise _DispatchIndeterminate(
+                SemanticDispatchEvidenceCode.OBSERVATION_MALFORMED_OR_FOREIGN
+            )
+        dispatch_state = dispatch_observation.dispatch_state
+        dispatch_evidence_code = dispatch_observation.dispatch_evidence_code
         if dispatch_state is SemanticPromptDispatchState.SEND_STATE_INDETERMINATE:
-            raise _DispatchIndeterminate()
+            # A live adapter's own real seam may itself report this -- a
+            # RETURNED value, never an exception. Honored identically, with
+            # the adapter's own bounded evidence code preserved.
+            raise _DispatchIndeterminate(dispatch_evidence_code)
         if dispatch_state is SemanticPromptDispatchState.CONFIRMED_NOT_SENT:
             # A mechanically-established pre-send refusal, returned (never
             # raised). A pre-prompt infrastructure refusal --
@@ -1440,25 +2812,53 @@ def run_semantic_task_attempt(
         # dispatch_state is CONFIRMED_SENT: the ONE authorized semantic
         # prompt for this attempt has now been mechanically established as
         # sent. This is the ONLY place in this module that ever sets
-        # semantic_prompts_sent to 1, and it happens ONLY after that fact is
-        # established -- never before the call, never on a guess.
-        if not turn_observation.call_succeeded:
-            # Structurally unreachable: SemanticTurnObservation's own
-            # __post_init__ requires call_succeeded == True for a
-            # CONFIRMED_SENT dispatch. Kept as a loud, non-silent guard
-            # rather than a comment-only promise.
-            raise _GateFailure(
-                SemanticGateName.SEMANTIC_PROMPT_DISPATCH,
-                SemanticFailureCode.SEMANTIC_PROMPT_DISPATCH_FAILED,
-            )
+        # semantic_prompts_sent to 1, it happens ONLY after that fact is
+        # established, and it dominates every statement that follows --
+        # invariant I-1, extended by Sec. 9.1.6 to workspace removal.
         semantic_prompts_sent = 1
         _pass(SemanticGateName.SEMANTIC_PROMPT_DISPATCH)
 
-        # -- TURN_COMPLETION --
+        # ============ PHASE 2: TURN_COMPLETION ============
+        # Entered ONLY after CONFIRMED_SENT -- and doubly so: this statement
+        # is unreachable for the other two states (both raised above), and
+        # `SemanticTurnRequest` itself refuses construction from a
+        # non-CONFIRMED_SENT dispatch.
+        #
+        # NOTHING in this block may write `semantic_prompts_sent` or
+        # `dispatch_state`. A phase-2 failure of ANY kind -- a raised
+        # adapter, a wrong type, a foreign session, an unconstructible
+        # request -- becomes the bounded terminal fact OBSERVATION_FAILED,
+        # never a fabricated deadline and never an erasure.
         _current_gate = SemanticGateName.TURN_COMPLETION
-        if not (turn_observation.agent_settled or turn_observation.deadline_reached):
+        try:
+            turn_request = SemanticTurnRequest(
+                run_id=run_id,
+                runtime_session=runtime_session,
+                task_id=task.task_id,
+                task_revision=task.task_revision,
+                dispatch=dispatch_observation,
+            )
+            observed_turn = observe_semantic_turn(turn_request)
+        except Exception:
+            observed_turn = None
+        else:
+            if not require_turn_matches_request(observed_turn, turn_request):
+                observed_turn = None
+        if observed_turn is None:
+            turn_observation = SemanticTurnObservation(
+                runtime_session_id=runtime_session.runtime_session_id,
+                turn_outcome=SemanticTurnOutcome.OBSERVATION_FAILED,
+            )
+        else:
+            turn_observation = observed_turn
+        if turn_observation.turn_outcome is SemanticTurnOutcome.OBSERVATION_FAILED:
+            # AIDO stopped being able to watch the turn. This is NOT a claim
+            # that Pi stopped, that the command was cancelled, or that
+            # backend inference stopped -- and it is never reported as a
+            # deadline, which is a different, genuinely observed fact.
             raise _GateFailure(
-                SemanticGateName.TURN_COMPLETION, SemanticFailureCode.TURN_DID_NOT_TERMINATE
+                SemanticGateName.TURN_COMPLETION,
+                SemanticFailureCode.TURN_OBSERVATION_FAILED,
             )
         _pass(SemanticGateName.TURN_COMPLETION)
 
@@ -1516,23 +2916,49 @@ def run_semantic_task_attempt(
             ) from None
         _pass(SemanticGateName.AUTHORITATIVE_VERIFICATION)
 
-        # -- FINAL_REPORT_CLAIMS --
+        # -- FINAL_REPORT_CLAIMS: OPTIONAL, UNTRUSTED, NEVER GATING --
+        # 5F3B-Q1-PRE1-FU2 / DESIGN-FU1 Sec. 9.3. Before FU2 this ran
+        # through the SAME `_invoke`/`_GateFailure` machinery as
+        # BROKER_ACTIVITY, REPOSITORY_OBSERVATION and
+        # AUTHORITATIVE_VERIFICATION -- so an adapter exception or a
+        # malformed model report set `failed_gate`, which fed
+        # `attribute_protocol_anomaly(..., mechanically_attributed_to=None)`
+        # and made an otherwise-successful, fully-verified, fully-closed run
+        # ATTRIBUTION_UNDETERMINED and unscorable. The model's own final
+        # text (or the harness's failure to extract it) was on equal gating
+        # footing with AIDO's own authoritative verification, which is never
+        # correct.
+        #
+        # It is now a bounded, closed availability classification that
+        # touches NOTHING else: not repository truth, not verification
+        # truth, not scope truth, not `run_validity`, not
+        # `scoring_eligible`, and not any of the hard bar's H-1..H-9 checks.
+        # There is deliberately no `_GateFailure` raised anywhere below, and
+        # no retry: a missing or bad self-report is not proof the one
+        # authorized prompt needs reissuing.
         _current_gate = SemanticGateName.FINAL_REPORT_CLAIMS
-        claims_observation = _invoke(
-            SemanticGateName.FINAL_REPORT_CLAIMS,
-            lambda: collect_final_report_claims(runtime_session),
-            expected_type=FinalReportClaimsObservation,
-            raised_code=SemanticFailureCode.FINAL_REPORT_CLAIMS_COLLECTION_FAILED,
-            malformed_code=SemanticFailureCode.MALFORMED_ADAPTER_RESULT,
+        try:
+            claims_observation = collect_final_report_claims(runtime_session)
+        except Exception:
+            claims_observation = None
+        if type(claims_observation) is not FinalReportClaimsObservation:
+            # The harness could not collect it: the adapter raised, or
+            # returned something that is not a report observation at all.
+            report_availability = ReportAvailability.UNAVAILABLE
+        elif claims_observation.runtime_session_id != runtime_session.runtime_session_id:
+            # Well-typed, but it answers a different runtime session, so it
+            # is not usable as THIS run's self-report.
+            report_availability = ReportAvailability.MALFORMED
+        else:
+            report_claims = claims_observation.claims
+            report_availability = ReportAvailability.AVAILABLE
+        gate_statuses[SemanticGateName.FINAL_REPORT_CLAIMS.value] = (
+            _STATUS_PASSED
+            if report_availability is ReportAvailability.AVAILABLE
+            else f"NOT_EVALUABLE:{report_availability.value}"
         )
-        if claims_observation.runtime_session_id != runtime_session.runtime_session_id:
-            raise _GateFailure(
-                SemanticGateName.FINAL_REPORT_CLAIMS, CategoryBFailureCode.RUNTIME_SESSION_MISMATCH
-            )
-        report_claims = claims_observation.claims
-        _pass(SemanticGateName.FINAL_REPORT_CLAIMS)
 
-    except _DispatchIndeterminate:
+    except _DispatchIndeterminate as indeterminate_signal:
         # 5F3B-Q1-PRE1-FU1: dispatch was attempted but AIDO cannot
         # mechanically establish whether the command was sent. NEVER
         # semantic_prompts_sent = 0 (that would falsely claim
@@ -1540,6 +2966,7 @@ def run_semantic_task_attempt(
         # CONFIRMED_SENT). infrastructure_refusal is deliberately left
         # untouched (stays False) for the identical reason.
         dispatch_state = SemanticPromptDispatchState.SEND_STATE_INDETERMINATE
+        dispatch_evidence_code = indeterminate_signal.evidence_code
         semantic_prompts_sent = None
         dispatch_indeterminate = True
         failed_gate = SemanticGateName.SEMANTIC_PROMPT_DISPATCH
@@ -1571,30 +2998,63 @@ def run_semantic_task_attempt(
             infrastructure_refusal = True
 
     # ================= CLOSURE: unconditional, on every path =================
-    # The three closure gates below record their OWN typed object's
+    # The four closure gates below record their OWN typed object's
     # `status_text` verbatim, never the generic `_pass()`/"PASSED" literal:
-    # `RuntimeTeardownStatus`/`BrokerShutdownStatus`/`SemanticCleanupStatus`
-    # each render "NOT_REQUIRED"/"SUCCEEDED"/"CLOSED"/"VERIFIED_REMOVED" for
-    # a non-failure state, never the string "PASSED" -- so gate_statuses can
-    # never disagree with the typed object that actually produced the fact
-    # (the same discipline i2b_controller.py's own closure loop applies).
+    # `RuntimeTeardownStatus`/`BrokerShutdownStatus`/`SemanticCleanupStatus`/
+    # `SemanticWorkspaceRemovalStatus` each render "NOT_REQUIRED"/
+    # "SUCCEEDED"/"CLOSED"/"VERIFIED_REMOVED" for a non-failure state, never
+    # the string "PASSED" -- so gate_statuses can never disagree with the
+    # typed object that actually produced the fact (the same discipline
+    # i2b_controller.py's own closure loop applies).
     runtime_teardown = _close_runtime(shutdown_runtime, runtime_session, run_id=run_id or "")
     gate_statuses[SemanticGateName.RUNTIME_TEARDOWN.value] = runtime_teardown.status_text
     broker_shutdown = _close_broker(shutdown_broker, broker_session, run_id=run_id or "")
     gate_statuses[SemanticGateName.BROKER_SHUTDOWN.value] = broker_shutdown.status_text
     cleanup = _attempt_cleanup(generated_config, semantic_prompts_sent=semantic_prompts_sent)
     gate_statuses[SemanticGateName.GENERATED_CONFIG_CLEANUP.value] = cleanup.status_text
-
-    safety_context = build_run_safety_context(
-        secret_context=secret_context,
-        broker_session=broker_session,
-        run_workspace=run_workspace,
-        route_descriptor=route_descriptor,
+    # 5F3B-Q1-PRE1-FU2 / DESIGN-FU1 Sec. 9.1.3 -- the frozen closure order.
+    # Workspace removal comes AFTER runtime teardown and broker shutdown
+    # (the runtime's cwd and the broker's capability scope are both bound to
+    # this tree, so removing it out from under a still-open resource is the
+    # same "cleanup racing a live resource" defect frozen O1's own ordering
+    # exists to prevent) and AFTER the generated-config scrub (which
+    # re-verifies that config's own creation-time issuance authority before
+    # deleting anything; the generic, authority-blind tree remover would
+    # otherwise silently absorb a config directory whose specific authority
+    # was never re-checked). It comes strictly BEFORE evidence
+    # construction/scrub/emission, so no record is ever sealed before
+    # workspace-removal truth is known -- for every dispatch state.
+    workspace_removal = _remove_semantic_workspace(
+        run_workspace, semantic_prompts_sent=semantic_prompts_sent
     )
+    gate_statuses[SemanticGateName.SEMANTIC_WORKSPACE_REMOVAL.value] = (
+        workspace_removal.status_text
+    )
+
+    # The safety context is REFUSED, never defaulted, if this route ever
+    # reports a credential mechanism other than the one frozen mechanism
+    # (Sec. 9.2.2). Fail closed: nothing is written at all rather than an
+    # artifact scrubbed against a context AIDO could not prove complete.
+    safety_context: ArtifactSafetyContext | None
+    try:
+        safety_context = build_run_safety_context(
+            secret_context=secret_context,
+            broker_session=broker_session,
+            run_workspace=run_workspace,
+            route_descriptor=route_descriptor,
+        )
+    except SemanticSafetyContextError:
+        safety_context = None
     closure_established = (
         runtime_teardown.closure_satisfied
         and broker_shutdown.closure_satisfied
         and cleanup.closure_satisfied
+        # Sec. 9.1.5: an unverified removal of AIDO's OWN disposable tree
+        # drives the same INFRASTRUCTURE_CONTAMINATED / not-scoring-eligible
+        # path a teardown, shutdown or config-cleanup failure already does.
+        # The candidate cannot influence whether AIDO's own tree removal
+        # succeeds, so Sec. 17.2 case 2 is mechanical here.
+        and workspace_removal.closure_satisfied
     )
 
     facts = CompatibilityFacts(**facts_kwargs)
@@ -1736,32 +3196,268 @@ def run_semantic_task_attempt(
                 observed_diff_present=bool(observed_paths),
                 verification_passed=verification_passed,
             )
-            comparisons = compare_report(report_claims, observed_facts)
+            try:
+                comparisons = compare_report(report_claims, observed_facts)
+            except Exception:  # noqa: BLE001 - Sec. 9.3.3: never gating
+                # The claims were well-typed but could not be compared. That
+                # is a fact about the REPORT LAYER alone: it downgrades
+                # report accuracy to not-evaluable and changes nothing about
+                # repository truth, verification truth, scope truth,
+                # run_validity, scoring_eligible, or the hard bar.
+                comparisons = ()
+                report_availability = ReportAvailability.MALFORMED
+                gate_statuses[SemanticGateName.FINAL_REPORT_CLAIMS.value] = (
+                    f"NOT_EVALUABLE:{report_availability.value}"
+                )
 
-    # -- record build + emission, through the SAME choke point every other
-    # -- primary qualification record in this package uses --
-    # 5F3B-Q1-PRE1-FU1: for SEND_STATE_INDETERMINATE, `build_qualification_record`
-    # is NEVER called. Its frozen shape requires `semantic_prompts_sent` to be
-    # exactly 0 or 1 (`qualification.records._validate_run_shape`) -- there is
-    # no truthful value this module could pass for an unestablished fact, and
-    # none is forced. No primary record exists for this attempt.
-    if dispatch_indeterminate:
-        qualification_record = None
-        gate_statuses[SemanticGateName.EVIDENCE_SAFETY.value] = _STATUS_NOT_REQUIRED
+    # ================= RETAINED EVIDENCE: exactly ONE artifact =================
+    # 5F3B-Q1-PRE1-FU2 / DESIGN-FU1 Sec. 3.F. Every INVOKED task attempt
+    # leaves exactly one immutable retained artifact -- never zero, never
+    # two -- through the SAME `qualification.safety.emit_evidence_or_refuse`
+    # choke point (exclusive-create, scrub-checked, bounded refusal
+    # fallback):
+    #
+    #     determinate send state   -> pi-implementer-qualification.v1
+    #     indeterminate send state -> pi-implementer-qualification-attempt.v1
+    #
+    # Before FU2, an indeterminate dispatch wrote NOTHING at all and marked
+    # EVIDENCE_SAFETY as NOT_REQUIRED -- so the one outcome in which AIDO
+    # cannot prove whether the candidate's single authorized prompt was
+    # spent was the one outcome that left nothing on disk.
+    #
+    # `build_qualification_record` is still NEVER called for an
+    # indeterminate dispatch: its frozen shape requires
+    # `semantic_prompts_sent` to be exactly 0 or 1, and there is no truthful
+    # value to pass for an unestablished fact. `pi-implementer-qualification.v1`
+    # is not widened; the sibling artifact OMITS the key entirely.
+    qualification_record: Mapping[str, Any] | None = None
+    attempt_record: Mapping[str, Any] | None = None
+    evidence_emission: EvidenceEmission | None = None
+
+    # 5F3B-Q1-PRE1-FU2A-FU1A-FU1: ONE fresh, random, per-attempt token,
+    # minted exactly once per invocation of `run_semantic_task_attempt` and
+    # never derived from `candidate`/`task`/anything guessable -- so a
+    # replayed genuine identity_provenance/evidence_emission from a
+    # DIFFERENT invocation carries a DIFFERENT token, no matter how closely
+    # its other fields happen to match this attempt's own. See
+    # `_AttemptIdentityProvenance`'s and `EvidenceEmission`'s own docstrings
+    # for the exact replay this closes.
+    _attempt_authority_token = secrets.token_hex(_ATTEMPT_AUTHORITY_TOKEN_BYTES)
+
+    def _mint_identity_provenance(
+        candidate_: str,
+        model_id_: str,
+        task_id_: str,
+        task_revision_: str,
+        attempt_authority_token_: str,
+    ) -> _AttemptIdentityProvenance:
+        """Mint one :class:`_AttemptIdentityProvenance`, bypassing its own
+        ``__init__``/``__post_init__`` -- the ONLY way, anywhere in this
+        package, that an instance of this type can ever be produced (its
+        public constructor unconditionally refuses every call). Nested here:
+        unreachable, uncallable, and unimportable from outside this one
+        invocation of ``run_semantic_task_attempt``, and built from the SAME
+        trusted local variables used to build this attempt's own
+        ``candidate``/``model_id``/``task.task_id``/``task.task_revision``/
+        this call's own ``_attempt_authority_token``.
+        """
+        instance = object.__new__(_AttemptIdentityProvenance)
+        object.__setattr__(instance, "candidate", candidate_)
+        object.__setattr__(instance, "model_id", model_id_)
+        object.__setattr__(instance, "task_id", task_id_)
+        object.__setattr__(instance, "task_revision", task_revision_)
+        object.__setattr__(instance, "attempt_authority_token", attempt_authority_token_)
+        return instance
+
+    # Minted immediately: candidate/model_id/task identity are already known
+    # and validated (SemanticControllerInputError above) before this point.
+    identity_provenance = _mint_identity_provenance(
+        candidate, model_id, task.task_id, task.task_revision, _attempt_authority_token
+    )
+
+    def _mint_evidence_emission(
+        *,
+        emitted: bool,
+        refused: bool,
+        path: str,
+        scrub_checked: bool,
+        clean: bool,
+        findings: tuple[str, ...],
+        attempt_authority_token: str,
+    ) -> EvidenceEmission:
+        """Mint one :class:`EvidenceEmission`, bypassing its own ``__init__``/
+        ``__post_init__`` -- the ONLY way, anywhere in this package, that a
+        ``refused=False`` (successful) instance can ever be produced.
+        ``EvidenceEmission.__post_init__`` unconditionally refuses
+        ``refused=False`` for every call that reaches it through the class's
+        public constructor, so this bypass is not a convenience, it is the
+        entire mechanism. Nested here (not a module attribute): unreachable,
+        uncallable, and unimportable from outside this one invocation of
+        ``run_semantic_task_attempt``. ``attempt_authority_token`` is always
+        this SAME call's own ``_attempt_authority_token`` -- both emission
+        paths (success and refused) below pass it, so
+        ``SemanticTaskAttemptResult.__post_init__`` always finds it paired
+        with this call's own ``identity_provenance``.
+        """
+        _require_evidence_emission_field_shape(
+            emitted=emitted,
+            refused=refused,
+            path=path,
+            scrub_checked=scrub_checked,
+            clean=clean,
+            findings=findings,
+            attempt_authority_token=attempt_authority_token,
+        )
+        instance = object.__new__(EvidenceEmission)
+        object.__setattr__(instance, "emitted", emitted)
+        object.__setattr__(instance, "refused", refused)
+        object.__setattr__(instance, "path", path)
+        object.__setattr__(instance, "scrub_checked", scrub_checked)
+        object.__setattr__(instance, "clean", clean)
+        object.__setattr__(instance, "findings", findings)
+        object.__setattr__(instance, "attempt_authority_token", attempt_authority_token)
+        return instance
+
+    def _project_emission(emission: Mapping[str, Any]) -> EvidenceEmission:
+        """Project a REAL ``emit_or_refuse``/``emit_attempt_or_refuse`` return
+        dict onto :class:`EvidenceEmission`.
+
+        Deliberately NESTED, not a module attribute: the only two call sites
+        below hand this ``emission`` straight from a same-statement call to
+        the real, frozen emission choke point -- there is no reachable path
+        by which a caller-fabricated ``Mapping`` could ever reach this
+        function, because the function itself cannot be imported, referenced,
+        or called from outside this one invocation of
+        ``run_semantic_task_attempt``.
+        """
+
+        def _exact_bool(name: str, value: object) -> bool:
+            # No truthiness anywhere in this projection: a truthy non-bool
+            # (the string "true", a non-empty list) must never be read as
+            # True for a fact the hard bar consumes.
+            if type(value) is not bool:
+                raise ValueError(f"evidence emission field {name!r} must be exactly a bool")
+            return value
+
+        scrub = emission.get("scrub")
+        if not isinstance(scrub, Mapping):
+            raise ValueError("evidence emission must carry its own scrub result")
+        findings = scrub.get("findings")
+        if not isinstance(findings, (list, tuple)):
+            raise ValueError("evidence emission scrub must carry a findings sequence")
+        # A malformed finding element is an integrity failure, never a value
+        # to normalize -- `str(entry)` would silently turn e.g. an int or a
+        # nested object into a plausible-looking finding code.
+        if not all(type(entry) is str for entry in findings):
+            raise ValueError(
+                "evidence emission scrub findings must be exactly str entries -- a "
+                "non-str finding is refused, never coerced"
+            )
+        path = emission.get("path")
+        if not isinstance(path, str) or not path:
+            raise ValueError("evidence emission must carry a non-blank path")
+        return _mint_evidence_emission(
+            emitted=_exact_bool("emitted", emission.get("emitted")),
+            refused=_exact_bool("refused", emission.get("refused")),
+            path=path,
+            scrub_checked=_exact_bool("scrub_checked", scrub.get("scrub_checked")),
+            clean=_exact_bool("clean", scrub.get("clean")),
+            findings=tuple(findings),
+            attempt_authority_token=_attempt_authority_token,
+        )
+
+    route_provenance = {
+        "model_id": model_id,
+        "provider_route": (
+            route_descriptor.provider_id if route_descriptor is not None else None
+        ),
+        "backend_gateway_class": (
+            route_descriptor.backend_gateway_class if route_descriptor is not None else None
+        ),
+    }
+
+    if safety_context is None:
+        # Unreachable through this package's public API -- `RouteDescriptor`
+        # already refuses any other credential mechanism at construction --
+        # and deliberately fail-closed rather than emitting an artifact
+        # scrubbed against a context that could be missing a real needle.
+        _fail_status(
+            SemanticGateName.EVIDENCE_SAFETY,
+            CategoryBFailureCode.SAFETY_CONTEXT_UNPROVABLE,
+        )
+    elif dispatch_indeterminate:
+        attempt_payload = build_attempt_record(
+            candidate=candidate,
+            model_id=model_id,
+            task_id=task.task_id,
+            task_revision=task.task_revision,
+            dispatch_evidence_code=dispatch_evidence_code,
+            # EVIDENCE_SAFETY is omitted deliberately: an evidence body
+            # cannot truthfully record the outcome of the gate that is about
+            # to judge it, and recording it as NOT_REACHED would be a false
+            # statement about a gate that always runs. Its outcome lives on
+            # the controller result instead -- the identical discipline
+            # `i2b_controller._build_evidence` already applies.
+            gate_statuses={
+                name: status
+                for name, status in gate_statuses.items()
+                if name != SemanticGateName.EVIDENCE_SAFETY.value
+            },
+            observed_pi_version=observed_pi_version,
+            compatibility_facts=facts.as_dict(),
+            compatibility_gate_passed=compatibility_established,
+            route_provenance=route_provenance,
+            closure={
+                "runtime_teardown": runtime_teardown.status_text,
+                "broker_shutdown": broker_shutdown.status_text,
+                "generated_config_cleanup": {
+                    "attempted": cleanup.attempted,
+                    "scrub_verified": cleanup.scrub_verified,
+                    "classification": None,
+                },
+                "semantic_workspace_removal": {
+                    "attempted": workspace_removal.attempted,
+                    "verified": workspace_removal.verified,
+                    "facts": (
+                        dict(workspace_removal.facts)
+                        if workspace_removal.facts is not None
+                        else None
+                    ),
+                },
+                "closure_established": closure_established,
+            },
+        )
+        emission = emit_attempt_or_refuse(
+            attempt_payload, path=evidence_path, safety=safety_context
+        )
+        # 5F3B-Q1-PRE1-FU2A-FU1: embed this attempt's OWN identity, from the
+        # SAME trusted local variables used to build `attempt_payload` and
+        # the `SemanticTaskAttemptResult` below -- never re-derived from
+        # `self` after construction. `SemanticTaskAttemptResult.__post_init__`
+        # cross-checks its own `candidate`/`model_id`/`task_id`/
+        # `task_revision` against these embedded copies, so
+        # `dataclasses.replace(result, candidate="B", model_id=...)` can no
+        # longer relabel identity: the embedded copy stays whatever this
+        # attempt genuinely was.
+        attempt_record = {
+            **emission,
+            "candidate": candidate,
+            "model_id": model_id,
+            "task_id": task.task_id,
+            "task_revision": task.task_revision,
+        }
+        evidence_emission = _project_emission(emission)
+        if evidence_emission.refused:
+            _fail_status(
+                SemanticGateName.EVIDENCE_SAFETY, CategoryBFailureCode.EVIDENCE_SCRUB_REFUSED
+            )
+        else:
+            _pass(SemanticGateName.EVIDENCE_SAFETY)
     else:
         pi_runtime = {
             "observed_version": observed_pi_version,
             "compatibility_facts": facts.as_dict(),
             "compatibility_gate_passed": compatibility_established,
-        }
-        route_provenance = {
-            "model_id": model_id,
-            "provider_route": (
-                route_descriptor.provider_id if route_descriptor is not None else None
-            ),
-            "backend_gateway_class": (
-                route_descriptor.backend_gateway_class if route_descriptor is not None else None
-            ),
         }
         record = build_qualification_record(
             candidate=candidate,
@@ -1786,25 +3482,69 @@ def run_semantic_task_attempt(
             route_provenance=route_provenance,
             verification=_project_verification(verification_outcome),
             scope_result=_project_scope_result(scope_result),
-            report_accuracy=_project_report_accuracy(comparisons),
+            report_accuracy=_project_report_accuracy(
+                comparisons, availability=report_availability
+            ),
         )
-        qualification_record = emit_or_refuse(record, path=evidence_path, safety=safety_context)
-        if qualification_record.get("refused"):
+        emission = emit_or_refuse(record, path=evidence_path, safety=safety_context)
+        # 5F3B-Q1-PRE1-FU2A-FU1: same identity-embedding as the attempt path
+        # above, from the same trusted local variables used to build
+        # `record` itself.
+        qualification_record = {
+            **emission,
+            "candidate": candidate,
+            "model_id": model_id,
+            "task_id": task.task_id,
+            "task_revision": task.task_revision,
+        }
+        evidence_emission = _project_emission(emission)
+        if evidence_emission.refused:
             _fail_status(
                 SemanticGateName.EVIDENCE_SAFETY, CategoryBFailureCode.EVIDENCE_SCRUB_REFUSED
             )
         else:
             _pass(SemanticGateName.EVIDENCE_SAFETY)
 
+    # 5F3B-Q1-PRE1-FU2A-FU1A-FU1-FU1: register THIS attempt's own authority
+    # fingerprint -- from the SAME trusted local variables about to be
+    # passed into `SemanticTaskAttemptResult` below -- before constructing
+    # it. See `_register_attempt_authority`'s own docstring for why this
+    # closes the "borrow a genuine, internally-self-consistent evidence
+    # bundle from a DIFFERENT attempt" replay the pairwise
+    # `attempt_authority_token` equality check alone could not.
+    _register_attempt_authority(
+        _attempt_authority_token,
+        _authorized_facts_fingerprint(
+            gate_statuses=gate_statuses,
+            dispatch_state=dispatch_state,
+            semantic_prompts_sent=semantic_prompts_sent,
+            run_validity=run_validity,
+            scoring_eligible=scoring_eligible,
+            autonomous_classification=autonomous_classification,
+            diagnostic_subclassification=diagnostic_subclassification,
+            verification_passed=verification_passed,
+        ),
+    )
+
     result = SemanticTaskAttemptResult(
         candidate=candidate,
         model_id=model_id,
         task_id=task.task_id,
         task_revision=task.task_revision,
+        identity_provenance=identity_provenance,
         semantic_prompts_sent=semantic_prompts_sent,
         dispatch_state=dispatch_state,
+        dispatch_evidence_code=dispatch_evidence_code,
+        semantic_dispatch_attempted=semantic_dispatch_attempted,
+        turn_outcome=(
+            turn_observation.turn_outcome if turn_observation is not None else None
+        ),
+        agent_end_observed=(
+            turn_observation.agent_end_observed if turn_observation is not None else False
+        ),
+        report_availability=report_availability,
         infrastructure_refusal=infrastructure_refusal,
-        gate_statuses=dict(gate_statuses),
+        gate_statuses=gate_statuses,
         failed_gate=failed_gate,
         failure_code=failure_code,
         facts=facts,
@@ -1825,6 +3565,9 @@ def run_semantic_task_attempt(
         runtime_teardown=runtime_teardown,
         broker_shutdown=broker_shutdown,
         cleanup=cleanup,
+        workspace_removal=workspace_removal,
         qualification_record=qualification_record,
+        attempt_record=attempt_record,
+        evidence_emission=evidence_emission,
     )
     return result
