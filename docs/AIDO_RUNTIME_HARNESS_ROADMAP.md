@@ -10,14 +10,24 @@
 > qualification runtime code was modified, `CLAUDE.md` was not modified, and no
 > frozen historical design document was rewritten.
 >
-> **Standing authority is unchanged by this document.**
-> `5F3B-Q1: NO-GO. 5F3B-Q2: NO-GO. Real-workspace authority: NO-GO.`
+> **Standing authority is unchanged by this document**, and stated in full:
+>
+> ```text
+> 5F3B-Q1-PRE1                ACCEPTED / FROZEN
+> Candidate A Category-B      QUALIFIED / FROZEN   (compatibility only)
+> Candidate B Category-B      QUALIFIED / FROZEN   (compatibility only)
+> 5F3B-LIVE1 (M2.5)           NOT YET IMPLEMENTED
+> 5F3B-Q1                     NO-GO
+> 5F3B-Q2                     NO-GO
+> Real-workspace authority    NO-GO
+> ```
 
 | | |
 |---|---|
 | Kind | Roadmap / architecture documentation |
 | Created | 2026-09-02 (post `5F3B-Q1-PRE1` ACCEPT / FREEZE) |
 | Revised | 2026-09-02 — architecture alignment review against the autonomous-project-execution product vision |
+| Revised | 2026-09-02 — **M2.5 / `5F3B-LIVE1` inserted.** A controlled Q1 execution attempt stopped *before* any semantic attempt: PRE1's semantic ports are injected, and the repository contains no real implementation of them and no live Q1/Q2 sweep entry point (§4.5, §8.2). Semantic prompts sent: **0**. |
 | Live activity | **None** |
 | Authorizes | **Nothing** |
 
@@ -80,7 +90,8 @@ This document is canonical for two layers.
 - **the four independent runtime axes** (§1);
 - **the qualification identity tuple** (§2);
 - **Pi's architectural status** (§3);
-- **milestone sequencing M1–M11 and the inserted control-plane tranche** (§4);
+- **milestone sequencing M1–M11, the inserted control-plane tranche, and the
+  inserted M2.5 / `5F3B-LIVE1` semantic live layer** (§4, §4.5);
 - **the Codex / DeepSeek Harness position** (§5);
 - **the AIDO v1 / v2 product milestones** (§6);
 - **deferred progress-aware stall supervision** (§7).
@@ -110,6 +121,7 @@ It is **not** canonical for, and does not restate or supersede:
 | Shipped L2 writer / verifier / reviewer contracts | [`PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md`](PHASE_5_L2_IMPLEMENTER_BOUNDARY_DESIGN.md) |
 | Implementer qualification policy, corpus, hard bar | [`PHASE_5F3B_PI_IMPLEMENTER_QUALIFICATION_DESIGN.md`](PHASE_5F3B_PI_IMPLEMENTER_QUALIFICATION_DESIGN.md) |
 | Semantic dispatch authority + evidence contract | [`PHASE_5F3B_Q1_PRE1_DESIGN_FU1_SEMANTIC_DISPATCH_AUTHORITY.md`](PHASE_5F3B_Q1_PRE1_DESIGN_FU1_SEMANTIC_DISPATCH_AUTHORITY.md) |
+| M2.5 semantic live layer — planning notes (authorizes nothing) | [`PHASE_5F3B_LIVE1_PI_SEMANTIC_LIVE_LAYER_PLAN.md`](PHASE_5F3B_LIVE1_PI_SEMANTIC_LIVE_LAYER_PLAN.md) |
 | Route / credential boundary | [`PHASE_5F3B_I2A_B300_PI_ROUTE_CREDENTIAL_BOUNDARY_DESIGN.md`](PHASE_5F3B_I2A_B300_PI_ROUTE_CREDENTIAL_BOUNDARY_DESIGN.md) |
 | Pi runtime boundary / delegated authority | `PHASE_5F3A_AR0_*`, `PHASE_5F3A_AR2D_*` |
 
@@ -375,13 +387,19 @@ Pi's accidents but also the *absence* of the control plane.
 
 The 2026-09-02 revision **preserves M1–M11 and their meanings** so existing
 records and cross-references stay valid, and inserts the control-plane tranche
-as lettered sub-milestones. Nothing was renumbered.
+as lettered sub-milestones. The later M2.5 insertion follows the same rule:
+`5F3B-LIVE1` is a **decimal** milestone precisely so that M3 keeps meaning
+exactly what it always meant. **Nothing was renumbered.**
 
 ```text
 M1    Runtime compatibility                            COMPLETE
         Pi + Qwen / Pi + MiniMax
 M2    Semantic qualification infrastructure            COMPLETE / FROZEN
         5F3B-Q1-PRE1
+M2.5  Pi semantic live adapter + sweep runner         NOT YET IMPLEMENTED
+        5F3B-LIVE1 — connects PRE1's already-frozen
+        injected semantic ports to the real Pi
+        runtime seam, and nothing else (§4.5)
 M3    Pi semantic implementer qualification            NOT AUTHORIZED (Q1/Q2 NO-GO)
         Q1 Candidate A
         Q2 Candidate B
@@ -417,8 +435,16 @@ M11   Advanced progress-aware stall supervision
 > rather than merely preceding M6 alongside it.
 
 ```text
-M3 ──► M4 ──► M5A ──► M5 ──► M6 ──► M6A ──► M6B ──► M6C ──► M7 ──► M8 ──► M9 ──► M10
+M2 ──► M2.5 ──► M3 ──► M4 ──► M5A ──► M5 ──► M6 ──► M6A ──► M6B ──► M6C ──► M7 ──► M8 ──► M9 ──► M10
 
+M2.5 depends on: M2 (accepted/frozen PRE1) alone. It is OFFLINE implementation
+                 work — design and construction send no semantic prompt, and
+                 its tests are synthetic. It is a HARD prerequisite of M3:
+                 without it there is nothing to invoke, and a Q1 attempt stops
+                 before any semantic attempt is made (§8.2).
+M3  depends on:  M2.5 being ACCEPTED / FROZEN, plus its own fresh explicit live
+                 authorization. Accepting M2.5 does NOT authorize Q1; Q1 and Q2
+                 remain separately authorized, one prompt at a time.
 M5A depends on:  nothing live. It is offline control-plane work and MAY BE
                  DESIGNED while M3/M4/Q1/Q2 are still pending or unauthorized —
                  design work starting early is fine and does not violate this
@@ -457,9 +483,21 @@ Three consequences worth stating so they cannot drift:
   implementation quality**, and no Category-B result is ever a candidate PASS.
   It is `RUNTIME_COMPATIBILITY` qualification in §2.3's terms.
 - **M2 — semantic qualification infrastructure. COMPLETE / FROZEN.** See §8.
+  PRE1 froze the semantic *orchestration*: the controller, the two-phase
+  dispatch/turn model, the sweep, the records, the hard bar. It froze those
+  around **injected ports**, and injected ports are not implementations.
+- **M2.5 — Pi semantic live adapter + sweep runner (`5F3B-LIVE1`). NOT YET
+  IMPLEMENTED.** The layer this roadmap previously skipped. Its **only** job is
+  to connect PRE1's four frozen semantic ports — `dispatch_semantic_prompt`,
+  `observe_semantic_turn`, `collect_broker_activity`,
+  `collect_final_report_claims` — to the real Pi runtime seam, and to provide a
+  deliberately explicit live sweep entry point. It redefines **no** qualification
+  semantics (§4.5). Offline to build; live only once M3 is separately
+  authorized.
 - **M3 — Pi semantic implementer qualification.** The first live semantic
-  activity in this line of work, and **the immediate next implementation work
-  after this roadmap review** (§4.4). Q1 and Q2 are independent, neither is
+  activity in this line of work. It is **gated on M2.5 being accepted and
+  frozen** (§4.5) — the 2026-09-02 execution attempt established mechanically
+  that it cannot start before then (§8.2). Q1 and Q2 are independent, neither is
   informed by the other, and each remains **NO-GO until separately authorized**.
   Under the frozen one-shot policy each candidate has exactly one authorized
   prompt per task, and an indeterminate dispatch **consumes** it.
@@ -557,15 +595,212 @@ remain on the roadmap with their original meanings.
 
 ### 4.4 What remains the immediate next implementation work
 
+> **Corrected 2026-09-02 (M2.5 insertion).** This section previously named
+> Q1/Q2 as the immediate next implementation work. That was wrong in a
+> mechanical rather than a strategic sense: Q1 cannot be implemented next
+> because it has nothing to invoke. The correction below replaces that
+> statement; it does **not** deprioritize, re-scope or soften Q1/Q2, which
+> remain the next *qualification* work and are still separately authorized.
+
 ```text
-5F3B-Q1 (Candidate A) and 5F3B-Q2 (Candidate B) — M3 — remain the immediate
-next implementation work, unchanged and unpostponed by this revision, and both
-remain NO-GO until separately authorized.
+5F3B-LIVE1 (M2.5) — the Pi semantic live adapter and live sweep runner — is the
+immediate next implementation work.
+
+5F3B-Q1 (Candidate A) and 5F3B-Q2 (Candidate B) — M3 — remain the next
+QUALIFICATION work, immediately after LIVE1 is accepted and frozen, and both
+remain NO-GO until separately authorized. Accepting LIVE1 authorizes neither.
 ```
 
-Nothing in the control-plane architecture added here invalidates, delays,
-re-scopes, or reprioritizes Q1/Q2. M5A may be designed in parallel; it does not
-precede M3.
+Nothing in the control-plane architecture added by the earlier revision
+invalidates, delays, re-scopes, or reprioritizes Q1/Q2. M5A may still be
+designed in parallel; it does not precede M3, and it does not precede M2.5
+either.
+
+### 4.5 M2.5 / `5F3B-LIVE1` — Pi semantic live adapter + sweep runner
+
+#### 4.5.1 Why this milestone exists
+
+The ladder ran `M1 runtime compatibility -> M2 semantic qualification
+infrastructure (PRE1) -> M3 live Q1/Q2`. A controlled attempt to execute Q1 on
+2026-09-02 stopped **before any semantic attempt was invoked**, and the reason
+was structural rather than incidental:
+
+```text
+PRE1 froze the semantic ORCHESTRATION around INJECTED ports:
+
+    dispatch_semantic_prompt        (phase 1 -- the send fact)
+    observe_semantic_turn           (phase 2 -- the turn fact)
+    collect_broker_activity
+    collect_final_report_claims
+
+The repository contains NO implementation of any of the four, and no live
+Q1/Q2 sweep entry point. `run_primary_sweep` exists as a library function and
+has no non-test caller. The existing live entry point drives the ZERO-PROMPT
+Category-B attempt only.
+```
+
+So M2 delivered orchestration and M3 assumed a seam that was never built. M2.5
+is that seam. It is the layer between "we can prove Pi launches, handshakes and
+routes" (M1, frozen for both candidates) and "we can measure what Pi's model
+actually does with a task" (M3).
+
+#### 4.5.2 Scope — connection only
+
+> **LIVE1 connects already-frozen orchestration to an already-frozen runtime
+> seam. It decides nothing.**
+
+LIVE1 explicitly does **not** redefine, reopen, reinterpret, extend, relax or
+tune any of:
+
+```text
+the qualification corpus            run validity
+task prompts                        the hard bar
+dispatch semantics                  ranking
+prompt count policy                 record schemas
+outcome taxonomy                    evidence policy
+workspace policy                    verification authority
+candidate routes                    Category-B policy
+                    real-workspace authority
+```
+
+If LIVE1 appears to require a change to any of those, that is a **finding to
+report**, not a change to make: it means either the frozen design or the seam
+reading is wrong, and it is resolved by review under its own prompt — never by
+a convenient adjustment inside LIVE1.
+
+#### 4.5.3 Sequencing
+
+```text
+5F3B-LIVE1-DESIGN
+    source inspection of the real Pi prompt/response and event seam,
+    plus the exact live semantic seam design
+    ZERO live activity -- no Pi/Node launch, no broker, no credential,
+    no B300 contact, no semantic prompt
+
+5F3B-LIVE1-I1
+    implementation of the real Pi semantic adapter and the live sweep runner
+    synthetic / offline tests ONLY
+    ZERO semantic prompts
+
+independent adversarial review
+    correction phase(s) if required, on the FU pattern used throughout 5F3B
+
+5F3B-LIVE1  ACCEPT / FREEZE
+
+then a NEW, EXPLICIT authorization for:
+    5F3B-Q1 -- Candidate A actual live sweep
+
+    Q2 (Candidate B) remains SEPARATELY authorized after that; Q1 acceptance
+    is not Q2 authorization, and neither result informs the other.
+```
+
+Freezing LIVE1 is an infrastructure acceptance, exactly as PRE1's was. It
+authorizes a live attempt to be *requested*; it never authorizes the attempt.
+
+#### 4.5.4 What LIVE1 must eventually supply
+
+Recorded here at roadmap/architecture level. The exact shapes are
+LIVE1-DESIGN's job, not this document's.
+
+- **Real phase-1 semantic prompt dispatch** against Pi's *correlated
+  prompt-response* seam, preserving the frozen three-way send state exactly:
+
+  ```text
+  CONFIRMED_NOT_SENT | CONFIRMED_SENT | SEND_STATE_INDETERMINATE
+  ```
+
+  The send fact is established only by a returned, well-typed,
+  provenance-matched observation carrying a bounded evidence code — never by
+  having called a function, and never by an exception. Prompt-count truth is
+  fixed once, in phase 1, and is never rewritten by anything downstream.
+- **Real phase-2 turn observation**, in which **`agent_settled` is completion**
+  and **`agent_end` alone is not completion**. `agent_end` may recur and may
+  carry a retry flag; it must never be promoted into a settle.
+- **Real broker-activity collection** from the *same run/session* the semantic
+  turn ran in — never a second session, never a reconstruction.
+- **Bounded, optional final-report-claims collection** that remains
+  **non-authoritative** and never gating. A runtime's self-report is a claim to
+  be audited, not evidence.
+- **Live assembly** of the already-frozen PRE1 controller and sweep together
+  with the existing live compatibility / route / resource primitives — reusing
+  them unmodified, not forking parallel versions.
+- **A deliberately explicit live sweep entry point** that cannot silently run
+  Q2, another candidate, another route, or a real workspace. Explicitness is
+  the feature; convenience defaults are the hazard.
+- **The same execution path for Candidate A and Candidate B**, differing only
+  in the frozen candidate / model / route identity. No branch anywhere may be
+  conditioned on which candidate is running.
+- **The existing unlimited AIDO output-token policy**, unchanged:
+
+  ```text
+  aido_requested_max_output_tokens = null      (AIDO requested no cap)
+  maxTokens                        omitted     (no field is sent at all)
+  ```
+
+  `null` means exactly *AIDO did not request a cap* — never `0`, `-1`, or
+  "unlimited". Backend/model native limits remain the backend's, and are never
+  reported as an AIDO-requested cap.
+- **No semantic retry, no continuation, no fallback** model, provider or route.
+  One authorized prompt per task, one dispatch call site, one turn-observation
+  call site.
+- **Fresh synthetic workspace, runtime, broker, session and capability per
+  task**, minted per attempt, with no state carried between tasks.
+- **A same-run Category-B-equivalent compatibility PREFIX before each semantic
+  task**, not inherited from an earlier frozen result: the SAME frozen 13
+  `CompatibilityFacts` (§9.1) must be re-established, on the SAME live
+  runtime/broker session that will go on to receive the semantic prompt, before
+  that prompt is dispatched.
+
+  > **This does NOT mean invoking `run_category_b_controller` before the
+  > semantic task.** That controller is one atomic, zero-prompt function: it
+  > establishes Category-B compatibility and *unconditionally tears the
+  > runtime and broker down before it ever returns* — correct for Category-B,
+  > which sends zero prompts by definition, but it exposes no way to obtain a
+  > not-yet-torn-down session, because closure is baked into that one function
+  > body. A semantic task instead reuses the frozen `CompatibilityFacts` shape
+  > and the same lower-level typed/resource primitives — through the semantic
+  > controller's own orchestration, exactly as `5F3B-Q1-PRE1` already does for
+  > its zero-prompt path — never the whole Category-B controller as a pre-gate
+  > that would tear the session down before a prompt could ever be sent. There
+  > is exactly one set of 13 compatibility facts; LIVE1 does not invent a
+  > second compatibility policy alongside it.
+- **The exact cleanup and evidence order already frozen by PRE1**: runtime
+  teardown, then broker shutdown, then generated-config cleanup, then workspace
+  removal and its verification, then the retained-evidence safety gate. Exactly
+  one retained artifact per invoked attempt — never zero, never two.
+
+#### 4.5.5 Architectural boundaries LIVE1 must not cross
+
+- **LIVE1 is Pi-specific.** Do **not** introduce a generic `AgentRuntime` or
+  `Harness` interface, a harness registry, a plugin seam, or a capability list
+  here. Do **not** generalize PRE1 for Codex or the DeepSeek Harness. §3.2's
+  reasoning is unchanged and now has one more supporting fact: the semantic
+  seam has not yet been *exercised* even once, so there is still no observed
+  evidence from which a common boundary could honestly be extracted. The
+  minimum generic harness contract (M7) remains deferred until real Pi semantic
+  qualification has completed and produced that evidence.
+- **The four-axis model is preserved**, unchanged:
+
+  ```text
+  ROLE / HARNESS / MODEL / BACKEND
+  ```
+
+- **The control/authority stack is preserved**, unchanged:
+
+  ```text
+  AIDO control plane
+      -> Pi harness/runtime
+          -> B300 provider/backend
+              -> candidate model
+  ```
+
+  AIDO remains the authority over workspace, operation authorization,
+  candidate/route selection, the credential boundary, verification, evidence
+  and the qualification verdict. **Pi remains an untrusted agent-loop
+  runtime**, and LIVE1 adding a semantic path into it does not make it trusted
+  — it makes the untrusted surface *reachable*, which is precisely why the
+  frozen gating, bounded observation and non-authoritative self-report rules
+  above are load-bearing.
 
 ---
 
@@ -815,9 +1050,15 @@ That test is **unrelated to the qualification package** and is deliberately
 work under its own prompt. No revision of this document ran any test: the counts
 above are transcribed from the acceptance record, not re-measured.
 
-### 8.1 Standing authority after PRE1
+### 8.1 Standing authority
+
+Current as of the 2026-09-02 M2.5 insertion, and binding:
 
 ```text
+5F3B-Q1-PRE1                ACCEPTED / FROZEN
+Candidate A Category-B      QUALIFIED / FROZEN   (compatibility only)
+Candidate B Category-B      QUALIFIED / FROZEN   (compatibility only)
+5F3B-LIVE1 (M2.5)           NOT YET IMPLEMENTED
 Q1                          NO-GO   (until separately authorized)
 Q2                          NO-GO   (until separately authorized)
 Real-workspace authority    NO-GO
@@ -825,8 +1066,67 @@ Real-workspace authority    NO-GO
 
 **No semantic prompt has ever been sent. No candidate implementer PASS/FAIL
 exists.** Candidate A and Candidate B are Category-B **compatibility**
-qualified/frozen only. PRE1 acceptance authorizes the *infrastructure* for a
-live semantic attempt; it does not authorize the attempt.
+qualified/frozen only — a Category-B result is never a candidate PASS (§4.1,
+M1). PRE1 acceptance authorizes the *infrastructure design* for a live semantic
+attempt; it does not authorize the attempt, and — as §8.2 records — it did not
+by itself make the attempt mechanically possible.
+
+### 8.2 Q1 execution attempt of 2026-09-02 — BLOCKED BEFORE ATTEMPT
+
+A controlled attempt to execute Q1 was made and stopped. Recorded exactly:
+
+```text
+Q1 execution attempt:       BLOCKED BEFORE ATTEMPT
+semantic prompts sent:      0
+semantic dispatch attempts: 0
+Candidate-A task attempt:   NOT CONSUMED
+Q1 candidate result:        NONE
+```
+
+The stop happened **before any semantic attempt was invoked**, so nothing was
+spent: no dispatch adapter was called, no send state was established, no
+one-shot task attempt was consumed, and no qualification or attempt artifact
+was produced. This is not a Q1 FAIL, not an indeterminate dispatch, and not a
+candidate result of any kind; Candidate A's one-shot attempts remain fully
+intact.
+
+The blocker was established **mechanically**, from the repository, not
+inferred:
+
+```text
+PRE1 exposes INJECTED ports for
+    dispatch_semantic_prompt
+    observe_semantic_turn
+    collect_broker_activity
+    collect_final_report_claims
+
+and the repository contains NO real implementation of any of them, and no
+live Q1/Q2 sweep entry point.
+```
+
+Two further facts belong in the record, because they bound the fix:
+
+- `LiveCategoryBAdapters` is **intentionally zero-prompt**. It supplies the
+  compatibility ports (connection, broker, runtime launch, `get_commands`,
+  `get_state`, protocol observation, shutdowns) and deliberately supplies none
+  of the four semantic ports. It must **not** simply be widened into a semantic
+  adapter in a way that destroys its accepted Category-B structural contract.
+- `run_primary_sweep` exists and is frozen, but has **no non-test caller**.
+  There is no live sweep entry point for Q1 or Q2.
+
+The consequence is the M2.5 insertion (§4.5). Q1 and Q2 are **NO-GO** until:
+
+```text
+semantic live layer design
+    -> offline implementation
+        -> independent review / freeze
+            -> fresh explicit live authorization
+```
+
+This section records a discovery about the *present* repository. The frozen
+historical qualification and design documents are **not** rewritten to pretend
+this missing layer was known earlier; PRE1's acceptance record stands exactly
+as it was written.
 
 ---
 
@@ -850,7 +1150,7 @@ What is missing is almost entirely **statefulness and multi-step composition**.
 | Immutable evidence artifacts with schema versions | `verification-result.v1`, `review-packet.v4`, `pi-implementer-qualification.v1` |
 | Controlled reviewer with a strict, non-repairing parser | 5F2E + RS1/V1/V2 — one model, one advisory verdict, rejected-never-repaired output |
 | Bounded request issuance and AIDO-owned wait deadlines | 5F2E-RS1 (+FU1/FU2) |
-| One-shot attempt authority and send-state proof | PRE1 semantic dispatch — `CONFIRMED_NOT_SENT / CONFIRMED_SENT / SEND_STATE_INDETERMINATE`, `semantic_prompts_sent` fixed at phase 1 |
+| One-shot attempt authority and send-state proof | PRE1 semantic dispatch — `CONFIRMED_NOT_SENT / CONFIRMED_SENT / SEND_STATE_INDETERMINATE`, `semantic_prompts_sent` fixed at phase 1. **Frozen as orchestration over injected ports; the live implementation of those ports is M2.5 and does not exist yet (§4.5, §8.2)** |
 | Exactly-one-artifact-per-attempt rule | `pi-implementer-qualification.v1` / `-attempt.v1` — never zero, never both |
 | Invariant gates at record construction | `qualification/records.py` — an internally impossible record is rejected, never coerced |
 | Frozen task identity by content digest | `QualificationTask.task_revision` — `<task_id>@<digest>` over files, prompt, verification argv, protected patterns, expected changed paths and baseline contract |
@@ -875,6 +1175,14 @@ What is missing is almost entirely **statefulness and multi-step composition**.
 
 ### 9.3 GENUINELY MISSING — the real gap
 
+0. **A real Pi semantic live layer** (added 2026-09-02, §4.5, §8.2). PRE1's four
+   semantic ports — `dispatch_semantic_prompt`, `observe_semantic_turn`,
+   `collect_broker_activity`, `collect_final_report_claims` — are injected and
+   have no implementation, and there is no live Q1/Q2 sweep entry point. This
+   one is listed first because, unlike the rest of this list, it blocks the
+   *immediate* next milestone rather than a later one: without it M3 cannot
+   start at all. It is M2.5 / `5F3B-LIVE1`, and it is the only item here whose
+   absence has already stopped a real execution attempt.
 1. **Persistent orchestration state.** Nothing in AIDO survives a process exit as
    *state*. Every shipped command is a single stateless invocation; every
    artifact is evidence about the past, not a resumable position.
@@ -1487,8 +1795,9 @@ mechanical test for "could production reach this state". Treat reachability as:
 
 TESTER is recorded as an eventual independent role (M6B).
 
-> **It is explicitly NOT the immediate next implementation.** The immediate next
-> implementation work is Q1/Q2 (§4.4).
+> **It is explicitly NOT the immediate next implementation.** The immediate
+> next implementation work is `5F3B-LIVE1` / M2.5 (§4.4, §4.5); Q1/Q2 are the
+> next *qualification* work after it.
 
 ### 18.1 Why it is deferred
 
@@ -1883,10 +2192,14 @@ ALREADY SHIPPED
                                             artifacts
 
 EXISTING QUALIFICATION / RUNTIME FOUNDATION, NOT YET A QUALIFIED IMPLEMENTER
-    Pi implementer harness infrastructure  under live M3 qualification
-                                            (Q1/Q2 — currently NO-GO, §8.1);
-                                            no PASS exists and no qualified
-                                            implementer combination exists yet
+    Pi implementer harness infrastructure  awaiting M2.5 (5F3B-LIVE1, the
+                                            semantic live adapter + sweep
+                                            runner — NOT YET IMPLEMENTED,
+                                            §4.5) and then live M3
+                                            qualification (Q1/Q2 — currently
+                                            NO-GO, §8.1); no PASS exists and
+                                            no qualified implementer
+                                            combination exists yet
 
 FUTURE, REQUIRED, NOT YET AUTHORIZED
     M5A control-plane foundation           Project/Step Contract, ProjectRun /
@@ -1928,6 +2241,12 @@ architecture validated by nothing.
 ## 24. What this document does NOT authorize
 
 - Implementing Q1 or Q2, or any part of them.
+- **Implementing `5F3B-LIVE1` / M2.5 (§4.5), or any part of it** — the semantic
+  live adapter, the four semantic port implementations, or the live sweep entry
+  point. LIVE1 is *sequenced* here and *authorized* nowhere; it needs its own
+  prompt, starting with `5F3B-LIVE1-DESIGN`.
+- Widening `LiveCategoryBAdapters` into a semantic adapter, or otherwise
+  reopening the accepted zero-prompt Category-B structural contract.
 - Running Pi, launching a Pi/Node process, or sending any semantic or model
   prompt.
 - Reading, injecting, or forwarding any credential; contacting B300 or any other
