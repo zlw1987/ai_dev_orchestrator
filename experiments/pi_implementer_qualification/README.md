@@ -1096,6 +1096,11 @@ authority: NO-GO.**
 
 ## 5F3B-Q1-PRE1 / PRE1-FU1 / PRE1-FU2: STILL ON HOLD
 
+> **SUPERSEDED STATUS — this section is the record as of the FU2 turn.**
+> Independent review has since **ACCEPTED and FROZEN `5F3B-Q1-PRE1`**. The HOLD
+> verdicts below are history; the current status is at the end of this file.
+> Q1 / Q2 / real-workspace authority are **unchanged and remain NO-GO**.
+
 The untracked `qualification/semantic_*.py` modules and their tests are
 **5F3B-Q1-PRE1 work that independent review placed on HOLD.** They are not
 accepted, not frozen, and must not be treated as the qualification package's
@@ -1152,3 +1157,47 @@ That design phase performed **no live activity of any kind**: no semantic
 prompt, no Pi/Node launch, no credential read, no socket, no B300 contact.
 **NO SEMANTIC PROMPT HAS EVER BEEN SENT.** Q1: NO-GO. Q2: NO-GO.
 Real-workspace authority: NO-GO.
+
+---
+
+## 5F3B-Q1-PRE1: ACCEPTED / FROZEN — current status
+
+Independent review **ACCEPTED and FROZE `5F3B-Q1-PRE1`**, superseding every
+HOLD verdict recorded above. Final offline validation as recorded at
+acceptance:
+
+```text
+pi_implementer_qualification   1751 passed
+pi_external_runtime_ar1           96 passed
+pi_external_runtime_ar2          298 passed
+pi_external_runtime_ar2_o1        89 passed
+
+root tests                      3503 passed
+                                   1 known environment-specific failure
+```
+
+The one root failure is
+`tests/test_writer_execution_isolation.py::test_no_project_verification_command_runs_after_the_refactor`
+on a machine where Git resolves under `C:\Program Files\Git\cmd\git.exe`. It is
+unrelated to this package, and **the root suite must not be described as fully
+passing**.
+
+**Acceptance authorizes the infrastructure for a live semantic attempt; it does
+not authorize the attempt.**
+
+```text
+5F3B-Q1-PRE1                ACCEPTED / FROZEN
+Q1                          NO-GO   (until separately authorized)
+Q2                          NO-GO   (until separately authorized)
+Real-workspace authority    NO-GO
+```
+
+**NO SEMANTIC PROMPT HAS EVER BEEN SENT.** No candidate implementer PASS/FAIL
+exists; Candidate A and Candidate B remain Category-B **compatibility**
+qualified/frozen only.
+
+Where this sits in AIDO's overall sequencing — the role/harness/model/backend
+axes, the qualification identity tuple, the M1–M11 multi-harness sequence and
+the AIDO v1 / v2 milestones — is recorded in
+[`docs/AIDO_RUNTIME_HARNESS_ROADMAP.md`](../../docs/AIDO_RUNTIME_HARNESS_ROADMAP.md).
+That document is roadmap documentation and authorizes nothing.

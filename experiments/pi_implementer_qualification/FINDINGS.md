@@ -6236,3 +6236,58 @@ tests/test_semantic_controller.py  +-0  (68 -> 68; several rewritten in place)
                                   ----
                                    102
 ```
+
+---
+
+# 5F3B-Q1-PRE1 — ACCEPT / FREEZE
+
+**Status record only. No live activity.** Independent review **ACCEPTED and
+FROZE `5F3B-Q1-PRE1`**, superseding the `HOLD` verdicts recorded above.
+
+Final offline validation as recorded at acceptance (superseding the FU2-turn
+counts above):
+
+```text
+pi_implementer_qualification   1751 passed
+pi_external_runtime_ar1           96 passed
+pi_external_runtime_ar2          298 passed
+pi_external_runtime_ar2_o1        89 passed
+
+root tests                      3503 passed
+                                   1 known environment-specific failure
+```
+
+The single root failure is
+`tests/test_writer_execution_isolation.py::test_no_project_verification_command_runs_after_the_refactor`,
+on a machine where Git resolves under `C:\Program Files\Git\cmd\git.exe`. It is
+unrelated to this package and is **not** fixed by the acceptance turn or the
+roadmap turn that recorded it. **The root suite is not fully passing and must
+not be described as such.**
+
+## Standing authority after acceptance
+
+```text
+5F3B-Q1-PRE1                ACCEPTED / FROZEN
+Q1                          NO-GO   (until separately authorized)
+Q2                          NO-GO   (until separately authorized)
+Real-workspace authority    NO-GO
+```
+
+Acceptance authorizes the **infrastructure** for a live semantic attempt; it
+does **not** authorize the attempt. **NO SEMANTIC PROMPT HAS EVER BEEN SENT.**
+No candidate implementer PASS/FAIL exists. Candidate A and Candidate B remain
+Category-B **compatibility** qualified/frozen only.
+
+## Where this sits in AIDO's sequencing
+
+Recorded in
+[`docs/AIDO_RUNTIME_HARNESS_ROADMAP.md`](../../docs/AIDO_RUNTIME_HARNESS_ROADMAP.md):
+the four independent axes (role / harness / model / backend), the qualification
+identity tuple `(harness, harness_version, model, backend,
+qualification_policy_revision)`, Pi's status as AIDO's **first** implementer
+harness candidate and **not** a permanent architectural dependency, the M1–M11
+multi-harness sequence (PRE1 is **M2**, complete/frozen; live Q1/Q2 is **M3**),
+and the AIDO v1 / v2 product milestones. PRE1, Q1 and Q2 stay **Pi-specific**;
+the generic harness contract is extracted only after real Q1/Q2 experience
+(**M7**), and neither M7 nor a second harness (**M8**) is a prerequisite for
+AIDO v1. That document is roadmap documentation and authorizes nothing.

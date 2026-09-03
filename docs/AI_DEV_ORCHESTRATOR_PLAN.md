@@ -16,7 +16,12 @@ coordinate a guarded, auditable pipeline that will eventually:
 - produce review packets,
 - support controlled automation levels.
 
-The emphasis is on **control and review**, not autonomous action.
+The emphasis is on **controlled, evidence-backed autonomy**, not unconstrained
+autonomous action: the human remains product authority, and AIDO autonomously
+coordinates execution only inside authority the human has already approved.
+(See [AIDO_RUNTIME_HARNESS_ROADMAP.md](AIDO_RUNTIME_HARNESS_ROADMAP.md) §0.1 for
+the accepted architectural verdict this restates: AIDO is an autonomous
+engineering control plane, not another coding harness.)
 
 ## 2. Current verified workflow problem
 
@@ -31,13 +36,22 @@ the human in control of approvals.
 ```
 GitHub issue
   → orchestrator
-    → minimax implementer
-    → qwen reviewer
-    → review / fix loop
+    → qualified Implementer
+    → deterministic verification
+    → qualified Reviewer when required
+    → controlled correction / re-plan loop
   → PR / CI / final review packet
 ```
 
 The orchestrator drives the loop; the human reviews and approves at gated points.
+The roles above are deliberately named by **role**, not by a specific model:
+`minimax-m2.7` and `qwen3.6-27b` were this project's original working examples
+(§6) and remain valid *candidate* models, but per
+[AIDO_RUNTIME_HARNESS_ROADMAP.md](AIDO_RUNTIME_HARNESS_ROADMAP.md) §1/§2, ROLE,
+HARNESS, MODEL and BACKEND are independent axes and no specific model is
+hard-coded into this target — an "Implementer" or "Reviewer" is whatever
+qualified role/harness/model/backend combination the project has accepted
+(§2.3), and the workflow's shape does not change if that combination does.
 
 *(Status note: as of Phase 5F2E the **reviewer** box exists in a narrow,
 configurable, controlled form — one approved diff, one configured model, one
@@ -55,7 +69,11 @@ Progressive, opt-in levels of autonomy:
 - **L2 — local branch + implement + local commit.** Work on a local branch and
   commit locally; nothing is pushed.
 - **L3 — push + PR.** Push the branch and open a pull request.
-- **L4 — review / CI / Codex fix loop.** Run the automated review/CI/fix loop.
+- **L4 — review / CI / controlled correction loop.** Run the automated
+  review/CI/correction loop. (Codex was this level's original working example
+  of a possible future harness for that loop, per Phase 10 below and
+  [AIDO_RUNTIME_HARNESS_ROADMAP.md](AIDO_RUNTIME_HARNESS_ROADMAP.md) §5.1; it
+  remains a likely candidate, not a hard-coded dependency of L4 itself.)
 - **Never merge `main`.** Merging to the main branch is always a human action.
 
 ## 5. Project config requirements
@@ -75,13 +93,46 @@ Model roles must be configurable. Each role specifies:
 
 - `implementer` — model that proposes changes.
 - `reviewer` — model that reviews changes.
-- `fixer` — model that addresses review findings.
 - `provider` — provider for the role (internal LiteLLM by default).
 - `model` — model name (e.g. `minimax-m2.7`, `qwen3.6-27b`).
 - **Connection config via environment variables** — base URLs and API keys come
   from the environment, never from committed files.
 
+> **No permanent `fixer` role.** An earlier version of this list named a
+> separate `fixer` model role; the accepted control-plane architecture in
+> [AIDO_RUNTIME_HARNESS_ROADMAP.md](AIDO_RUNTIME_HARNESS_ROADMAP.md) §19.3
+> rejects that as a standing role: implementation correction remains an
+> **Implementer** responsibility. A future fix loop is review finding → AIDO
+> routing → Implementer correction → deterministic verification → review again
+> as policy requires — never a third party with independent write authority
+> over code it did not plan or implement. This does not revise the historical
+> record below that Phase 7 and 5F2E/5F2E-RS1 ship no fixer today.
+
 ## 7. MVP phase roadmap
+
+> **Scope of this section.** §7 is canonical for the **production capability
+> phase list** — what AIDO's own commands may do, phase by phase. It is *not*
+> the roadmap for the runtime-harness layer, and *not* the roadmap for the
+> autonomous execution control plane.
+>
+> Both of those are canonical in
+> [AIDO_RUNTIME_HARNESS_ROADMAP.md](AIDO_RUNTIME_HARNESS_ROADMAP.md):
+>
+> - the **post-PRE1 runtime/qualification layer** — the four independent axes
+>   (role / harness / model / backend), the qualification identity tuple, the
+>   split between runtime-compatibility and role-capability qualification, Pi's
+>   status as first harness candidate rather than a permanent dependency, the
+>   M1–M11 sequence, the Codex and DeepSeek Harness positions, and the AIDO
+>   v1 / v2 milestones;
+> - the **control-plane architecture layer** — the Project Contract / Execution
+>   Plan / Step Contract authority split, Planner decisions as proposals rather
+>   than transitions, persistent `ProjectRun` / `StepRun` state (SQLite recorded
+>   as the preferred direction, implemented nowhere), the deterministic
+>   transition engine, Test Authority, the deferred independent Tester, reviewer
+>   view routing, and the project integration gate.
+>
+> That document authorizes nothing; `5F3B-Q1` and `5F3B-Q2` remain **NO-GO**, and
+> real-workspace implementer authority remains **NO-GO**.
 
 - **Phase 0 — bootstrap.** Complete.
 - **Phase 1 — config + workspace policy.**

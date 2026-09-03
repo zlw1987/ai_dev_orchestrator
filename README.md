@@ -15,7 +15,9 @@ changes. The eventual design will:
 - produce review packets,
 - support controlled automation levels.
 
-The emphasis is on **control and review**, not autonomous action.
+The emphasis is on **controlled, evidence-backed autonomy**, not unconstrained
+autonomous action: the human remains product authority, and AIDO autonomously
+coordinates execution only inside authority the human has already approved.
 
 ## Current status: Phase 5F2E-V2 — AIDO can now write **one** approved file, **verify** it, and have **one** model review it under bounded reviewer request-count and wait supervision, over either of **two** explicitly configured reviewer backends, with an optional structured-output constraint on the direct-vLLM path, and that is all
 
@@ -3129,7 +3131,16 @@ Phase 5F2E-V2 adds. A future **RS2 — Explicit Reviewer Failover** is
 documented as a candidate and is **not authorized or implemented**; two selectable
 providers is not failover, and nothing selects a provider automatically. Pi
 integration and a model-backed implementer likewise remain separate, unauthorized
-future work.
+future work — the runtime-harness sequencing that would eventually lead there
+(role / harness / model / backend axes, the M1–M11 multi-harness milestones, and
+the AIDO v1 / v2 definitions), together with the autonomous execution control
+plane those milestones now sit inside (Project Contract / Execution Plan / Step
+Contract authority, persistent `ProjectRun` / `StepRun` state, and deterministic
+transition authorization — concepts only, implemented nowhere), is documented,
+and authorized no further, in
+[docs/AIDO_RUNTIME_HARNESS_ROADMAP.md](docs/AIDO_RUNTIME_HARNESS_ROADMAP.md);
+live implementer qualification (`5F3B-Q1` / `5F3B-Q2`) and real-workspace
+implementer authority are **NO-GO**.
 Generalized writer expansion — multi-file, `create`, protected-path writes,
 transactions, journals, rollback, crash recovery and concurrency — has **not**
 resumed, and **no generalized writer work was inserted between 5F2D and 5F2E**.
