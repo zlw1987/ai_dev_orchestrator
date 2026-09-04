@@ -2,10 +2,16 @@
 
 Everything here operates on explicit, structured ``RefusalEvent`` facts
 supplied by the caller (a live adapter's broker log, or an offline test) --
-never inferred from final assistant prose. A refusal's ``reason_code`` is
-the exact code the accepted broker/capability engine already produces; this
-module classifies codes, it does not invent new ones or reimplement the
-broker that emits them.
+never inferred from final assistant prose. A refusal's ``reason_code`` is a
+member of the CLOSED qualification vocabulary produced by
+:func:`qualification.refusal_projection.project_broker_refusal_reason`
+(Phase 5F3B-LIVE1-C2). It is **not** the broker's own ``internal_reason``
+diagnostic: that vocabulary is deliberately more precise, is dynamic at
+several frozen construction sites, and can carry candidate-influenced text,
+so it is reduced at that one projection boundary before it reaches this
+module or any retained artifact. AR2 keeps its own diagnostics unchanged.
+This module classifies codes; it does not invent new ones, it does not map
+or rename them, and it does not reimplement the broker that emits them.
 
 Two attribution questions, kept separate per Sec. 17:
 
