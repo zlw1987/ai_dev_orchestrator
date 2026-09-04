@@ -87,6 +87,23 @@ the run's actual workspace and no cleanup ownership story, for a capability
 that a zero-prompt run structurally never uses (no prompt is ever sent, so
 Pi never has a reason to invoke ``aido_read``/``aido_edit`` at all).
 
+**Corrected by 5F3B-LIVE1-C1, and stated rather than glossed.** The two
+paragraphs above remain exactly true of the ORDINARY Category-B path -- the
+one every caller of this module's plain constructor reaches, and the one
+Candidate A / Candidate B were qualified under -- and the inert domain
+remains this class's byte-identical default. They are no longer true of the
+package as a whole: :mod:`qualification.i2b_workspace` now owns a narrow
+semantic issuance boundary that DOES call the frozen, unmodified
+``ar2.capability.mint_capability`` (and ``ar2.observation.observe_repository``
+to derive the manifest) for a semantic task, and
+:func:`build_semantic_task_live_adapters` below is the one construction path
+through which ``create_broker`` consumes it. This module still imports
+neither: it imports the opaque grant type and the issuance function, and it
+still exposes no authority object, no domain parameter, and no capability
+accessor. The "second unrelated disposable root" objection is unchanged and
+still refused -- the issuance consumes the run's OWN mint record, never a
+fresh one.
+
 Instead, :func:`_build_inert_static_eligibility_domain` constructs a
 :class:`~ar2.capability.StaticEligibilityDomain` DIRECTLY -- it is a plain
 dataclass with no ``__post_init__`` invariant of its own; every eligibility
@@ -361,7 +378,12 @@ from .i2b_session import (
     h1_components_from_frozen_evaluation,
     observed_command_from_reported_entry,
 )
-from .i2b_workspace import QUALIFICATION_EXPERIMENT_ID
+from .i2b_workspace import (
+    QUALIFICATION_EXPERIMENT_ID,
+    SemanticCapabilityGrant,
+    WorkspaceAuthorityError,
+    issue_semantic_broker_capability,
+)
 
 #: AR2's own tool allowlist, duplicated as a VALUE -- never imported -- per
 #: this package's established precedent (see e.g.
@@ -2029,6 +2051,49 @@ def _rpc_response_reports_exact_success(response: Any) -> bool:
     return type(success) is bool and success is True
 
 
+# -- 5F3B-LIVE1-C1-FU2: semantic authority STATE, not grant presence ----------
+#
+# BLOCKER. ``_semantic_capability_grant is None`` used to carry TWO different
+# meanings at once: (1) an ordinary Category-B adapter, which must use the
+# inert domain, and (2) a semantic adapter whose one grant was already
+# consumed by a prior ``create_broker`` call, which must NEVER use the inert
+# domain and must NEVER issue a second capability. ``create_broker`` could not
+# tell those apart, because clearing the grant to ``None`` after consuming it
+# was indistinguishable from never having had one.
+#
+# The correction adds a THIRD, explicit, mechanical state, private to this
+# module, that a semantic instance moves through irreversibly:
+#
+#     CATEGORY_B_INERT       ordinary constructor only; every ``create_broker``
+#                             call on this instance uses the inert domain.
+#     SEMANTIC_GRANT_PENDING set ONLY by ``build_semantic_task_live_adapters``,
+#                             after it has validated a genuine
+#                             ``SemanticCapabilityGrant``; the ONE call in
+#                             which issuance may be attempted.
+#     SEMANTIC_GRANT_SPENT   set by ``create_broker`` itself, BEFORE it calls
+#                             ``issue_semantic_broker_capability``, regardless
+#                             of whether that call goes on to succeed, refuse
+#                             expectedly, or raise unexpectedly. Every LATER
+#                             ``create_broker`` call on the same instance
+#                             refuses fail-closed from this state alone.
+#
+# There is still no caller-facing ``semantic=``/``semantic_mode=``/
+# ``enable_writes=``/``use_real_capability=``/``capability_source=``/
+# ``domain=`` parameter or public mode setter anywhere: this state is set only
+# by ``build_semantic_task_live_adapters`` (PENDING) and by ``create_broker``
+# itself (PENDING -> SPENT), never by a caller.
+
+_CATEGORY_B_INERT = "category_b_inert"
+_SEMANTIC_GRANT_PENDING = "semantic_grant_pending"
+_SEMANTIC_GRANT_SPENT = "semantic_grant_spent"
+
+#: Every literal :attr:`LiveCategoryBAdapters._semantic_authority_state` may
+#: ever hold. An offline test asserts the field is always drawn from this set.
+_SEMANTIC_AUTHORITY_STATES: frozenset[str] = frozenset(
+    {_CATEGORY_B_INERT, _SEMANTIC_GRANT_PENDING, _SEMANTIC_GRANT_SPENT}
+)
+
+
 # -- internal, process-local session registries --------------------------------
 
 
@@ -2138,6 +2203,39 @@ class LiveCategoryBAdapters:
         #: itself a refusal condition for the observer: a route observation
         #: can never precede the credential read it depends on.
         self._consumed_connection: ConnectionValues | None = None
+        #: 5F3B-LIVE1-C1. ``None`` on the ORDINARY Category-B construction
+        #: path -- which is every path reachable through this constructor --
+        #: so ``create_broker`` below keeps today's inert domain as the
+        #: DEFAULT, reached without the caller naming anything. It is set to
+        #: an OPAQUE, module-external, one-shot
+        #: :class:`~qualification.i2b_workspace.SemanticCapabilityGrant` by
+        #: exactly one narrow construction path,
+        #: :func:`build_semantic_task_live_adapters`, and by nothing else.
+        #: There is deliberately no constructor parameter, no boolean, no
+        #: setter and no public accessor for it: a caller cannot select
+        #: broker capability authority, it can only present a grant that
+        #: ``qualification.i2b_workspace`` alone can mint and that carries no
+        #: authority fact of its own.
+        #:
+        #: **5F3B-LIVE1-C1-FU2:** this field alone is no longer what
+        #: ``create_broker`` branches on -- clearing it to ``None`` after
+        #: consumption proved indistinguishable from never having had a
+        #: grant at all. It is retained only as the CARRIER of the opaque
+        #: grant object between construction and consumption.
+        #: :attr:`_semantic_authority_state` below is the sole authority
+        #: ``create_broker`` reads.
+        self._semantic_capability_grant: SemanticCapabilityGrant | None = None
+        #: 5F3B-LIVE1-C1-FU2. The mechanical state distinguishing an ordinary
+        #: Category-B instance from a semantic instance whose one grant is
+        #: still pending, or already spent. Starts ``CATEGORY_B_INERT`` for
+        #: every instance reachable through this constructor;
+        #: :func:`build_semantic_task_live_adapters` alone may move a fresh
+        #: instance to ``SEMANTIC_GRANT_PENDING``; ``create_broker`` itself
+        #: alone may move ``SEMANTIC_GRANT_PENDING`` to
+        #: ``SEMANTIC_GRANT_SPENT``, irreversibly, before it attempts
+        #: issuance. No other transition exists, and no caller-facing
+        #: parameter or setter can reach this field.
+        self._semantic_authority_state: str = _CATEGORY_B_INERT
 
     # -- credential boundary -------------------------------------------------
 
@@ -2177,9 +2275,89 @@ class LiveCategoryBAdapters:
     # -- broker authority ------------------------------------------------------
 
     def create_broker(self, request: BrokerCreationRequest) -> BrokerCreationObservation:
-        sed = _build_inert_static_eligibility_domain(
-            canonical_root=request.workspace.workspace_root
-        )
+        """Create this run's broker. **The capability is the DEFAULT inert one.**
+
+        5F3B-LIVE1-C1 adds exactly one alternative, and it is not reachable
+        from this constructor: when -- and only when -- this instance was
+        built by :func:`build_semantic_task_live_adapters`, the capability is
+        the GENUINE one ``qualification.i2b_workspace`` issues for this exact
+        (workspace nonce, ``run_id``, ``task_id``, ``task_revision``), from an
+        AIDO-OBSERVED manifest and the frozen task contract. This call site is
+        the design's EVENT 2 (capability issuance), and it is the first
+        adapter call that carries both the run id and the exact workspace --
+        which is why issuance happens here and not at ``read_connection``,
+        whose frozen zero-argument shape is not widened.
+
+        The state is transitioned to SPENT before it is consumed, so this
+        instance can never present it twice; the issuance registry refuses a
+        replay independently (defense in depth -- see the module-level
+        ``_WORKSPACE_SEMANTIC_ISSUANCE`` note). A refused issuance **never**
+        falls back to the inert domain: a semantic run in which every model
+        operation was silently refused would read as candidate behaviour
+        rather than as harness failure.
+
+        **5F3B-LIVE1-C1-FU1: an EXPECTED issuance refusal is a truthful "no
+        broker was ever attempted" observation, not an adapter exception.**
+        The frozen design requires this failure to land at the controller's
+        ``BROKER_SESSION`` gate as ``BROKER_CREATION_FAILED`` -- the same
+        attribution an ordinary ``session=None`` broker-creation failure
+        already gets -- rather than as ``ADAPTER_RAISED``. A bounded
+        :class:`~qualification.i2b_workspace.WorkspaceAuthorityError` raised
+        by :func:`issue_semantic_broker_capability` is therefore caught HERE,
+        before any :class:`BrokerServer` is constructed or started, and
+        projected into the frozen ``session=None`` / ``start_attempted=False``
+        / ``resource_created=False`` shape -- truthful, because at that point
+        no broker-start call has been reached and no resource exists. An
+        UNEXPECTED exception (a programmer error, not a bounded refusal) is
+        NOT caught here, and still reaches the frozen controller's
+        ``ADAPTER_RAISED`` path -- the two failure classes stay distinct.
+
+        **5F3B-LIVE1-C1-FU2: a semantic adapter may never fall back to
+        Category-B inert mode.** ``_semantic_capability_grant is None`` used
+        to mean BOTH "ordinary Category-B instance" and "semantic instance,
+        grant already spent" -- indistinguishable, so a second call on a
+        semantic instance fell through to the inert branch. This instance's
+        :attr:`_semantic_authority_state` is now the sole authority this
+        method branches on. It moves ``SEMANTIC_GRANT_PENDING`` ->
+        ``SEMANTIC_GRANT_SPENT`` irreversibly, BEFORE the issuance attempt --
+        so a genuine success, an expected refusal, and an unexpected
+        exception all leave the instance permanently ``SPENT``. A LATER call
+        on an already-``SPENT`` instance refuses fail-closed, using this same
+        truthful "no broker was ever attempted" shape: it never builds an
+        inert domain, never attempts a second issuance, and never constructs
+        or starts a :class:`BrokerServer`.
+        """
+        state = self._semantic_authority_state
+        if state not in _SEMANTIC_AUTHORITY_STATES:
+            raise LiveAdapterError(
+                "broker creation refused: this adapter's semantic authority "
+                "state is not one of the declared states"
+            )
+        if state == _CATEGORY_B_INERT:
+            sed = _build_inert_static_eligibility_domain(
+                canonical_root=request.workspace.workspace_root
+            )
+        elif state == _SEMANTIC_GRANT_SPENT:
+            # The one semantic grant this instance ever held was already
+            # committed to one attempt (success, expected refusal, or
+            # unexpected exception -- all three land here identically). Never
+            # fall back to inert mode, never issue a second capability, never
+            # construct or start a BrokerServer, never add a registry entry.
+            return BrokerCreationObservation(
+                session=None, start_attempted=False, resource_created=False
+            )
+        else:  # state == _SEMANTIC_GRANT_PENDING
+            grant = self._semantic_capability_grant
+            self._semantic_authority_state = _SEMANTIC_GRANT_SPENT
+            self._semantic_capability_grant = None
+            try:
+                sed = issue_semantic_broker_capability(
+                    grant, workspace=request.workspace, run_id=request.run_id
+                )
+            except WorkspaceAuthorityError:
+                return BrokerCreationObservation(
+                    session=None, start_attempted=False, resource_created=False
+                )
         run_state = RunState(caps=sed.caps)
         binding = BrokerBinding.mint(sed.capability_id)
         handler = BrokerRequestHandler(
@@ -2735,6 +2913,54 @@ class LiveCategoryBAdapters:
             orchestrator_direct_child_reported_exit=termination.get("exit_status_observed")
             is not None,
         )
+
+
+def build_semantic_task_live_adapters(
+    *,
+    environ_reader: Any,
+    runtime_identity: IssuedRuntimeIdentity,
+    capability_grant: Any,
+) -> LiveCategoryBAdapters:
+    """The ONE narrow construction path under which ``create_broker`` issues a
+    genuine capability (5F3B-LIVE1-C1).
+
+    Returns an object whose ``type(...) is LiveCategoryBAdapters`` -- exactly,
+    not a subclass -- so the frozen
+    :class:`AuthenticatedB300RouteObserver`'s exact-type route authority is
+    unchanged and unweakened, and every accepted Category-B behaviour of the
+    returned object is the accepted one.
+
+    ``capability_grant`` must be an opaque
+    :class:`~qualification.i2b_workspace.SemanticCapabilityGrant`, which only
+    ``qualification.i2b_workspace`` can mint and only for a task that IS one
+    of the frozen corpus singletons. It carries no manifest, no protected
+    set, no witness set, no root, no capability id, no domain, and no
+    callable -- every authority fact is derived at consumption, inside the
+    issuing module, from AIDO's own observation of the verified workspace.
+
+    **This is not an authority switch.** There is no ``semantic=True``, no
+    ``real_capability=``, no ``enable_writes=``, no ``capability_source=`` and
+    no domain parameter anywhere; the distinction is carried mechanically by
+    an object a caller cannot construct. Category-B construction remains the
+    plain :class:`LiveCategoryBAdapters` constructor, whose signature is
+    unchanged and whose default capability is unchanged.
+    """
+    if type(capability_grant) is not SemanticCapabilityGrant:
+        raise LiveAdapterError(
+            "semantic broker capability refused: this construction path "
+            "requires a grant minted by qualification.i2b_workspace's own "
+            "issuance boundary; no caller-constructed value can authorize one"
+        )
+    adapters = LiveCategoryBAdapters(
+        environ_reader=environ_reader, runtime_identity=runtime_identity
+    )
+    adapters._semantic_capability_grant = capability_grant
+    # 5F3B-LIVE1-C1-FU2: the ONE place a fresh instance may enter
+    # SEMANTIC_GRANT_PENDING -- after the grant above has already been
+    # validated as a genuine SemanticCapabilityGrant. create_broker owns the
+    # only further transition (PENDING -> SPENT), and it is irreversible.
+    adapters._semantic_authority_state = _SEMANTIC_GRANT_PENDING
+    return adapters
 
 
 class AuthenticatedB300RouteObserver:

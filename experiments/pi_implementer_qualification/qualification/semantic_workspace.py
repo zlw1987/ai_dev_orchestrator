@@ -6,6 +6,21 @@ exact fixture-construction operation
 every other case in this repository). No Pi process, no socket, no HTTP
 request, no credential.
 
+Which ``git`` runs here (5F3B-LIVE1-C1-P12a)
+---------------------------------------------
+
+This module performs the semantic attempt's **first** Git execution, so it is
+where the attempt's Git executable authority is established.
+:func:`populate_semantic_task_workspace` keeps its frozen caller-visible
+``git_executable: str`` parameter, but treats that string as a **provenance
+claim, never an authority**: :func:`_require_trusted_git_executable` resolves
+independently through the accepted ``resolve_git_executable`` against the root
+:func:`~qualification.i2b_workspace.verify_run_workspace` just returned, and
+requires **exact string equality**, before the emptiness check, before any
+fixture file write, and before the first Git subprocess. Only the resolver's
+own return value is ever executed. See that function's docstring for why the
+comparison must be exact-spelling rather than an alias test.
+
 Why this module exists
 -----------------------
 
@@ -74,6 +89,11 @@ import os
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from ai_dev_orchestrator.workspace.git_adapter import (
+    GitExecutableError,
+    resolve_git_executable,
+)
 
 from .corpus import QualificationTask
 from .i2b_workspace import (
@@ -154,6 +174,56 @@ def _git(git_executable: str, args: list[str], *, cwd: str, environment: dict[st
     return completed.stdout.decode("utf-8", "replace")
 
 
+def _require_trusted_git_executable(
+    supplied_git_executable: object, *, verified_repo_root: str
+) -> str:
+    """C1-P12a -- the FIXTURE-POPULATION checkpoint. Returns the trusted path.
+
+    ``populate_semantic_task_workspace`` keeps its frozen caller-visible
+    ``git_executable: str`` shape, but that string is a **provenance claim,
+    never an executable authority**. This function re-proves it, once, at the
+    attempt's FIRST Git consumption boundary -- before the emptiness check,
+    before any fixture file write, and before the first Git subprocess.
+
+    ``resolve_git_executable`` is AIDO's own accepted resolver and the ONLY
+    authority: ``shutil.which("git")``, ``abspath``, then absolute / existing
+    regular file / **not inside the target workspace**. It is run against the
+    root ``verify_run_workspace`` just returned, so the
+    not-inside-the-workspace check is meaningful for THIS observation and the
+    process authority is bound to the same unforgeable object as every other
+    operation on that path. No target repository, task, model, artifact,
+    project config, operator-supplied path or caller string may OVERRIDE it.
+    (The resolver's own ``PATH`` input is unchanged and is not a defect: this
+    is an OVERRIDE-impossibility property, **not** a claim that Git resolution
+    is independent of ``PATH``.)
+
+    **The comparison is EXACT STRING EQUALITY on the spelling** -- not
+    ``realpath``, not ``samefile``, not any other same-target alias test. The
+    reason is mechanical and load-bearing:
+    ``semantic_controller.run_semantic_task_attempt`` keeps using its
+    ORIGINAL ``git_executable`` local after this function returns, and source
+    confirms that local is never reassigned. A weaker alias comparison would
+    admit a DIFFERENT SPELLING of the same target, and that different
+    spelling -- not the resolver's return value -- is what the later
+    consumers (the child ``PATH`` narrowing and the authoritative post-prompt
+    repository observation) would carry. Requiring the supplied string to BE
+    the resolver's return value makes the controller's unchanged local
+    EXACTLY the trusted value, so all four consumers are bound without
+    reopening the frozen controller.
+
+    A mismatch, or an unresolvable executable, refuses with a fixed bounded
+    reason code that echoes NEITHER path. There is no fallback to the
+    supplied string, to a bare name, or to anything else.
+    """
+    try:
+        trusted = resolve_git_executable(workspace_root=verified_repo_root)
+    except GitExecutableError:
+        raise SemanticWorkspaceError("GIT_EXECUTABLE_UNRESOLVED") from None
+    if type(supplied_git_executable) is not str or supplied_git_executable != trusted:
+        raise SemanticWorkspaceError("GIT_EXECUTABLE_NOT_TRUSTED_RESOLUTION")
+    return trusted
+
+
 @dataclass(frozen=True)
 class SemanticTaskWorkspace:
     """One task's fixture content, populated into an I2B-authority-bearing workspace.
@@ -215,6 +285,10 @@ def populate_semantic_task_workspace(
     except WorkspaceAuthorityError as exc:
         raise SemanticWorkspaceError(f"WORKSPACE_UNVERIFIED:{exc.reason_code}") from None
 
+    trusted_git_executable = _require_trusted_git_executable(
+        git_executable, verified_repo_root=verified_repo_root
+    )
+
     repo = Path(verified_repo_root)
     if any(repo.iterdir()):
         raise SemanticWorkspaceError("WORKSPACE_NOT_EMPTY")
@@ -237,19 +311,19 @@ def populate_semantic_task_workspace(
         "-c", "commit.gpgsign=false",
     ]
     _git(
-        git_executable,
+        trusted_git_executable,
         ["init", "-b", "main", "--quiet"],
         cwd=str(repo),
         environment=environment,
     )
     _git(
-        git_executable,
+        trusted_git_executable,
         ["add", "--", *sorted(files)],
         cwd=str(repo),
         environment=environment,
     )
     _git(
-        git_executable,
+        trusted_git_executable,
         [
             *identity_flags,
             "commit",
@@ -261,7 +335,7 @@ def populate_semantic_task_workspace(
         environment=environment,
     )
     head = _git(
-        git_executable, ["rev-parse", "HEAD"], cwd=str(repo), environment=environment
+        trusted_git_executable, ["rev-parse", "HEAD"], cwd=str(repo), environment=environment
     ).strip()
     if not head:
         raise SemanticWorkspaceError("FIXTURE_INITIAL_COMMIT_PRODUCED_NO_HEAD")

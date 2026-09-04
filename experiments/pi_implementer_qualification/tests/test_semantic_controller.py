@@ -73,9 +73,17 @@ from qualification.validity import RunValidity
 
 @pytest.fixture(scope="module")
 def git_executable() -> str:
+    """AIDO's OWN accepted Git resolution (5F3B-LIVE1-C1-P12a).
+
+    The semantic attempt's fixture-population checkpoint requires EXACT
+    STRING EQUALITY with ``resolve_git_executable``'s return value, so this
+    fixture must BE that value -- never another spelling of the same target.
+    """
+    from ai_dev_orchestrator.workspace.git_adapter import resolve_git_executable
+
     exe = shutil.which("git")
     assert exe, "git must be on PATH to build synthetic fixtures"
-    return exe
+    return resolve_git_executable(workspace_root=str(Path(__file__).resolve().parents[1]))
 
 
 @pytest.fixture()

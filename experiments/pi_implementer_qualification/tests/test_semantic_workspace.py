@@ -7,6 +7,7 @@ construction surface the rest of this package's offline suite already uses.
 from __future__ import annotations
 
 import shutil
+from pathlib import Path
 
 import pytest
 
@@ -26,9 +27,17 @@ from qualification.semantic_workspace import (
 
 @pytest.fixture(scope="module")
 def git_executable() -> str:
+    """AIDO's OWN accepted Git resolution (5F3B-LIVE1-C1-P12a).
+
+    The semantic attempt's fixture-population checkpoint requires EXACT
+    STRING EQUALITY with ``resolve_git_executable``'s return value, so this
+    fixture must BE that value -- never another spelling of the same target.
+    """
+    from ai_dev_orchestrator.workspace.git_adapter import resolve_git_executable
+
     exe = shutil.which("git")
-    assert exe
-    return exe
+    assert exe, "git must be on PATH to build synthetic fixtures"
+    return resolve_git_executable(workspace_root=str(Path(__file__).resolve().parents[1]))
 
 
 def test_populate_produces_a_valid_task_workspace(git_executable: str) -> None:

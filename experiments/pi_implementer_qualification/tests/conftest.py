@@ -22,7 +22,6 @@ operations only), and ``qualification`` (this package). Nothing under
 
 from __future__ import annotations
 
-import os
 import shutil
 import sys
 import threading
@@ -42,10 +41,33 @@ for _path in (str(_REPO_SRC), str(_AR2_DIR), str(_PACKAGE_DIR)):
 
 @pytest.fixture(scope="session")
 def git_executable() -> str:
-    found = shutil.which("git")
-    if not found:  # pragma: no cover - environment dependent
+    """AIDO's OWN accepted Git resolution -- never a re-spelling of it.
+
+    5F3B-LIVE1-C1-P12a. This used to return ``os.path.realpath(shutil.which(
+    "git"))``. That is the same TARGET as
+    ``ai_dev_orchestrator.workspace.git_adapter.resolve_git_executable``
+    returns, but not necessarily the same STRING: on Windows ``realpath``
+    normalises the extension's case, so the fixture handed the semantic
+    attempt ``...\\git.exe`` while the accepted resolver returns
+    ``...\\git.EXE``.
+
+    The C1 fixture-population checkpoint requires EXACT STRING EQUALITY with
+    the resolver's return value, deliberately -- an alias-tolerant comparison
+    would let a DIFFERENT SPELLING reach the frozen controller's later
+    consumers. So the suite is corrected to use the trusted resolution
+    itself rather than the checkpoint being weakened to accept an alias.
+    """
+    from ai_dev_orchestrator.workspace.git_adapter import (
+        GitExecutableError,
+        resolve_git_executable,
+    )
+
+    if not shutil.which("git"):  # pragma: no cover - environment dependent
         pytest.skip("git is not available")
-    return os.path.realpath(found)
+    try:
+        return resolve_git_executable(workspace_root=str(_PACKAGE_DIR))
+    except GitExecutableError:  # pragma: no cover - environment dependent
+        pytest.skip("git could not be resolved by AIDO's own resolver")
 
 
 def observed_changed_paths(*, git_executable: str, repo_root: str) -> frozenset[str]:

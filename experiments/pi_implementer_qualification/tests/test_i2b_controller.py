@@ -4754,6 +4754,91 @@ def test_no_i2b_module_has_a_prompt_shaped_name_anywhere() -> None:
                 )
 
 
+#: 5F3B-LIVE1-C1, design Sec. 2.6.5a T5 / Sec. 2.6.5b.
+#:
+#: THE ONE REOPENED INVARIANT, RECORDED EXPLICITLY. ``i2b_workspace``'s module
+#: docstring used to open with "This module launches nothing." C1 narrowed
+#: that sentence, in the docstring itself, because its semantic capability
+#: issuance path runs the accepted fixed, READ-ONLY Git observation once, at
+#: the root ``verify_run_workspace`` just returned.
+#:
+#: The old version of this test would have PASSED SILENTLY through that
+#: change: ``from ar2.observation import observe_repository`` has the import
+#: root ``ar2``, which is not in ``_FORBIDDEN_IMPORT_ROOTS``, and calls no
+#: forbidden fragment textually -- so the invariant would have become false
+#: while the purity test stayed green. A silently-passing purity test is worse
+#: than a failing one, so the test is AMENDED AND STRENGTHENED rather than
+#: deleted or loosened.
+#:
+#: The strengthening: each i2b module's imports from an EXTERNAL package
+#: (``ar2`` / ``ai_dev_orchestrator`` -- the only roots from which a
+#: process-capable dependency can arrive here) must be EXACTLY the reviewed
+#: set below, symbol by symbol. Any other ``ar2`` symbol, and any new
+#: process-capable dependency, fails loudly instead of arriving transitively.
+_EXTERNAL_IMPORT_ROOTS = frozenset({"ar2", "ai_dev_orchestrator"})
+
+_ALLOWED_EXTERNAL_IMPORTS: dict[str, dict[str, frozenset[str]]] = {
+    # The frozen controller and the frozen session value objects import
+    # NOTHING from an external package, and that is unchanged by C1.
+    i2b_controller_module.__name__: {},
+    i2b_session_module.__name__: {},
+    # The one reopened module. Five of these twelve symbols predate C1
+    # (DisposableRootAuthority, RootAuthorityError, _verify_root_authority,
+    # create_disposable_experiment_root, remove_disposable_tree); the seven
+    # C1 additions are named individually so a reviewer sees exactly what
+    # the widening is:
+    #   ar2.capability.mint_capability          the FROZEN eligibility algorithm
+    #   ar2.capability.CapabilityMintError      its fail-closed error
+    #   ar2.capability.StaticEligibilityDomain  the mint's returned product
+    #   ar2.observation.observe_repository      THE process-capable one
+    #   ar2.observation.ObservationError        its fail-closed error
+    #   ...git_adapter.resolve_git_executable   the accepted Git authority
+    #   ...git_adapter.GitExecutableError       its fail-closed error
+    i2b_workspace_module.__name__: {
+        "ar2.capability": frozenset(
+            {
+                "DisposableRootAuthority",
+                "RootAuthorityError",
+                "_verify_root_authority",
+                "CapabilityMintError",
+                "StaticEligibilityDomain",
+                "mint_capability",
+            }
+        ),
+        "ar2.fixtures": frozenset(
+            {"create_disposable_experiment_root", "remove_disposable_tree"}
+        ),
+        "ar2.observation": frozenset({"ObservationError", "observe_repository"}),
+        "ai_dev_orchestrator.workspace.git_adapter": frozenset(
+            {"GitExecutableError", "resolve_git_executable"}
+        ),
+    },
+}
+
+#: The symbols in ``i2b_workspace`` that can reach a subprocess, and the ONE
+#: function each is allowed to appear in. Anything else -- including a new
+#: helper that "just" observes the repository -- fails.
+_PROCESS_CAPABLE_SYMBOLS = ("observe_repository", "resolve_git_executable")
+_PROCESS_CAPABLE_CALLER = "issue_semantic_broker_capability"
+
+
+def _external_imports(module) -> dict[str, set[str]]:
+    """Every ``from <external> import <symbol>`` this module declares."""
+    import ast
+
+    found: dict[str, set[str]] = {}
+    for node in ast.walk(_module_tree(module)):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.split(".")[0] in _EXTERNAL_IMPORT_ROOTS:
+                    found.setdefault(alias.name, set()).add("<module>")
+        elif isinstance(node, ast.ImportFrom):
+            source = node.module or ""
+            if source.split(".")[0] in _EXTERNAL_IMPORT_ROOTS:
+                found.setdefault(source, set()).update(alias.name for alias in node.names)
+    return found
+
+
 def test_no_i2b_module_imports_a_live_io_primitive() -> None:
     import ast
 
@@ -4777,6 +4862,61 @@ def test_no_i2b_module_imports_a_live_io_primitive() -> None:
             if fragment in allowed:
                 continue
             assert fragment not in code, f"{module.__name__} code contains {fragment!r}"
+
+        # -- the C1 strengthening: an EXACT closed set, symbol by symbol -----
+        expected = _ALLOWED_EXTERNAL_IMPORTS[module.__name__]
+        observed = _external_imports(module)
+        assert set(observed) == set(expected), (
+            f"{module.__name__} imports from an external module outside its "
+            f"reviewed closed set: {sorted(set(observed) ^ set(expected))}"
+        )
+        for source, symbols in observed.items():
+            assert symbols <= expected[source], (
+                f"{module.__name__} imports {sorted(symbols - expected[source])!r} "
+                f"from {source!r}, which is outside its reviewed closed set"
+            )
+
+
+def test_only_the_semantic_issuance_path_in_i2b_workspace_can_reach_a_process() -> None:
+    """C1 Part B. The ORDINARY Category-B path in ``i2b_workspace`` launches
+    nothing: the two process-capable symbols appear in exactly ONE function,
+    the semantic issuance boundary. A new helper that reaches either of them
+    fails here rather than widening the module silently."""
+    import ast
+
+    tree = _module_tree(i2b_workspace_module)
+    for symbol in _PROCESS_CAPABLE_SYMBOLS:
+        callers = sorted(
+            node.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef)
+            and symbol in {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+        )
+        assert callers == [_PROCESS_CAPABLE_CALLER], (
+            f"{symbol!r} is reachable from {callers!r}; C1 authorizes it in "
+            f"{_PROCESS_CAPABLE_CALLER!r} only"
+        )
+
+
+def test_i2b_workspace_still_exposes_no_path_to_workspace_conversion() -> None:
+    """The property C1 did NOT reopen. Narrowing process abstinence is not
+    narrowing path authority: there is still no public function anywhere in
+    the module that accepts a path/root/directory and returns authority."""
+    import ast
+
+    tree = _module_tree(i2b_workspace_module)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef) or node.name.startswith("_"):
+            continue
+        args = node.args
+        names = [a.arg for a in (*args.posonlyargs, *args.args, *args.kwonlyargs)]
+        for name in names:
+            lowered = name.lower()
+            for fragment in ("path", "root", "dir", "directory", "executable"):
+                assert fragment not in lowered, (
+                    f"i2b_workspace.{node.name} takes a {name!r} parameter -- "
+                    "authority must originate at CREATION, never from a string"
+                )
 
 
 def test_the_controller_exposes_no_prompt_parameter() -> None:
