@@ -1,4 +1,4 @@
-"""``pi-implementer-qualification.v1`` schema, invariant gate, and safe emission.
+"""``pi-implementer-qualification.v2`` schema, invariant gate, and safe emission.
 
 Phase 5F3B-I1-FU1 turned the builder from a formatter into a real gate and
 the writer from an overwriting ``"w"`` into exclusive-create. These tests are

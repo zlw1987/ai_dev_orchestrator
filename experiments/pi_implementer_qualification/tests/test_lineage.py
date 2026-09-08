@@ -27,7 +27,11 @@ from qualification.lineage import (
     write_invalidation_evidence,
 )
 from qualification.records import build_qualification_record, emit_or_refuse
-from qualification.safety import ArtifactSafetyContext, EvidencePathCollisionError
+from qualification.safety import (
+    ArtifactSafetyContext,
+    EvidencePathCollisionError,
+    write_evidence_exclusively,
+)
 
 NO_SECRETS = ArtifactSafetyContext.none_declared()
 
@@ -354,7 +358,15 @@ def test_replacement_belonging_to_another_task_is_rejected(tmp_path):
     new_path = str(tmp_path / "new.json")
     replacement = _sample_record("IQ-2", "IQ-2@corrected0000000")  # wrong task
     replacement["supersedes_task_revision"] = "IQ-1@original00000000"
-    emit_or_refuse(replacement, path=new_path, safety=NO_SECRETS)
+    # 5F3B-LIVE1-C4-FU1: this cross-task pairing is exactly what the primary
+    # record's own invariant contract refuses, and the durable emission
+    # boundary now re-derives that contract -- so `emit_or_refuse` can no
+    # longer produce this artifact at all. The property under test here is a
+    # LINEAGE one (a replacement belonging to another task is refused when
+    # bound), so the file is placed directly through the same exclusive-create
+    # writer, without asking the record boundary to emit something it is
+    # right to reject.
+    write_evidence_exclusively(new_path, replacement)
 
     with pytest.raises(LineageBindingError):
         build_invalidation_evidence(

@@ -46,7 +46,7 @@ from typing import Any
 
 from ar2.record import scrub_check
 
-from . import PACKAGE_ID, REFUSAL_RECORD_VERSION
+from . import PACKAGE_ID, QUALIFICATION_POLICY_REVISION, REFUSAL_RECORD_VERSION
 
 
 class EvidencePathCollisionError(Exception):
@@ -164,14 +164,36 @@ def build_refusal_record(
 ) -> dict[str, Any]:
     """A SAFE placeholder emitted INSTEAD of an artifact that failed scrub.
 
-    Carries only fixed metadata -- experiment identity, what kind of artifact
-    was refused, and the finding COUNT and CODES. Never the offending value,
-    the unsafe candidate body, an endpoint, a credential, reasoning content,
-    or any copied snippet that triggered a rule.
+    Carries only fixed metadata -- experiment identity, the qualification-policy
+    revision, what kind of artifact was refused, and the finding COUNT and
+    CODES. Never the offending value, the unsafe candidate body, an endpoint, a
+    credential, reasoning content, or any copied snippet that triggered a rule.
+
+    **Why the policy revision belongs here** (5F3B-LIVE1-C4, design Sec.
+    10A.2b). :func:`emit_evidence_or_refuse` writes this record *instead of*
+    the primary or attempt payload it refused, exclusive-create, at the same
+    destination -- so in that case this IS the only durable artifact that
+    invoked, one-shot attempt will ever have. Binding the revision into the two
+    records this one replaces but not into the replacement would leave the
+    evidence non-self-describing in exactly the fallback case, which is
+    precisely when a reader has least other context.
+
+    **This function takes no payload, and that is the point.** Its signature
+    admits only a kind string, a count, and finding CODES, so there is no
+    parameter through which the unsafe candidate's own contents -- including a
+    forged ``qualification_policy_revision`` sitting inside it -- could reach
+    this record. The revision below is the package's declared constant, read
+    from the single declaration site, and it is scrub-safe by construction
+    because it is a declared literal with no runtime input.
+
+    **Exactly one field was added.** No candidate id, model id, task id, path,
+    workspace path, prompt text, endpoint, exception text, runtime diagnostic
+    or credential joined it, and none may.
     """
     return {
         "experiment": PACKAGE_ID,
         "record_version": REFUSAL_RECORD_VERSION,
+        "qualification_policy_revision": QUALIFICATION_POLICY_REVISION,
         "record_kind": "artifact emission refusal",
         "refused_record_kind": refused_record_kind,
         "is_review_packet": False,

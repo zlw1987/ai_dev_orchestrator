@@ -17,8 +17,8 @@ The frozen rule this module implements (Sec. 3.F):
 
     every INVOKED task attempt leaves EXACTLY ONE immutable retained artifact
 
-        determinate send state    -> pi-implementer-qualification.v1
-        indeterminate send state  -> pi-implementer-qualification-attempt.v1
+        determinate send state    -> pi-implementer-qualification.v2
+        indeterminate send state  -> pi-implementer-qualification-attempt.v2
 
     never zero, and never both.
 
@@ -34,7 +34,7 @@ would push an unestablished fact into ``_validate_run_shape``,
 ``evaluate_hard_bar``, ``build_invalidation_evidence`` and the ranking layer
 -- every one of which currently gets to assume a determinate count, and every
 one of whose new ``None`` branch would be a place an unproven fact could
-later be read as a proven one. So ``pi-implementer-qualification.v1`` stays
+later be read as a proven one. So ``pi-implementer-qualification.v2`` stays
 **exactly as frozen**, and this is a separate artifact kind at its own
 version, whose ``record_kind`` makes it unmistakable and unmergeable with a
 run record.
@@ -72,10 +72,16 @@ What this module deliberately does NOT do
 
 from __future__ import annotations
 
+import json
 from dataclasses import fields
 from typing import Any, Mapping
 
-from . import ATTEMPT_RECORD_VERSION, FIXTURE_SCHEMA_VERSION, PACKAGE_ID
+from . import (
+    ATTEMPT_RECORD_VERSION,
+    FIXTURE_SCHEMA_VERSION,
+    PACKAGE_ID,
+    QUALIFICATION_POLICY_REVISION,
+)
 from .corpus import TASKS_BY_ID
 from .i2_route import RouteDescriptorError, route_descriptor_for_candidate
 from .i2b_controller import (
@@ -91,6 +97,10 @@ from .records import (
     TRUST_NAMESPACES,
     VALID_TASK_IDS,
 )
+# 5F3B-LIVE1-C4: the SAME protected-key set the primary header uses, imported
+# rather than re-listed -- two listings is exactly how the two artifact kinds
+# could come to protect different fields.
+from .records import _CALLER_FORBIDDEN_HEADER_KEYS, _is_exact_declared_mapping
 from .safety import ArtifactSafetyContext, emit_evidence_or_refuse
 from .semantic_session import (
     DISPATCH_EVIDENCE_CODE_STATES,
@@ -152,7 +162,7 @@ def _contains_key(value: object, key: str) -> bool:
 
 
 # ===========================================================================
-# 5F3B-Q1-PRE1-FU2A -- the attempt.v1 INVARIANT GATE (Sec. 7/8)
+# 5F3B-Q1-PRE1-FU2A -- the attempt.v2 INVARIANT GATE (Sec. 7/8)
 # ===========================================================================
 # Independent review proved `build_attempt_record` accepted far more shapes
 # than an actual reachable indeterminate semantic-dispatch attempt could
@@ -239,12 +249,16 @@ _EXPECTED_ATTEMPT_GATE_STATUS_KEYS: frozenset[str] = frozenset(
 )
 
 #: 5F3B-Q1-PRE1-FU2A-FU1A: the EXACT, CLOSED top-level key set every
-#: attempt.v1 payload carries -- `attempt_record_header`'s own 8 fixed
+#: attempt.v2 payload carries -- `attempt_record_header`'s own 9 fixed
 #: header keys, plus `build_attempt_record`'s own 24 `**extra` keys. An
 #: unknown key (`semantic_prompt_definitely_sent`, `provider_request_count`,
 #: ...) is refused outright, never silently retained -- a scrub-clean
 #: unknown field must never be able to widen this artifact's frozen claim
 #: scope.
+#:
+#: 5F3B-LIVE1-C4 admits EXACTLY ONE new member, `qualification_policy_revision`
+#: (the ninth fixed header key). The set stays exact and closed: this is an
+#: enumeration of one further permitted field, never a relaxation of the rule.
 _EXPECTED_ATTEMPT_RECORD_TOP_LEVEL_KEYS: frozenset[str] = frozenset(
     (
         # -- attempt_record_header's own fixed header shape --
@@ -256,6 +270,7 @@ _EXPECTED_ATTEMPT_RECORD_TOP_LEVEL_KEYS: frozenset[str] = frozenset(
         "reviewer_invoked",
         "external_prior_not_scored",
         "trust_namespaces",
+        "qualification_policy_revision",
         # -- build_attempt_record's own **extra --
         "candidate",
         "model_id",
@@ -473,8 +488,72 @@ def _require_bounded_resource_closure_status(
     )
 
 
-def _require_valid_attempt_payload(record: Mapping[str, Any]) -> None:
-    """The REAL invariant gate for a ``pi-implementer-qualification-attempt.v1``
+def _canonicalize_or_refuse(payload: object) -> object:
+    """The EXACT structure ``json.dump`` would persist for ``payload``, at
+    every depth.
+
+    5F3B-LIVE1-C4-FU2. FU1 closed the TOP-LEVEL lying-``dict`` bypass, but a
+    ``dict``/``Mapping`` or ``str`` subclass can play the identical trick at
+    any nested depth: override ``get``/``__getitem__``/``__contains__``/
+    ``__iter__``/``values``/equality to report one shape to a validator while
+    its real underlying storage -- the storage
+    :func:`~qualification.safety.write_evidence_exclusively`'s ``json.dump``
+    actually walks -- holds another. Patching each nested site individually
+    (``pi_runtime``, ``compatibility_facts``, ``gate_statuses``, ``closure``
+    and its own nested fields, ...) is an unbounded list of special cases;
+    the property that actually needs to hold is that the validator and the
+    writer look at the SAME concrete value.
+
+    So this collapses the WHOLE payload through the identical serialization
+    call the writer uses -- ``json.dumps`` -- and reads it back with
+    ``json.loads``, which can only ever produce ordinary ``dict`` / ``list`` /
+    ``str`` / ``int`` / ``float`` / ``bool`` / ``None`` objects. No subclass
+    of any of those survives a JSON round trip: whatever ``json.dumps`` chose
+    to walk (real storage for an object that does not override ``.items()``;
+    its own lie for one that does -- and a lie there is what would genuinely
+    be written too, so it is not a bypass) is exactly what comes back. Every
+    check that runs afterward, at any depth, is therefore comparing against
+    the identical concrete value that can reach disk, never a lookalike.
+
+    A payload that cannot be serialized at all could never be durably
+    emitted either, so that is refused here too, with the same exception the
+    rest of the gate raises, instead of surfacing a bare ``TypeError`` later
+    inside the writer.
+
+    **5F3B-LIVE1-C4-FU3.** The probe call below now uses the SAME
+    ``json.dumps`` keyword arguments -- ``ensure_ascii=True`` AND
+    ``sort_keys=True`` -- that
+    :func:`~qualification.safety.write_evidence_exclusively`'s ``json.dump``
+    call actually uses (that call additionally passes ``indent=2``, which
+    only affects whitespace and can never affect success or failure).
+    Independent review reproduced a payload for which
+    ``json.dumps(payload)`` succeeds while ``json.dumps(payload,
+    sort_keys=True)`` raises ``TypeError`` -- ``sort_keys`` sorts a dict's
+    ``.items()`` BEFORE non-``str`` keys are coerced to text, so a dict with
+    heterogeneous key types (e.g. both ``str`` and ``int`` keys) can compare
+    them and raise. Using the writer's own configuration here means that
+    exact failure now surfaces as a refusal at validation time, before
+    ``write_evidence_exclusively`` has opened the destination file --
+    instead of after, where it would strand a partial, exclusive-created
+    artifact. It also makes the return value's own re-serialization by the
+    writer provably safe: every key surviving a ``json.loads`` of ``payload``
+    is already an ordinary ``str`` (JSON object keys are always strings), so
+    the writer's later ``sort_keys=True`` re-encoding of THIS canonical
+    snapshot can never itself raise for a shape that passed here.
+    """
+    try:
+        return json.loads(json.dumps(payload, ensure_ascii=True, sort_keys=True))
+    except (TypeError, ValueError, RecursionError) as exc:
+        raise AttemptRecordInvariantError(
+            "an attempt payload must be JSON-serializable -- by the SAME "
+            "serialization configuration the writer uses -- to ever be "
+            "durably emitted; refused before any check trusted its reported "
+            "shape, and before any file was created"
+        ) from exc
+
+
+def _require_valid_attempt_payload(record: Mapping[str, Any]) -> dict[str, Any]:
+    """The REAL invariant gate for a ``pi-implementer-qualification-attempt.v2``
     payload -- re-derived from the payload's OWN declared facts, never
     trusted merely because it reached this function.
 
@@ -484,9 +563,37 @@ def _require_valid_attempt_payload(record: Mapping[str, Any]) -> None:
     scrub-clean-but-semantically-invalid dict that never passed through
     :func:`build_attempt_record` at all is refused before it can ever reach
     the safety scrub or be persisted).
+
+    **5F3B-LIVE1-C4-FU3 -- RETURNS the validated snapshot.** Every check
+    below runs against ``record`` AFTER it is rebound, at the top of this
+    function, to :func:`_canonicalize_or_refuse`'s output -- an AIDO-owned
+    plain ``dict`` built fresh by a ``json.dumps``/``json.loads`` round trip,
+    never the caller's original object. Independent review found that this
+    rebinding was previously LOCAL: the canonical snapshot was validated and
+    then discarded, and the caller's original -- possibly stateful or
+    subclassed -- object was consulted a SECOND time by the safety scrub and
+    the writer. A caller-owned object whose serialization changes between
+    calls (a stateful ``dict`` subclass, a mutation performed after this
+    function returns) could therefore have a genuinely valid shape checked
+    here while a completely different, forged shape reached disk.
+    Returning the exact validated snapshot -- and every caller below using
+    ONLY that return value from this point on -- closes that gap: the
+    caller's original object is never consulted again after this function
+    returns.
     """
-    if not isinstance(record, Mapping):
-        raise AttemptRecordInvariantError("an attempt payload must be a Mapping")
+    # (5F3B-LIVE1-C4-FU2) Canonicalize FIRST, before ANY other check --
+    # including the forbidden-key scan below -- runs. Every check in this
+    # function, at every depth, operates on `record` as rebound here: the
+    # exact concrete structure `json.dump` would persist, never a
+    # Mapping/dict/str subclass's own account of itself. See
+    # `_canonicalize_or_refuse` for why this is airtight rather than merely
+    # another special case.
+    record = _canonicalize_or_refuse(record)
+    if type(record) is not dict:
+        raise AttemptRecordInvariantError(
+            "an attempt payload must serialize to a JSON object at its top "
+            f"level, got {type(record).__name__}"
+        )
     if _contains_key(record, _FORBIDDEN_KEY):
         raise AttemptRecordInvariantError(
             f"an attempt artifact must OMIT {_FORBIDDEN_KEY!r} entirely -- the send "
@@ -499,11 +606,11 @@ def _require_valid_attempt_payload(record: Mapping[str, Any]) -> None:
     # artifact's frozen claim scope by riding along unexamined.
     if set(record) != _EXPECTED_ATTEMPT_RECORD_TOP_LEVEL_KEYS:
         raise AttemptRecordInvariantError(
-            "an attempt.v1 payload must carry EXACTLY its own closed top-level "
+            "an attempt.v2 payload must carry EXACTLY its own closed top-level "
             "key set -- an unknown or missing field is refused"
         )
     # -- FIXED-SHAPE HEADER/PROVENANCE FIELDS: every one of these is a
-    # constant for EVERY attempt.v1 artifact, never caller-variable, and a
+    # constant for EVERY attempt.v2 artifact, never caller-variable, and a
     # build-valid record must not be mutable in any of them and still
     # emit successfully (5F3B-Q1-PRE1-FU2A-FU1).
     for key, expected in (
@@ -517,15 +624,28 @@ def _require_valid_attempt_payload(record: Mapping[str, Any]) -> None:
         actual = record.get(key)
         if type(actual) is not bool or actual is not expected:
             raise AttemptRecordInvariantError(
-                f"{key!r} must be exactly {expected!r} for every attempt.v1 artifact"
+                f"{key!r} must be exactly {expected!r} for every attempt.v2 artifact"
             )
-    for key, expected in (
+    # FIXED str fields. `type(...) is str` as well as `==` (5F3B-LIVE1-C4-FU1):
+    # a `str` subclass may define `__eq__`/`__ne__` that compare equal to
+    # anything while its actual underlying content -- the content that gets
+    # serialized into the immutable artifact -- is a forged value entirely.
+    # That is the same class of bypass the bool fields above have with
+    # `0`/`1`. Refused, never coerced: no `str(value)`, no normalization.
+    for key, expected_text in (
         ("experiment", PACKAGE_ID),
+        # `record_version` and `qualification_policy_revision` are the C4 `.v2`
+        # metadata PAIR, and the bump and the binding are ONE fact: `.v2`
+        # MEANS "carries a policy binding", `.v1` MEANS "carries none". Both
+        # are re-derived here so a hand-built dict handed straight to
+        # `emit_attempt_or_refuse` -- which never passed through
+        # `attempt_record_header` and so never met its protected-key guard --
+        # can persist neither a forged revision nor a real `.v1` value that
+        # merely compares equal to `.v2`.
         ("record_version", ATTEMPT_RECORD_VERSION),
+        ("qualification_policy_revision", QUALIFICATION_POLICY_REVISION),
         ("fixture_schema_version", FIXTURE_SCHEMA_VERSION),
         ("record_kind", ATTEMPT_RECORD_KIND),
-        ("trust_namespaces", dict(TRUST_NAMESPACES)),
-        ("token_policy", dict(TOKEN_POLICY)),
         ("claim_scope", ATTEMPT_CLAIM_SCOPE),
         ("cleanup_classification_unavailable_reason", CLASSIFICATION_UNAVAILABLE_REASON),
         (
@@ -533,15 +653,45 @@ def _require_valid_attempt_payload(record: Mapping[str, Any]) -> None:
             CLASSIFICATION_UNAVAILABLE_REASON,
         ),
     ):
-        if record.get(key) != expected:
+        actual = record.get(key)
+        if type(actual) is not str or actual != expected_text:
             raise AttemptRecordInvariantError(
-                f"{key!r} must be exactly {expected!r} for every attempt.v1 artifact"
+                f"{key!r} must be an ordinary str carrying exactly "
+                f"{expected_text!r} for every attempt.v2 artifact; a value of "
+                "another type -- including a str subclass that merely compares "
+                "equal -- is refused, never coerced"
+            )
+    for key, expected_mapping in (
+        ("trust_namespaces", TRUST_NAMESPACES),
+        ("token_policy", TOKEN_POLICY),
+    ):
+        if not _is_exact_declared_mapping(record.get(key), expected_mapping):
+            raise AttemptRecordInvariantError(
+                f"{key!r} must be exactly the declared {key} mapping for every "
+                "attempt.v2 artifact; a mapping of another type, or one whose "
+                "nested values merely compare equal, is refused"
             )
 
     candidate = record.get("candidate")
     model_id = record.get("model_id")
     task_id = record.get("task_id")
     task_revision = record.get("task_revision")
+    # (5F3B-LIVE1-C4-FU1) Ordinary strs BEFORE the identity comparisons below,
+    # so an equality-forging `str` subclass cannot satisfy `model_id !=` or
+    # `task_revision !=` while serializing a different underlying value.
+    for key, value in (
+        ("candidate", candidate),
+        ("model_id", model_id),
+        ("task_id", task_id),
+        ("task_revision", task_revision),
+        ("semantic_dispatch_state", record.get("semantic_dispatch_state")),
+        ("dispatch_evidence_code", record.get("dispatch_evidence_code")),
+    ):
+        if type(value) is not str:
+            raise AttemptRecordInvariantError(
+                f"{key!r} must be an ordinary str on an attempt.v2 artifact, got "
+                f"{type(value).__name__}"
+            )
     if candidate not in CANDIDATE_MODEL_IDS:
         raise AttemptRecordInvariantError(
             f"unknown candidate {candidate!r}; declared: {sorted(CANDIDATE_MODEL_IDS)}"
@@ -608,6 +758,24 @@ def _require_valid_attempt_payload(record: Mapping[str, Any]) -> None:
             "pi_runtime must carry EXACTLY its own closed key set -- an unknown "
             "or missing field is refused"
         )
+    # 5F3B-LIVE1-C4-FU3: `observed_pi_version: str | None` is the real
+    # builder parameter's own declared domain (see `build_attempt_record`
+    # below) -- never a Mapping, list, number, bool, or a `str` subclass
+    # whose serialized content need not match what it reports. `type(...) is
+    # str`, not `isinstance`, for the same reason every other authority
+    # string on this artifact is checked that way: an equality-forging `str`
+    # subclass cannot reach here at all (canonicalization already reduced it
+    # to an ordinary JSON scalar), but a genuine caller-built dict handed
+    # straight to `emit_attempt_or_refuse` could still carry a Mapping, a
+    # list, or a bool here -- shapes the real builder can never produce.
+    observed_version = pi_runtime.get("observed_version")
+    if observed_version is not None and type(observed_version) is not str:
+        raise AttemptRecordInvariantError(
+            "pi_runtime.observed_version must be exactly None or an ordinary "
+            f"str, got {type(observed_version).__name__} -- the real builder "
+            "parameter's own domain is `str | None`, and no other shape is a "
+            "value the real builder could ever have honestly produced"
+        )
     if pi_runtime.get("compatibility_gate_passed") is not True:
         raise AttemptRecordInvariantError(
             "pi_runtime.compatibility_gate_passed must be exactly True -- an "
@@ -641,7 +809,11 @@ def _require_valid_attempt_payload(record: Mapping[str, Any]) -> None:
         "provider_route": expected_route.provider_id,
         "backend_gateway_class": expected_route.backend_gateway_class,
     }
-    if record.get("route_provenance") != expected_route_provenance:
+    # (5F3B-LIVE1-C4-FU1) Compared by SERIALIZED form: an ordinary mapping
+    # comparison compares its values with `==` too, so a nested
+    # equality-forging `str` subclass would satisfy it while writing a
+    # substituted route into the immutable artifact.
+    if not _is_exact_declared_mapping(record.get("route_provenance"), expected_route_provenance):
         raise AttemptRecordInvariantError(
             "route_provenance does not equal the frozen route identity for this "
             "candidate/model -- a cross-candidate/provider/backend route "
@@ -787,7 +959,7 @@ def _require_valid_attempt_payload(record: Mapping[str, Any]) -> None:
     # typed too -- `removal["attempted"]` is already forced True above, and
     # `_remove_semantic_workspace` never returns `facts=None` when
     # `attempted=True` (only its `run_workspace is None` /
-    # `attempted=False` branch does), so a genuine attempt.v1 payload's
+    # `attempted=False` branch does), so a genuine attempt.v2 payload's
     # `facts` is always a Mapping matching this exact bounded shape --
     # never bare `None` here.
     _require_valid_removal_facts(removal["facts"])
@@ -824,13 +996,64 @@ def _require_valid_attempt_payload(record: Mapping[str, Any]) -> None:
             "summarizes"
         )
 
+    # 5F3B-LIVE1-C4-FU3: every check above ran against `record` as rebound
+    # at the top of this function -- the canonical snapshot, never the
+    # caller's original object. Returning it (rather than `None`) is what
+    # lets every caller below bind ONE AIDO-owned concrete object all the
+    # way from validation through the safety scrub to persistence.
+    return record
+
+
+#: This artifact's own values for the protected key NAMES imported above. The
+#: names are shared with the primary record; the ``record_version`` value is
+#: emphatically NOT, which is exactly why the two are declared apart.
+_FIXED_ATTEMPT_HEADER_METADATA: dict[str, str] = {
+    "record_version": ATTEMPT_RECORD_VERSION,
+    "qualification_policy_revision": QUALIFICATION_POLICY_REVISION,
+}
+
+
+def _reject_caller_supplied_fixed_metadata(extra: dict[str, Any]) -> None:
+    """Refuse a caller attempting to supply a FIXED-metadata header key.
+
+    Deliberately checks ``records._CALLER_FORBIDDEN_HEADER_KEYS`` -- the SAME
+    set the primary header protects -- rather than a second local listing, so
+    the two artifact kinds can never protect different fields.
+    """
+    forged = sorted(_CALLER_FORBIDDEN_HEADER_KEYS.intersection(extra))
+    if forged:
+        raise AttemptRecordInvariantError(
+            f"{forged!r} is FIXED AIDO metadata on every attempt artifact and is "
+            "not a caller-supplied field; it is stamped from this package's own "
+            "declaration sites. An attempt artifact whose schema version or "
+            "policy revision came from its caller would prove nothing about the "
+            "schema it satisfies or the policy under which that one-shot attempt "
+            "was made."
+        )
+
 
 def attempt_record_header(**extra: Any) -> dict[str, Any]:
     """The attempt artifact's header. Mirrors ``records.record_header``'s
     shape so a reader sees the same provenance fields, with this artifact's
     OWN version and kind -- never the primary record's.
+
+    ``qualification_policy_revision`` (5F3B-LIVE1-C4) is the SAME constant, from
+    the SAME single declaration site, that the primary header stamps -- an
+    indeterminate attempt is equally a one-shot result produced under a policy.
+    ``record_version`` (C4-FU1) is fixed alongside it, because the bump and the
+    binding are one fact. Both are protected by the same TWO independent
+    mechanisms:
+
+    1. a caller supplying either is REFUSED outright, above;
+    2. even if that guard were bypassed, both authoritative constants are
+       re-stamped AFTER ``**extra`` is merged, so the last write -- AIDO's --
+       wins the merge.
+
+    A third, independent check re-derives both at the emission boundary, in
+    :func:`_require_valid_attempt_payload`.
     """
-    return {
+    _reject_caller_supplied_fixed_metadata(extra)
+    header = {
         "experiment": PACKAGE_ID,
         "record_version": ATTEMPT_RECORD_VERSION,
         "fixture_schema_version": FIXTURE_SCHEMA_VERSION,
@@ -839,8 +1062,12 @@ def attempt_record_header(**extra: Any) -> dict[str, Any]:
         "reviewer_invoked": False,
         "external_prior_not_scored": True,
         "trust_namespaces": dict(TRUST_NAMESPACES),
+        "qualification_policy_revision": QUALIFICATION_POLICY_REVISION,
         **extra,
     }
+    # -- FIXED AIDO METADATA: re-stamped LAST, after **extra, deliberately.
+    header.update(_FIXED_ATTEMPT_HEADER_METADATA)
+    return header
 
 
 def build_attempt_record(
@@ -857,7 +1084,7 @@ def build_attempt_record(
     route_provenance: Mapping[str, Any],
     closure: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Build one validated ``pi-implementer-qualification-attempt.v1`` payload.
+    """Build one validated ``pi-implementer-qualification-attempt.v2`` payload.
 
     Pure; does not write. Raises :class:`AttemptRecordInvariantError` for any
     impossible artifact rather than coercing it into a plausible one --
@@ -953,8 +1180,17 @@ def build_attempt_record(
     # the ABSENT-KEY check this function always ran). This is a self-check:
     # `build_attempt_record`'s own output can never violate the rules it
     # demands of any other caller.
-    _require_valid_attempt_payload(record)
-    return record
+    #
+    # 5F3B-LIVE1-C4-FU3: the value RETURNED is the validated snapshot the
+    # gate itself produced and checked, never the local `record` variable
+    # built above. `record` here is already an ordinary dict built fresh by
+    # `attempt_record_header`, so the two are equal in content for every
+    # genuine call -- but returning the gate's own output is what keeps this
+    # function's contract identical to `emit_attempt_or_refuse`'s: the
+    # object a caller receives (or that reaches the writer) is always
+    # exactly the one object the invariant gate validated, never a second,
+    # independently-serializing account of it.
+    return _require_valid_attempt_payload(record)
 
 
 def emit_attempt_or_refuse(
@@ -969,15 +1205,28 @@ def emit_attempt_or_refuse(
 
     5F3B-Q1-PRE1-FU2A: a scrub checks SAFETY, never semantic truth, so this
     is also the emission-boundary consumption gate. ``record`` is
-    re-validated against the FULL attempt.v1 invariant set -- identical to
+    re-validated against the FULL attempt.v2 invariant set -- identical to
     :func:`build_attempt_record`'s own self-check -- BEFORE the scrub ever
     runs, so an arbitrary caller-built dict that never passed through
     :func:`build_attempt_record` at all (and would therefore never have been
     checked otherwise) cannot reach persistence merely by being scrub-clean.
+
+    **5F3B-LIVE1-C4-FU3.** The parameter named ``record`` is the caller's
+    object and is used for exactly ONE thing: as the input to
+    :func:`_require_valid_attempt_payload`. Its RETURN value -- an AIDO-owned
+    plain ``dict`` produced by a ``json.dumps``/``json.loads`` round trip of
+    ``record`` -- is what is handed to :func:`~qualification.safety.emit_evidence_or_refuse`
+    for both the safety scrub and the exclusive-create write. The caller's
+    original ``record`` object is never read again after the line below:
+    not by the scrub, not by the writer. A stateful or subclassed caller
+    object whose serialized shape could change between calls (a stateful
+    ``dict`` subclass's ``.items()``, or a plain mutation performed by the
+    caller after this call returns) therefore cannot affect what is
+    persisted -- only the ONE validated snapshot can ever reach disk.
     """
-    _require_valid_attempt_payload(record)
+    validated = _require_valid_attempt_payload(record)
     return emit_evidence_or_refuse(
-        record, path=path, safety=safety, record_kind=ATTEMPT_RECORD_KIND
+        validated, path=path, safety=safety, record_kind=ATTEMPT_RECORD_KIND
     )
 
 
@@ -988,6 +1237,7 @@ __all__ = [
     "AttemptRecordInvariantError",
     "CLASSIFICATION_UNAVAILABLE_REASON",
     "INDETERMINATE_EVIDENCE_CODES",
+    "QUALIFICATION_POLICY_REVISION",
     "attempt_record_header",
     "build_attempt_record",
     "emit_attempt_or_refuse",

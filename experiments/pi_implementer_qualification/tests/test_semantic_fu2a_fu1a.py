@@ -395,13 +395,21 @@ def test_genuine_successful_attempt_record_still_builds_after_fu2a_fu1a(
 ) -> None:
     """Positive control: an ordinary genuine indeterminate attempt (closed
     shape, real resource-domain codes) still round-trips.
+
+    5F3B-LIVE1-C4 added exactly one member to this closed set,
+    ``qualification_policy_revision`` -- the ninth fixed header key. The
+    assertion stays an EXACT set comparison; only the recorded expectation
+    moved, and by one field. See
+    ``test_live1_c4_policy_binding.py`` for the proof that the set gained
+    that one field and nothing else.
     """
     kwargs = _genuine_indeterminate_attempt_kwargs(git_executable, tmp_path)
     record = build_attempt_record(**kwargs)
     assert set(record) == {
         "experiment", "record_version", "fixture_schema_version", "record_kind",
         "is_review_packet", "reviewer_invoked", "external_prior_not_scored",
-        "trust_namespaces", "candidate", "model_id", "task_id", "task_revision",
+        "trust_namespaces", "qualification_policy_revision",
+        "candidate", "model_id", "task_id", "task_revision",
         "semantic_dispatch_state", "dispatch_evidence_code",
         "semantic_prompts_sent_established", "attempt_consumed",
         "qualification_record_emitted", "scoring_eligible", "run_validity",

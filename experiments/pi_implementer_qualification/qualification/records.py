@@ -1,11 +1,11 @@
-"""``pi-implementer-qualification.v1`` record schema and safe emission (Sec. 26).
+"""``pi-implementer-qualification.v2`` record schema and safe emission (Sec. 26).
 
 This is an EXPERIMENT-OWNED artifact. It is NOT a ``ReviewPacket``, never
 ``review-packet.v4``, and never emitted through the reviewer path, and no
 reviewer is called anywhere in this package.
 
 **The builder is an invariant GATE, not a formatter** (Phase 5F3B-I1-FU1,
-extended by 5F3B-I1-FU2). ``pi-implementer-qualification.v1`` must not be
+extended by 5F3B-I1-FU2). ``pi-implementer-qualification.v2`` must not be
 able to express an internally impossible run, because an impossible record
 that reaches disk is indistinguishable from a real one afterwards -- and
 these artifacts are immutable, so there is no later opportunity to correct
@@ -43,9 +43,15 @@ rather than trusting caller-supplied identifiers about them.
 
 from __future__ import annotations
 
-from typing import Any
+import json
+from typing import Any, Mapping
 
-from . import FIXTURE_SCHEMA_VERSION, PACKAGE_ID, RECORD_VERSION
+from . import (
+    FIXTURE_SCHEMA_VERSION,
+    PACKAGE_ID,
+    QUALIFICATION_POLICY_REVISION,
+    RECORD_VERSION,
+)
 from .safety import (
     ArtifactSafetyContext,
     build_refusal_record,
@@ -140,8 +146,74 @@ class RecordInvariantError(ValueError):
     """A proposed record describes an internally impossible run. Rejected."""
 
 
+#: 5F3B-LIVE1-C4, extended by C4-FU1: the header keys whose value is FIXED
+#: AIDO METADATA of the ``.v2`` schema and is never a caller's to supply.
+#: ``record_header(**extra)`` merges caller extras, so a caller-supplied key
+#: of either name would otherwise WIN the merge and stamp a policy revision or
+#: a schema version AIDO never declared onto a retained, immutable artifact.
+#:
+#: C4-FU1 added ``record_version``. C4 made the bump and the policy field ONE
+#: fact -- ``.v2`` MEANS "carries a policy binding" -- so a caller able to
+#: supply the version through ``**extra`` could manufacture an internally
+#: inconsistent header (the declared revision beside a stale ``.v1``) without
+#: ever touching the revision itself. Both halves of that one fact are fixed,
+#: or neither is. This set is deliberately NOT every historical fixed header
+#: key: it is exactly the C4 ``.v2`` metadata pair.
+_FIXED_HEADER_METADATA_KEYS: tuple[str, str] = (
+    "record_version",
+    "qualification_policy_revision",
+)
+_CALLER_FORBIDDEN_HEADER_KEYS: frozenset[str] = frozenset(_FIXED_HEADER_METADATA_KEYS)
+
+#: The primary record's own values for those two keys. The attempt artifact
+#: has the same key NAMES (it imports the set above) and its own version
+#: value, which is exactly why the names and the values are declared apart.
+_FIXED_PRIMARY_HEADER_METADATA: dict[str, str] = {
+    "record_version": RECORD_VERSION,
+    "qualification_policy_revision": QUALIFICATION_POLICY_REVISION,
+}
+
+
+def _reject_caller_supplied_fixed_metadata(extra: dict[str, Any]) -> None:
+    """Refuse a caller attempting to supply a FIXED-metadata header key.
+
+    Layer 1 of two independent defences (see :func:`record_header`). Refusal
+    rather than silent replacement, because a caller passing either key is
+    either forging provenance or badly confused, and both deserve to fail
+    loudly rather than be quietly corrected.
+    """
+    forged = sorted(_CALLER_FORBIDDEN_HEADER_KEYS.intersection(extra))
+    if forged:
+        raise RecordInvariantError(
+            f"{forged!r} is FIXED AIDO metadata on every qualification record and "
+            "is not a caller-supplied field; it is stamped from this package's "
+            "own declaration sites. A record whose schema version or policy "
+            "revision came from its caller would prove nothing about the schema "
+            "it satisfies or the policy that produced it."
+        )
+
+
 def record_header(**extra: Any) -> dict[str, Any]:
-    return {
+    """The primary record's header.
+
+    ``record_version`` and ``qualification_policy_revision`` (5F3B-LIVE1-C4,
+    C4-FU1) are FIXED AIDO metadata, protected by TWO independent mechanisms
+    here and a THIRD at the emission boundary:
+
+    1. a caller supplying either is REFUSED outright, above;
+    2. even if that guard were bypassed, both authoritative constants are
+       re-stamped AFTER ``**extra`` is merged, so the last write -- AIDO's --
+       wins the merge. A forged value cannot survive.
+    3. :func:`_require_valid_primary_payload` re-derives both from the
+       declaration sites at emission, so a hand-built dict that never came
+       through this function is refused too.
+
+    The re-stamp is an ``update`` of an already-merged mapping rather than a
+    trailing literal, so each key keeps its canonical position in the header
+    while taking AIDO's value.
+    """
+    _reject_caller_supplied_fixed_metadata(extra)
+    header = {
         "experiment": EXPERIMENT_ID,
         "record_version": RECORD_VERSION,
         "fixture_schema_version": FIXTURE_SCHEMA_VERSION,
@@ -150,8 +222,12 @@ def record_header(**extra: Any) -> dict[str, Any]:
         "reviewer_invoked": False,
         "external_prior_not_scored": True,
         "trust_namespaces": dict(TRUST_NAMESPACES),
+        "qualification_policy_revision": QUALIFICATION_POLICY_REVISION,
         **extra,
     }
+    # -- FIXED AIDO METADATA: re-stamped LAST, after **extra, deliberately.
+    header.update(_FIXED_PRIMARY_HEADER_METADATA)
+    return header
 
 
 def _validate_identity(candidate: str, model_id: str, task_id: str, task_revision: str) -> None:
@@ -338,9 +414,30 @@ def _validate_autonomous_pass_shape(
 
 
 def _validate_route_provenance(route_provenance: dict[str, Any], model_id: str) -> None:
-    if not isinstance(route_provenance, dict):
-        raise RecordInvariantError("route_provenance must be a dict")
+    # (5F3B-LIVE1-C4-FU2) An exact `dict`, not merely `isinstance(..., dict)`:
+    # a `dict` SUBCLASS can override `.get()` to report the expected model id
+    # while its real underlying storage -- the storage `json.dump` actually
+    # serializes from (via `.items()`, never `.get()`) -- holds a different
+    # one. `isinstance` alone let such an object satisfy the comparison below
+    # and still persist the substituted model. Every call site reachable from
+    # a genuine caller already hands over an ordinary dict, so this refuses
+    # only a shape that was never honestly reachable.
+    if type(route_provenance) is not dict:
+        raise RecordInvariantError(
+            "route_provenance must be an ordinary dict; a Mapping of another "
+            "type -- including a dict subclass -- is refused, because what it "
+            "reports through `.get()` and what would be serialized from its "
+            "real storage need not agree"
+        )
     recorded = route_provenance.get("model_id")
+    # (C4-FU1) An ordinary str or nothing: an equality-forging `str` subclass
+    # would otherwise satisfy the comparison below while serializing a
+    # substituted model id into the immutable artifact.
+    if recorded is not None and type(recorded) is not str:
+        raise RecordInvariantError(
+            "route_provenance.model_id must be exactly None or an ordinary str, "
+            f"got {type(recorded).__name__}"
+        )
     if recorded is not None and recorded != model_id:
         raise RecordInvariantError(
             f"route_provenance.model_id {recorded!r} disagrees with the record's model_id "
@@ -348,7 +445,7 @@ def _validate_route_provenance(route_provenance: dict[str, Any], model_id: str) 
         )
 
 
-def build_qualification_record(
+def _validate_primary_invariants(
     *,
     candidate: str,
     model_id: str,
@@ -362,19 +459,18 @@ def build_qualification_record(
     diagnostic_subclassification: str | None,
     operator_continuation: bool,
     automatic_semantic_retry: bool,
-    pi_runtime: dict[str, Any],
     route_provenance: dict[str, Any],
-    verification: dict[str, Any],
-    scope_result: dict[str, Any],
-    report_accuracy: dict[str, Any],
-    supervised_recovery: str = "NOT_ATTEMPTED",
-    supersedes_task_revision: str | None = None,
-) -> dict[str, Any]:
-    """Build one validated ``pi-implementer-qualification.v1`` record.
+    supervised_recovery: str,
+    supersedes_task_revision: str | None,
+) -> None:
+    """THE frozen primary-record invariant contract, in one place.
 
-    Pure; does not write. Raises :class:`RecordInvariantError` for any
-    internally impossible record rather than coercing it into a plausible
-    one.
+    5F3B-LIVE1-C4-FU1 extracted this from :func:`build_qualification_record`
+    unchanged -- same rules, same order, same messages -- so that the durable
+    emission boundary can re-derive the SAME contract from a payload's own
+    declared facts instead of trusting that the builder was called. Two
+    copies of these rules is exactly how the builder and the emission gate
+    could come to accept different records.
     """
     _validate_identity(candidate, model_id, task_id, task_revision)
     _validate_run_shape(
@@ -421,6 +517,53 @@ def build_qualification_record(
             "earlier revision, never a different task's"
         )
 
+
+def build_qualification_record(
+    *,
+    candidate: str,
+    model_id: str,
+    task_id: str,
+    task_revision: str,
+    semantic_prompts_sent: int,
+    infrastructure_refusal: bool,
+    run_validity: str | None,
+    scoring_eligible: bool,
+    autonomous_classification: str | None,
+    diagnostic_subclassification: str | None,
+    operator_continuation: bool,
+    automatic_semantic_retry: bool,
+    pi_runtime: dict[str, Any],
+    route_provenance: dict[str, Any],
+    verification: dict[str, Any],
+    scope_result: dict[str, Any],
+    report_accuracy: dict[str, Any],
+    supervised_recovery: str = "NOT_ATTEMPTED",
+    supersedes_task_revision: str | None = None,
+) -> dict[str, Any]:
+    """Build one validated ``pi-implementer-qualification.v2`` record.
+
+    Pure; does not write. Raises :class:`RecordInvariantError` for any
+    internally impossible record rather than coercing it into a plausible
+    one.
+    """
+    _validate_primary_invariants(
+        candidate=candidate,
+        model_id=model_id,
+        task_id=task_id,
+        task_revision=task_revision,
+        semantic_prompts_sent=semantic_prompts_sent,
+        infrastructure_refusal=infrastructure_refusal,
+        run_validity=run_validity,
+        scoring_eligible=scoring_eligible,
+        autonomous_classification=autonomous_classification,
+        diagnostic_subclassification=diagnostic_subclassification,
+        operator_continuation=operator_continuation,
+        automatic_semantic_retry=automatic_semantic_retry,
+        route_provenance=route_provenance,
+        supervised_recovery=supervised_recovery,
+        supersedes_task_revision=supersedes_task_revision,
+    )
+
     record = record_header(
         candidate=candidate,
         model_id=model_id,
@@ -444,6 +587,345 @@ def build_qualification_record(
     )
     if supersedes_task_revision is not None:
         record["supersedes_task_revision"] = supersedes_task_revision
+    # (C4-FU1) This builder's own output must satisfy the very contract the
+    # emission boundary re-derives, so the two can never drift apart in the
+    # direction that matters: a builder-produced record that the boundary
+    # would refuse.
+    #
+    # (C4-FU4) The value RETURNED is the validated canonical snapshot the
+    # gate itself produced and checked, never the local `record` variable
+    # built above -- which still holds live references to this function's
+    # own `pi_runtime`/`route_provenance`/`verification`/`scope_result`/
+    # `report_accuracy` parameters exactly as the caller supplied them. The
+    # two are equal in content for every genuine call, but returning the
+    # gate's own output is what keeps this function's contract identical to
+    # `emit_or_refuse`'s: the object a caller receives (or that reaches the
+    # writer) is always exactly the one object the invariant gate validated,
+    # never a second, independently-serializing account of it.
+    return _require_valid_primary_payload(record)
+
+
+# ===========================================================================
+# 5F3B-LIVE1-C4-FU1 -- the PRIMARY record's durable consumption gate
+# ===========================================================================
+# Independent review found that `emit_or_refuse` accepted any scrub-clean
+# hand-built dict that merely carried the accepted revision and version, so a
+# supported caller could bypass `build_qualification_record` -- the module's
+# declared invariant gate for this artifact -- entirely. AIDO's standing rule
+# is that a caller convention to invoke the correct helper first is not an
+# authority invariant when the consumption boundary can mechanically enforce
+# the condition itself. So it does, below, by RE-DERIVING the same contract
+# from the payload's own declared facts. Nothing here trusts a provenance
+# flag, a "validated" marker, or the fact that the payload arrived at all.
+
+#: The EXACT, CLOSED required top-level key set of a primary record: the 9
+#: fixed `record_header` keys plus `build_qualification_record`'s own 19
+#: `**extra` keys. Enumerated from the frozen builder shape, so an unknown
+#: scrub-clean field can never widen this artifact's claim scope by riding
+#: along unexamined.
+_REQUIRED_PRIMARY_RECORD_TOP_LEVEL_KEYS: frozenset[str] = frozenset(
+    (
+        # -- record_header's own fixed header shape --
+        "experiment",
+        "record_version",
+        "fixture_schema_version",
+        "record_kind",
+        "is_review_packet",
+        "reviewer_invoked",
+        "external_prior_not_scored",
+        "trust_namespaces",
+        "qualification_policy_revision",
+        # -- build_qualification_record's own **extra --
+        "candidate",
+        "model_id",
+        "task_id",
+        "task_revision",
+        "semantic_prompts_sent",
+        "infrastructure_refusal",
+        "run_validity",
+        "scoring_eligible",
+        "autonomous_classification",
+        "diagnostic_subclassification",
+        "operator_continuation",
+        "automatic_semantic_retry",
+        "pi_runtime",
+        "route_provenance",
+        "verification",
+        "scope_result",
+        "report_accuracy",
+        "token_policy",
+        "supervised_recovery",
+    )
+)
+
+#: The ONE conditionally-present key the frozen builder can add.
+_OPTIONAL_PRIMARY_RECORD_TOP_LEVEL_KEYS: frozenset[str] = frozenset({"supersedes_task_revision"})
+
+
+def _canonicalize_or_refuse(payload: object) -> object:
+    """The EXACT structure ``json.dump`` would persist for ``payload``, at
+    every depth.
+
+    5F3B-LIVE1-C4-FU4. Independent review reproduced the primary-record
+    counterpart of the gap :func:`~qualification.semantic_attempt._canonicalize_or_refuse`
+    closes for the attempt artifact: the top-level record was exact-`dict`
+    gated, and ``route_provenance`` was compared by serialized form, but the
+    other retained nested objects -- ``pi_runtime``, ``verification``,
+    ``scope_result``, ``report_accuracy`` -- were caller-owned Mapping values
+    consulted independently by the invariant gate, the safety scrub, and the
+    exclusive-create writer. A nested `dict` subclass whose ``.items()``
+    reports one shape on an early call and a different (e.g. secret-bearing)
+    shape on a later call could therefore pass every check here and still
+    have the later shape reach disk, because each of those three stages is
+    its own independent serialization of the SAME caller object.
+
+    The fix is the identical mechanism FU3 established for the attempt
+    artifact: collapse the WHOLE payload through the one serialization call
+    the writer uses -- ``json.dumps(..., ensure_ascii=True, sort_keys=True)``
+    -- and read it back with ``json.loads``, which can only ever produce
+    ordinary ``dict`` / ``list`` / ``str`` / ``int`` / ``float`` / ``bool`` /
+    ``None`` objects. No subclass of any of those survives the round trip:
+    whatever ``json.dumps`` chose to walk is exactly what comes back, and it
+    is also exactly what a genuine write would have persisted. Every check
+    that runs afterward -- in this gate, in the safety scrub, and in the
+    writer -- therefore examines the SAME concrete value, and the caller's
+    original object is never read again after this one call.
+
+    Using the writer's own ``sort_keys=True`` configuration here (rather than
+    a plain ``json.dumps(payload)``) additionally surfaces a
+    writer-incompatible payload (e.g. a nested dict with heterogeneous key
+    types) as a refusal here, before any file is created, rather than as a
+    bare ``TypeError`` inside ``write_evidence_exclusively`` after an
+    exclusive-created destination already exists.
+
+    A payload that cannot be serialized at all could never be durably
+    emitted either, so that is refused here too, with the same exception the
+    rest of the gate raises.
+    """
+    try:
+        return json.loads(json.dumps(payload, ensure_ascii=True, sort_keys=True))
+    except (TypeError, ValueError, RecursionError) as exc:
+        raise RecordInvariantError(
+            "a primary qualification record must be JSON-serializable -- by the "
+            "SAME serialization configuration the writer uses -- to ever be "
+            "durably emitted; refused before any check trusted its reported "
+            "shape, and before any file was created"
+        ) from exc
+
+
+def _is_exact_declared_str(value: Any, expected: str) -> bool:
+    """``value`` is an ORDINARY ``str`` carrying exactly ``expected``.
+
+    ``type(...) is str``, never ``isinstance``: a ``str`` subclass may define
+    ``__eq__``/``__ne__`` that compare equal to anything while its actual
+    underlying content -- the content that gets serialized into the immutable
+    artifact -- is something else entirely. That is the same class of bypass
+    an equality-only bool check has with ``0``/``1``. No coercion, no
+    ``str(value)``, no normalization: a lookalike is REFUSED, never repaired.
+    """
+    return type(value) is str and value == expected
+
+
+def _is_exact_declared_mapping(value: Any, expected: Mapping[str, Any]) -> bool:
+    """``value`` is an ordinary ``dict`` whose SERIALIZED form is exactly the
+    declared mapping's.
+
+    Compared through ``json.dumps`` rather than ``==``, because ``dict.__eq__``
+    compares its values with ``==`` too: a nested equality-forging ``str``
+    subclass satisfies an ordinary mapping comparison while writing a forged
+    claim into the immutable artifact. What is compared here is exactly what
+    gets written. An unserializable value could not be written at all, so it
+    is a mismatch rather than an exception.
+    """
+    if type(value) is not dict:
+        return False
+    try:
+        return json.dumps(value, sort_keys=True) == json.dumps(dict(expected), sort_keys=True)
+    except (TypeError, ValueError):
+        return False
+
+
+def _require_exact_declared_str(record: dict[str, Any], key: str, expected: str) -> None:
+    if not _is_exact_declared_str(record.get(key), expected):
+        raise RecordInvariantError(
+            f"{key!r} must be an ordinary str carrying exactly {expected!r} on every "
+            "primary qualification record; a value of another type -- including a "
+            "str subclass that merely compares equal -- is refused, never coerced. "
+            "Nothing was written."
+        )
+
+
+def _require_exact_optional_str(record: dict[str, Any], key: str) -> None:
+    """A ``str | None`` field must be exactly ``None`` or an ordinary ``str``.
+
+    Type-guarding these BEFORE the frozen contract runs is what stops a
+    lookalike from subverting the contract's own equality and membership
+    tests (``run_validity == "VALID"``, ``task_revision.startswith(...)``).
+    """
+    value = record.get(key)
+    if value is not None and type(value) is not str:
+        raise RecordInvariantError(
+            f"{key!r} must be exactly None or an ordinary str on a primary "
+            f"qualification record, got {type(value).__name__}. Nothing was written."
+        )
+
+
+def _require_valid_primary_payload(record: Mapping[str, Any]) -> dict[str, Any]:
+    """THE invariant gate for a ``pi-implementer-qualification.v2`` payload,
+    re-derived from the payload's OWN declared facts.
+
+    Called at the end of :func:`build_qualification_record` (so that
+    function's output can never violate the rules it demands of others) AND
+    at the very start of :func:`emit_or_refuse` (so a hand-built dict that
+    never passed through the builder at all is refused before the scrub ever
+    runs, and before anything is persisted).
+
+    The property this establishes:
+
+        Any record accepted for primary durable emission satisfies the same
+        primary-record invariant contract ``build_qualification_record``
+        enforces. A caller cannot bypass that contract by constructing a
+        dict directly.
+
+    **5F3B-LIVE1-C4-FU4 -- RETURNS the validated snapshot.** Every check
+    below runs against ``record`` AFTER it is rebound, at the top of this
+    function, to :func:`_canonicalize_or_refuse`'s output -- an AIDO-owned
+    plain ``dict`` built fresh by a ``json.dumps``/``json.loads`` round trip,
+    never the caller's original object, and never any of its original nested
+    objects (``pi_runtime``, ``route_provenance``, ``verification``,
+    ``scope_result``, ``report_accuracy``). Independent review found that a
+    caller-owned nested object whose serialization changes between calls (a
+    stateful ``dict`` subclass, or a mutation performed after this function
+    returns) could have a genuinely valid shape checked here while a
+    completely different, forged shape reached the safety scrub and the
+    writer -- each of which is its own independent serialization of whatever
+    object it is handed. Returning the exact validated snapshot -- and every
+    caller below using ONLY that return value from this point on -- closes
+    that gap: the caller's original record and every one of its original
+    nested objects are consulted exactly once, ever, and never again after
+    this function returns.
+    """
+    # (5F3B-LIVE1-C4-FU4) Canonicalize FIRST, before ANY other check runs.
+    # Every check in this function, at every depth -- including inside
+    # nested `pi_runtime`/`verification`/`scope_result`/`report_accuracy`,
+    # which this gate does not itself walk field-by-field -- operates on
+    # `record` as rebound here: the exact concrete structure `json.dump`
+    # would persist, never a Mapping/dict/str subclass's own account of
+    # itself. See `_canonicalize_or_refuse` for why this is airtight rather
+    # than merely another special case.
+    record = _canonicalize_or_refuse(record)
+    # An exact `dict`, not merely a Mapping: `json.dump` serializes a dict
+    # subclass from its real underlying storage, so a subclass whose `get`
+    # returned AIDO's declared values while its storage held forged ones
+    # would satisfy every check below and still persist the forgery. (After
+    # canonicalization this can only fail for a payload that does not even
+    # serialize to a JSON object at its top level -- e.g. a list handed in
+    # directly -- since `json.loads` of a JSON object always yields a plain
+    # `dict`.)
+    if type(record) is not dict:
+        raise RecordInvariantError(
+            "a primary qualification record must be an ordinary dict; a Mapping "
+            "of another type -- including a dict subclass -- is refused, because "
+            "what it reports and what it serializes need not agree. Nothing was "
+            "written."
+        )
+    keys = set(record)
+    missing = _REQUIRED_PRIMARY_RECORD_TOP_LEVEL_KEYS - keys
+    unknown = keys - (
+        _REQUIRED_PRIMARY_RECORD_TOP_LEVEL_KEYS | _OPTIONAL_PRIMARY_RECORD_TOP_LEVEL_KEYS
+    )
+    if missing or unknown:
+        raise RecordInvariantError(
+            "a primary qualification record must carry EXACTLY its own closed "
+            f"top-level key set; missing={sorted(missing)} unknown={sorted(unknown)}. "
+            "Nothing was written."
+        )
+
+    # -- FIXED-SHAPE HEADER/PROVENANCE FIELDS: constant for EVERY primary
+    # artifact, never caller-variable.
+    for key, expected_flag in (
+        # bool fields: exact type AND identity -- `!=` alone would let a
+        # non-bool truthy/falsy value (`0`/`1`) satisfy Python's own
+        # `0 == False`/`1 == True` and slip past an equality-only check.
+        ("is_review_packet", False),
+        ("reviewer_invoked", False),
+        ("external_prior_not_scored", True),
+    ):
+        actual = record.get(key)
+        if type(actual) is not bool or actual is not expected_flag:
+            raise RecordInvariantError(
+                f"{key!r} must be exactly {expected_flag!r} on every primary "
+                "qualification record. Nothing was written."
+            )
+    _require_exact_declared_str(record, "experiment", EXPERIMENT_ID)
+    _require_exact_declared_str(record, "record_kind", RECORD_KIND)
+    _require_exact_declared_str(record, "fixture_schema_version", FIXTURE_SCHEMA_VERSION)
+    # The C4 `.v2` metadata pair. `record_version` is checked here as an exact
+    # ordinary str, not by `!=`, because the bump and the policy binding are
+    # ONE fact: `.v2` MEANS "carries a policy binding", and `.v1`'s frozen
+    # meaning is "carries no such binding". A payload may not pair the
+    # declared revision with a stale version that merely compares equal to the
+    # new one.
+    for key, expected_metadata in _FIXED_PRIMARY_HEADER_METADATA.items():
+        _require_exact_declared_str(record, key, expected_metadata)
+    for key, expected_mapping in (
+        ("trust_namespaces", TRUST_NAMESPACES),
+        ("token_policy", TOKEN_POLICY),
+    ):
+        if not _is_exact_declared_mapping(record.get(key), expected_mapping):
+            raise RecordInvariantError(
+                f"{key!r} must be exactly the declared {key} mapping on every "
+                "primary qualification record; a mapping of another type, or one "
+                "whose nested values merely compare equal, is refused. Nothing "
+                "was written."
+            )
+
+    # -- TYPE PRELUDE for the contract's own fields. The frozen contract
+    # compares and slices these; a lookalike must be refused BEFORE it can
+    # subvert one of those comparisons.
+    for key in ("candidate", "model_id", "task_id", "task_revision", "supervised_recovery"):
+        if type(record.get(key)) is not str:
+            raise RecordInvariantError(
+                f"{key!r} must be an ordinary str on a primary qualification "
+                f"record, got {type(record.get(key)).__name__}. Nothing was written."
+            )
+    for key in (
+        "run_validity",
+        "autonomous_classification",
+        "diagnostic_subclassification",
+        "supersedes_task_revision",
+    ):
+        _require_exact_optional_str(record, key)
+    if type(record.get("semantic_prompts_sent")) is not int:
+        raise RecordInvariantError(
+            "semantic_prompts_sent must be an ordinary int on a primary "
+            "qualification record. Nothing was written."
+        )
+
+    _validate_primary_invariants(
+        candidate=record["candidate"],
+        model_id=record["model_id"],
+        task_id=record["task_id"],
+        task_revision=record["task_revision"],
+        semantic_prompts_sent=record["semantic_prompts_sent"],
+        infrastructure_refusal=record["infrastructure_refusal"],
+        run_validity=record["run_validity"],
+        scoring_eligible=record["scoring_eligible"],
+        autonomous_classification=record["autonomous_classification"],
+        diagnostic_subclassification=record["diagnostic_subclassification"],
+        operator_continuation=record["operator_continuation"],
+        automatic_semantic_retry=record["automatic_semantic_retry"],
+        route_provenance=record["route_provenance"],
+        supervised_recovery=record["supervised_recovery"],
+        supersedes_task_revision=record.get("supersedes_task_revision"),
+    )
+
+    # 5F3B-LIVE1-C4-FU4: every check above ran against `record` as rebound
+    # at the top of this function -- the canonical snapshot, never the
+    # caller's original object or any of its original nested objects.
+    # Returning it (rather than `None`) is what lets every caller below bind
+    # ONE AIDO-owned concrete object all the way from validation through the
+    # safety scrub to persistence.
     return record
 
 
@@ -457,8 +939,44 @@ def emit_or_refuse(
     :meth:`~qualification.safety.ArtifactSafetyContext.none_declared`. The
     write is exclusive-create, so this can never overwrite an earlier
     emitted artifact -- not with the record, and not with a refusal.
+
+    **5F3B-LIVE1-C4-FU1 emission-boundary re-derivation.** A scrub checks
+    SAFETY, never semantic truth or provenance truth, so a hand-built dict
+    that never passed through :func:`build_qualification_record` -- and
+    therefore never met that builder's invariant gate or
+    :func:`record_header`'s protected-key guard -- would otherwise be
+    persisted verbatim, forged ``qualification_policy_revision``, stale
+    ``.v1`` version and internally impossible run alike.
+
+    :func:`_require_valid_primary_payload` therefore re-derives the FULL
+    frozen primary-record contract here, from the payload's own declared
+    facts. A caller convention to invoke the builder first is not an
+    authority invariant when this boundary can enforce the condition itself;
+    nothing here trusts a provenance flag or a "validated" marker, because a
+    forger supplies those as readily as anything else.
+
+    This is the primary artifact's counterpart to the gate
+    :func:`~qualification.semantic_attempt._require_valid_attempt_payload`
+    already performs for the attempt artifact.
+
+    **5F3B-LIVE1-C4-FU4.** The parameter named ``record`` is the caller's
+    object and is used for exactly ONE thing: as the input to
+    :func:`_require_valid_primary_payload`. Its RETURN value -- an AIDO-owned
+    plain ``dict`` produced by a ``json.dumps``/``json.loads`` round trip of
+    ``record``, including every nested ``pi_runtime``/``route_provenance``/
+    ``verification``/``scope_result``/``report_accuracy`` value -- is what is
+    handed to :func:`~qualification.safety.emit_evidence_or_refuse` for both
+    the safety scrub and the exclusive-create write. The caller's original
+    ``record`` object, and every one of its original nested objects, is never
+    read again after the line below: not by the scrub, not by the writer. A
+    stateful or subclassed caller object whose serialized shape could change
+    between calls (a stateful ``dict`` subclass's ``.items()``, or a plain
+    mutation performed by the caller after this call returns) therefore
+    cannot affect what is persisted -- only the ONE validated snapshot can
+    ever reach disk.
     """
-    return emit_evidence_or_refuse(record, path=path, safety=safety, record_kind=RECORD_KIND)
+    validated = _require_valid_primary_payload(record)
+    return emit_evidence_or_refuse(validated, path=path, safety=safety, record_kind=RECORD_KIND)
 
 
 __all__ = [
@@ -466,6 +984,7 @@ __all__ = [
     "CANDIDATE_MODEL_IDS",
     "EXPERIMENT_ID",
     "PRIMARY_RECORD_SUPERVISED_RECOVERY",
+    "QUALIFICATION_POLICY_REVISION",
     "RECORD_KIND",
     "RECORD_VERSION",
     "RecordInvariantError",

@@ -449,7 +449,7 @@ def test_indeterminate_attempt_still_leaves_its_own_artifact(
         "A", git_executable, tmp_path, correct=True, indeterminate_task_ids=frozenset({"IQ-1"})
     )
     payload = json.loads((tmp_path / "A_IQ-1.json").read_text(encoding="utf-8"))
-    assert payload["record_version"] == "pi-implementer-qualification-attempt.v1"
+    assert payload["record_version"] == "pi-implementer-qualification-attempt.v2"
     assert "semantic_prompts_sent" not in payload
     assert result.task_results["IQ-1"].qualification_record is None
     assert result.task_results["IQ-1"].attempt_record is not None

@@ -54,10 +54,58 @@ that abstraction stays deferred per the design.
 from __future__ import annotations
 
 PACKAGE_ID = "pi_implementer_qualification"
-RECORD_VERSION = "pi-implementer-qualification.v1"
+
+#: 5F3B-LIVE1-C4 (design Sec. 10A.2b / Sec. 10A.3 C3-PR-4) -- THE single
+#: declaration site, in the whole repository, of the implementer
+#: ``ROLE_CAPABILITY`` qualification-policy revision. Every durable per-result
+#: artifact this package emits binds itself to this literal, so a retained
+#: one-shot result stays self-describing about the policy that produced its
+#: verdicts after the policy moves on.
+#:
+#: **What it identifies.** The COMPLETE implementer ``ROLE_CAPABILITY``
+#: qualification policy -- not merely R-1..R-4. That includes the corpus /
+#: task-contract semantics, the hard bar H-1..H-14, the run-validity and
+#: scoring-eligibility semantics, the autonomous and diagnostic classification
+#: taxonomy, the one-shot / prompt-budget policy, the candidate-fairness rules,
+#: refusal / scope interpretation where it changes qualification or ranking
+#: meaning, and R-1..R-4's definitions and comparison rules.
+#:
+#: **When it changes.** Whenever a change alters the MEANING, ELIGIBILITY,
+#: CLASSIFICATION, RANKING or COMPARABILITY of a qualification result. It does
+#: NOT change for implementation-only refactors, tests that do not change
+#: policy, documentation-only edits, or formatting/naming changes with
+#: identical semantics. Deciding that a change is policy-bearing is a REVIEW
+#: judgement, made when the change is made, and this literal is exactly the
+#: record of that judgement.
+#:
+#: **What it is not.** It is OPAQUE TO CODE: nothing parses, orders, compares
+#: as a range, splits, or interprets its shape -- consumers only test it for
+#: exact equality. It is deliberately NOT derived from the environment, the
+#: filesystem, Git state or a commit SHA, the clock or a date, a source digest,
+#: or any computed fingerprint. A computed identifier would change on every
+#: refactor and would silently stop meaning "the policy changed".
+#:
+#: It is also NOT a schema version. ``RECORD_VERSION`` and friends answer "what
+#: SHAPE is this record"; this answers "under which POLICY were its verdicts
+#: produced". The two sit side by side in every emitted artifact and are
+#: deliberately spelled differently so neither can be mistaken for the other.
+#:
+#: 5F3B-LIVE1-C3 will IMPORT this constant for the ranking boundary. It must
+#: never declare a second one -- one declaration site is what makes it
+#: impossible for the retained record and the ranking boundary to disagree.
+QUALIFICATION_POLICY_REVISION = "aido-implementer-role-capability-qualification-policy.r1"
+
+#: 5F3B-LIVE1-C4 bumped the three per-result artifact lineages to ``.v2``, the
+#: revision at which each one carries ``qualification_policy_revision``. Each
+#: ``.v1`` keeps its ORIGINAL meaning -- *a record carrying no policy-revision
+#: binding* -- and no ``.v1`` record may ever be read as though it had been
+#: produced under any particular qualification-policy revision, including this
+#: one. (No artifact of any of the three kinds has ever been emitted, so the
+#: bump costs nothing archival; the rule is about hand-made or forged records.)
+RECORD_VERSION = "pi-implementer-qualification.v2"
 FIXTURE_SCHEMA_VERSION = "pi-implementer-qualification-fixture.v1"
 LINEAGE_RECORD_VERSION = "pi-implementer-qualification-lineage.v1"
-REFUSAL_RECORD_VERSION = "pi-implementer-qualification-refusal.v1"
+REFUSAL_RECORD_VERSION = "pi-implementer-qualification-refusal.v2"
 
 #: 5F3B-Q1-PRE1-FU2 (DESIGN-FU1 Sec. 3.B) -- the SIBLING attempt-level
 #: artifact kind for a task attempt whose semantic dispatch send state could
@@ -66,4 +114,4 @@ REFUSAL_RECORD_VERSION = "pi-implementer-qualification-refusal.v1"
 #: ``semantic_prompts_sent in (0, 1)``, and an unestablished send fact has no
 #: truthful slot there. This artifact OMITS ``semantic_prompts_sent``
 #: entirely rather than encoding the gap as ``null``, ``0``, or a sentinel.
-ATTEMPT_RECORD_VERSION = "pi-implementer-qualification-attempt.v1"
+ATTEMPT_RECORD_VERSION = "pi-implementer-qualification-attempt.v2"
