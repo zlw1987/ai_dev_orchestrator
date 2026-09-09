@@ -20,7 +20,8 @@ Sec. 10A.2b / Sec. 10A.2c, Sec. 18.2/18.3/18.5)::
 
 This is **policy provenance, not ranking**: no run validity, scoring
 eligibility, classification, hard bar, refusal attribution, R-1..R-4 rule or
-comparison semantic changed, and C3 is not implemented here.
+comparison semantic changed. C4 itself does not implement C3's ranking
+mechanics.
 
 The adversarial question this module answers mechanically
 ----------------------------------------------------------
@@ -887,27 +888,55 @@ def test_lineage_still_refuses_a_record_at_the_superseded_v1_version(tmp_path: P
 # ===========================================================================
 
 
-def test_the_policy_revision_appears_only_in_the_four_authorized_modules():
+def test_the_policy_revision_appears_only_in_the_authorized_modules():
     """Mechanical scope proof, independent of VCS state.
 
-    If a fifth production qualification module had been edited to mention the
-    revision -- ``ranking.py`` for C3, ``lineage.py`` for a shim,
+    If a production qualification module outside this set had been edited to
+    mention the revision -- ``lineage.py`` for a shim,
     ``semantic_controller.py`` for a projection -- this fails.
+
+    **Updated when 5F3B-LIVE1-C3 landed.** ``ranking.py`` now legitimately
+    CONSUMES the constant at the ranking boundary (design Sec. 10A.3 C3-PR-1/2),
+    which is exactly the ordering C4 was built for: C4 declares it and writes it
+    into retained artifacts; C3 imports it and refuses across revisions. It is
+    listed separately from ``_C4_AUTHORIZED_MODULES`` so this test still proves
+    C4's own scope, and
+    :func:`test_exactly_one_policy_revision_declaration_site_in_production_code`
+    (unchanged) still proves ranking declares no second literal.
     """
     mentioning = {
         source_path.name
         for source_path in _production_qualification_sources()
         if "qualification_policy_revision" in source_path.read_text(encoding="utf-8").lower()
     }
-    assert mentioning == _C4_AUTHORIZED_MODULES
+    assert mentioning == _C4_AUTHORIZED_MODULES | {"ranking.py"}
 
 
-def test_c3_is_not_implemented_here():
-    """Prohibited work: C3 owns the ranking-policy mechanics. C4 must not add
-    the revision to ranking, R-2 derivation, R-3 symmetry, or comparison."""
-    ranking_source = (_QUALIFICATION_DIR / "ranking.py").read_text(encoding="utf-8")
-    assert "QUALIFICATION_POLICY_REVISION" not in ranking_source
-    assert "qualification_policy_revision" not in ranking_source
+def test_c4_did_not_implement_c3s_ranking_mechanics():
+    """Prohibited work for C4: C3 owns the ranking-policy mechanics.
+
+    Originally written as ``test_c3_is_not_implemented_here``, asserting
+    ``ranking.py`` mentioned the revision nowhere. C3 has since landed and does
+    consume it, so that spelling would now assert C3's absence rather than C4's
+    restraint. The property C4 actually owns is preserved and still checked
+    here: **none of C4's four authorized modules contains ranking mechanics** --
+    no R-2 derivation, no R-3 symmetry, no profile comparison.
+    """
+    for module_name in sorted(_C4_AUTHORIZED_MODULES):
+        source = (_QUALIFICATION_DIR / module_name).read_text(encoding="utf-8")
+        for token in (
+            "from .ranking",
+            "OperationBucket",
+            "ReportAccuracyBucket",
+            "CandidateRankingProfile",
+            "RankingInput",
+            "R2TaskEvidence",
+            "resolve_r2_bucket",
+            "compare_profiles",
+            "build_profile",
+            "R3_EVALUABLE",
+        ):
+            assert token not in source, f"{module_name} carries ranking mechanics: {token!r}"
 
 
 def test_no_ar2_or_production_src_module_mentions_the_policy_revision():

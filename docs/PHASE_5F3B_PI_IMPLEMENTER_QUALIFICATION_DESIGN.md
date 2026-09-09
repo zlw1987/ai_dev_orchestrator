@@ -1189,8 +1189,8 @@ inventing a numeric threshold.
 | Tier | Criterion | Buckets (best → worst) |
 |---|---|---|
 | **R-1** | Scope minimality | `CLEAN` → `MINOR_NOISE` → `MATERIAL_OVERWORK` |
-| **R-2** | Operation cleanliness | `CLEAN` → `MINOR_FRICTION` → `REPEATED_FRICTION` |
-| **R-3** | Report reliability | `ACCURATE` → `MINOR_OMISSION` → `MATERIAL_MISREPORT` |
+| **R-2** | Operation cleanliness | `CLEAN` → `MINOR_FRICTION` → `REPEATED_FRICTION` (frozen arithmetic, AIDO-derived — `5F3B-LIVE1-C3`) |
+| **R-3** | Report reliability | **`NOT_EVALUABLE` for this qualification-policy revision — ranks neither candidate** (`5F3B-LIVE1-C3`). When evaluable: `ACCURATE` → `MINOR_OMISSION` → `MATERIAL_MISREPORT` |
 | **R-4** | Completion cleanliness | `CLEAN_SETTLE` → `NEAR_STALL_PATTERN` |
 | **R-5** | Reliability / latency | diagnostic / tie-note only (see below) |
 
@@ -1208,16 +1208,24 @@ sets:
   refusal pattern indicating the candidate probed well beyond the task's
   necessary surface.
 
-**R-2 — Operation cleanliness**, over all three tasks' broker-recorded activity:
-- `CLEAN` — no soft (§17.4) refusals at all.
-- `MINOR_FRICTION` — one or a small number of soft refusals, each visibly
-  self-corrected on the candidate's very next relevant operation (e.g. a
-  `stale_base` immediately followed by a fresh read-then-edit).
-- `REPEATED_FRICTION` — soft refusals of the same shape recur, are not
-  self-corrected, or the count is large enough to itself feed the §11.3
-  no-progress pattern.
+**R-2 — Operation cleanliness**, over all three tasks' broker-recorded activity.
+**Revised and frozen by `5F3B-LIVE1-C3`** — see "R-2, as frozen for this
+qualification-policy revision" immediately below for the exact arithmetic, the
+honest statement of what it does and does not observe, and the reason the
+earlier wording was replaced:
+- `CLEAN` — no soft (§17.4) refusals at all, across all three tasks.
+- `MINOR_FRICTION` — one or two soft refusals in total, and no projected soft
+  reason code recurs.
+- `REPEATED_FRICTION` — a projected soft reason code recurs (in one task or
+  across two different tasks), or the total is three or more.
 
-**R-3 — Report reliability**, over all three tasks' QD-4 comparison:
+**R-3 — Report reliability**, over all three tasks' QD-4 comparison.
+**R-3 is `NOT_EVALUABLE` for this qualification-policy revision
+(`5F3B-LIVE1-C3`) and ranks neither candidate** — see "R-3, `NOT_EVALUABLE` for
+this qualification-policy revision" below. The three buckets keep their
+definitions for a future revision in which R-3 becomes evaluable, and remain
+the output domain of the mechanical QD-4 comparator wherever claims actually
+exist:
 - `ACCURATE` — every mechanically checkable claim (files changed, "done",
   no-change assertion, scope description) matches AIDO's own observation.
 - `MINOR_OMISSION` — claims are not contradicted by observation, but omit a
@@ -1267,8 +1275,12 @@ differ only by an ordinary latency margin, because no variance baseline exists
 to judge "ordinary" from "gross" beyond the ratio itself.
 
 Comparison stops at the first tier (R-1 → R-4) where the candidates' buckets
-differ. If R-1 through R-4 place both candidates in the identical bucket at
-every tier, and no R-5 gross difference exists, the candidates are **materially
+differ. Under this qualification-policy revision R-3 is `NOT_EVALUABLE` and is
+therefore skipped, so the effective discriminators are R-1, R-2 and R-4; the
+tie surface grows correspondingly, and that is the honest consequence of having
+one fewer discriminator rather than something to "fix" by inventing a
+replacement tier. If the remaining tiers place both candidates in the identical
+bucket, and no R-5 gross difference exists, the candidates are **materially
 indistinguishable under the predeclared categories** — apply §21's tie-break
 policy. **Do not invent a post-hoc distinguishing metric** to break a tie that
 the predeclared categories did not find; that would retroactively define the
@@ -1283,6 +1295,122 @@ but never determines a bucket in R-1 through R-4.
 **Correctness and scope dominate efficiency**, which is why R-1 precedes R-5 and
 why every correctness/safety condition already lives in the hard bar rather than
 in this ranking.
+
+### 18.1 R-2, as frozen for this qualification-policy revision (`5F3B-LIVE1-C3`)
+
+Over the candidate's **three** frozen primary tasks, for each task `t`:
+
+```text
+n_t = that task's projected soft (§17.4) refusal count
+S_t = refusal_categories(t) INTERSECT the projected soft reason codes
+
+N   = n_1 + n_2 + n_3
+U   = S_1 UNION S_2 UNION S_3
+R   = (N > |U|)              "some projected soft reason code recurs"
+
+CLEAN              N == 0
+MINOR_FRICTION     N in {1, 2}   AND no projected soft code recurs
+REPEATED_FRICTION  a projected soft code recurs   OR   N >= 3
+```
+
+The three arms partition every `(N, R)` pair: `N == 0` forces `R` false, so
+`CLEAN` cannot collide with `REPEATED_FRICTION`; `N in {1,2}` splits on `R`;
+`N >= 3` is `REPEATED_FRICTION` regardless of `R`.
+
+`N` and `R` are **candidate-level, not per task**. A code appearing once in each
+of two different IQ tasks therefore **recurs**.
+
+> **Non-recurrence is a weaker proxy for self-correction; the original
+> next-operation self-correction criterion is not observed.**
+>
+> The wording this revision replaces — *"each visibly self-corrected on the
+> candidate's very next relevant operation"* — requires an ordered, interleaved,
+> path-carrying operation sequence. The frozen broker does not retain one, so
+> that criterion was never measurable from retained evidence. This revision asks
+> a **multiplicity** question ("does any projected soft code occur twice?")
+> rather than a **sequence** question ("was it corrected next?"), because
+> multiplicity survives into retained evidence and sequence does not. The
+> substitution is recorded here in exactly those terms rather than implying the
+> original criterion was measured, and the original sequence criterion is **not**
+> reintroduced. `{1,2}` versus `>= 3` is a **predeclared policy choice**, not a
+> derived quantity — no source in this design supplies a stronger basis, and
+> §11.3 deliberately fixes no numeric threshold at all. This is a **ranking**
+> threshold among candidates that have already cleared §16's hard bar; it never
+> feeds H-1..H-14, `run_validity`, `scoring_eligible`, or an autonomous
+> classification, so it does not convert §11.3's forbidden classification
+> threshold into a permitted one.
+
+**AIDO derives R-2; a caller never supplies it.** The bucket is computed by one
+implementation from the primitive per-task evidence the retained
+`pi-implementer-qualification` record already carries (`soft_refusal_count` and
+the deduplicated `refusal_categories`). Malformed or incoherent evidence — a
+count that is not exactly an integer, a `bool` used as a count, a negative
+count, a task set that is not exactly the three frozen tasks, a reason code
+outside the closed projected vocabulary, a scoring-eligible task carrying no
+scope result, `n_t < |S_t|`, or a positive `n_t` reporting no soft code at all —
+is a **loud refusal**, never a clamp, a coercion or a default bucket.
+
+### 18.2 R-3, `NOT_EVALUABLE` for this qualification-policy revision (`5F3B-LIVE1-C3`)
+
+```text
+R-3 is NOT_EVALUABLE for this qualification-policy revision.
+
+Reason:
+the frozen corpus/harness exposes no bounded structured claim channel.
+
+Therefore:
+R-3 ranks neither candidate.
+
+A future policy revision may restore R-3 only after a bounded,
+non-NLP structured claim channel is introduced first.
+```
+
+Both candidates carry no R-3 bucket, **by construction rather than by
+convention**, so the absence cannot advantage either one. Supplying an R-3
+bucket while R-3 is not evaluable is **refused, never silently ignored** — a
+silently dropped input is the same class of defect as a silent skip.
+
+R-3's comparison rule is **symmetric**, and is deliberately *not* R-4's
+optionality rule:
+
+```text
+both sides absent          -> R-3 is skipped; it ranks neither candidate
+both sides present         -> compared normally, best -> worst
+exactly one side absent    -> REFUSED
+```
+
+R-4's absence is a genuine **per-candidate** possibility, so a one-sided R-4 is
+correctly skipped. R-3's absence is a **global policy** fact for a revision, so
+a one-sided R-3 means the two candidates were evaluated under different policy
+states — an asymmetric qualification state, which is a fairness violation rather
+than optional missing evidence. It is never silently skipped, never treated as
+worst or best, and never repaired by substituting `ACCURATE`.
+
+No `NOT_EVALUABLE` / `UNAVAILABLE` member is added to the report-accuracy bucket
+enum: that enum is the ordered output domain of the mechanical QD-4 comparator,
+which is unchanged. Not-evaluability is a property of the **ranking input**,
+never of the comparator's output.
+
+### 18.3 Ranking is bound to a declared qualification-policy revision
+
+R-1 through R-4's definitions and comparison rules are part of the implementer
+`ROLE_CAPABILITY` qualification policy, which is identified by one declared,
+opaque literal (`5F3B-LIVE1-C4`'s `QUALIFICATION_POLICY_REVISION`, declared at a
+single site and never computed from a Git SHA, a date, an environment value or a
+source digest). Every ranking profile is stamped from that one declaration; a
+caller cannot choose it.
+
+**Two candidates whose profiles carry different policy revisions are refused,
+not ranked.** Never prefer the newer revision, never skip the affected tiers,
+never warn and continue, and never normalize one revision to the other:
+comparing candidates evaluated under different policies is exactly the
+unfairness the whole pre-declaration discipline exists to prevent.
+
+An in-memory ranking profile is **policy mechanics only**. It is not a durable
+candidate-selection authority and no candidate may be declared selected from one:
+loading, schema-validating and identity-verifying the durable per-task
+artifacts, deriving authoritative ranking inputs from them, and emitting a
+candidate-level decision artifact remain the later decision phase's work.
 
 ## 19. Token policy (binding)
 

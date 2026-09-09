@@ -1,11 +1,20 @@
-"""Categorical ranking among already hard-bar-qualified candidates (Sec. 18)."""
+"""Categorical ranking among already hard-bar-qualified candidates (Sec. 18).
+
+The R-2 derivation, the R-3 ``NOT_EVALUABLE`` policy, the malformed-evidence
+refusals and the qualification-policy-revision boundary that 5F3B-LIVE1-C3
+added are proven in ``test_live1_c3_ranking_policy.py``. This module keeps the
+original Sec. 18 mechanics -- tier order, R-4's optionality, hard-bar
+eligibility -- exercised against the post-C3 shapes.
+"""
 
 from __future__ import annotations
 
 from qualification.hard_bar import QualificationState
 from qualification.ranking import (
+    FROZEN_PRIMARY_TASK_IDS,
     CompletionBucket,
     OperationBucket,
+    R2TaskEvidence,
     RankingInput,
     ScopeBucket,
     build_profile,
@@ -15,6 +24,25 @@ from qualification.ranking import (
 from qualification.report_accuracy import ReportAccuracyBucket
 
 
+def _evidence(*per_task: tuple[int, tuple[str, ...]]) -> tuple[R2TaskEvidence, ...]:
+    """Primitive R-2 evidence for the three frozen tasks, in the frozen order."""
+    assert len(per_task) == len(FROZEN_PRIMARY_TASK_IDS)
+    return tuple(
+        R2TaskEvidence(task_id=task_id, soft_refusal_count=count, refusal_categories=codes)
+        for task_id, (count, codes) in zip(FROZEN_PRIMARY_TASK_IDS, per_task)
+    )
+
+
+#: No soft refusal anywhere -- N = 0, so R-2 derives CLEAN.
+_CLEAN_R2_EVIDENCE = _evidence((0, ()), (0, ()), (0, ()))
+#: N = 1, one distinct soft code -- derives MINOR_FRICTION.
+_MINOR_R2_EVIDENCE = _evidence((1, ("stale_base",)), (0, ()), (0, ()))
+#: N = 3, three distinct soft codes -- derives REPEATED_FRICTION (N >= 3).
+_REPEATED_R2_EVIDENCE = _evidence(
+    (1, ("stale_base",)), (1, ("no_unique_match",)), (1, ("over_cap_read",))
+)
+
+
 def _clean_input(**overrides) -> RankingInput:
     base = dict(
         all_tasks_autonomous_pass=True,
@@ -22,8 +50,7 @@ def _clean_input(**overrides) -> RankingInput:
         any_operator_continuation=False,
         any_automatic_retry=False,
         r1_bucket=ScopeBucket.CLEAN,
-        r2_bucket=OperationBucket.CLEAN,
-        r3_bucket=ReportAccuracyBucket.ACCURATE,
+        r2_evidence=_CLEAN_R2_EVIDENCE,
     )
     base.update(overrides)
     return RankingInput(**base)
@@ -47,7 +74,9 @@ def test_r1_outranks_r2_lexicographically():
     profile_b = build_profile(
         "B",
         QualificationState.AUTONOMOUS_QUALIFIED,
-        _clean_input(r1_bucket=ScopeBucket.MINOR_NOISE, r2_bucket=OperationBucket.REPEATED_FRICTION),
+        _clean_input(
+            r1_bucket=ScopeBucket.MINOR_NOISE, r2_evidence=_REPEATED_R2_EVIDENCE
+        ),
     )
     # A is better on R-1 even though B's R-2 is irrelevant once R-1 differs.
     assert compare_profiles(profile_a, profile_b) == "a"
@@ -57,13 +86,15 @@ def test_r2_decides_when_r1_ties():
     profile_a = build_profile(
         "A",
         QualificationState.AUTONOMOUS_QUALIFIED,
-        _clean_input(r2_bucket=OperationBucket.CLEAN),
+        _clean_input(r2_evidence=_CLEAN_R2_EVIDENCE),
     )
     profile_b = build_profile(
         "B",
         QualificationState.AUTONOMOUS_QUALIFIED,
-        _clean_input(r2_bucket=OperationBucket.MINOR_FRICTION),
+        _clean_input(r2_evidence=_MINOR_R2_EVIDENCE),
     )
+    assert profile_a.r2 is OperationBucket.CLEAN
+    assert profile_b.r2 is OperationBucket.MINOR_FRICTION
     assert compare_profiles(profile_a, profile_b) == "a"
 
 
