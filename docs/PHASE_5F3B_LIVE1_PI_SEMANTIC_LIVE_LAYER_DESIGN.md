@@ -1,51 +1,168 @@
-# Phase 5F3B-LIVE1-DESIGN-FU4A — Pi semantic live adapter + sweep runner — EXACT DESIGN
+# Phase 5F3B-LIVE1-DESIGN-FU4C — Pi semantic live adapter + sweep runner — EXACT DESIGN
 
-> **Revision `5F3B-LIVE1-DESIGN-FU4A` — final authority + canonical-consistency
-> closure.** This document supersedes `5F3B-LIVE1-DESIGN` and its `-FU1` /
-> `-FU2` / `-FU3` / `-FU4` revisions in place. FU1 closed four review blockers;
-> FU2 five closure items; FU3 three blockers plus a provenance clarification;
-> FU4 three cross-layer items; **FU4A closes five authority and
-> canonical-consistency items** (§0.1) — two of which withdraw FU4's own
-> overclaims.
+> **Revision `5F3B-LIVE1-DESIGN-FU4C` — post-implementation canonical status
+> sync.** This document supersedes `5F3B-LIVE1-DESIGN` and its `-FU1` / `-FU2`
+> / `-FU3` / `-FU4` / `-FU4A` / `-FU4B` revisions in place. FU1 closed four
+> review blockers; FU2 five closure items; FU3 three blockers plus a
+> provenance clarification; FU4 three cross-layer items; FU4A five authority
+> and canonical-consistency items (§0.1); FU4B re-performed the complete
+> §§2.1–2.5 Pi seam analysis against the actually installed `0.85.1` package
+> (§0.0) and was **independently accepted**. **FU4C makes NO substantive
+> change of any kind** — it corrects present-tense normative status language
+> left over from before `5F3B-LIVE1-C1`/`C2`/`C4`/`C3` and `5F3B-LIVE1-I1`
+> were implemented, so the document a reader opens today states the actual
+> current phase state rather than the state that held when FU4A/FU4B were
+> written.
 >
-> **This revision reopened no Pi-seam analysis.** The 0.84.4 seam, prompt
-> acknowledgement ordering, `agent_settled` completion, the dispatch/turn split
-> and stream ownership are untouched; §§2.1–2.5 and §§3–8 were not edited.
+> **Current authoritative phase state**, restated here because it is the one
+> fact this revision exists to make findable:
+>
+> ```text
+> 5F3B-LIVE1-DESIGN-FU4B/FU4C    provenance/design accepted
+>                                Pi seam re-attested at 0.85.1
+>
+> 5F3B-LIVE1-C1                  ACCEPTED / FROZEN
+> 5F3B-LIVE1-C2                  ACCEPTED / FROZEN
+> 5F3B-LIVE1-C4                  ACCEPTED / FROZEN
+> 5F3B-LIVE1-C3                  ACCEPTED / FROZEN
+>
+> 5F3B-LIVE1-I1                  IMPLEMENTED
+>                                FU1/FU2 corrections closed
+>                                Pi 0.85.1 provenance blocker closed
+>                                pending final phase freeze only on this
+>                                canonical-status synchronization review
+>
+> 5F3B-Q1                        NO-GO
+> 5F3B-Q2                        NO-GO
+> real-workspace authority       NO-GO
+> M4 candidate selection         not authorized here
+> ```
+>
+> **FU4C reopens no architecture and no runtime semantics.** It changed no
+> ranking policy, no qualification policy revision, no record version, no
+> candidate mapping, and no frozen C1/C2/C3/C4 code. It does **not** claim Q1
+> has run, and it does **not** claim either candidate has semantic implementer
+> PASS/FAIL — Candidate A and Candidate B remain only Category-B
+> compatibility-qualified until actual semantic qualification occurs.
+> **Version remains provenance, never runtime authorization**, unchanged from
+> FU4B.
 
-> **DESIGN / SOURCE INSPECTION ONLY. NOTHING WAS IMPLEMENTED IN THIS TURN.**
+> **DESIGN / SOURCE INSPECTION ONLY. NO RUNTIME PRODUCTION WAS IMPLEMENTED IN
+> THIS TURN.**
 >
-> No runtime module, no test, and no frozen AR1 / AR2 / AR2-O1 / I1 / I2 / I2B /
-> PRE1 file was modified. **No semantic prompt was sent (0), no model was
-> called (0), no Pi or Node process was launched (0), no broker or named pipe
-> was opened (0), no credential was read (0), no socket was opened and B300 was
-> not contacted (0).** Q1 and Q2 were not run. Nothing was committed, pushed,
-> branched, or opened as a PR. `CLAUDE.md` was not modified, and no real
-> workspace was touched.
+> No runtime module and no frozen AR1 / AR2 / AR2-O1 / I1 / I2 / I2B / PRE1
+> **production** file was modified. **No semantic prompt was sent (0), no model
+> was called (0), no Pi or Node process was launched (0), no `pi --help` was
+> run (0), no broker or named pipe was opened (0), no credential was read (0),
+> no socket was opened and B300 was not contacted (0), and no npm/network
+> fetch, update or install was performed (0).** Q1 and Q2 were not run, and the
+> live sweep was not run. Nothing was committed, pushed, branched, or opened as
+> a PR. `CLAUDE.md` was not modified, and no real workspace was touched.
 >
-> **Standing status is unchanged by this document.** No model qualification has
-> occurred. No candidate implementer PASS/FAIL exists. Candidate A and Candidate
-> B are Category-B **compatibility** qualified/frozen only.
-> **5F3B-Q1: NO-GO. 5F3B-Q2: NO-GO. Real-workspace authority: NO-GO.**
+> **FU4C's code-side changes are a docstring correction and a test-only
+> provenance strengthening, and nothing else:** the stale `PreSweepRefusal`
+> docstring in `run_semantic_sweep_live.py` (comment text only), and the
+> I1-owned Case 45 real-source drift guard
+> `tests/test_live1_i1_pi_source_drift.py`, which now proves the OUTER
+> package's own name and version independently of the nested core's.
+> Every fact behind both changes was already established by FU4B's plain file
+> reads; FU4C adds no new source inspection.
+>
+> **Current standing status**, corrected by this document to match what is
+> actually true today: `5F3B-LIVE1-C1`, `5F3B-LIVE1-C2`, `5F3B-LIVE1-C4` and
+> `5F3B-LIVE1-C3` are **ACCEPTED / FROZEN**, and `5F3B-LIVE1-I1` is
+> **IMPLEMENTED** (its own FU1/FU2 corrections closed, and the Pi `0.85.1`
+> provenance blocker closed by FU4B). Still true, unchanged: **no model
+> qualification has occurred, no candidate implementer PASS/FAIL exists**, and
+> Candidate A and Candidate B remain Category-B **compatibility**
+> qualified/frozen only, pending actual semantic qualification.
+> **5F3B-Q1: NO-GO. 5F3B-Q2: NO-GO. Real-workspace authority: NO-GO. M4
+> candidate selection: not authorized here.**
 
 | | |
 |---|---|
 | Kind | Phase design (implementation-readiness), source-derived |
-| Phase | `5F3B-LIVE1-DESIGN-FU4A` (supersedes `5F3B-LIVE1-DESIGN`, `-FU1`…`-FU4`) |
+| Phase | `5F3B-LIVE1-DESIGN-FU4C` (supersedes `5F3B-LIVE1-DESIGN`, `-FU1`…`-FU4B`) |
 | Milestone | M2.5 |
+| **Pi seam provenance** | **`0.85.1`** — re-attested by FU4B (§1.1, §2), **independently accepted**. Previous: `0.84.4` (FU4A and earlier), retained as historical provenance |
+| **Seam re-attestation result** | **`SEMANTIC SEAM COMPATIBLE`** — every §§2.1–2.5 LIVE1-required fact mechanically preserved |
 | Canonical sequencing | [`AIDO_RUNTIME_HARNESS_ROADMAP.md`](AIDO_RUNTIME_HARNESS_ROADMAP.md) §4.5 |
 | Planning notes | [`PHASE_5F3B_LIVE1_PI_SEMANTIC_LIVE_LAYER_PLAN.md`](PHASE_5F3B_LIVE1_PI_SEMANTIC_LIVE_LAYER_PLAN.md) |
 | Live activity | **None** |
 | Authorizes | **Nothing** |
-| Requires before I1 | `5F3B-LIVE1-C1`, `5F3B-LIVE1-C2`, `5F3B-LIVE1-C4`, `5F3B-LIVE1-C3` (§18.2) |
-| Policy revision required | **Yes** — R-2 buckets **frozen** (§9.4.5) and **AIDO-derived** (§9.4.8), R-3 `NOT_EVALUABLE` with a symmetric rule (§10.6.2a), and a revision identifier at the ranking boundary (§10A.3); all before Q1 (§18.3) |
-| Record schema change | **Yes, and required before Q1** — `pi-implementer-qualification.v2`, `-attempt.v2` **and `-refusal.v2`** carry `qualification_policy_revision` (§10A.2b), owned by `5F3B-LIVE1-C4` |
-| C1 production modules | **three**: `i2b_workspace`, `i2b_live_adapters`, `semantic_workspace` (§2.6.6) |
+| Historical requirement before I1 | `5F3B-LIVE1-C1` → `C2` → `C4` → `C3` → `LIVE1-I1`, as originally sequenced (§18.2) |
+| **Current satisfaction** | **All four ACCEPTED / FROZEN**; `LIVE1-I1` **IMPLEMENTED** (§18.1, §18.2) |
+| Historical policy-revision requirement | **Yes** — R-2 buckets **frozen** (§9.4.5) and **AIDO-derived** (§9.4.8), R-3 `NOT_EVALUABLE` with a symmetric rule (§10.6.2a), and a revision identifier at the ranking boundary (§10A.3); all before Q1 (§18.3) |
+| **Current satisfaction** | **Landed** — `qualification.ranking` carries `R3_EVALUABLE = False`, the AIDO-derived R-2 resolver, and the `qualification_policy_revision` binding (§18.3) |
+| Historical record-schema requirement | **Yes, before Q1** — `pi-implementer-qualification.v2`, `-attempt.v2` **and `-refusal.v2`** carry `qualification_policy_revision` (§10A.2b), owned by `5F3B-LIVE1-C4` |
+| **Current satisfaction** | **Landed** — `qualification/__init__.py` declares `RECORD_VERSION = "pi-implementer-qualification.v2"`, `ATTEMPT_RECORD_VERSION = "…-attempt.v2"`, `REFUSAL_RECORD_VERSION = "…-refusal.v2"` |
+| C1 production modules | **three**: `i2b_workspace`, `i2b_live_adapters`, `semantic_workspace` (§2.6.6) — **implemented** |
 | Reported open gaps | **none** — FU3's one open gap is closed by C4 (§10A.4) |
-| **VERDICT** | **`DESIGN READY FOR C1`** — see §18.1 |
+| Historical verdict | `DESIGN READY FOR C1` — as originally written, before C1/C2/C4/C3/I1 existed |
+| **VERDICT (current, FU4C)** | **`C1/C2/C4/C3 ACCEPTED/FROZEN; LIVE1-I1 IMPLEMENTED`** — see §18.1 |
 
 ---
 
 ## 0. Executive summary
+
+### 0.0 FU4B — installed-Pi `0.85.1` provenance refresh
+
+> **FU4B scope.** A DESIGN / SOURCE-INSPECTION provenance refresh, and nothing
+> else. The I1 Case 45 real-installed-source drift guard added by
+> `5F3B-LIVE1-I1-FU2` did its job: at frozen provenance `0.84.4` it discovered
+> an installed `0.85.1` and failed loudly. FU4B answers the only question that
+> matters — **not** "is 0.85.1 close enough to 0.84.4", but **"does the actual
+> 0.85.1 source mechanically preserve every semantic fact LIVE1 depends on?"**
+>
+> It does. Every §§2.1–2.5 fact was re-established from the installed 0.85.1
+> package's own text. **No LIVE1 production semantic must change**, and **no
+> `QUALIFICATION_POLICY_REVISION` bump is warranted** — qualification meaning,
+> eligibility, classification, ranking and fairness semantics are all untouched
+> by a Pi runtime version change that preserves the seam.
+
+```text
+previous provenance    0.84.4      (FU4A and earlier; retained as history)
+current provenance     0.85.1      (@earendil-works/pi-coding-agent
+                                    + nested @earendil-works/pi-agent-core)
+result                 SEMANTIC SEAM COMPATIBLE
+```
+
+| # | Item | Resolution |
+|---|---|---|
+| **1** | Re-attest §§2.1–2.5 completely against installed `0.85.1` | **Done, fact by fact** (§2, §2.0). Prompt command and acknowledgement (§2.1), completion authority (§2.2), parse-failure correlation and the id-less inventory (§2.3), prompt-content transformation (§2.4) and `send_command` transmission semantics (§2.5) each carry an explicit 0.85.1 re-attestation block naming what was read and what, if anything, moved |
+| **2** | Adversarial review for **new** 0.85.1 behaviour | **Done** (§2.0b). The existence of the old code path is insufficient, so §2.0b hunts for a NEW path that could bypass or contradict it — new RPC commands, new session-event kinds, a second prompt entry point, a second `agent_settled` emitter, a startup auto-prompt, a new prompt transformation, and a new id-less response family. **Three genuine 0.85.1 deltas were found; none is authority-bearing**, and each is recorded with the counterexample that was constructed against it |
+| **3** | Correct stale "installed Pi is `0.84.4`" claims | **Done.** Every sentence that asserts something about the **currently installed** runtime is corrected: the metadata table, the §0.5-closing provenance headline, §1.1's table and verdict, §2's provenance banner, §7.6.2, §16.2 case 45, and §18.1's verdict block. Sentences that record what an **earlier revision reviewed** — §0.1–§0.5's preserved-item lists, §2.1–§2.5's original analyses, §1.1's historical row — deliberately keep `0.84.4` and are marked historical. **A superseded provenance is history, not an error to erase**, and rewriting it would destroy the audit trail that made this drift detectable |
+| **4** | Advance the I1 drift guard's declared reviewed provenance | **Done, and strengthened** (§2.7). `_FROZEN_SEAM_PROVENANCE_VERSION` → `"0.85.1"`, with the superseded value retained in `_HISTORICAL_SEAM_PROVENANCE_VERSIONS` so the advance is an auditable re-review rather than an edited expectation. The guard's structural checks are additionally **bound to the declarations and functions that carry the authority**, with mutation regressions proving each binding is load-bearing |
+| **5** | Keep version as provenance, never authorization | **Preserved.** FU4B adds **no** version comparison to any production path, and none of the three §0.0 items touching version is a runtime gate. The only place a Pi version is *compared to an expectation* remains the offline drift guard (a test), which nothing in production reads; `resolve_pi_identity` still merely **carries** the reported version; and `tests/test_i2b_live_adapters.py`'s `test_lf1_pi_version_mismatch_alone_never_rejects` still proves the opposite direction with synthetic versions — that a mismatch alone denies no launch fact. Exactly as `resolve_pi_identity`'s own docstring requires |
+
+> **What FU4B did NOT do.** It changed no runtime production module, no ranking
+> policy, no qualification policy revision, no record version, no candidate
+> mapping, and no frozen C1/C2/C3/C4 code. It did not run Pi or Node, send a
+> semantic prompt, call a model, contact B300, read a credential, touch a real
+> workspace, or run Q1/Q2/the live sweep.
+>
+> **What FU4B changed, exactly.** It removed exactly one blocker — the stale
+> seam provenance — and removed no other. At FU4B's own time of writing,
+> `5F3B-LIVE1-I1`'s hold was bounded by its own acceptance review rather than
+> by an unreviewed external runtime, and its FU1/FU2 corrections were separate,
+> already-closed items. **Q1, Q2 and real-workspace authority remained NO-GO**,
+> unchanged. No model qualification had occurred and no candidate implementer
+> PASS/FAIL existed.
+>
+> **Current status (added by FU4C, superseding the paragraph above as a
+> statement of present fact — the reasoning above is preserved as history).**
+> FU4B's provenance re-attestation was **independently accepted**. Combined
+> with I1's already-closed FU1/FU2 corrections, `5F3B-LIVE1-I1` is now
+> **IMPLEMENTED**, pending final phase freeze only on FU4C's own
+> canonical-status-synchronization review (§18.1). `5F3B-LIVE1-C1`, `C2`, `C4`
+> and `C3` are **ACCEPTED / FROZEN** (confirmed at source: `qualification.i2b_workspace`'s
+> C1-P12a Git checkpoint, `qualification.refusal_projection`'s C2 vocabulary
+> projection, `qualification.__init__`'s C4 `.v2` record-version constants, and
+> `qualification.ranking`'s C3 `R3_EVALUABLE = False` / AIDO-derived R-2 /
+> `qualification_policy_revision` binding all exist in the tracked tree today).
+> **Q1, Q2 and real-workspace authority remain NO-GO, unchanged.** No model
+> qualification has occurred and no candidate implementer PASS/FAIL exists —
+> Candidate A and Candidate B remain Category-B compatibility-qualified only.
 
 ### 0.1 FU4A — authority and canonical consistency
 
@@ -153,15 +270,29 @@ four port signatures (§6), the phase-1 dispatch algorithm (§7), the phase-2 tu
 observation (§8), the composition-not-subclass decision (§11.1–§11.2), cleanup
 ownership (§13) and A/B fairness (§15) all stand exactly as accepted.
 
-Provenance headline, unchanged: **the installed Pi is `0.84.4`, exactly the
-version whose seam `5F3B-Q1-PRE1-DESIGN-FU1` froze.** Every PRE1 seam assumption
-was re-verified against that source and every one of them held (§2.1–§2.5).
+Provenance headline, **updated by FU4B**: the installed Pi is now **`0.85.1`**
+(nested `@earendil-works/pi-agent-core` `0.85.1` too), and the complete
+§§2.1–2.5 seam analysis was **re-performed against that actual source** —
+result **`SEMANTIC SEAM COMPATIBLE`** (§0.0, §1.1, §2.0). Every PRE1 seam
+assumption still holds; the three genuine 0.85.1 deltas are named in §2.0a and
+none is authority-bearing.
 
-**Verdict: `DESIGN READY FOR C1`** — see §18.1. **Four** correction phases and
-one qualification-policy revision must land before `5F3B-LIVE1-I1`; §18.2 names
-their exact production-module boundaries, and C4 additionally carries a record
-schema bump that must land **before Q1**. FU3's one reported gap is **closed**
-by C4. LIVE1-I1, Q1, Q2 and real-workspace authority all remain **NO-GO**.
+*Superseded, retained as history:* revisions up to FU4A read "the installed Pi
+is `0.84.4`, exactly the version whose seam `5F3B-Q1-PRE1-DESIGN-FU1` froze."
+That was accurate when written. **Version remains provenance, never
+authorization** — the version moving is what triggered the re-review, not what
+decided its outcome.
+
+**Historical verdict (as originally written): `DESIGN READY FOR C1`.** Four
+correction phases and one qualification-policy revision were required to land
+before `5F3B-LIVE1-I1`; §18.2 named their exact production-module boundaries,
+and C4 additionally carried a record schema bump required **before Q1**. FU3's
+one reported gap was **closed** by C4.
+
+**Current verdict (FU4C): all four have landed.** `5F3B-LIVE1-C1`, `C2`, `C4`
+and `C3` are **ACCEPTED / FROZEN**, and `5F3B-LIVE1-I1` is **IMPLEMENTED** —
+see §18.1 for the full accounting. **`5F3B-Q1`, `5F3B-Q2` and real-workspace
+authority all remain NO-GO**, unchanged by any of the above.
 
 ---
 
@@ -172,30 +303,42 @@ by C4. LIVE1-I1, Q1, Q2 and real-workspace authority all remain **NO-GO**.
 | Fact | Value | How established |
 |---|---|---|
 | Package | `@earendil-works/pi-coding-agent` | `package.json` `name` |
-| **Version** | **`0.84.4`** | `package.json` `version`, read as a file |
-| Nested core | `@earendil-works/pi-agent-core` `0.84.4` | its own `package.json` |
-| Location | the npm global `node_modules` beside the `pi` shim that `ar2.launch._resolve_pi_package_root` itself resolves | path inspection only |
+| **Version** | **`0.85.1`** | `package.json` `version`, read as a file |
+| Nested core | `@earendil-works/pi-agent-core` **`0.85.1`** | its own `package.json` (`name` + `version`) |
+| Location | the npm global `node_modules` beside the `pi` shim that `ar2.launch._resolve_pi_package_root` itself resolves — `…/npm/node_modules/@earendil-works/pi-coding-agent` | path inspection only, via the same process-free resolver |
+| Historical provenance | `0.84.4` (FU4A and earlier; `5F3B-Q1-PRE1-DESIGN-FU1` §1.1) | superseded, retained as history |
 
-**Provenance verdict: MATCH.** `5F3B-Q1-PRE1-DESIGN-FU1` §1.1 recorded its seam
-analysis against `0.84.4`; the installed runtime reports `0.84.4`. There is no
-version-drift finding to report, and no "close enough" judgement was made or
-needed. Version remains **provenance, never authorization** (frozen
-`o1.pi_compat` policy, reproduced in `qualification.i2b_live_adapters.resolve_pi_identity`),
-and this design does not reintroduce any version comparison.
+**Provenance verdict (FU4B): DRIFT DETECTED, THEN RE-ATTESTED.** FU4A recorded
+a `0.84.4` MATCH, and that record was accurate when written. The installed
+runtime has since moved to `0.85.1`. The I1 Case 45 real-source drift guard
+detected exactly that and failed loudly, which is the behaviour it was built
+for.
 
-Files read:
+**No "close enough" judgement was made, and none was accepted as sufficient.**
+FU4B did not compare version numbers to decide anything; it re-read the actual
+0.85.1 source and re-established each §§2.1–2.5 fact from that text. Version
+remains **provenance, never authorization** (frozen `o1.pi_compat` policy,
+reproduced in `qualification.i2b_live_adapters.resolve_pi_identity`), and this
+design still reintroduces no version comparison into any production path.
 
-| # | File | What it established here |
+Files read (FU4B re-read the complete FU4A set at `0.85.1`; every one is still
+at its reviewed path — no relevant implementation moved or was renamed):
+
+| # | File | What it established here, at `0.85.1` |
 |---|---|---|
-| 1 | `dist/modes/rpc/rpc-types.d.ts` | the complete `RpcCommand` / `RpcResponse` unions; the exact `prompt` success arm and the generic `success:false` arm |
-| 2 | `dist/modes/rpc/rpc-mode.js` | `handleCommand`'s `prompt` case; `success`/`error`/`output` helpers; `handleInputLine`'s parse-failure path; the `session.subscribe(... output(toJsonEvent(event)))` forwarding; the `default:` unknown-command arm; the `catch (commandError)` arm |
-| 3 | `dist/modes/rpc/jsonl.js` | LF-only framing, single trailing `\r` strip, end-of-stream flush of a trailing partial line |
-| 4 | `dist/modes/json-event.js` | `toJsonEvent` — every session event is forwarded verbatim except `message_update` |
-| 5 | `dist/core/agent-session.js` | all five `preflightResult` call sites; `_runAgentPrompt`; the single `_emitAgentSettled` call site; `_expandSkillCommand`; `willRetry` decoration of `agent_end` |
-| 6 | `dist/core/agent-session.d.ts` | the `AgentSessionEvent` union — `agent_end{messages, willRetry}` and `agent_settled` |
-| 7 | `dist/core/prompt-templates.js` | `expandPromptTemplate` — identity for text not starting with `/` |
-| 8 | `node_modules/@earendil-works/pi-agent-core/dist/agent-loop.js` | the two `emit({type:"agent_start"})` sites and the four `agent_end` sites |
-| 9 | `node_modules/@earendil-works/pi-agent-core/dist/agent.js` | `agent_end` semantics ("only means no further loop events will be emitted") |
+| 1 | `package.json` | outer package `name` + `version` = `@earendil-works/pi-coding-agent` `0.85.1`; `bin.pi` → `dist/bundle/cli.js` (a bundled duplicate AIDO does **not** launch; AIDO launches `dist/cli.js`) |
+| 2 | `dist/modes/rpc/rpc-types.d.ts` | the complete `RpcCommand` / `RpcResponse` unions; the exact `prompt` request arm, the `prompt` success arm and the generic `success:false` arm; the `RpcExtensionUIRequest` / `RpcExtensionUIResponse` unions (neither is a `type:"response"` record) |
+| 3 | `dist/modes/rpc/rpc-mode.js` | `handleCommand`'s `prompt` case and its `const id = command.id` correlation source; the `success`/`error`/`output` helpers; **all 36 `success(` and all 8 `error(` call sites**; `handleInputLine`'s parse-failure path; the `session.subscribe(… output(toJsonEvent(event)))` forwarding; the `default:` unknown-command arm; the `catch (commandError)` arm |
+| 4 | `dist/modes/rpc/jsonl.js` | `serializeJsonLine` through `JSON.stringify`; LF-only framing, single trailing `\r` strip, end-of-stream flush of a trailing partial line |
+| 5 | `dist/modes/json-event.js` | `toJsonEvent` — every session event is forwarded verbatim except `message_update` |
+| 6 | `dist/core/agent-session.js` | all five `preflightResult` call sites; `_runAgentPrompt` and its **new** `_handlePostAgentRun` continuation loop; the single `_emitAgentSettled` call site; `_expandSkillCommand`; `_willRetryAfterAgentEnd` / `_prepareRetry`; `prompt()`'s `emitInput` and `emitBeforeAgentStart` seams; `buildSystemPrompt` option assembly |
+| 7 | `dist/core/agent-session.d.ts` | the `AgentSessionEvent` union — `agent_end{messages, willRetry}` and `agent_settled` still present; the **new** `summarization_retry_*` and `bash_execution_update` arms; `PromptOptions` including the `source?: InputSource` field |
+| 8 | `dist/core/prompt-templates.js` | `expandPromptTemplate` — identity for text not starting with `/` |
+| 9 | `dist/core/extensions/runner.js` | `emitBeforeAgentStart` — a no-op returning no messages and no system-prompt override when no extension registers a `before_agent_start` handler |
+| 10 | `dist/main.js`, `dist/cli/args.js`, `dist/modes/index.js` | `--mode rpc` reaches `runRpcMode` and nothing else; no startup auto-prompt in RPC mode; all **14** flags in AIDO's frozen `build_pi_argv` still parse |
+| 11 | `node_modules/@earendil-works/pi-agent-core/package.json` | nested core `name` + `version` = `@earendil-works/pi-agent-core` `0.85.1` |
+| 12 | `node_modules/@earendil-works/pi-agent-core/dist/agent-loop.js` | the two `emit({type:"agent_start"})` sites and — **changed from FU4A's four** — the **three** `agent_end` sites, all inside `runLoop` |
+| 13 | `node_modules/@earendil-works/pi-agent-core/dist/agent.js` | `agent_end` semantics, verbatim: *"`agent_end` only means no further loop events will be emitted"*; its one additional `agent_end` emission on the run-failure path |
 
 ### 1.2 AIDO-side source inspected (read-only, unmodified)
 
@@ -224,6 +367,95 @@ plus `run_i2b_live.py` and `tests/test_i2b_live_adapters.py`.
 
 ## 2. Actual Pi semantic seam observations
 
+> **Provenance of this section: `0.85.1`.** §§2.1–2.5 were first established
+> against `0.84.4` (`5F3B-Q1-PRE1-DESIGN-FU1`, carried through FU4A) and were
+> **completely re-attested against the installed `0.85.1` source by FU4B**.
+> Each subsection's original analysis is preserved as written — it remains an
+> accurate record of the 0.84.4 review — and each now carries an explicit
+> **`0.85.1 RE-ATTESTATION`** block stating what was re-read, what is
+> mechanically unchanged, and what moved.
+
+### 2.0 Fact-by-fact §§2.1–2.5 comparison, `0.84.4` → `0.85.1`
+
+| § | LIVE1-required fact | `0.84.4` (FU4A) | `0.85.1` (FU4B) | Verdict |
+|---|---|---|---|---|
+| 2.1 | `RpcCommand` exposes the semantic prompt request | `type:"prompt"; message: string` arm present | present, byte-identical shape | **PRESERVED** |
+| 2.1 | AIDO's exact three-field `{id,type,message}` command is accepted | `id?`, `images?`, `streamingBehavior?` all optional | all three still optional; `message` still required | **PRESERVED** |
+| 2.1 | `message` is the task-text-bearing field | yes | yes — `session.prompt(command.message, …)` | **PRESERVED** |
+| 2.1 | Acknowledgement correlates to THIS command's id | `handleCommand`'s `const id = command.id` → `output(success(id,"prompt"))` | identical, and re-proved as a bound chain (§2.1) | **PRESERVED** |
+| 2.1 | `success:true` means the prompt preflight/acceptance point | ack fires only from `preflightResult(true)` | identical | **PRESERVED** |
+| 2.1 | `success:false` is a genuine refusal before an accepted agent run | `.catch` → `output(error(id,"prompt",…))` guarded by `preflightSucceeded` | identical | **PRESERVED** |
+| 2.1 | Ack ordering is strictly earlier than agent start / provider inference | five `preflightResult` sites, the real one immediately before `_runAgentPrompt` | same five sites, same ordering | **PRESERVED** |
+| 2.2 | `agent_settled` is the semantic turn-completion authority | exactly one `_emitAgentSettled` call site, in `_runAgentPrompt`'s `finally` | exactly one call site, same `finally` | **PRESERVED** |
+| 2.2 | `agent_end` is **not** completion authority | 4 sites in `agent-loop.js` + 1 in `agent.js`; `willRetry` decoration | **3** sites in `agent-loop.js` + 1 in `agent.js`; `willRetry` decoration unchanged | **PRESERVED** (count changed; meaning did not — §2.2) |
+| 2.2 | Retry/continuation completes *before* settled | `agent_end` repeatable, then `finally` | retry **and** continuation now run in an explicit `while (await this._handlePostAgentRun())` loop **inside** the `try` | **PRESERVED, and strengthened** (§2.2) |
+| 2.3 | Malformed input still produces `command:"parse"` | `error(undefined,"parse",…)` in `handleInputLine`'s `catch` | identical | **PRESERVED** |
+| 2.3 | That response has no usable correlation id, and why | `id: undefined` + `JSON.stringify` drops the key | identical — `serializeJsonLine` still `JSON.stringify` | **PRESERVED** |
+| 2.3 | It is the only id-less response family in the inspected seam | claimed of the seam | **re-checked and RESTATED PRECISELY** — see §2.3 | **PRESERVED, wording tightened** |
+| 2.4 | Ordinary frozen task text is unchanged before inference | `_expandSkillCommand`, `expandPromptTemplate`, extension-slash-command all identity for non-`/` text | all three identical | **PRESERVED** |
+| 2.4 | Pi itself adds system/context material | Pi-authored `buildSystemPrompt` | identical, plus a re-checked `emitBeforeAgentStart` seam that is inert for AIDO | **PRESERVED** |
+| 2.5 | Successful write proves bytes handed to the pipe, not acceptance | AIDO-owned `send_command` | **unaffected by the Pi upgrade** — see §2.5 | **PRESERVED** |
+| 2.5 | Write failure cannot prove transmission did not occur | AIDO-owned | unaffected | **PRESERVED** |
+
+**Overall: `SEMANTIC SEAM COMPATIBLE`.** No frozen LIVE1 invariant is
+contradicted, so §§3–8, the four port signatures, the dispatch algorithm, the
+turn-observation algorithm and every classification code stand exactly as
+accepted. **No LIVE1 production semantic must change.**
+
+### 2.0a Three genuine `0.85.1` deltas, and why none is authority-bearing
+
+FU4B records these explicitly rather than omitting them, because an
+"everything is identical" claim would be false and would make the next
+re-review harder.
+
+**Delta 1 — `agent_end` emission sites in `agent-loop.js`: 4 → 3.** All three
+survivors are inside `runLoop` (on an `error`/`aborted` stop reason, on
+`shouldStopAfterTurn`, and on the outer-loop exit), and `agent.js` still emits
+one more on its run-failure path. *Not authority-bearing*: LIVE1 never counts
+`agent_end` sites and never treats `agent_end` as completion. It uses
+`agent_end` only as one member of the fixed positive `_AGENT_LOOP_EVENT_TYPES`
+set that proves an agent loop **ran**, where any positive delta suffices, and
+it takes completion from `agent_settled` alone.
+
+**Delta 2 — `_runAgentPrompt` now has an explicit continuation loop.** The
+0.85.1 body is `await this.agent.prompt(messages); while (await
+this._handlePostAgentRun()) { await this.agent.continue(); }`, wrapped in the
+same `try`/`finally`. `_handlePostAgentRun` drives auto-retry (`_prepareRetry`),
+auto-compaction (`_checkCompaction`) and extension-queued continuations.
+*Not authority-bearing, and it strengthens §2.2*: every retry and continuation
+is now visibly **inside** the `try`, so `_emitAgentSettled` in the `finally`
+still runs strictly after the complete prompt lifecycle — including after every
+retry attempt is exhausted, and including when `agent.prompt` throws.
+
+**Delta 3 — `rpc-mode.js` now passes `source: "rpc"` to `session.prompt`.**
+`PromptOptions.source?: InputSource` is forwarded only to
+`_extensionRunner.emitInput(…)`, which is itself guarded by
+`if (this._extensionRunner.hasHandlers("input"))`. *Not authority-bearing*:
+AIDO's one loaded extension (`experiments/pi_external_runtime_ar2/extension/index.ts`)
+registers exactly two tools and one inert sentinel command and **no** event
+handlers at all, so the `input` seam is never entered and its
+`action === "transform"` text-rewriting branch is unreachable in AIDO's
+configuration.
+
+### 2.0b Adversarial review — could a NEW `0.85.1` path bypass the old one?
+
+The existence of an old code path is insufficient. Each row below names the
+counterexample that was constructed and how the source refuted it.
+
+| Hypothesis | Refuted by |
+|---|---|
+| A second prompt entry point acknowledges without running | Every `success(`/`error(` site in `rpc-mode.js` was enumerated: **36 + 8**. Exactly two mention `"prompt"`, both inside `handleCommand`'s `case "prompt":`, both bound to `const id = command.id` |
+| A new RPC command reaches the agent behind LIVE1's back | LIVE1 writes exactly three commands (`h1` `get_commands`, `h2` `get_state`, `s1` `prompt`) and never issues another. New 0.85.1 commands (`set_auto_retry`, `abort_retry`, `bash`, `export_html`, `get_commands`, …) are unreachable without AIDO writing them |
+| A second `agent_settled` emitter makes settled ambiguous | A whole-tree scan of `dist/` and the nested core found `agent_settled` **emitted** in exactly one place: `agent-session.js`'s `_emitAgentSettled`. All other occurrences are consumers (`interactive-mode.js`, `rpc-client.js`, `rpc-mode.js`'s shutdown check) |
+| A new terminal/retry event supersedes `agent_settled` | The `AgentSessionEvent` union's new arms are `summarization_retry_scheduled` / `_attempt_start` / `_finished` and `bash_execution_update`. None is terminal, none replaces `agent_settled`, and none is a member of `_AGENT_LOOP_EVENT_TYPES`, so none can inflate `agent_loop_delta` either |
+| A new event kind trips AIDO's decoder as a protocol violation | `ar2.protocol.decode_record` has **no** event-type allowlist: it raises only on an empty record, non-UTF-8 bytes, non-strict JSON, or JSON that is not an object. `_absorb` counts an unrecognised `type` in `event_type_counts` and returns |
+| A new id-less **response** family breaks the `"parse"` classifier | Full inventory in §2.3. Also note U4 requires `command == "parse"` explicitly, so the classifier would stay sound even if another id-less family appeared |
+| `extension_error` is a new id-less record that pollutes `unmatched_response_ids` | It is `type:"extension_error"`, not `type:"response"`, and `_absorb` only appends to `unmatched_response_ids` for `type == "response"`. Frozen AR2 already handles `extension_error` by name |
+| RPC mode auto-prompts at startup | `main.js` reaches `runRpcMode(runtime)` and returns a never-resolving promise; the only prompt path is a stdin line. `@file` args are rejected outright in RPC mode, and `--offline` suppresses the model-catalog refresh |
+| A frozen launch flag no longer parses, so the child dies pre-RPC | All **14** flags in `ar2.launch.build_pi_argv` were located in `dist/cli/args.js`'s parser: `--mode`, `--no-session`, `--no-extensions`, `--extension`, `--tools`, `--no-builtin-tools`, `--no-skills`, `--no-prompt-templates`, `--no-themes`, `--no-context-files`, `--no-approve`, `--offline`, `--provider`, `--model` |
+| A new prompt transformation rewrites AIDO's text | §2.4. The only candidate-/task-dependent rewrite is `emitInput`'s `transform`, which needs an extension `input` handler AIDO does not register. `sendCustomMessage`/`_pendingNextTurnMessages` likewise require an extension calling `pi.sendMessage` |
+| The bundled `dist/bundle/cli.js` differs from the reviewed `dist/cli.js` | Moot for LIVE1: `ar2.launch` builds argv from `identity.pi_cli_js`, which the trusted resolver pins to `dist/cli.js`. The bundle was read anyway and carries the same `handleCommand` / `handleInputLine` text |
+
 ### 2.1 The dispatch command and its acknowledgement — CONFIRMED
 
 `RpcCommand`'s `prompt` member is `{id?: string; type: "prompt"; message: string;
@@ -250,6 +482,67 @@ The acknowledgement is therefore strictly earlier than agent start and strictly
 earlier than any provider inference. **PRE1's two-phase architecture is
 faithful.**
 
+> **`0.85.1` RE-ATTESTATION (FU4B) — every fact above holds.**
+>
+> **Command shape.** `dist/modes/rpc/rpc-types.d.ts`'s `RpcCommand` declaration
+> still opens with `{id?: string; type: "prompt"; message: string;
+> images?: ImageContent[]; streamingBehavior?: "steer" | "followUp";}`. `id`,
+> `images` and `streamingBehavior` remain **optional** and `message` remains
+> **required and `string`**, so AIDO's exact three-field `{id, type, message}`
+> dispatch is still a complete, accepted command, and `message` is still the
+> task-text-bearing field — `handleCommand` passes it as
+> `session.prompt(command.message, …)`.
+>
+> **Response shape.** `RpcResponse` still declares
+> `{id?; type:"response"; command:"prompt"; success:true}` and the shared
+> `{id?; type:"response"; command:string; success:false; error:string}`
+> failure arm.
+>
+> **Correlation, proved as a bound chain rather than by pattern-spotting.**
+> It is not enough to find `success(id, "prompt")` somewhere. The 0.85.1 proof
+> binds three links:
+>
+> ```text
+> const handleCommand = async (command) => {        <- handleCommand's OWN parameter
+>     const id = command.id;                        <- correlation source, from THAT parameter
+>     switch (command.type) {
+>         case "prompt": {                          <- inside THIS switch, not another
+>             ...
+>             preflightResult: (didSucceed) => {
+>                 if (didSucceed) {
+>                     preflightSucceeded = true;
+>                     output(success(id, "prompt")); <- passes THAT SAME binding
+>                 }
+>             },
+>             ...
+>         }
+> ```
+>
+> A `case "prompt":` in an unrelated switch, or an `id` local not derived from
+> this command, therefore does **not** establish the fact — and §2.7's guard
+> enforces exactly that distinction with mutation regressions.
+>
+> **`success:true` still means the preflight/acceptance point**, because the
+> acknowledgement is reachable only from the `preflightResult` callback and only
+> when `didSucceed`. **`success:false` is still a genuine refusal before an
+> accepted agent run**: the `.catch((e) => { if (!preflightSucceeded)
+> output(error(id, "prompt", e.message)); })` arm is correlated to the same
+> `id`, and the `preflightSucceeded` guard keeps a post-acceptance failure from
+> masquerading as a refusal.
+>
+> **Ordering.** `AgentSession.prompt` still calls `preflightResult` at exactly
+> **five** sites in `dist/core/agent-session.js` — four `true` (extension
+> slash-command handled; extension `input` handler `handled`; queued while
+> streaming; **the real path**, immediately before
+> `await this._runAgentPrompt(messages)`) and one `false` (the `catch` around
+> all of the above, before rethrow). The acknowledgement therefore remains
+> strictly earlier than agent start and strictly earlier than any provider
+> inference, so **the two-phase send-state architecture is still faithful**.
+>
+> **One delta, recorded:** the 0.85.1 call additionally passes `source: "rpc"`
+> (§2.0a Delta 3). It reaches only the extension `input` seam, which AIDO never
+> populates.
+
 ### 2.2 Turn completion — CONFIRMED
 
 `_emitAgentSettled` has exactly **one** call site: `_runAgentPrompt`'s `finally`
@@ -261,6 +554,83 @@ and `AgentSession._handleAgentEvent` decorates it with
 explicit: *"`agent_end` only means no further loop events will be emitted."*
 
 **`agent_settled` is completion; `agent_end` is not.** Confirmed at source.
+
+> **`0.85.1` RE-ATTESTATION (FU4B) — the conclusion holds, and the evidence is
+> now stronger.**
+>
+> **`agent_settled` — ALL call sites, not one convenient example.** A scan of
+> the entire installed `dist/` tree **and** the nested
+> `pi-agent-core/dist/` found `agent_settled` **emitted** in exactly one place:
+>
+> ```js
+> // dist/core/agent-session.js
+> async _emitAgentSettled() {
+>     this._isAgentRunActive = false;
+>     try {
+>         await this._extensionRunner.emit({ type: "agent_settled" });
+>         this._emit({ type: "agent_settled" });
+>     } finally { this._resolveIdleWaitIfIdle(); }
+> }
+> ```
+>
+> and `_emitAgentSettled` itself has exactly **one** call site — the `finally`
+> of `_runAgentPrompt`. Every other occurrence anywhere in the package is a
+> **consumer** (`interactive-mode.js`'s switch, `rpc-client.js`'s
+> `waitForIdle`/`collectEvents`, and `rpc-mode.js`'s post-forward shutdown
+> check). The nested core emits it nowhere.
+>
+> **It still occurs after the COMPLETE prompt lifecycle**, and 0.85.1 makes
+> that more explicit than 0.84.4 did:
+>
+> ```js
+> async _runAgentPrompt(messages) {
+>     this._isAgentRunActive = true;
+>     try {
+>         await this.agent.prompt(messages);
+>         while (await this._handlePostAgentRun()) {   // retry / compaction / continuation
+>             await this.agent.continue();
+>         }
+>     } finally {
+>         ...
+>         await this._emitAgentSettled();
+>     }
+> }
+> ```
+>
+> `_handlePostAgentRun` drives `_prepareRetry` (auto-retry), `_checkCompaction`
+> and extension-queued continuations. All of them are **inside the `try`**, so
+> `agent_settled` still fires strictly after every retry attempt is exhausted,
+> after every continuation, and also when `agent.prompt` throws. It remains the
+> correct event for LIVE1 `SETTLED`.
+>
+> **`agent_end` — complete analysis, all sites.** `agent-loop.js` emits it at
+> **three** sites (FU4A recorded four at 0.84.4), all inside the shared
+> `runLoop`: on an `error`/`aborted` stop reason, on
+> `config.shouldStopAfterTurn`, and on the outer follow-up loop's exit.
+> `agent.js` emits one more on its run-failure path. `agent_start` is still
+> emitted at the top of **both** `runAgentLoop` and `runAgentLoopContinue`, so
+> it is still not one-per-prompt — and since `_runAgentPrompt`'s loop calls
+> `agent.continue()`, both remain repeatable within a single prompt.
+>
+> **The site-count change is a refactor, not a semantic conflict**, and nothing
+> in LIVE1 counts `agent_end` sites. `AgentSession._handleAgentEvent` still
+> decorates the event as
+> `{...event, willRetry: this._willRetryAfterAgentEnd(event)}`, and `agent.js`'s
+> own comment is still verbatim: *"`agent_end` only means no further loop events
+> will be emitted."*
+>
+> **New terminal/retry events — none undermines the frozen interpretation.**
+> The `AgentSessionEvent` union gained `summarization_retry_scheduled`,
+> `summarization_retry_attempt_start`, `summarization_retry_finished` and
+> `bash_execution_update`. None is a completion event, none replaces
+> `agent_settled`, and none is a member of LIVE1's fixed
+> `_AGENT_LOOP_EVENT_TYPES`, so none can inflate `agent_loop_delta` either. All
+> eight members of that set (`agent_start`, `turn_start`, `message_start`,
+> `message_end`, `turn_end`, `tool_execution_start`, `tool_execution_end`,
+> `agent_end`) are still emitted by 0.85.1's loop, and the ninth
+> (`agent_settled`) by `agent-session.js`.
+>
+> **No semantic conflict to report.**
 
 ### 2.3 The parse-failure response — CONFIRMED, and it carries no id
 
@@ -278,7 +648,77 @@ know `"prompt"` would return a **correlated** `command:"prompt", success:false`
 command.type, …)`.
 
 **Consequence used in §7.5:** in `0.84.4` the parse-failure response is the
-**only** id-less response Pi can emit.
+**only** id-less response Pi can emit. *(FU4B restates this precisely for
+`0.85.1` immediately below; the tightened form is the one §7.6.2 now uses.)*
+
+> **`0.85.1` RE-ATTESTATION (FU4B) — the path holds; the id-less claim is
+> restated precisely.**
+>
+> **The path, bound to `handleInputLine` (not merely to a `catch` somewhere).**
+>
+> ```js
+> const handleInputLine = async (line) => {
+>     let parsed;
+>     try { parsed = JSON.parse(line); }
+>     catch (parseError) {
+>         output(error(undefined, "parse", `Failed to parse command: …`));
+>         await waitForRawStdoutBackpressure();
+>         return;
+>     }
+>     ...
+> ```
+>
+> Malformed input still produces `command: "parse"`, and the response still has
+> no usable correlation id.
+>
+> **Exactly why the id is absent on the wire.** Two independent facts, both
+> re-read:
+>
+> 1. the shared helper builds `{id, type:"response", command, success:false,
+>    error}` with `id === undefined`; and
+> 2. `dist/modes/rpc/jsonl.js` still serialises through
+>    `serializeJsonLine(value) { return `${JSON.stringify(value)}\n`; }`, and
+>    `JSON.stringify` **omits** an `undefined`-valued key rather than emitting
+>    `null`.
+>
+> So the record reaches AIDO with **no `id` key at all** — not `"id": null` —
+> which is what makes `"id" not in record` a sound test rather than a guess.
+> The LF-only framing, the single trailing `\r` strip and the end-of-stream
+> flush of a trailing partial line are all unchanged too.
+>
+> **Id-less response inventory — complete, and the FU4A claim TIGHTENED.**
+> FU4A's stronger claim was that the parse-failure response is the *only*
+> id-less response Pi can emit in the inspected seam. FU4B enumerated **every**
+> `success(` (36) and `error(` (8) call site in `rpc-mode.js` and finds the
+> claim needs one qualifier to be exactly true — a qualifier that was already
+> implicitly relied on, and that AIDO's own dispatch satisfies by construction:
+>
+> | Emission site | First argument | Id-less? |
+> |---|---|---|
+> | `handleInputLine`'s `catch (parseError)` | literal `undefined` | **always** |
+> | every `success(id, …)` / `error(id, …)` in `handleCommand`, incl. the `default:` unknown-command arm | `id`, i.e. `command.id` | only if the **inbound command** carried no `id` |
+> | `handleInputLine`'s `catch (commandError)` | `command.id` | only if the **inbound command** carried no `id` |
+>
+> **The precise statement, and the one LIVE1 uses:** *given AIDO's own frozen
+> three-field dispatch, which always carries `id: "s1"`, the parse-failure
+> response is the only id-less `type:"response"` record Pi can emit.* If
+> `JSON.parse` succeeds, the parsed object is AIDO's own and carries AIDO's id,
+> so every downstream arm is correlated; if it fails, the parse arm fires. The
+> unqualified form was only ever true under the same premise.
+>
+> **Other id-less records exist, and always did — but they are not
+> `type:"response"`.** `output(toJsonEvent(event))` forwards session events, and
+> `output({type:"extension_error", …})` carries no `id`. Neither is a response,
+> and `ar2.supervisor._absorb` appends to `unmatched_response_ids` **only** for
+> `type == "response"`, handling `extension_error` by name in its own branch. So
+> neither can inflate U4's pre-filter. `RpcExtensionUIRequest` records carry a
+> required `id` and a `type:"extension_ui_request"`, so they are not a
+> counterexample either.
+>
+> **`COMMAND_UNPARSEABLE_REFUSED` remains sound**, and would remain sound even
+> if another id-less family appeared: U4 (§7.6.1) does not test id-less-ness
+> alone — it additionally requires `type == "response"`, `command == "parse"`,
+> `success is False` with `type(success) is bool`, and `"id" not in record`.
 
 ### 2.4 Prompt-content contribution by Pi — CONFIRMED and bounded
 
@@ -306,6 +746,64 @@ contribution rather than AIDO prompt text:** a Pi-authored **system prompt**
 Pi's own prompt guidelines). AIDO neither authors nor suppresses it; LIVE1 must
 never describe the transmitted context as "only AIDO's prompt".
 
+> **`0.85.1` RE-ATTESTATION (FU4B) — unchanged, and the distinction is
+> preserved.**
+>
+> **The three identity paths are byte-for-byte the same rule.** For text that
+> does not begin with `/`:
+>
+> - `AgentSession._expandSkillCommand` — `if (!text.startsWith("/skill:")) return text;`
+> - `expandPromptTemplate` (`dist/core/prompt-templates.js`) — `if (!text.startsWith("/")) return text;`
+> - the extension slash-command branch — guarded by
+>   `if (expandPromptTemplates && text.startsWith("/"))`, so it is not entered.
+>
+> AIDO's frozen argv still passes `--no-skills`, `--no-prompt-templates`,
+> `--no-context-files`, `--no-extensions`, `--extension <one AIDO extension>`,
+> `--tools aido_read,aido_edit`, `--no-builtin-tools`, `--no-themes`,
+> `--no-approve`, `--offline` — and FU4B additionally confirmed that **all 14**
+> of those flags still parse in `dist/cli/args.js`, so the registries are still
+> empty for the reason the design claims. LIVE1's own precondition **P4** also
+> refuses any task prompt starting with `/` before the write, which closes the
+> slash path on AIDO's side independently of Pi.
+>
+> **Did 0.85.1 add a transformation capable of candidate- or task-dependent
+> modification?** There are exactly two candidates, and both are inert here:
+>
+> 1. `prompt()`'s extension `input` event —
+>    `if (this._extensionRunner.hasHandlers("input")) { … if (inputResult.action
+>    === "transform") { currentText = inputResult.text; … } }`. This **is** a
+>    genuine text-rewriting seam, and it is the closest thing to a new risk.
+>    It requires an extension registering an `input` handler. AIDO's one loaded
+>    extension registers `pi.registerTool` twice and `pi.registerCommand` once
+>    (an inert sentinel) and **no** handlers, so `hasHandlers("input")` is false
+>    and the branch is never entered.
+> 2. `emitBeforeAgentStart` — can append `role:"custom"` messages and override
+>    the system prompt. `dist/core/extensions/runner.js` iterates extensions and
+>    `continue`s when an extension has no `before_agent_start` handler, so with
+>    none registered it returns no messages and no override, and
+>    `agent.state.systemPrompt` is reset to the base prompt.
+>
+> `_pendingNextTurnMessages` is likewise populated only by
+> `sendCustomMessage(…, {deliverAs: "nextTurn"})`, i.e. by an extension calling
+> `pi.sendMessage`. The same is true of the second `_runAgentPrompt` call site,
+> which lives inside `sendCustomMessage` and is unreachable in AIDO's
+> configuration. **The user message Pi builds is therefore still exactly
+> `[{type:"text", text: <AIDO's frozen task prompt>}]`.**
+>
+> **Pi's own additions are unchanged**, and the semantic distinction is
+> preserved verbatim:
+>
+> ```text
+> AIDO transmitted semantic text == frozen task.prompt
+>     does NOT imply
+> provider receives only frozen task.prompt
+> ```
+>
+> `_buildBaseSystemPrompt` still assembles `cwd`, skills, context files, custom
+> and append prompts, the selected tool names, tool snippets and prompt
+> guidelines into `buildSystemPrompt(...)`. AIDO neither authors nor suppresses
+> that, and no LIVE1 text may claim the provider sees only AIDO's prompt.
+
 ### 2.5 What a successful write proves — CONFIRMED unchanged
 
 `ar2.supervisor.PiRpcSupervisor.send_command` does
@@ -314,6 +812,47 @@ never describe the transmitted context as "only AIDO's prompt".
 recording `stdin_write_error`. A returned `send_command` proves only that the
 bytes were handed to the OS pipe. PRE1 §1.7's reading stands unchanged, in both
 directions.
+
+> **`0.85.1` RE-ATTESTATION (FU4B) — and an explicit statement of whose seam
+> this is.**
+>
+> **This is an AIDO-OWNED seam. The Pi upgrade does not touch it, and Pi source
+> could not prove it either way.** `PiRpcSupervisor.send_command` lives in
+> `experiments/pi_external_runtime_ar2/ar2/supervisor.py`; nothing in the
+> 0.84.4 → 0.85.1 change can alter what a Python `write()`/`flush()` on a
+> subprocess pipe proves. FU4B says so plainly rather than dressing an
+> unchanged AIDO fact as a Pi finding.
+>
+> The frozen code was re-read at this revision and is unchanged:
+>
+> ```python
+> payload = json.dumps(command, ensure_ascii=True).encode("utf-8") + b"\n"
+> try:
+>     self.process.stdin.write(payload)
+>     self.process.stdin.flush()
+> except OSError as exc:
+>     self.stdin_write_error = f"{type(exc).__name__}: {exc}"
+>     raise PiSupervisorError(...) from exc
+> ```
+>
+> so the frozen interpretation stands, in both directions:
+>
+> ```text
+> successful write/flush
+>     proves bytes were handed to the pipe
+>
+> successful write/flush
+>     does NOT prove Pi parsed or accepted the semantic prompt
+>
+> write/flush failure
+>     cannot establish that transmission definitely did not occur
+> ```
+>
+> The Pi-side facts that make this *useful* are the ones §2.1 and §2.3
+> re-attested — that acceptance is signalled by a correlated
+> `command:"prompt"` response and refusal-before-acceptance by an id-less
+> `"parse"` one — and those are unchanged at 0.85.1. Invariant **I-2** stands:
+> "the function returned" is never `CONFIRMED_SENT`.
 
 ### 2.6 Capability authority seam — CONFIRMED gap, and the correction's binding shape
 
@@ -1096,6 +1635,67 @@ invariant C1 reopens. That proof is **C1's** job, not
 **§§3–16 are written so that only §11.3's handle binding and §12.3's
 `create_broker` / `launch_runtime` delegation depend on C1's outcome.**
 
+### 2.7 How this seam stays attested — the Case 45 real-source drift guard (FU4B)
+
+`5F3B-LIVE1-I1-FU2` added
+`experiments/pi_implementer_qualification/tests/test_live1_i1_pi_source_drift.py`:
+an **offline** guard that reads the actually-installed Pi package's own text
+through the same process-free resolver
+(`qualification.i2b_live_adapters._ar2_resolve_pi_package_root`) the accepted
+adapters already use. **No Pi process, no Node process, no `--help`, no
+network, no subprocess of any kind.** It is what turned a silent external-runtime
+upgrade into an actionable finding, and FU4B is the phase it triggered.
+
+**Declared reviewed provenance advanced to `0.85.1`.**
+`_FROZEN_SEAM_PROVENANCE_VERSION` is now `"0.85.1"`, and the superseded value is
+kept in `_HISTORICAL_SEAM_PROVENANCE_VERSIONS = ("0.84.4",)` so the advance is a
+recorded re-review rather than an edited expectation. A new companion test
+records the nested `@earendil-works/pi-agent-core` provenance the same way,
+because §2.2's completion-authority analysis reads that package too.
+
+**Version is still provenance, never authorization.** This is the only version
+comparison in the repository that FU4B touches, it lives in a test, and no
+runtime authorization path reads it — exactly what
+`resolve_pi_identity`'s own docstring requires.
+
+**Six bindings, because the pre-FU4B checks were weaker than their comments
+claimed.** Each was a bounded regex over the *whole file*, so satisfying text
+anywhere in that file counted. FU4B binds each check to the declaration or
+function that actually carries the authority:
+
+| # | Fact | Now bound to |
+|---|---|---|
+| 1 | prompt **request** arm, and its optional fields staying optional | the real `export type RpcCommand = … ;` declaration, located by a brace-depth scan to its own depth-0 `;` |
+| 2 | prompt **success** arm and the shared `success:false` failure arm | the real `export type RpcResponse = … ;` declaration |
+| 3 | the `case "prompt":` arm | the real `const handleCommand = async (<param>) => {…}` body |
+| 4 | the acknowledgement's **correlation** | a three-link chain — `handleCommand`'s own `<param>`, then `const <name> = <param>.id;`, then `output(success(<name>, "prompt"))` with **that same name**. The correlated refusal `output(error(<name>, "prompt", …))` and the correlated `default:` arm are proved the same way |
+| 5 | the id-less `"parse"` refusal | a `catch` block of the real `const handleInputLine = async (<param>) => {…}` body |
+| 6 | the `JSON.stringify` consequence | preserved unchanged — it was already bound to `serializeJsonLine`'s own declaration and first statement, and it is still true |
+
+**Mutation regressions prove each binding is load-bearing.** The five *move*
+tests relocate satisfying text out of the authoritative declaration or function
+while leaving it in the file, then assert **both** that the bound check now
+fails **and** that the naive whole-file regex would still have passed — the
+second assertion is what makes the binding demonstrably load-bearing rather than
+decorative. A sixth test renames each authority outright and asserts every bound
+check fails **closed** rather than falling back to a file-wide scan. The
+scenarios are exactly the ones a reviewer would try:
+
+```text
+a fake unrelated `case "prompt"` elsewhere        must not satisfy the guard
+a local `id` not derived from command.id          must not satisfy correlation proof
+a `catch (parseError)` outside handleInputLine    must not satisfy the guard
+prompt/failure arms placed outside RpcResponse    must not satisfy the guard
+a stray prompt request arm outside RpcCommand     must not satisfy the guard
+a renamed RpcCommand / handleCommand / handleInputLine  must fail CLOSED
+```
+
+**It is deliberately not a whole-file hash, and it does not overfit
+whitespace.** Every extractor reads *structure* (brace depth, declaration
+boundaries, function bodies); every pattern tolerates arbitrary intervening
+whitespace. A reformat of the installed package must not fail this guard; a
+semantic drift must.
+
 ---
 
 ## 3. Live object and resource ownership model
@@ -1519,12 +2119,29 @@ before acceptance. `_absorb` does not retain the parse record in
 `sanitized_events()` — a public method — sliced from the baseline index. Only a
 **count** is derived; no record, and specifically no `error` text, is retained.
 
-#### 7.6.2 Why the id-less signal is unambiguous in 0.84.4
+#### 7.6.2 Why the id-less signal is unambiguous — restated precisely (FU4B, `0.85.1`)
 
-`error(undefined, "parse", …)` is the **only** id-less response
-`rpc-mode.js` can emit (§2.3). The `default:` and `catch (commandError)` arms both
-carry `command.id`. The `unmatched_response_ids` delta is used as a cheap
-pre-filter; the record-shape scan is the authority.
+**The precise statement.** *Given AIDO's own frozen three-field dispatch, which
+always carries `id: "s1"`, `error(undefined, "parse", …)` is the only id-less
+`type:"response"` record `rpc-mode.js` can emit* (§2.3).
+
+FU4B enumerated every `success(` and `error(` call site in the installed
+`rpc-mode.js` (36 and 8 respectively). Only the `handleInputLine` parse arm
+passes a literal `undefined`. The `default:` arm and the `catch (commandError)`
+arm both carry `command.id` — so they are id-less **only if the inbound command
+was**, which AIDO's dispatch never is. Revisions up to FU4A stated this without
+the qualifier; the qualifier was always the premise the argument rested on, and
+it is now written down.
+
+Id-less **non-response** records exist and always did — forwarded session events
+and `extension_error` — but `ar2.supervisor._absorb` appends to
+`unmatched_response_ids` only for `type == "response"`, so none of them reaches
+U4's pre-filter.
+
+The `unmatched_response_ids` delta remains a cheap pre-filter; **the
+record-shape scan is the authority**, and it tests `command == "parse"`
+explicitly rather than id-less-ness alone — so U4 would stay sound even if a new
+id-less response family appeared.
 
 #### 7.6.3 Where the code must NOT be emitted
 
@@ -2846,6 +3463,11 @@ being folded in:
 
 ```text
 5F3B-LIVE1-C4  qualification-record policy binding   REQUIRED, NOT YET AUTHORIZED
+                                                       [historical, at time of
+                                                       writing -- current status
+                                                       (FU4C): ACCEPTED / FROZEN,
+                                                       confirmed at source in
+                                                       qualification/__init__.py]
 
   Production modules reopened, and only these FOUR:
     qualification/__init__.py       declare QUALIFICATION_POLICY_REVISION (one
@@ -3133,6 +3755,13 @@ considered:
 > reviewed once C1's shape is known; neither read is expanded, and no public
 > accessor is added to the zero-prompt adapter for either. §§7–10 do not depend
 > on the outcome.
+>
+> **Current status (FU4C).** C1's shape is now known: C1 is implemented and
+> accepted, and confirmed at source, READ 1 was **kept, not deleted** —
+> `qualification.semantic_live_adapters` still reads `base._brokers.get(...)`
+> directly (marked "READ 1" in its own comment). This is a factual observation
+> about which of the two conditional outcomes occurred, not a reopening of
+> §11.3 or of C1's acceptance.
 
 ### 11.4 What the semantic module must not contain
 
@@ -3782,7 +4411,7 @@ Any test touching Git uses a synthetic repository under pytest `tmp_path`.
 | 42 | exactly two private-attribute reads of `_base` in the semantic module (AST count) | §11.3 |
 | 43 | the adapter never writes a command while a wait is outstanding | §7.6.1 U1/U2 |
 | 44 | the runner's parser declares exactly the two declared options | §12.1 |
-| 45 | Pi 0.84.4 seam-shape drift guard for the `prompt` request/response arms and the id-less `parse` arm | §2.1–§2.3 |
+| 45 | Pi **`0.85.1`** seam-shape drift guard for the `prompt` request/response arms and the id-less `parse` arm — in **two** modules: the synthetic wire test (AIDO-side compatibility, `tests/test_semantic_live_adapters.py`) and the **real installed-source** guard (`tests/test_live1_i1_pi_source_drift.py`), which alone can notice that the installed package itself drifted. FU4B advanced the latter's declared provenance to `0.85.1` and bound every structural check to the authoritative declaration/function, with load-bearing mutation regressions (§2.7) | §2.1–§2.3, §2.7 |
 
 ### 16.3 FU1 additions — per-task ordering (BLOCKER 2)
 
@@ -3845,12 +4474,57 @@ these matrices launches a process, opens a socket, or reads a credential.
 
 ## 18. Verdict, correction sequence, and what LIVE1 refuses to implement
 
-### 18.1 Verdict — FU4A
+### 18.1 Verdict — FU4C (current) — supersedes the FU4B verdict below
+
+> **This section's header block states CURRENT status as of FU4C.** The
+> per-revision item accounting that follows (FU4B, FU4A, FU4, FU3, FU2, FU1)
+> is preserved verbatim as the historical DESIGN-level closure record — it
+> documents what each revision closed *at the time it was written*, and none
+> of that reasoning is rewritten. Only the status lines at the very top and
+> very bottom of the code block — which described the design's authorization
+> state, not any revision's own closure list — are corrected to the present.
 
 ```text
-5F3B-LIVE1-DESIGN-FU4A            DESIGN READY FOR C1
+5F3B-LIVE1-DESIGN-FU4C            CANONICAL STATUS SYNCED
+                                  Pi seam provenance RE-ATTESTED at 0.85.1
+                                  (by FU4B, independently accepted)
 
-All five FU4A items are closed at DESIGN level:
+FU4C is a canonical-status-sync. It changed no runtime production, no ranking
+policy, no qualification policy revision, no record version, no candidate
+mapping, and no frozen C1/C2/C3/C4 code.
+
+FU4B is a provenance refresh (historical scope, retained as written). It
+changed no runtime production, no ranking policy, no qualification policy
+revision, no record version, no candidate mapping, and no frozen C1/C2/C3/C4
+code.
+
+    previous provenance    0.84.4      (FU4A and earlier; kept as history)
+    current  provenance    0.85.1      (@earendil-works/pi-coding-agent AND
+                                        nested @earendil-works/pi-agent-core)
+    result                 SEMANTIC SEAM COMPATIBLE
+
+All five FU4B items are closed:
+    ITEM 1  Sec. 2.1-2.5 re-attested COMPLETELY against installed 0.85.1
+            source, fact by fact                 -> Sec. 2.0, 2.1..2.5
+    ITEM 2  adversarial review for NEW 0.85.1 paths that could bypass or
+            contradict the old ones; 3 real deltas found, NONE
+            authority-bearing                    -> Sec. 2.0a, 2.0b
+    ITEM 3  stale "installed Pi is 0.84.4" claims corrected; historical
+            provenance PRESERVED as history      -> Sec. 0.4, 1.1, 7.6.2, 16.2
+    ITEM 4  I1 Case 45 real-source drift guard advanced to 0.85.1 AND bound
+            to the authoritative declarations/functions, with load-bearing
+            mutation regressions                 -> Sec. 2.7
+    ITEM 5  version remains PROVENANCE, never authorization; no version
+            comparison added to any production path
+
+    QUALIFICATION_POLICY_REVISION           NO BUMP WARRANTED
+        qualification meaning, eligibility, classification, ranking and
+        fairness semantics are all unchanged by a Pi runtime version change
+        that preserves the seam.
+
+    LIVE1 production semantics                 NO CHANGE REQUIRED
+
+All five FU4A items remain closed at DESIGN level:
     ITEM 1  C1 module boundary made consistent EVERYWHERE: THREE production
             modules (i2b_workspace, i2b_live_adapters, semantic_workspace);
             P12a tightened to EXACT STRING EQUALITY, no realpath/alias test
@@ -3912,36 +4586,80 @@ composition semantics, cleanup ownership, A/B fairness and security posture
                                   remain UNCHANGED and DESIGN READY
 (Sec. 14 and Sec. 16.5 were edited for canonical consistency in FU4A -- the
 CONTRACTS they describe were not reopened, only the module-boundary bookkeeping
-around C1/C4/C3)
+around C1/C4/C3. FU4B re-attested the Pi seam at 0.85.1 and reopened NO
+contract: Sec. 2.1-2.5's original analyses are preserved verbatim, each with an
+added 0.85.1 RE-ATTESTATION block.)
 
-5F3B-LIVE1-C1  capability issuance seam        REQUIRED, NOT YET AUTHORIZED
-               (+ Git execution authority)
-5F3B-LIVE1-C2  refusal vocabulary projection   REQUIRED, NOT YET AUTHORIZED
-5F3B-LIVE1-C4  qualification-record policy      REQUIRED, NOT YET AUTHORIZED
-               binding (.v2 schema bump)        <-- NEW in FU4; lands BEFORE C3
-5F3B-LIVE1-C3  R-2/R-3 policy revision +       REQUIRED, NOT YET AUTHORIZED
-               policy-revision identifier
+Historical requirement (as originally sequenced, §18.2):
+    5F3B-LIVE1-C1  capability issuance seam        REQUIRED, NOT YET AUTHORIZED
+                   (+ Git execution authority)      [historical, at time of writing]
+    5F3B-LIVE1-C2  refusal vocabulary projection   REQUIRED, NOT YET AUTHORIZED
+                                                     [historical, at time of writing]
+    5F3B-LIVE1-C4  qualification-record policy      REQUIRED, NOT YET AUTHORIZED
+                   binding (.v2 schema bump)        [historical; <- NEW in FU4;
+                                                     lands BEFORE C3]
+    5F3B-LIVE1-C3  R-2/R-3 policy revision +       REQUIRED, NOT YET AUTHORIZED
+                   policy-revision identifier       [historical, at time of writing]
 
-5F3B-LIVE1-I1                     NOT AUTHORIZED, and blocked until C1, C2, C4
-                                  and C3 are accepted
-Q1 / Q2 / real workspace          NO-GO (unchanged)
+    5F3B-LIVE1-I1                     NOT AUTHORIZED, and blocked until C1, C2,
+                                      C4 and C3 are accepted  [historical]
+
+CURRENT STATUS (FU4C, confirmed at source -- see the paragraph below the box):
+    5F3B-LIVE1-C1  capability issuance seam        ACCEPTED / FROZEN
+                   (+ Git execution authority)
+    5F3B-LIVE1-C2  refusal vocabulary projection   ACCEPTED / FROZEN
+    5F3B-LIVE1-C4  qualification-record policy     ACCEPTED / FROZEN
+                   binding (.v2 schema bump)
+    5F3B-LIVE1-C3  R-2/R-3 policy revision +       ACCEPTED / FROZEN
+                   policy-revision identifier
+
+    5F3B-LIVE1-I1                     IMPLEMENTED (FU1/FU2 corrections closed;
+                                      Pi 0.85.1 provenance blocker closed;
+                                      final phase freeze pending only on this
+                                      FU4C canonical-status-sync review)
+
+Q1 / Q2 / real workspace           NO-GO (unchanged)
+M4 candidate selection              not authorized here
 ```
 
-**Nothing blocks C1 on this design.** FU1's two open items were closed by FU2
-(the R-2 threshold is frozen in §9.4.5; §11.3's READ 1 is answered conditionally
-— deleted if C1's `create_broker`-time issuance carries the handler, kept
-otherwise), and FU3's three blockers are closed above.
+**Historical note, preserved as written:** "Nothing blocks C1 on this design.
+FU1's two open items were closed by FU2 (the R-2 threshold is frozen in §9.4.5;
+§11.3's READ 1 is answered conditionally — deleted if C1's `create_broker`-time
+issuance carries the handler, kept otherwise), and FU3's three blockers are
+closed above." "No gap remains open. FU3 reported one — the durable
+policy-revision binding had no home before M4. FU4 closes it:
+`5F3B-LIVE1-C4` binds it into all three per-result durable artifact lineages
+before Q1 (§10A.2b), and M4's decision artifact remains required but
+**additive** (§10A.4). C1 may be authorized on this document as it stands."
 
-**No gap remains open.** FU3 reported one — the durable policy-revision binding
-had no home before M4. FU4 closes it: `5F3B-LIVE1-C4` binds it into all three
-per-result durable artifact lineages before Q1 (§10A.2b), and M4's decision artifact remains
-required but **additive** (§10A.4). C1 may be authorized on this document as it
-stands.
+**Current status (FU4C):** C1 **was** authorized on this document, and has
+since been **implemented and accepted**, confirmed at source —
+`qualification.i2b_workspace` carries the C1-P12a Git checkpoint
+(`resolve_git_executable`, §2.6.5b). So were C2 (`qualification.refusal_projection`
+exists and implements the `(error_code, internal_reason)` pair projection,
+§9.4.3.3), C4 (`qualification/__init__.py` declares `RECORD_VERSION =
+"pi-implementer-qualification.v2"`, `ATTEMPT_RECORD_VERSION = "…-attempt.v2"`,
+`REFUSAL_RECORD_VERSION = "…-refusal.v2"`, §10A.2b) and C3
+(`qualification.ranking` declares `R3_EVALUABLE = False`, the AIDO-derived R-2
+resolver, and the `qualification_policy_revision` binding, §9.4.8/§10.6.2a/§10A.3).
+`5F3B-LIVE1-I1` is **implemented**: its experiment modules
+(`qualification.semantic_live_adapters`, `run_semantic_sweep_live.py`, and
+their test suites) exist in the working tree — **untracked** pending the
+user's own commit/push per this repository's standing convention, not because
+implementation is incomplete — and its own FU1/FU2 corrective work is closed
+(see the FU1/FU2 status this document's own preamble records). No gap remains
+open at any of C1/C2/C4/C3, and none remains open at I1 beyond this
+canonical-status-sync review itself.
 
 ### 18.2 The exact correction phases required before `5F3B-LIVE1-I1`
 
-**Four**, each narrow, each independently reviewable. **None is implemented in
-this turn.**
+**Four**, each narrow, each independently reviewable. **Historical note: none
+was implemented in the turn this table was written.** **Current status
+(FU4C): all four have since landed and are ACCEPTED / FROZEN**, confirmed at
+source in the paragraph following the table. The table itself is preserved
+unchanged below — it remains the accurate record of each phase's scope,
+closed items and module boundaries, and every "Must land before" ordering
+constraint it states was in fact honored.
 
 | Phase | Closes | Frozen modules reopened | Must land before |
 |---|---|---|---|
@@ -3962,6 +4680,18 @@ C2           independent of C1 and C4; may be reviewed in any order.
 ```
 
 What is **not** negotiable is that **all four** precede Q1.
+
+**Current status (FU4C), confirmed at source.** The ordering above was
+honored: `qualification.i2b_workspace` / `i2b_live_adapters` /
+`semantic_workspace` carry C1's issuance seam and Git checkpoint;
+`qualification.refusal_projection` (a genuinely new module, exactly as
+required) carries C2's projection; `qualification/__init__.py` declares C4's
+`QUALIFICATION_POLICY_REVISION` constant and the three `.v2` record-version
+bumps; `qualification.ranking` carries C3's AIDO-derived R-2, the symmetric
+R-3 `NOT_EVALUABLE` rule and `R3_EVALUABLE = False`, and the policy-revision
+binding that imports C4's constant. **C1, C2, C4 and C3 are ACCEPTED /
+FROZEN**, and **all four landed before Q1** — which remains, and will remain,
+NO-GO until separately authorized.
 
 ### 18.3 Frozen qualification-policy revision required — YES
 
@@ -4031,6 +4761,16 @@ schema-version bumps above**. Genuinely untouched: the corpus, the prompts, run
 validity, the hard bar H-1..H-14, the outcome taxonomy, the prompt-count policy,
 evidence policy, workspace policy, verification authority, candidate routes,
 Category-B policy, the token policy, and real-workspace authority.
+
+**Current status (FU4C):** this entire revision has **landed**, via C3 and C4,
+exactly as required above — confirmed at source: `qualification/__init__.py`
+declares `RECORD_VERSION = "pi-implementer-qualification.v2"`,
+`ATTEMPT_RECORD_VERSION = "pi-implementer-qualification-attempt.v2"` and
+`REFUSAL_RECORD_VERSION = "pi-implementer-qualification-refusal.v2"`;
+`qualification.ranking` declares `R3_EVALUABLE = False` and derives R-2 rather
+than accepting a caller-supplied bucket. It still remains true, unchanged,
+that **no artifact of any of the three kinds has ever been emitted** — Q1 has
+not run.
 
 ### 18.4 Roadmap impact — none
 
@@ -4103,6 +4843,9 @@ The five pre-FU1 questions are resolved as follows.
 | 3 | §9.2 `RefusalEvent.path` unpopulatable | **Unchanged and still non-gating** — `qualification.scope` never reads it. FU1 adds that the same discarded `relative_path` is one of the four missing facts behind the R-2 sequence gap (§9.4.4), which is why the two findings are now reported together |
 | 4 | §10.3 `UNAVAILABLE` as the truthful state | **Accepted by review**, and its consequence specified as C3 (§10.6) |
 | 5 | §12.4 three `--version` probes per sweep | **Unchanged in count, corrected in placement**: three per sweep, one per task, each now strictly after that task's own Category-A gates (§12.2A) |
+
+*Current status (FU4C) on row 1:* review **did** authorize C1, and C1 has since
+been implemented and accepted (§18.1, §18.2).
 
 FU1's two open items are now closed:
 
