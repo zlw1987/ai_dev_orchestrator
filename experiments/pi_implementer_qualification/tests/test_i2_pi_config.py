@@ -39,6 +39,7 @@ SYNTHETIC_CREDENTIAL_VALUE_THAT_MUST_NEVER_APPEAR = "sk-synthetic-should-never-a
 
 CANDIDATE_A_MODEL_ID = CANDIDATE_MODEL_IDS["A"]
 CANDIDATE_B_MODEL_ID = CANDIDATE_MODEL_IDS["B"]
+CANDIDATE_C_MODEL_ID = CANDIDATE_MODEL_IDS["C"]
 
 
 def _write(tmp_path, *, model_id: str, suffix: str):
@@ -156,6 +157,40 @@ def test_candidate_a_and_b_configs_differ_only_in_model_identity(tmp_path):
 
     # Distinct per-run authority tokens even for structurally-identical configs.
     assert a.authority_token != b.authority_token
+
+
+def test_candidate_c_config_differs_from_a_only_in_model_identity(tmp_path):
+    """5F3B-Q3-PRE1-FU1 required regression (Finding 4): the PRODUCTION
+    ``preflight_candidate_route_generator_symmetry`` live-preflight gate is a
+    pairwise REPRESENTATIVE self-check of the generator FUNCTION -- it is
+    frozen to issue exactly two configs (A and B) and is deliberately not
+    modified here. This OFFLINE test is the "elsewhere" proof the finding
+    asks for: Candidate C's generated config is field-identical to
+    Candidate A's, modulo the one candidate/model-specific value
+    (``models[0].id``), using the exact same comparison shape the production
+    gate already applies to A/B."""
+    a = _write(tmp_path, model_id=CANDIDATE_A_MODEL_ID, suffix="a2")
+    c = _write(tmp_path, model_id=CANDIDATE_C_MODEL_ID, suffix="c")
+
+    models_a = json.loads(open(a.models_path, encoding="utf-8").read())
+    models_c = json.loads(open(c.models_path, encoding="utf-8").read())
+
+    provider_a = models_a["providers"][PROVIDER_ID]
+    provider_c = models_c["providers"][PROVIDER_ID]
+
+    assert provider_a["baseUrl"] == provider_c["baseUrl"]
+    assert provider_a["api"] == provider_c["api"]
+    assert provider_a["apiKey"] == provider_c["apiKey"]
+    assert len(provider_a["models"]) == len(provider_c["models"]) == 1
+    assert provider_a["models"][0]["id"] != provider_c["models"][0]["id"]
+    assert provider_c["models"][0]["id"] == CANDIDATE_C_MODEL_ID
+    assert provider_a["models"][0]["reasoning"] == provider_c["models"][0]["reasoning"]
+
+    settings_a = json.loads(open(a.settings_path, encoding="utf-8").read())
+    settings_c = json.loads(open(c.settings_path, encoding="utf-8").read())
+    assert settings_a == settings_c
+
+    assert a.authority_token != c.authority_token
 
 
 # -- 5F3B-I2-FU2: route identity is not a caller-supplied parameter -----------

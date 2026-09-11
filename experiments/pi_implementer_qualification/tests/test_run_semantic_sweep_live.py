@@ -104,9 +104,67 @@ def test_candidate_is_required_with_no_default_and_declared_choices(runner):
     assert candidate_action.required is True
     assert candidate_action.default is None
     assert tuple(candidate_action.choices) == tuple(sorted(runner.CANDIDATE_MODEL_IDS))
-
+    # 5F3B-Q3-PRE1: pinned literally, not just against the (also-correct)
+    # generic derivation above, so a future accidental roster change is
+    # caught even if it drifted the generic assertion along with it.
+    assert tuple(candidate_action.choices) == ("A", "B", "C")
     flag_action = actions["run_primary_sweep_live"]
     assert flag_action.default is False
+
+
+def test_run_i2b_live_and_run_semantic_sweep_live_derive_choices_from_the_same_authority():
+    """5F3B-Q3-PRE1 required regression: both live runners' ``--candidate``
+    choices come from the SAME ``qualification.records.CANDIDATE_MODEL_IDS``
+    authority, not from two independently-maintained literal lists that
+    could drift apart when a candidate is added."""
+    import argparse
+
+    from qualification.records import CANDIDATE_MODEL_IDS
+
+    i2b_live_path = _HERE.parent / "run_i2b_live.py"
+    spec = importlib.util.spec_from_file_location("run_i2b_live_under_test", i2b_live_path)
+    i2b_live_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(i2b_live_module)
+
+    original_init = argparse.ArgumentParser.__init__
+    captured = {}
+
+    def _capture(self, *a, **kw):
+        captured["parser"] = self
+        return original_init(self, *a, **kw)
+
+    argparse.ArgumentParser.__init__ = _capture
+    try:
+        # An invalid --candidate choice forces argparse to raise SystemExit(2)
+        # strictly inside parse_args -- BEFORE any of run_i2b_live's own
+        # (live) logic runs -- while the parser object, captured at
+        # construction time above, still carries the real `choices=` set.
+        # This must never pass a valid candidate/flag combination: doing so
+        # would let this offline test fall through into the runner's actual
+        # live Category-B gate logic.
+        with pytest.raises(SystemExit) as excinfo:
+            i2b_live_module.main(["--candidate", "not-a-real-candidate"])
+        assert excinfo.value.code == 2
+    finally:
+        argparse.ArgumentParser.__init__ = original_init
+
+    actions = {a.dest: a for a in captured["parser"]._actions}
+    i2b_choices = tuple(actions["candidate"].choices)
+
+    assert i2b_choices == tuple(sorted(CANDIDATE_MODEL_IDS)) == ("A", "B", "C")
+    # 5F3B-Q3-PRE1-FU1 adversarial requirement: Candidate C must not have
+    # opened a model/provider override surface on this runner either --
+    # `dest`s are argparse's own derived attribute names, so `--api-key`
+    # would appear here as `api_key`, etc.
+    forbidden_override_dests = {
+        "model",
+        "provider",
+        "backend",
+        "endpoint",
+        "base_url",
+        "api_key",
+    }
+    assert forbidden_override_dests.isdisjoint(actions)
 
 
 def test_no_workspace_ish_option_exists(runner):
@@ -181,8 +239,10 @@ def test_missing_candidate_is_an_argparse_usage_error(runner):
 
 
 def test_unknown_candidate_is_an_argparse_usage_error(runner):
+    # "D" (not "C"): 5F3B-Q3-PRE1 made "C" a real, frozen candidate, so the
+    # unknown-candidate exemplar must be a letter still outside the map.
     with pytest.raises(SystemExit) as excinfo:
-        runner.main(["--candidate", "C", "--run-primary-sweep-live"])
+        runner.main(["--candidate", "D", "--run-primary-sweep-live"])
     assert excinfo.value.code == 2
 
 
@@ -332,25 +392,95 @@ def test_exactly_one_run_primary_sweep_call_site(runner):
     assert len(calls) == 1
 
 
-def test_no_retry_fallback_or_run_both_path(runner):
-    """Matrix case: no retry/fallback/run-both surface. AST: no comparison
-    of ``candidate`` against a specific candidate LITERAL ("A"/"B") --
-    the one legitimate ``candidate not in CANDIDATE_MODEL_IDS`` membership
-    check treats every declared candidate identically and is not this. Also:
-    no loop over the declared candidate set (a "run both" shape)."""
-    for node in ast.walk(_SOURCE_AST):
+def _candidate_literal_forbidden_by_runner_guard(tree: ast.AST) -> object:
+    """The candidate-comparison half of the runner's no-retry/fallback/
+    run-both guard, factored out so the real guard test below and its own
+    Candidate-C counterexample proof (5F3B-Q3-PRE1-FU2) exercise the
+    IDENTICAL logic rather than two hand-synchronized copies of it.
+
+    Returns the first forbidden candidate literal found in ``tree``, or
+    ``None``. Forbidden literals are DERIVED from the authoritative
+    ``qualification.records.CANDIDATE_MODEL_IDS`` domain -- a strict
+    superset of the original fixed ``("A", "B")`` tuple, never a narrowing
+    of it, so a future candidate is covered without a manual edit here.
+    """
+    from qualification.records import CANDIDATE_MODEL_IDS
+
+    forbidden_candidate_literals = tuple(CANDIDATE_MODEL_IDS)
+    for node in ast.walk(tree):
         if isinstance(node, ast.Compare):
             left_is_candidate = isinstance(node.left, ast.Name) and node.left.id == "candidate"
             if left_is_candidate:
                 for comparator in node.comparators:
-                    if isinstance(comparator, ast.Constant) and comparator.value in ("A", "B"):
-                        pytest.fail(
-                            "candidate compared against a specific candidate literal"
-                        )
+                    if (
+                        isinstance(comparator, ast.Constant)
+                        and comparator.value in forbidden_candidate_literals
+                    ):
+                        return comparator.value
+    return None
+
+
+def test_no_retry_fallback_or_run_both_path(runner):
+    """Matrix case: no retry/fallback/run-both surface. AST: no comparison
+    of ``candidate`` against a specific, currently-declared candidate
+    LITERAL -- the one legitimate ``candidate not in CANDIDATE_MODEL_IDS``
+    membership check treats every declared candidate identically and is not
+    this. Also: no loop over the declared candidate set (a "run both"
+    shape) -- kept as its own, separate check (5F3B-Q3-PRE1-FU2): deriving
+    the literal-comparison forbidden set must never be merged with, or
+    substitute for, this independent loop prohibition."""
+    forbidden = _candidate_literal_forbidden_by_runner_guard(_SOURCE_AST)
+    assert forbidden is None, (
+        f"candidate compared against a specific candidate literal: {forbidden!r}"
+    )
+    for node in ast.walk(_SOURCE_AST):
         if isinstance(node, (ast.For, ast.While)):
             for sub in ast.walk(node):
                 if isinstance(sub, ast.Name) and sub.id == "CANDIDATE_MODEL_IDS":
                     pytest.fail("a loop over candidates was found in the runner")
+
+
+def test_runner_fairness_guard_catches_a_deliberately_inserted_c_branch():
+    """5F3B-Q3-PRE1-FU2 required regression: prove the guard above is not
+    passing merely because nobody has written a Candidate-C-specific branch
+    yet. A hostile synthetic source string containing a genuine
+    ``candidate == "C"`` branch must be caught by the SAME helper the real
+    guard uses -- not a hand-simulated approximation of it."""
+    hostile_source = (
+        "def handle(candidate):\n"
+        '    if candidate == "C":\n'
+        "        return special_c_only_path()\n"
+        "    return normal_path()\n"
+    )
+    hostile_tree = ast.parse(hostile_source)
+    assert _candidate_literal_forbidden_by_runner_guard(hostile_tree) == "C"
+
+
+def test_runner_fairness_guard_still_catches_a_and_b_branches():
+    """The pre-existing A/B detection must not have regressed while the
+    forbidden-literal set was generalized to derive from the authority."""
+    for literal in ("A", "B"):
+        hostile_source = (
+            "def handle(candidate):\n"
+            f'    if candidate == "{literal}":\n'
+            "        return special_path()\n"
+        )
+        hostile_tree = ast.parse(hostile_source)
+        assert _candidate_literal_forbidden_by_runner_guard(hostile_tree) == literal
+
+
+def test_runner_fairness_guard_still_catches_unknown_candidate_literal():
+    """A branch on a literal OUTSIDE the declared domain (e.g. "D") is not
+    what this guard polices -- that shape is refused elsewhere by the
+    ``candidate not in CANDIDATE_MODEL_IDS`` membership check -- so the
+    derived forbidden set correctly does NOT flag it here."""
+    hostile_source = (
+        "def handle(candidate):\n"
+        '    if candidate == "D":\n'
+        "        return special_path()\n"
+    )
+    hostile_tree = ast.parse(hostile_source)
+    assert _candidate_literal_forbidden_by_runner_guard(hostile_tree) is None
 
 
 def test_no_serialization_call_site(runner):

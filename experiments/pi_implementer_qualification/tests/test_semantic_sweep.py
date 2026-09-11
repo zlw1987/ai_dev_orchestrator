@@ -333,6 +333,32 @@ def test_candidate_a_and_b_run_the_identical_task_order(
     assert calls_a == calls_b == ["IQ-1", "IQ-2", "IQ-3"]
 
 
+def test_candidate_c_runs_the_identical_frozen_task_order_and_qualifies(
+    git_executable: str, tmp_path: Path
+) -> None:
+    """5F3B-Q3-PRE1: Candidate C (``qwen3.6-27b``) flows through the exact
+    same frozen ``REQUIRED_TASKS`` order as A and B -- no candidate-specific
+    branch exists in ``run_primary_sweep``."""
+    result, fresh_calls = _run_sweep("C", git_executable, tmp_path, correct=True)
+    assert fresh_calls == ["IQ-1", "IQ-2", "IQ-3"]
+    assert result.confirmed_semantic_prompts_sent == 3
+    assert result.hard_bar_result.qualification_state is QualificationState.AUTONOMOUS_QUALIFIED
+
+
+def test_candidate_c_artifact_names_resolve_generically(
+    git_executable: str, tmp_path: Path
+) -> None:
+    """5F3B-Q3-PRE1: Candidate C's evidence files are named ``C_IQ-*.json``
+    by the SAME candidate-generic filename rule A/B already use
+    (``f"{candidate}_{task.task_id}.json"``) -- not by any new naming
+    logic, and without disturbing the ``A_*``/``B_*`` naming shape."""
+    _run_sweep("C", git_executable, tmp_path, correct=True)
+    for task_id in ("IQ-1", "IQ-2", "IQ-3"):
+        assert (tmp_path / f"C_{task_id}.json").exists()
+        assert not (tmp_path / f"A_{task_id}.json").exists()
+        assert not (tmp_path / f"B_{task_id}.json").exists()
+
+
 def test_no_state_reused_between_tasks(git_executable: str, tmp_path: Path) -> None:
     result, _ = _run_sweep("A", git_executable, tmp_path, correct=True)
     workspace_roots = set()
@@ -354,9 +380,11 @@ def test_max_semantic_prompts_per_candidate_is_three(
 
 
 def test_unknown_candidate_refused(git_executable: str, tmp_path: Path) -> None:
+    # "D" (not "C"): 5F3B-Q3-PRE1 made "C" a real, frozen candidate, so the
+    # unknown-candidate exemplar must be a letter still outside the map.
     with pytest.raises(SweepInputError):
         run_primary_sweep(
-            candidate="C",
+            candidate="D",
             ambient_environ={},
             node_executable=sys.executable,
             git_executable=git_executable,

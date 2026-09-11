@@ -22,8 +22,9 @@ Hard rules, enforced here exactly like AR2 enforces its own:
    module at all.
 4. **Route identity is not a caller-supplied parameter (5F3B-I2-FU1).**
    ``provider_id``/``credential_env_var_name`` are fixed internal
-   constants; ``model_id`` is validated against the frozen first-round
-   pairing before any file is created.
+   constants; ``model_id`` is validated against the declared qualification
+   candidate domain (``qualification.records.CANDIDATE_MODEL_IDS``) before
+   any file is created.
 5. **``base_url`` is validated with the ONE shared qualification URL
    validator (5F3B-I2-FU2).** ``i2_secret_context.validate_b300_base_url``,
    BEFORE any directory or file is created -- never a second, drifting URL
@@ -442,8 +443,8 @@ def write_qualification_pi_config(
 
     **Route identity is fixed, not caller-supplied (5F3B-I2-FU1).** There
     is no ``provider_id`` or ``credential_env_var_name`` parameter.
-    ``model_id`` must be exactly one of the frozen first-round candidate
-    model ids; ``base_url`` must pass the ONE shared qualification URL
+    ``model_id`` must be exactly one of the declared qualification candidate
+    domain's model ids; ``base_url`` must pass the ONE shared qualification URL
     validator (5F3B-I2-FU2). Every identity/URL check below runs BEFORE any
     directory or file is created, so a validation failure leaves nothing on
     disk.
@@ -473,8 +474,8 @@ def write_qualification_pi_config(
         raise QualificationPiConfigError("config error: model_id must be non-blank")
     if model_id not in CANDIDATE_MODEL_IDS.values():
         raise QualificationPiConfigError(
-            f"config error: {model_id!r} is not one of the frozen first-round "
-            f"candidate model ids {sorted(CANDIDATE_MODEL_IDS.values())!r}"
+            f"config error: {model_id!r} is not one of the declared candidate "
+            f"model ids {sorted(CANDIDATE_MODEL_IDS.values())!r}"
         )
 
     provider_id = PROVIDER_ID

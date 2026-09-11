@@ -12,7 +12,8 @@ these artifacts are immutable, so there is no later opportunity to correct
 it. Every cross-field rule the design fixes is therefore enforced here, at
 construction, and a violating record is **rejected, never coerced**:
 
-    candidate <-> model id     the frozen first-round pairing (Sec. 5)
+    candidate <-> model id     the frozen candidate <-> model pairing (Sec. 5;
+                               extended across rounds by 5F3B-Q3-PRE1)
     prompt/run shape           pre-prompt refusal vs. post-prompt primary run
     validity                   scoring_eligible IFF run_validity == VALID
     classification coherence   Sec. 8's subclassification containment
@@ -62,13 +63,18 @@ EXPERIMENT_ID = PACKAGE_ID
 
 RECORD_KIND = "qualification run record"
 
-#: The frozen first-round candidate <-> served-model-id pairing (Sec. 5).
+#: The frozen candidate <-> served-model-id pairing (Sec. 5; extended by
+#: 5F3B-Q3-PRE1 with a second-round candidate, per
+#: ``docs/PHASE_5F3B_Q3_DESIGN_SECOND_ROUND_CANDIDATE_C_AUTHORIZATION.md``).
 #: Identity/schema data only. No candidate-specific behavior exists anywhere
-#: in this package -- both candidates share one corpus, one hard bar, one
-#: ranking evaluator, one token policy and one prompt-count policy.
+#: in this package -- every candidate shares one corpus, one hard bar, one
+#: ranking evaluator, one token policy and one prompt-count policy. Adding a
+#: new key entering qualification from scratch is additive: it does not
+#: alter A's or B's existing pairing, evidence, or disposition.
 CANDIDATE_MODEL_IDS: dict[str, str] = {
     "A": "qwen3-coder-next",
     "B": "minimax-m2.7",
+    "C": "qwen3.6-27b",
 }
 
 #: ``IQ-4T`` is declared by the design's Sec. 26 schema as the CONDITIONAL
@@ -233,8 +239,8 @@ def record_header(**extra: Any) -> dict[str, Any]:
 def _validate_identity(candidate: str, model_id: str, task_id: str, task_revision: str) -> None:
     if candidate not in CANDIDATE_MODEL_IDS:
         raise RecordInvariantError(
-            f"unknown candidate {candidate!r}; the first round declares exactly "
-            f"{sorted(CANDIDATE_MODEL_IDS)}"
+            f"unknown candidate {candidate!r}; the declared candidate domain is "
+            f"exactly {sorted(CANDIDATE_MODEL_IDS)}"
         )
     expected_model = CANDIDATE_MODEL_IDS[candidate]
     if model_id != expected_model:

@@ -847,19 +847,29 @@ def test_candidate_a_and_b_prompt_text_is_byte_identical() -> None:
     import qualification.semantic_controller as mod
 
     source = Path(mod.__file__).read_text(encoding="utf-8")
+    # 5F3B-Q3-PRE1-FU1: derived from the authoritative candidate domain so a
+    # future candidate is covered automatically -- a strict superset of the
+    # original fixed "A"/"B" checks below, never a narrowing of them.
+    from qualification.records import CANDIDATE_MODEL_IDS
+
+    for candidate in sorted(CANDIDATE_MODEL_IDS):
+        assert f'candidate == "{candidate}"' not in source
     assert 'candidate == "A"' not in source
     assert 'candidate == "B"' not in source
+    assert 'candidate == "C"' not in source
 
 
 # ===========================================================================
-# 22: candidate A/B policy values identical
+# 22: candidate A/B/C policy values identical
 # ===========================================================================
 
 
 def test_candidate_a_and_b_share_identical_gate_sequence(
     git_executable: str, evidence_path: str, tmp_path: Path
 ) -> None:
-    for candidate in ("A", "B"):
+    # 5F3B-Q3-PRE1-FU1: "C" added -- the A/B loop members, assertions and
+    # expected gate sequence are exactly as they were.
+    for candidate in ("A", "B", "C"):
         h = Harness(candidate, git_executable)
         _iq1_correct_repair(h)
         result = h.run(IQ1_TASK, str(tmp_path / f"{candidate}.json"))
@@ -957,9 +967,11 @@ def test_caller_supplied_task_not_in_frozen_corpus_is_refused(
 
 
 def test_unknown_candidate_is_refused(git_executable: str, evidence_path: str) -> None:
+    # "D" (not "C"): 5F3B-Q3-PRE1 made "C" a real, frozen candidate, so the
+    # unknown-candidate exemplar must be a letter still outside the map.
     with pytest.raises(SemanticControllerInputError):
         run_semantic_task_attempt(
-            candidate="C",
+            candidate="D",
             task=IQ1_TASK,
             ambient_environ={},
             node_executable=sys.executable,

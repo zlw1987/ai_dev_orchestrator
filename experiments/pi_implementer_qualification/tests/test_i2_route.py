@@ -67,9 +67,18 @@ def test_candidate_b_route_descriptor():
     assert descriptor.model_id == CANDIDATE_MODEL_IDS["B"]
 
 
+def test_candidate_c_route_descriptor():
+    descriptor = route_descriptor_for_candidate("C")
+    assert descriptor.candidate == "C"
+    assert descriptor.model_id == "qwen3.6-27b"
+    assert descriptor.model_id == CANDIDATE_MODEL_IDS["C"]
+
+
 def test_unknown_candidate_refused():
+    # "D" (not "C"): 5F3B-Q3-PRE1 made "C" a real, frozen candidate, so the
+    # unknown-candidate exemplar must be a letter still outside the map.
     with pytest.raises(RouteDescriptorError):
-        route_descriptor_for_candidate("C")
+        route_descriptor_for_candidate("D")
 
 
 def test_reversed_model_candidate_pairing_refused():
@@ -77,11 +86,14 @@ def test_reversed_model_candidate_pairing_refused():
         validate_candidate_model_pairing("A", "minimax-m2.7")
     with pytest.raises(RouteDescriptorError):
         validate_candidate_model_pairing("B", "qwen3-coder-next")
+    with pytest.raises(RouteDescriptorError):
+        validate_candidate_model_pairing("C", "qwen3-coder-next")
 
 
 def test_correct_pairing_accepted():
     validate_candidate_model_pairing("A", "qwen3-coder-next")
     validate_candidate_model_pairing("B", "minimax-m2.7")
+    validate_candidate_model_pairing("C", "qwen3.6-27b")
 
 
 def test_unknown_candidate_pairing_refused():
@@ -89,11 +101,12 @@ def test_unknown_candidate_pairing_refused():
         validate_candidate_model_pairing("Z", "qwen3-coder-next")
 
 
-# -- never direct-vLLM; same policy for both candidates -----------------------
+# -- never direct-vLLM; same policy for every declared candidate -------------
 
 
 def test_backend_gateway_class_is_b300_litellm_proxy_never_direct_vllm():
-    for candidate in ("A", "B"):
+    # 5F3B-Q3-PRE1-FU1: "C" added -- A/B expectations unchanged.
+    for candidate in ("A", "B", "C"):
         descriptor = route_descriptor_for_candidate(candidate)
         assert descriptor.backend_gateway_class == BACKEND_GATEWAY_CLASS
         assert descriptor.backend_gateway_class == "b300_litellm_proxy"
@@ -101,13 +114,18 @@ def test_backend_gateway_class_is_b300_litellm_proxy_never_direct_vllm():
 
 
 def test_candidate_symmetry_beyond_model_identity():
+    # 5F3B-Q3-PRE1-FU1: extended to Candidate C; the A<->B comparisons and
+    # values below are exactly as they were.
     a = route_descriptor_for_candidate("A")
     b = route_descriptor_for_candidate("B")
-    assert a.provider_id == b.provider_id
-    assert a.backend_gateway_class == b.backend_gateway_class
-    assert a.credential_mechanism == b.credential_mechanism
-    assert a.credential_env_var_name == b.credential_env_var_name
+    c = route_descriptor_for_candidate("C")
+    assert a.provider_id == b.provider_id == c.provider_id
+    assert a.backend_gateway_class == b.backend_gateway_class == c.backend_gateway_class
+    assert a.credential_mechanism == b.credential_mechanism == c.credential_mechanism
+    assert a.credential_env_var_name == b.credential_env_var_name == c.credential_env_var_name
     assert a.model_id != b.model_id
+    assert b.model_id != c.model_id
+    assert a.model_id != c.model_id
     assert a.credential_mechanism == CREDENTIAL_MECHANISM
 
 
@@ -232,11 +250,17 @@ def test_raw_checker_failure_text_never_survives_for_wrong_model_case():
     assert outcome.failure_code == RouteFailureCode.MODEL_NOT_SERVED
 
 
-def test_same_wiring_policy_for_both_candidates():
+def test_same_wiring_policy_for_every_declared_candidate():
+    # 5F3B-Q3-PRE1-FU1: "C" added to the offline route-check wiring-shape
+    # proof -- the A/B pairs and their expected outcome are unchanged.
     def checker(base_url, *, model_id):
         return _FakeRouteModelCheck(reachable=True, configured_model_served=True)
 
-    for candidate, model_id in (("A", "qwen3-coder-next"), ("B", "minimax-m2.7")):
+    for candidate, model_id in (
+        ("A", "qwen3-coder-next"),
+        ("B", "minimax-m2.7"),
+        ("C", "qwen3.6-27b"),
+    ):
         descriptor = route_descriptor_for_candidate(candidate)
         outcome = run_offline_route_check(
             descriptor=descriptor, secret_context=_secret_context(model_id), checker=checker

@@ -1098,8 +1098,8 @@ def build_attempt_record(
     """
     if candidate not in CANDIDATE_MODEL_IDS:
         raise AttemptRecordInvariantError(
-            f"unknown candidate {candidate!r}; the first round declares exactly "
-            f"{sorted(CANDIDATE_MODEL_IDS)}"
+            f"unknown candidate {candidate!r}; the declared candidate domain is "
+            f"exactly {sorted(CANDIDATE_MODEL_IDS)}"
         )
     expected_model = CANDIDATE_MODEL_IDS[candidate]
     if model_id != expected_model:

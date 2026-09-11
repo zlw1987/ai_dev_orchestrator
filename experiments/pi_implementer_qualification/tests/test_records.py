@@ -14,6 +14,7 @@ import pytest
 from qualification.records import (
     CANDIDATE_MODEL_IDS,
     RECORD_VERSION,
+    TOKEN_POLICY,
     RecordInvariantError,
     build_qualification_record,
     emit_or_refuse,
@@ -71,7 +72,11 @@ def test_supersedes_task_revision_only_present_when_given():
 
 
 def test_frozen_candidate_model_pairing():
-    assert CANDIDATE_MODEL_IDS == {"A": "qwen3-coder-next", "B": "minimax-m2.7"}
+    assert CANDIDATE_MODEL_IDS == {
+        "A": "qwen3-coder-next",
+        "B": "minimax-m2.7",
+        "C": "qwen3.6-27b",
+    }
 
 
 def test_candidate_b_with_its_own_model_is_accepted():
@@ -83,6 +88,19 @@ def test_candidate_b_with_its_own_model_is_accepted():
     assert record["candidate"] == "B"
 
 
+def test_candidate_c_with_its_own_model_is_accepted():
+    record = _minimal_record(
+        candidate="C",
+        model_id="qwen3.6-27b",
+        route_provenance={"model_id": "qwen3.6-27b"},
+    )
+    assert record["candidate"] == "C"
+    # 5F3B-Q3-PRE1-FU1 required regression: Candidate C's record carries the
+    # SAME frozen TOKEN_POLICY object every candidate's record carries --
+    # `record_header` attaches it unconditionally, with no candidate branch.
+    assert record["token_policy"] == TOKEN_POLICY
+
+
 def test_reversed_candidate_model_pair_is_rejected():
     with pytest.raises(RecordInvariantError):
         _minimal_record(
@@ -92,11 +110,17 @@ def test_reversed_candidate_model_pair_is_rejected():
         _minimal_record(
             candidate="A", model_id="minimax-m2.7", route_provenance={"model_id": "minimax-m2.7"}
         )
+    with pytest.raises(RecordInvariantError):
+        _minimal_record(
+            candidate="C", model_id="qwen3-coder-next", route_provenance={"model_id": "qwen3-coder-next"}
+        )
 
 
 def test_unknown_candidate_is_rejected():
+    # "D" (not "C"): 5F3B-Q3-PRE1 made "C" a real, frozen candidate, so the
+    # unknown-candidate exemplar must be a letter still outside the map.
     with pytest.raises(RecordInvariantError):
-        _minimal_record(candidate="C", model_id="qwen3-coder-next")
+        _minimal_record(candidate="D", model_id="qwen3-coder-next")
 
 
 def test_route_provenance_model_id_must_agree_with_top_level_model_id():

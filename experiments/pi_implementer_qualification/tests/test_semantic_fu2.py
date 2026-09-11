@@ -1564,8 +1564,14 @@ def test_sweep_result_refuses_a_cross_task_substitution(
 def test_candidate_a_and_b_dispatch_semantics_are_identical(
     git_executable: str, tmp_path: Path
 ) -> None:
+    # 5F3B-Q3-PRE1-FU2: "C" added -- every captured field above is a policy/
+    # behavior outcome (gate statuses, dispatch state, evidence code, turn
+    # outcome, classification) or the frozen task's own prompt, never a
+    # candidate/model-identity value itself, so identical results across
+    # A/B/C are expected, not merely hoped for. The A/B members and their
+    # expected equality are exactly as they were.
     observed: dict[str, dict[str, object]] = {}
-    for candidate in ("A", "B"):
+    for candidate in ("A", "B", "C"):
         h = Harness(candidate, git_executable)
         _iq1_correct_repair(h)
         calls = _instrumented(h)
@@ -1584,7 +1590,7 @@ def test_candidate_a_and_b_dispatch_semantics_are_identical(
             "prompt": IQ1_TASK.prompt,
             "classification": result.autonomous_classification,
         }
-    assert observed["A"] == observed["B"]
+    assert observed["A"] == observed["B"] == observed["C"]
 
 
 @pytest.mark.parametrize(
@@ -1606,8 +1612,12 @@ def test_candidate_a_and_b_dispatch_semantics_are_identical(
 def test_candidate_a_and_b_failure_semantics_are_identical(
     git_executable: str, tmp_path: Path, configure
 ) -> None:
+    # 5F3B-Q3-PRE1-FU2: "C" added -- every captured field is a policy/failure
+    # outcome, never a candidate/model-identity value, so identical results
+    # across A/B/C are expected. The A/B members and expected equality are
+    # exactly as they were.
     observed: dict[str, tuple] = {}
-    for candidate in ("A", "B"):
+    for candidate in ("A", "B", "C"):
         h = Harness(candidate, git_executable)
         _iq1_correct_repair(h)
         configure(h)
@@ -1625,10 +1635,38 @@ def test_candidate_a_and_b_failure_semantics_are_identical(
             result.attempt_record is None,
             tuple(result.gate_statuses.items()),
         )
-    assert observed["A"] == observed["B"]
+    assert observed["A"] == observed["B"] == observed["C"]
 
 
 # -- 48: no candidate-specific branch outside the frozen pairing -----------
+#
+# 5F3B-Q3-PRE1-FU1: the original fixed literal tuple below named only "A"/"B"
+# candidate literals, so a FUTURE candidate-specific branch (e.g.
+# ``candidate == "C"``) would silently pass this guard. The per-candidate
+# literal patterns are now DERIVED from the authoritative
+# ``qualification.records.CANDIDATE_MODEL_IDS`` domain, which is a strict
+# SUPERSET of the original fixed check (every originally-checked "A"/"B"
+# pattern is still generated) and automatically covers any future candidate
+# without a manual edit here. The two pre-existing raw model-id literals
+# ("qwen3-coder-next", the deliberately broader "minimax" substring) are left
+# exactly as they were -- only Candidate C's own exact model id is appended,
+# at the same "full literal" granularity "qwen3-coder-next" already uses.
+
+
+def _candidate_fairness_forbidden_literals() -> tuple[str, ...]:
+    from qualification.records import CANDIDATE_MODEL_IDS
+
+    literals: list[str] = []
+    for candidate in sorted(CANDIDATE_MODEL_IDS):
+        literals.extend(
+            [
+                f'candidate == "{candidate}"',
+                f"candidate is '{candidate}'",
+                f'candidate != "{candidate}"',
+            ]
+        )
+    literals.extend(["qwen3-coder-next", "minimax", "qwen3.6-27b"])
+    return tuple(literals)
 
 
 def test_no_candidate_conditional_branch_in_the_semantic_modules() -> None:
@@ -1639,18 +1677,29 @@ def test_no_candidate_conditional_branch_in_the_semantic_modules() -> None:
 
     for module in (controller_mod, sweep_mod, session_mod, attempt_mod):
         source = Path(module.__file__).read_text(encoding="utf-8")
-        for forbidden in (
-            'candidate == "A"',
-            'candidate == "B"',
-            "candidate is 'A'",
-            'candidate != "A"',
-            "qwen3-coder-next",
-            "minimax",
-        ):
+        for forbidden in _candidate_fairness_forbidden_literals():
             assert forbidden not in source, (module.__name__, forbidden)
         # The ONLY candidate -> model authority is the frozen mapping.
         if "CANDIDATE_MODEL_IDS" in source:
             assert "CANDIDATE_MODEL_IDS[candidate]" in source or "in CANDIDATE_MODEL_IDS" in source
+
+
+def test_candidate_fairness_guard_catches_a_deliberately_inserted_c_branch() -> None:
+    """5F3B-Q3-PRE1-FU1 required regression: prove the guard above is not
+    passing merely because nobody has written a Candidate-C-specific branch
+    yet. This re-runs the EXACT per-literal assertion the real guard uses
+    against a hostile synthetic source string that DOES contain a genuine
+    ``candidate == "C"`` branch, and requires it to fail -- not a
+    hand-simulated approximation of the check, the same one."""
+    hostile_source = (
+        "def handle(candidate, task):\n"
+        '    if candidate == "C":\n'
+        "        return special_c_only_path(task)\n"
+        "    return normal_path(task)\n"
+    )
+    with pytest.raises(AssertionError):
+        for forbidden in _candidate_fairness_forbidden_literals():
+            assert forbidden not in hostile_source, ("synthetic_hostile_module", forbidden)
 
 
 def test_preserved_semantic_authority_constants() -> None:

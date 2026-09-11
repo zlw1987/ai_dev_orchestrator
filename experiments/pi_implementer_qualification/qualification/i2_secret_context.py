@@ -147,8 +147,8 @@ class QualificationRouteSecretContext:
             )
         if self.model_id not in CANDIDATE_MODEL_IDS.values():
             raise SecretContextError(
-                "secret context error: model_id is not one of the frozen "
-                "first-round candidate model ids"
+                "secret context error: model_id is not one of the declared "
+                "candidate model ids"
             )
 
     def __repr__(self) -> str:  # noqa: D105 - see module docstring
