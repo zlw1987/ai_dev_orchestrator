@@ -903,13 +903,26 @@ def test_the_policy_revision_appears_only_in_the_authorized_modules():
     C4's own scope, and
     :func:`test_exactly_one_policy_revision_declaration_site_in_production_code`
     (unchanged) still proves ranking declares no second literal.
+
+    **Updated again when 5F3B-HARNESS-OBS1 landed**, by the identical rule and
+    for the identical reason. ``runtime_activity.py`` CONSUMES the constant to
+    stamp it into the non-scoring runtime-activity companion artifact -- a
+    BINDING-ONLY header field, so a retained companion stays self-describing
+    about the policy in force when it was written (OBS1 design Sec. 8;
+    CONTRACT-A1 Sec. 9 confirms the revision itself remains ``r1`` and that the
+    companion is non-policy-bearing). Like ``ranking.py``, it is named
+    SEPARATELY rather than folded into ``_C4_AUTHORIZED_MODULES``, so this
+    assertion still proves C4's OWN scope exactly; and the declaration-site
+    test (unchanged) still proves it declares no second literal. The assertion
+    stays an EXACT set equality -- never weakened to a subset or a
+    "contains" check.
     """
     mentioning = {
         source_path.name
         for source_path in _production_qualification_sources()
         if "qualification_policy_revision" in source_path.read_text(encoding="utf-8").lower()
     }
-    assert mentioning == _C4_AUTHORIZED_MODULES | {"ranking.py"}
+    assert mentioning == _C4_AUTHORIZED_MODULES | {"ranking.py", "runtime_activity.py"}
 
 
 def test_c4_did_not_implement_c3s_ranking_mechanics():
@@ -954,7 +967,24 @@ def test_no_ar2_or_production_src_module_mentions_the_policy_revision():
 def test_no_new_artifact_kind_was_added():
     """Prohibited work: C4 is policy provenance on THREE EXISTING lineages --
     no new artifact kind, no sweep artifact, no candidate-level decision
-    artifact."""
+    artifact.
+
+    **Updated when 5F3B-HARNESS-OBS1 landed**, by the same rule the
+    policy-revision scope test above already established for C3. C4's own
+    restraint is unchanged and still asserted: C4 added no lineage. What
+    changed is that a LATER, SEPARATELY AUTHORIZED phase did --
+    ``ACTIVITY_RECORD_VERSION``, the non-scoring runtime-activity companion
+    (OBS1 design Sec. 3). It is named SEPARATELY from C4's own five so this
+    assertion still proves C4's scope exactly.
+
+    That companion lineage exists PRECISELY so the primary is not bumped:
+    ``RECORD_VERSION`` stays ``pi-implementer-qualification.v2``, byte-identical
+    in meaning, there is no ``.v3``, and ``lineage.py`` is untouched (OBS1
+    design Sec. 2). It is still NOT a sweep artifact and still NOT a
+    candidate-level decision artifact -- at most ONE companion per invoked task
+    attempt, carrying no scoring, hard-bar, run-validity or classification
+    authority at all. The assertion stays an EXACT set equality.
+    """
     package_source = (_QUALIFICATION_DIR / "__init__.py").read_text(encoding="utf-8")
     version_assignments = {
         target.id
@@ -963,13 +993,33 @@ def test_no_new_artifact_kind_was_added():
         for target in node.targets
         if isinstance(target, ast.Name) and target.id.endswith("_VERSION")
     }
-    assert version_assignments == {
+    _C4_LINEAGES = {
         "RECORD_VERSION",
         "FIXTURE_SCHEMA_VERSION",
         "LINEAGE_RECORD_VERSION",
         "REFUSAL_RECORD_VERSION",
         "ATTEMPT_RECORD_VERSION",
     }
+    assert version_assignments == _C4_LINEAGES | {"ACTIVITY_RECORD_VERSION"}
+    # C4's own three retained per-result lineages are untouched by the later
+    # addition -- and the PRIMARY in particular was not bumped.
+    from qualification import ACTIVITY_RECORD_VERSION, RECORD_VERSION
+
+    assert RECORD_VERSION == "pi-implementer-qualification.v2"
+    assert ACTIVITY_RECORD_VERSION == "pi-implementer-qualification-activity.v1"
+    # No `.v3` is ASSIGNED anywhere -- checked against the parsed assignment
+    # VALUES, not raw text, so prose stating that no `.v3` exists cannot make
+    # this assertion trip over itself.
+    assigned_versions = {
+        node.value.value
+        for node in ast.walk(ast.parse(package_source))
+        if isinstance(node, ast.Assign)
+        and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, str)
+        for target in node.targets
+        if isinstance(target, ast.Name) and target.id.endswith("_VERSION")
+    }
+    assert "pi-implementer-qualification.v3" not in assigned_versions
 
 
 def test_c4_changed_no_policy_behaviour(git_executable: str, tmp_path: Path):

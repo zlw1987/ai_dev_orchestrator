@@ -95,6 +95,14 @@ class _FakeSupervisor:
             agent_end_count=0,
             agent_end_will_retry_count=0,
             settled=False,
+            # 5F3B-HARNESS-OBS1: the frozen `ar2.supervisor.RuntimeActivity`
+            # ALWAYS carries `tool_calls` (a `field(default_factory=dict)`), so
+            # this double was previously an INCOMPLETE model of the real type.
+            # It is completed here, never a production fallback: OBS1's
+            # per-dispatch correlation deliberately refuses to assume an empty
+            # baseline, so `_DispatchBaseline.capture` reads this field
+            # directly rather than through a defaulting `getattr`.
+            tool_calls={},
         )
         self.process = SimpleNamespace(poll=lambda: None)
         self.stdin_write_error: str | None = None

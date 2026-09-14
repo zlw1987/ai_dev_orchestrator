@@ -1175,9 +1175,17 @@ def test_one_safety_context_serves_every_retained_artifact_shape() -> None:
     source = Path(mod.__file__).read_text(encoding="utf-8")
     # Exactly one construction per attempt, and every emission uses it.
     assert source.count("safety_context = build_run_safety_context(") == 1
-    assert source.count("safety=safety_context") == 2
+    # 5F3B-HARNESS-OBS1: THREE uses now, still of the ONE context. The third
+    # is the non-scoring runtime-activity companion, which goes through the
+    # SAME `qualification.safety` choke point with the SAME safety context --
+    # never a second context, never a defaulted one, and never a second raw
+    # JSON writer. The property this test asserts (one construction per
+    # attempt; every emission uses it) is unchanged and is now proven over one
+    # more emission shape, not fewer.
+    assert source.count("safety=safety_context") == 3
     assert "emit_attempt_or_refuse(\n            attempt_payload, path=evidence_path, safety=safety_context\n        )" in source
     assert "emit_or_refuse(record, path=evidence_path, safety=safety_context)" in source
+    assert "safety=safety_context,\n        )" in source
 
 
 def test_unprovable_safety_context_writes_nothing_at_all(

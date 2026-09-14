@@ -103,14 +103,32 @@ def test_turn_observation_refuses_raw_text_or_a_wrong_type_outcome() -> None:
 def test_turn_observation_carries_no_dispatch_fact_at_all() -> None:
     """The structural half of invariant I-1: there is NO field on a phase-2
     observation through which a turn outcome could carry, contradict, or
-    rewrite the phase-1 send fact."""
+    rewrite the phase-1 send fact.
+
+    5F3B-HARNESS-OBS1-CONTRACT-A1 Sec. 7 -- the ONE authorized amendment to
+    this frozen exact-set regression. The set grows by exactly one name,
+    ``tool_activity``, which is NON-DISPATCH, NON-COMPLETION and NON-GATING:
+    it cannot carry a send fact, a dispatch state or an evidence code, and it
+    is consumed by nothing that computes one. The assertion stays an EXACT set
+    equality against a fully-enumerated literal -- never weakened to ``>=``, a
+    subset check, or a generic "a field named X exists" check -- and it still
+    guards the absence of every dispatch-shaped name the original guarded,
+    plus two more.
+    """
     import dataclasses
 
     names = {f.name for f in dataclasses.fields(SemanticTurnObservation)}
-    assert names == {"runtime_session_id", "turn_outcome", "agent_end_observed"}
+    assert names == {
+        "runtime_session_id",
+        "turn_outcome",
+        "agent_end_observed",
+        "tool_activity",
+    }
     assert "dispatch" not in names
     assert "call_succeeded" not in names
     assert "semantic_prompts_sent" not in names
+    assert "dispatch_state" not in names
+    assert "dispatch_evidence_code" not in names
 
 
 def test_agent_end_is_an_independent_non_completion_fact() -> None:

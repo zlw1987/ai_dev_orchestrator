@@ -743,6 +743,11 @@ def test_route_checker_binder_never_activates_and_constructs_exactly_one_observe
 # ===========================================================================
 
 
+from qualification.runtime_activity import (
+    RuntimeActivityCompanionDisposition as _RuntimeActivityCompanionDisposition,
+)
+
+
 def _fake_sweep_result(
     *,
     not_attempted=(),
@@ -786,6 +791,10 @@ def test_console_summary_never_discloses_forbidden_needles(runner, capsys):
             path=r"C:\Users\secret-operator\AppData\Local\Temp\needle-dir\A_IQ-1.json",
             refused=False,
         ),
+        # 5F3B-HARNESS-OBS1: the real `SemanticTaskAttemptResult` always
+        # carries this bounded, closed-vocabulary companion disposition, so
+        # this double is completed to match it -- never a runner-side default.
+        runtime_activity_companion=_RuntimeActivityCompanionDisposition.EMITTED,
     )
     result = _fake_sweep_result(tasks={"IQ-1": task_result})
 
@@ -814,6 +823,10 @@ def test_console_summary_is_valid_json_with_the_declared_bounded_fields(runner, 
         scoring_eligible=True,
         failed_gate=None,
         evidence_emission=SimpleNamespace(path="/tmp/A_IQ-1.json", refused=False),
+        # 5F3B-HARNESS-OBS1: the real `SemanticTaskAttemptResult` always
+        # carries this bounded, closed-vocabulary companion disposition, so
+        # this double is completed to match it -- never a runner-side default.
+        runtime_activity_companion=_RuntimeActivityCompanionDisposition.EMITTED,
     )
     result = _fake_sweep_result(tasks={"IQ-1": task_result})
     runner.print_bounded_summary(result)
@@ -823,3 +836,5 @@ def test_console_summary_is_valid_json_with_the_declared_bounded_fields(runner, 
     assert payload["aido_requested_max_output_tokens"] is None
     assert payload["tasks"]["IQ-1"]["artifact_file_name"] == "A_IQ-1.json"
     assert payload["tasks"]["IQ-1"]["scrub_outcome"] == "clean"
+    # 5F3B-HARNESS-OBS1: the bounded companion disposition TOKEN only.
+    assert payload["tasks"]["IQ-1"]["runtime_activity_companion"] == "EMITTED"

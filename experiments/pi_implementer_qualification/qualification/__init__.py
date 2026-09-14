@@ -115,3 +115,13 @@ REFUSAL_RECORD_VERSION = "pi-implementer-qualification-refusal.v2"
 #: truthful slot there. This artifact OMITS ``semantic_prompts_sent``
 #: entirely rather than encoding the gap as ``null``, ``0``, or a sentinel.
 ATTEMPT_RECORD_VERSION = "pi-implementer-qualification-attempt.v2"
+
+#: 5F3B-HARNESS-OBS1 -- the SEPARATE, NON-SCORING runtime-activity COMPANION
+#: lineage (design Sec. 3). Deliberately an INDEPENDENT lineage from
+#: :data:`RECORD_VERSION`: it may be bumped later with ZERO effect on the
+#: primary schema, on ``lineage`` binding, or on the nine already-emitted,
+#: frozen Q1/Q2/Q3 ``.v2`` artifacts. There is no
+#: ``pi-implementer-qualification.v3``, and this constant is never a substitute
+#: for one -- a companion carries no scoring, hard-bar, run-validity or
+#: classification authority whatsoever.
+ACTIVITY_RECORD_VERSION = "pi-implementer-qualification-activity.v1"

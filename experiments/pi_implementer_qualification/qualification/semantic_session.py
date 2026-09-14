@@ -127,6 +127,7 @@ from .i2b_session import (
     require_exact_bool,
 )
 from .report_accuracy import ReportClaims
+from .runtime_activity import RuntimeToolActivitySnapshot
 from .scope import RefusalEvent
 
 #: A bounded task identifier (``IQ-1``, ``IQ-2``, ``IQ-3``). Never a free
@@ -513,6 +514,17 @@ class SemanticTurnObservation:
     runtime_session_id: str
     turn_outcome: SemanticTurnOutcome
     agent_end_observed: bool = False
+    #: 5F3B-HARNESS-OBS1-CONTRACT-A1 Sec. 3 -- ONE optional, immutable,
+    #: NON-SCORING diagnostic field, defaulting to ``None``. It carries no
+    #: dispatch fact, no send fact, no evidence code and no completion fact,
+    #: and it is read by NOTHING in ``classify_outcome``, ``evaluate_hard_bar``,
+    #: ``ranking``, ``validity`` or ``_authorized_facts_fingerprint`` -- only by
+    #: the new, non-scoring runtime-activity companion builder. Populated (or
+    #: left ``None``) entirely inside phase 2, strictly AFTER phase 1 has
+    #: already fixed ``semantic_prompts_sent``, so Invariant I-1's monotonicity
+    #: is untouched (CONTRACT-A1 Sec. 4). Declared LAST because a dataclass
+    #: field with a default may not precede one without -- not a style choice.
+    tool_activity: "RuntimeToolActivitySnapshot | None" = None
 
     def __post_init__(self) -> None:
         _require_pattern(
@@ -528,6 +540,20 @@ class SemanticTurnObservation:
         require_exact_bool(
             "SemanticTurnObservation.agent_end_observed", self.agent_end_observed
         )
+        # EXACT type, never `isinstance`: a subclass is refused for the same
+        # reason a `str` subclass with a forged `__eq__` is refused elsewhere
+        # in this package -- what a lookalike REPORTS and what it
+        # SERIALIZES/BEHAVES AS need not agree. No Mapping, no duck typing: a
+        # `dict` shaped like a snapshot is not a snapshot (CONTRACT-A1 Sec. 6).
+        if (
+            self.tool_activity is not None
+            and type(self.tool_activity) is not RuntimeToolActivitySnapshot
+        ):
+            raise ObservationError(
+                "SemanticTurnObservation.tool_activity must be exactly None or an "
+                "exact RuntimeToolActivitySnapshot instance; a subclass or a "
+                "Mapping is refused, never coerced"
+            )
 
     @property
     def agent_settled(self) -> bool:

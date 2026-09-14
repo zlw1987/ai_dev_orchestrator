@@ -309,6 +309,10 @@ from .i2b_workspace import (
 from .outcomes import AutonomousClassification, DiagnosticSubclassification, OutcomeClassification, RunFacts, classify_outcome
 from .records import CANDIDATE_MODEL_IDS, build_qualification_record, emit_or_refuse
 from .report_accuracy import ClaimComparison, ObservedFacts, ReportClaims, bucket_report_accuracy, compare_report
+from .runtime_activity import (
+    RuntimeActivityCompanionDisposition,
+    _attempt_runtime_activity_companion,
+)
 from .safety import ArtifactSafetyContext, qualification_scrub_check
 from .semantic_attempt import (
     CLASSIFICATION_UNAVAILABLE_REASON,
@@ -1856,6 +1860,29 @@ class SemanticTaskAttemptResult:
     #: The NARROW typed projection of whichever of the two was emitted --
     #: this is what the hard bar's ``artifact_scrub_passed`` reads.
     evidence_emission: EvidenceEmission | None
+    #: 5F3B-HARNESS-OBS1 Sec. 12.1. What happened to this attempt's OPTIONAL,
+    #: NON-SCORING runtime-activity companion. A bounded, closed-vocabulary
+    #: enum member -- never a free-form string, never a bool.
+    #:
+    #: **It is read by nothing that decides anything.** Absent from
+    #: ``classify_outcome``, ``evaluate_hard_bar``, ``ranking``, ``validity``,
+    #: ``_authorized_facts_fingerprint``, the primary record, the attempt
+    #: record and the refusal record. It describes an artifact that is itself
+    #: outside all three of those schemas.
+    #:
+    #: **Determined BEFORE the one genuine construction and passed into it.**
+    #: ``run_semantic_task_attempt`` computes it by ordinary sequential code
+    #: after ``EVIDENCE_SAFETY`` has already sealed the retained artifact, and
+    #: hands it to the single ``SemanticTaskAttemptResult(...)`` call as one
+    #: keyword argument -- never assigned afterward, never applied via
+    #: ``dataclasses.replace`` (which this class's one-shot issuance registry
+    #: refuses for every field alike), and never a second issuance.
+    #:
+    #: Deliberately REQUIRED, with no default: this package has exactly ONE
+    #: construction site for this class, so a default would buy nothing and
+    #: would let a future construction silently inherit a disposition claim it
+    #: never established.
+    runtime_activity_companion: RuntimeActivityCompanionDisposition
 
     def __post_init__(self) -> None:
         # 5F3B-Q1-PRE1-FU2A: mechanically bind identity BEFORE anything else
@@ -1962,6 +1989,19 @@ class SemanticTaskAttemptResult:
                 "disagrees with identity_provenance.attempt_authority_token -- this "
                 "evidence emission was not minted for this attempt's own identity, "
                 "even though its path/refused projection agrees"
+            )
+        # 5F3B-HARNESS-OBS1 Sec. 12.1: exact enum member, never a bare string
+        # and never a bool. This is a SHAPE check only -- nothing anywhere
+        # branches on its VALUE, and no qualification-facing fact is derived
+        # from it.
+        if (
+            type(self.runtime_activity_companion)
+            is not RuntimeActivityCompanionDisposition
+        ):
+            raise ValueError(
+                "SemanticTaskAttemptResult.runtime_activity_companion must be "
+                "exactly a RuntimeActivityCompanionDisposition member -- a bare "
+                "string or any other lookalike is refused, never coerced"
             )
         if type(self.dispatch_state) is not SemanticPromptDispatchState:
             raise ValueError(
@@ -3505,6 +3545,51 @@ def run_semantic_task_attempt(
         else:
             _pass(SemanticGateName.EVIDENCE_SAFETY)
 
+    # ===== 5F3B-HARNESS-OBS1: the runtime-activity COMPANION =================
+    # ENTIRELY OUTSIDE the gate system (design Sec. 11.2): no SemanticGateName
+    # member, no gate_statuses entry, no failed_gate effect, no
+    # SemanticFailureCode, no _authorized_facts_fingerprint entry. Ordinary
+    # sequential code over local variables this function already holds.
+    #
+    # Placed HERE deliberately (Sec. 11.3): strictly AFTER the EVIDENCE_SAFETY
+    # block above has already sealed this attempt's one retained
+    # primary/attempt/refusal artifact on disk, and strictly BEFORE the one
+    # genuine `SemanticTaskAttemptResult(...)` call below -- so its bounded
+    # disposition can be passed as one ordinary keyword argument into that
+    # single construction, never assigned afterward and never via
+    # `dataclasses.replace`.
+    #
+    # EVERY qualification-facing value (`run_validity`, `scoring_eligible`,
+    # `autonomous_classification`, `diagnostic_subclassification`,
+    # `gate_statuses`, `failed_gate`, the hard-bar inputs) is ALREADY a fixed
+    # local variable at this point. This call has no parameter, no return
+    # value and no side channel through which it could reach back and change
+    # one. There is deliberately NO try/except around it here -- the entire
+    # failure-containment boundary lives inside
+    # `runtime_activity._attempt_runtime_activity_companion`, which catches
+    # `Exception` (never `BaseException`, never a bare `except:`) around the
+    # companion attempt ONLY.
+    #
+    # A companion is attempted only for an attempt that actually produced a
+    # durable artifact: a `SAFETY_CONTEXT_UNPROVABLE` refusal wrote nothing at
+    # all, so there is nothing to bind and an unbound companion would be
+    # strictly worse than none (Sec. 11.4).
+    if safety_context is None or evidence_emission is None:
+        runtime_activity_companion = (
+            RuntimeActivityCompanionDisposition.UNAVAILABLE_NO_PRIMARY
+        )
+    else:
+        runtime_activity_companion = _attempt_runtime_activity_companion(
+            turn_observation=turn_observation,
+            broker_activity=broker_activity,
+            bound_primary_path=evidence_path,
+            candidate=candidate,
+            model_id=model_id,
+            task_id=task.task_id,
+            task_revision=task.task_revision,
+            safety=safety_context,
+        )
+
     # 5F3B-Q1-PRE1-FU2A-FU1A-FU1-FU1: register THIS attempt's own authority
     # fingerprint -- from the SAME trusted local variables about to be
     # passed into `SemanticTaskAttemptResult` below -- before constructing
@@ -3569,5 +3654,6 @@ def run_semantic_task_attempt(
         qualification_record=qualification_record,
         attempt_record=attempt_record,
         evidence_emission=evidence_emission,
+        runtime_activity_companion=runtime_activity_companion,
     )
     return result

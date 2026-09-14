@@ -287,6 +287,12 @@ def _task_summary(result: Any) -> dict[str, Any]:
         "failed_gate": result.failed_gate.value if result.failed_gate is not None else None,
         "artifact_file_name": _artifact_file_name(result.evidence_emission),
         "scrub_outcome": _scrub_outcome(result.evidence_emission),
+        # 5F3B-HARNESS-OBS1. The bounded, closed-vocabulary companion
+        # disposition ONLY -- never a count, never a tool name, never a path,
+        # and never exception text. An `UNAVAILABLE_*`/`REFUSED_*` value means
+        # exactly "runtime activity evidence unavailable"; it is NEVER to be
+        # read or reported as "no tool activity occurred".
+        "runtime_activity_companion": result.runtime_activity_companion.value,
     }
 
 

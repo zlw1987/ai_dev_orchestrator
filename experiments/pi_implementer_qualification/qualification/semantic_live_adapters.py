@@ -158,6 +158,7 @@ from .i2b_session import (
 )
 from .i2b_workspace import grant_semantic_capability_issuance
 from .refusal_projection import project_broker_refusal_reason
+from .runtime_activity import project_runtime_tool_activity
 from .scope import BUDGET_EXHAUSTED_REASON_CODE, RefusalEvent
 from .semantic_session import (
     BrokerActivityObservation,
@@ -288,6 +289,14 @@ class _DispatchBaseline:
     unmatched_response_ids: int
     agent_end_count: int
     settled: bool
+    #: 5F3B-HARNESS-OBS1 Sec. 5.2. ``activity.tool_calls`` is a dict keyed by
+    #: CALL ID, not a monotonic counter, so a per-dispatch delta-of-count
+    #: cannot correlate its entries: a key present before this dispatch would
+    #: silently persist and be miscounted as this attempt's own activity. This
+    #: frozen pre-send snapshot makes the exclusion MECHANICAL -- the
+    #: projection retains only entries whose key is absent from it -- rather
+    #: than relying on the "one adapter owns one transport" invariant holding.
+    pre_dispatch_tool_call_ids: frozenset[str] = frozenset()
 
     @staticmethod
     def capture(supervisor: PiRpcSupervisor) -> "_DispatchBaseline":
@@ -302,6 +311,9 @@ class _DispatchBaseline:
             unmatched_response_ids=len(activity.unmatched_response_ids),
             agent_end_count=activity.agent_end_count,
             settled=activity.settled,
+            # Captured at the SAME pre-send instant as every other baseline
+            # field -- `capture` itself runs strictly before `send_command`.
+            pre_dispatch_tool_call_ids=frozenset(activity.tool_calls.keys()),
         )
 
 
@@ -861,11 +873,33 @@ class LiveSemanticAdapters:
         else:
             turn_outcome = SemanticTurnOutcome.OBSERVATION_FAILED
 
+        # 5F3B-HARNESS-OBS1 Sec. 4.2/5.2/5.3 -- the runtime-activity snapshot is
+        # projected HERE, at the exact point this port already reads
+        # `supervisor.activity` for its own `agent_end_observed`, and rides out
+        # in this ONE already-existing return statement. No new port, no new
+        # TaskAdapterBundle member, no new gate, and no new call the controller
+        # must make. The projection is into plain ints/bools on a frozen
+        # dataclass BEFORE this call even returns, so a later mutation of
+        # `activity.tool_calls` cannot reach the returned observation.
+        #
+        # `transport.baseline` is always present here in practice (phase 2 is
+        # entered only after a CONFIRMED_SENT phase 1, which sets it), but
+        # without a baseline there is no correlation to THIS dispatch at all --
+        # so no correlated fact is invented, and `tool_activity` stays None.
+        tool_activity = (
+            project_runtime_tool_activity(
+                supervisor.activity, transport.baseline, turn_outcome=turn_outcome
+            )
+            if transport.baseline is not None
+            else None
+        )
+
         transport.turn_observed = True
         return SemanticTurnObservation(
             runtime_session_id=transport.runtime_session_id,
             turn_outcome=turn_outcome,
             agent_end_observed=agent_end_observed,
+            tool_activity=tool_activity,
         )
 
     # -- broker activity (design Sec. 9) -----------------------------------
