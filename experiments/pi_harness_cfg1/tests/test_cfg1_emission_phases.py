@@ -22,7 +22,7 @@ from qualification.safety import ArtifactSafetyContext
 
 from pi_harness_cfg1 import binding, records, writers
 from pi_harness_cfg1.records import Cfg1RecordValidationError
-from pi_harness_cfg1.stage_runner import run_cfg1_stage
+from pi_harness_cfg1.stage_runner import _run_cfg1_stage_with_injected_executor as run_cfg1_stage
 from pi_harness_cfg1.writers import emit_cfg1_refusal_record, emit_cfg1_run_record
 
 NO_NEEDLES = ArtifactSafetyContext.none_declared()

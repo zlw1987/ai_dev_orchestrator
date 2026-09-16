@@ -53,6 +53,31 @@ _STOP_REASON_KEYS = ("stop", "length", "toolUse", "error", "aborted", "other")
 _VERIFICATION_COUNT_KEYS = ("passed", "failed", "error")
 
 
+def _exact_bool(value: object) -> bool:
+    """Reduce one raw, port-mediated fact to a bool -- never truthiness-coerced.
+
+    ``bool(x)`` cannot fail: it accepts any object and returns a plausible
+    ``True``/``False`` even when ``x`` is a string, a list, or an arbitrary
+    object -- which is exactly the "malformed but plausible" repair
+    CFG1-IMPL-FU1 Finding 4 forbids for an authority- or admission-bearing
+    fact. Only an already-exact ``bool`` survives; every other value becomes
+    ``False``, the same fail-closed reduction already applied to
+    ``lifecycle_all_closed`` in :mod:`stage_runner`.
+    """
+    return value if type(value) is bool else False
+
+
+def _exact_count(value: object) -> int:
+    """The same reduction for a non-negative, count-shaped raw fact.
+
+    ``bool`` is explicitly excluded (Python's own ``int`` subclass), and a
+    float, numeric string, negative number, or an object with a custom
+    ``__int__``/``__index__`` becomes ``0`` -- the field's own documented
+    minimum -- rather than a value ``int(...)`` would silently manufacture.
+    """
+    return value if (type(value) is int and value >= 0) else 0
+
+
 @dataclass(frozen=True)
 class Cfg1RunPorts:
     """Every live-resource capability L1-L28 may reach, as one injectable set.
@@ -87,9 +112,10 @@ class Cfg1RunPorts:
         ``(base_url, credential_value)`` -- the ONE place either is ever read
     ``observe_route(base_url=..., api_key=..., model_id=...)``
         ``.reachable``, ``.configured_model_served``
-    ``write_config(owned_root=..., arm_id=..., base_url=...)``
+    ``write_config(workspace=..., arm_id=..., base_url=...)``
         a :class:`~pi_harness_cfg1.cfg1_pi_config.GeneratedCfg1Config`, written
-        BESIDE the repository child, never inside it
+        BESIDE the repository child, never inside it -- ``workspace`` is the
+        run's own ``Cfg1RunWorkspace`` ownership handle, never a bare path
     ``build_broker(capability=...)``
         ``.start()``, ``.token``, ``.pipe_name``, ``.capability_id``,
         ``.diagnostics_counts()`` -> ``{read_operations, edit_operations,
@@ -483,8 +509,8 @@ def _dispatch_phase(
         )
     except Exception:  # noqa: BLE001
         raise _PreDispatchRefusal("ROUTE_UNAVAILABLE", "L7") from None
-    observations["route_reachable"] = bool(getattr(route, "reachable", False))
-    observations["route_configured_model_served"] = bool(
+    observations["route_reachable"] = _exact_bool(getattr(route, "reachable", False))
+    observations["route_configured_model_served"] = _exact_bool(
         getattr(route, "configured_model_served", False)
     )
     if not (observations["route_reachable"] and observations["route_configured_model_served"]):
@@ -513,7 +539,7 @@ def _dispatch_phase(
         # content, contaminating L25's observation and putting the endpoint
         # somewhere the model's own tools can see.
         state.generated_config = ports.write_config(
-            owned_root=state.workspace.experiment_root,
+            workspace=state.workspace,
             arm_id=admission.arm_id,
             base_url=base_url,
         )
@@ -550,6 +576,7 @@ def _dispatch_phase(
             ambient_environ=ports.ambient_environ,
             node_executable=identity.node_executable,
             generated_config=state.generated_config,
+            workspace=state.workspace,
             credential_value=credential_value,
             git_executable=git_executable,
         )
@@ -587,7 +614,7 @@ def _dispatch_phase(
         )
     except Exception:  # noqa: BLE001
         raise _PreDispatchRefusal("RUNTIME_CORRELATION_FAILED", "L15") from None
-    observations["h1_extension_identity_matched"] = bool(getattr(h1, "matched", False))
+    observations["h1_extension_identity_matched"] = _exact_bool(getattr(h1, "matched", False))
     if not observations["h1_extension_identity_matched"]:
         raise _PreDispatchRefusal("H1_MISMATCH", "L15")
 
@@ -596,7 +623,7 @@ def _dispatch_phase(
         h2, state_document = ports.evaluate_model_identity(supervisor=state.supervisor)
     except Exception:  # noqa: BLE001
         raise _PreDispatchRefusal("RUNTIME_CORRELATION_FAILED", "L16") from None
-    observations["h2_provider_model_identity_matched"] = bool(getattr(h2, "matched", False))
+    observations["h2_provider_model_identity_matched"] = _exact_bool(getattr(h2, "matched", False))
     observations.update(project_get_state(state_document, arm_id=admission.arm_id))
     if not observations["h2_provider_model_identity_matched"]:
         raise _PreDispatchRefusal("H2_MISMATCH", "L16")
@@ -644,7 +671,7 @@ def _dispatch_phase(
         available, counts = False, {key: 0 for key in _STOP_REASON_KEYS}
     observations["stop_reasons_available"] = available
     observations["stop_reason_counts"] = counts
-    observations["auto_retry_events"] = int(
+    observations["auto_retry_events"] = _exact_count(
         getattr(state.supervisor.activity, "auto_retry_events", 0)
     )
     observations["extension_error_count"] = len(
@@ -723,19 +750,25 @@ def _closure_phase(
             stderr_state = state.supervisor.stderr_snapshot()
         except Exception:  # noqa: BLE001
             stderr_state = {}
-        observations["runtime_transport_eof_observed"] = bool(
-            stdout_state.get("eof") and stderr_state.get("eof")
-        )
+        observations["runtime_transport_eof_observed"] = _exact_bool(
+            stdout_state.get("eof")
+        ) and _exact_bool(stderr_state.get("eof"))
 
     # ---------------- L22 PHI-5 BROKER COUNTS ----------------
     if state.broker is not None:
         try:
             counts = state.broker.diagnostics_counts()
             observations["broker_recorded_activity_available"] = True
-            observations["broker_recorded_read_operation_count"] = int(counts["read_operations"])
-            observations["broker_recorded_edit_operation_count"] = int(counts["edit_operations"])
-            observations["broker_recorded_edited_path_count"] = int(counts["edited_paths"])
-            observations["broker_recorded_refusal_count"] = int(counts["refusals"])
+            observations["broker_recorded_read_operation_count"] = _exact_count(
+                counts["read_operations"]
+            )
+            observations["broker_recorded_edit_operation_count"] = _exact_count(
+                counts["edit_operations"]
+            )
+            observations["broker_recorded_edited_path_count"] = _exact_count(
+                counts["edited_paths"]
+            )
+            observations["broker_recorded_refusal_count"] = _exact_count(counts["refusals"])
         except Exception:  # noqa: BLE001
             observations["broker_recorded_activity_available"] = False
 
@@ -746,10 +779,11 @@ def _closure_phase(
         except Exception:  # noqa: BLE001
             lifecycle = {}
         observations["broker_state_closed"] = lifecycle.get("state_reached") == "CLOSED"
+        pending_unreaped = lifecycle.get("pending_operations_unreaped")
         observations["broker_pending_unreaped_zero"] = (
-            lifecycle.get("pending_operations_unreaped") == 0
+            type(pending_unreaped) is int and pending_unreaped == 0
         )
-        observations["broker_worker_terminated_or_absent"] = bool(
+        observations["broker_worker_terminated_or_absent"] = _exact_bool(
             lifecycle.get("worker_termination_observed", True)
         )
 
@@ -782,10 +816,12 @@ def _closure_phase(
             observations["head_moved"] = getattr(snapshot, "head", head_before) != head_before
             changed = sorted(set(getattr(snapshot, "changed_tracked_paths", ())) & CFG1_T1_FILES)
             observations["changed_tracked_paths"] = changed
-            observations["untracked_path_count"] = int(
+            observations["untracked_path_count"] = _exact_count(
                 getattr(snapshot, "untracked_path_count", 0)
             )
-            observations["staged_path_count"] = int(getattr(snapshot, "staged_path_count", 0))
+            observations["staged_path_count"] = _exact_count(
+                getattr(snapshot, "staged_path_count", 0)
+            )
             observations["broker_git_cross_check_agrees"] = _broker_git_cross_check(
                 observations, changed
             )
@@ -819,20 +855,24 @@ def _closure_phase(
         if outcome is None:
             observations["verification_child_reaped_or_not_started"] = False
         else:
-            observations["verification_started"] = bool(getattr(outcome, "started", False))
-            observations["verification_completed"] = bool(getattr(outcome, "completed", False))
-            observations["verification_timed_out"] = bool(getattr(outcome, "timed_out", False))
-            observations["verification_output_limit_exceeded"] = bool(
+            observations["verification_started"] = _exact_bool(getattr(outcome, "started", False))
+            observations["verification_completed"] = _exact_bool(
+                getattr(outcome, "completed", False)
+            )
+            observations["verification_timed_out"] = _exact_bool(
+                getattr(outcome, "timed_out", False)
+            )
+            observations["verification_output_limit_exceeded"] = _exact_bool(
                 getattr(outcome, "output_limit_exceeded", False)
             )
             return_code = getattr(outcome, "return_code", None)
             observations["verification_return_code"] = (
                 return_code if type(return_code) is int else None
             )
-            observations["verification_passed"] = bool(getattr(outcome, "passed", False))
+            observations["verification_passed"] = _exact_bool(getattr(outcome, "passed", False))
             raw_counts = getattr(outcome, "counts", {}) or {}
             observations["verification_counts"] = {
-                key: int(raw_counts.get(key, 0)) for key in _VERIFICATION_COUNT_KEYS
+                key: _exact_count(raw_counts.get(key, 0)) for key in _VERIFICATION_COUNT_KEYS
             }
             # A child that never yielded a return code was never reaped.
             observations["verification_child_reaped_or_not_started"] = return_code is not None
@@ -857,8 +897,8 @@ def _closure_phase(
         if observations["workspace_authority_reproved"]:
             try:
                 removal = workspace_module.remove_cfg1_run_workspace(state.workspace)
-                observations["workspace_removed_verified"] = bool(removal.get("removed"))
-                observations["workspace_residual_file_count"] = int(
+                observations["workspace_removed_verified"] = _exact_bool(removal.get("removed"))
+                observations["workspace_residual_file_count"] = _exact_count(
                     removal.get("residual_file_count", 0)
                 )
             except Exception:  # noqa: BLE001
@@ -877,7 +917,7 @@ def _broker_git_cross_check(observations: Mapping[str, Any], changed: list[str])
     and Git is the authority. Disagreement never "corrects" either side -- it
     routes the run to indeterminate.
     """
-    broker_edits = int(observations["broker_recorded_edited_path_count"])
+    broker_edits = _exact_count(observations["broker_recorded_edited_path_count"])
     if broker_edits == 0 and changed:
         return False
     if broker_edits > 0 and not changed:
@@ -920,7 +960,7 @@ def _scrub_extension_binding(extension_dir: object, *, owned_root: object) -> bo
         result = scrub_generated_extension_config(resolved)
     except OSError:
         return False
-    return bool(result.get("generated_binding_file_removed"))
+    return _exact_bool(result.get("generated_binding_file_removed"))
 
 
 def _verified_unlink(path: object, *, owned_root: object) -> bool:
@@ -1108,10 +1148,12 @@ def default_cfg1_run_ports(*, ambient_environ: Mapping[str, str]) -> Cfg1RunPort
                 consumed = self.run_state.consumed
                 diagnostics = self.handler.diagnostics
                 return {
-                    "read_operations": int(consumed.read_operations),
-                    "edit_operations": int(consumed.edit_operations),
+                    "read_operations": _exact_count(consumed.read_operations),
+                    "edit_operations": _exact_count(consumed.edit_operations),
                     "edited_paths": len(self.run_state.mutated_paths),
-                    "refusals": sum(int(count) for count in diagnostics.refused.values()),
+                    "refusals": sum(
+                        _exact_count(count) for count in diagnostics.refused.values()
+                    ),
                 }
 
             def shutdown_for_cfg1(self) -> dict:
@@ -1120,10 +1162,10 @@ def default_cfg1_run_ports(*, ambient_environ: Mapping[str, str]) -> Cfg1RunPort
                 # and is deliberately NOT carried across this boundary.
                 return {
                     "state_reached": lifecycle.get("state_reached"),
-                    "pending_operations_unreaped": int(
-                        lifecycle.get("pending_operations_unreaped", 0) or 0
+                    "pending_operations_unreaped": _exact_count(
+                        lifecycle.get("pending_operations_unreaped", 0)
                     ),
-                    "worker_termination_observed": bool(
+                    "worker_termination_observed": _exact_bool(
                         lifecycle.get("worker_termination_observed", False)
                     ),
                 }
@@ -1185,7 +1227,9 @@ def default_cfg1_run_ports(*, ambient_environ: Mapping[str, str]) -> Cfg1RunPort
             commands, extension_entry=extension.entry_path
         )
         return _HandshakeVerdict(
-            matched=bool(response and response.get("success") and verdict.get("passed"))
+            matched=bool(response)
+            and _exact_bool(response.get("success"))
+            and _exact_bool(verdict.get("passed"))
         )
 
     def _evaluate_model_identity(*, supervisor):
@@ -1206,7 +1250,7 @@ def default_cfg1_run_ports(*, ambient_environ: Mapping[str, str]) -> Cfg1RunPort
         state_document = {}
         if response and isinstance(response.get("data"), dict):
             state_document = response["data"]
-        return _HandshakeVerdict(matched=bool(verdict.get("passed"))), state_document
+        return _HandshakeVerdict(matched=_exact_bool(verdict.get("passed"))), state_document
 
     return Cfg1RunPorts(
         ambient_environ=ambient_environ,
@@ -1224,8 +1268,8 @@ def default_cfg1_run_ports(*, ambient_environ: Mapping[str, str]) -> Cfg1RunPort
         read_connection=_read_connection,
         observe_route=_observe_route,
         mint_capability=_mint_capability,
-        write_config=lambda *, owned_root, arm_id, base_url: write_cfg1_pi_config(
-            owned_root, arm_id=arm_id, base_url=base_url
+        write_config=lambda *, workspace, arm_id, base_url: write_cfg1_pi_config(
+            workspace, arm_id=arm_id, base_url=base_url
         ),
         write_extension=_write_extension,
         build_environment=build_cfg1_child_environment,
@@ -1240,3 +1284,83 @@ def _python_executable() -> str:
     import sys
 
     return sys.executable
+
+
+# ---------------------------------------------------------------------------
+# CFG1-IMPL-FU1 Finding 1 -- the genuine executor, mint-registry-unforgeable
+# ---------------------------------------------------------------------------
+
+#: token -> registered. Process-local, in-memory only, never persisted, never
+#: an evidence field. Mirrors the exact shape :mod:`stage_output` already
+#: uses for :class:`~pi_harness_cfg1.stage_output.CFG1StageOutputAuthority`.
+_GENUINE_RUN_EXECUTOR_MINTED: dict[str, bool] = {}
+
+_GENUINE_RUN_EXECUTOR_TOKEN_BYTES = 16
+
+
+class Cfg1GenuineRunExecutorError(Exception):
+    """A genuine run-executor binding could not be established or re-proven."""
+
+    def __init__(self, reason_code: str) -> None:
+        super().__init__(f"cfg1 genuine run executor refused: {reason_code}")
+        self.reason_code = reason_code
+
+
+@dataclass(frozen=True)
+class Cfg1GenuineRunExecutor:
+    """The ONE unforgeable handle to the genuine, mechanically-bound L1-L28
+    executor. Valid by construction and unforgeable by API.
+
+    ``bind_genuine_cfg1_run_executor`` is the ONLY supported path to a genuine
+    instance: ``__post_init__`` refuses any instance whose ``token`` is
+    unregistered, so a caller cannot construct one wrapping a substitute
+    callable of its own -- constructing ``Cfg1GenuineRunExecutor(token="x",
+    call=my_fake)`` directly fails before ``my_fake`` is ever reachable from
+    anywhere. The bound callable is ``field(repr=False)`` and is invoked only
+    through :meth:`invoke`, never exposed as a bare attribute a caller could
+    detach and pass elsewhere.
+    """
+
+    token: str = field(repr=False)
+    call: object = field(repr=False)
+
+    def __post_init__(self) -> None:
+        if type(self.token) is not str or self.token not in _GENUINE_RUN_EXECUTOR_MINTED:
+            raise Cfg1GenuineRunExecutorError("UNKNOWN_EXECUTOR_TOKEN")
+
+    def invoke(self, admission: Cfg1RunAdmission) -> Cfg1RunOutcome:
+        """Re-proves the token is still registered, THEN invokes. Every call."""
+        if self.token not in _GENUINE_RUN_EXECUTOR_MINTED:
+            raise Cfg1GenuineRunExecutorError("UNKNOWN_EXECUTOR_TOKEN")
+        return self.call(admission)
+
+    def __repr__(self) -> str:  # noqa: D105 - the bound callable is never rendered
+        return f"{type(self).__name__}(<bound>)"
+
+
+def bind_genuine_cfg1_run_executor() -> Cfg1GenuineRunExecutor:
+    """Mint the ONE genuine, mechanically-bound L1-L28 executor handle.
+
+    Closes over :func:`execute_cfg1_run` and
+    ``default_cfg1_run_ports(ambient_environ=os.environ)`` itself -- there is
+    no parameter here through which a caller could substitute ports, an
+    outcome, or the underlying execute function. Calling this does not
+    authorize anything by itself (``CFG1-LIVE-S1``/``-LIVE-S2`` remain
+    separately required, Sec. 14.1); it exists so :func:`stage_runner.
+    run_cfg1_stage` can bind the genuine executor mechanically, with nothing
+    left for a caller holding only a stage-output authority to substitute
+    (CFG1-IMPL-FU1 Finding 1).
+    """
+    import os
+    import secrets
+
+    ports = default_cfg1_run_ports(ambient_environ=os.environ)
+
+    def _call(admission: Cfg1RunAdmission) -> Cfg1RunOutcome:
+        return execute_cfg1_run(admission, ports=ports)
+
+    token = secrets.token_hex(_GENUINE_RUN_EXECUTOR_TOKEN_BYTES)
+    if token in _GENUINE_RUN_EXECUTOR_MINTED:  # pragma: no cover - a 128-bit collision
+        raise Cfg1GenuineRunExecutorError("EXECUTOR_TOKEN_ALREADY_REGISTERED")
+    _GENUINE_RUN_EXECUTOR_MINTED[token] = True
+    return Cfg1GenuineRunExecutor(token=token, call=_call)

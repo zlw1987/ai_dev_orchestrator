@@ -40,7 +40,7 @@ from qualification.safety import ArtifactSafetyContext
 from pi_harness_cfg1.records import build_cfg1_run_payload
 from pi_harness_cfg1.run_contract import Cfg1RunAdmission
 from pi_harness_cfg1.run_executor import execute_cfg1_run
-from pi_harness_cfg1.stage_runner import run_cfg1_stage
+from pi_harness_cfg1.stage_runner import _run_cfg1_stage_with_injected_executor as run_cfg1_stage
 from pi_harness_cfg1.writers import emit_cfg1_run_record
 
 #: Every hostile value this test injects. Each is deliberately distinctive, so

@@ -140,7 +140,30 @@ def _open_exclusive(path: str):
 
 
 def _write_all(handle, data: bytes) -> None:
-    handle.write(data)
+    """Confirm every byte of ``data`` transferred; a short write is never success.
+
+    ``handle.write`` is not trusted to report ``len(data)`` merely because it
+    did not raise: each call's own return value is proven to be an exact,
+    positive ``int`` no larger than what remains before another byte is
+    considered written. A malformed progress report -- ``None``, a negative
+    count, a ``bool``, a non-``int`` object, zero progress, or a count larger
+    than what was asked for -- raises immediately, so the caller's phase
+    tracking can never advance to ``BYTES_FULLY_WRITTEN`` on anything but a
+    fully confirmed transfer (CFG1-IMPL-FU1 Finding 3).
+    """
+    total = len(data)
+    written = 0
+    while written < total:
+        remaining = total - written
+        progress = handle.write(data[written:])
+        # ``bool`` is an ``int`` subclass; ``type(...) is int`` refuses it too.
+        if type(progress) is not int:
+            raise Cfg1WriterError("SHORT_WRITE_MALFORMED_PROGRESS")
+        if progress <= 0:
+            raise Cfg1WriterError("SHORT_WRITE_NO_PROGRESS")
+        if progress > remaining:
+            raise Cfg1WriterError("SHORT_WRITE_PROGRESS_EXCEEDS_REMAINING")
+        written += progress
 
 
 def _flush_handle(handle) -> None:

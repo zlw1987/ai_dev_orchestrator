@@ -267,9 +267,9 @@ def build_doubled_ports(
         made["workspace"] = workspace
         return workspace, built
 
-    def _write_config(*, owned_root, arm_id, base_url):
+    def _write_config(*, workspace, arm_id, base_url):
         made["arm_id"] = arm_id
-        return write_cfg1_pi_config(owned_root, arm_id=arm_id, base_url=base_url)
+        return write_cfg1_pi_config(workspace, arm_id=arm_id, base_url=base_url)
 
     defaults: dict[str, Any] = {
         "ambient_environ": {"SystemRoot": r"C:\Windows", "PATH": r"C:\decoy"},

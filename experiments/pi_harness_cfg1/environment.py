@@ -150,6 +150,7 @@ def build_cfg1_child_environment(
     ambient_environ: Mapping[str, str],
     node_executable: str,
     generated_config: GeneratedCfg1Config,
+    workspace,
     credential_value: str,
     git_executable: str | None = None,
 ) -> Cfg1LaunchEnvironment:
@@ -157,20 +158,18 @@ def build_cfg1_child_environment(
 
     ``PI_CODING_AGENT_DIR`` has exactly ONE source: the generated config's own
     directory, RE-VERIFIED here at this consumption boundary against CFG1's
-    issuance registry before it is trusted. Neither a global ``~/.pi/agent``
+    issuance registry -- bound to ``workspace``'s own ownership handle, never
+    a bare path -- before it is trusted. Neither a global ``~/.pi/agent``
     directory nor an arbitrary sibling config can reach the child through this
-    API, because there is no parameter through which one could be named.
+    API, because there is no parameter through which one could be named, and a
+    genuine config minted for a DIFFERENT workspace is refused here even when
+    its recorded paths happen to match (CFG1-IMPL-FU1 Finding 2).
 
     This builder takes no arm parameter, so arm symmetry is structural: R, E
     and H differ from Q ONLY inside the generated ``models.json``, never in the
     environment the child is launched with.
     """
-    verify_config_issuance(
-        token=generated_config.issuance_token,
-        config_dir=generated_config.config_dir,
-        settings_path=generated_config.settings_path,
-        models_path=generated_config.models_path,
-    )
+    verify_config_issuance(token=generated_config.issuance_token, workspace=workspace)
     if type(credential_value) is not str or not credential_value.strip():
         # Defensive: this route has no keyless mode, and a blank carrier would
         # look like a successful launch while authenticating nothing.

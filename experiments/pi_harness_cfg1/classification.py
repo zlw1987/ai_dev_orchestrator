@@ -84,6 +84,19 @@ CAPTURE_BASIS_WAIT_ENDED_BEFORE_SETTLED = "wait_ended_before_settled"
 DISAGREEMENT_PREDICATE_IDS: tuple[str, ...] = ("D-1", "D-2", "D-3", "D-4")
 
 
+def _exact_count(value: object) -> int:
+    """Reduce one raw fact to a non-negative count -- never ``int(...)`` coerced.
+
+    ``int(x)`` silently accepts a numeric string, a float, or any object with a
+    custom ``__int__``/``__index__``, manufacturing a plausible count from a
+    value that was never proven to be one (CFG1-IMPL-FU1 Finding 4). Only an
+    already-exact ``int`` (``bool`` explicitly excluded) survives; anything
+    else becomes ``0``, the field's own documented minimum -- never inventing
+    evidence of activity that was not observed.
+    """
+    return value if (type(value) is int and value >= 0) else 0
+
+
 def observation_disagreement_predicates(facts: Mapping[str, object]) -> tuple[str, ...]:
     """Which Sec. 12.2 predicates hold. Evaluated only after rows 1-7 are excluded.
 
@@ -101,16 +114,16 @@ def observation_disagreement_predicates(facts: Mapping[str, object]) -> tuple[st
     basis = facts["runtime_reported_tool_activity_capture_basis"]
     settled_basis = basis == CAPTURE_BASIS_AGENT_SETTLED
 
-    read_calls = int(facts["runtime_reported_aido_read_call_ids"])
-    edit_calls = int(facts["runtime_reported_aido_edit_call_ids"])
-    read_ends = int(facts["runtime_reported_aido_read_end_observed"])
-    edit_ends = int(facts["runtime_reported_aido_edit_end_observed"])
-    read_errors = int(facts["runtime_reported_aido_read_error_results"])
-    edit_errors = int(facts["runtime_reported_aido_edit_error_results"])
+    read_calls = _exact_count(facts["runtime_reported_aido_read_call_ids"])
+    edit_calls = _exact_count(facts["runtime_reported_aido_edit_call_ids"])
+    read_ends = _exact_count(facts["runtime_reported_aido_read_end_observed"])
+    edit_ends = _exact_count(facts["runtime_reported_aido_edit_end_observed"])
+    read_errors = _exact_count(facts["runtime_reported_aido_read_error_results"])
+    edit_errors = _exact_count(facts["runtime_reported_aido_edit_error_results"])
 
-    broker_reads = int(facts["broker_recorded_read_operation_count"])
-    broker_edits = int(facts["broker_recorded_edit_operation_count"])
-    broker_refusals = int(facts["broker_recorded_refusal_count"])
+    broker_reads = _exact_count(facts["broker_recorded_read_operation_count"])
+    broker_edits = _exact_count(facts["broker_recorded_edit_operation_count"])
+    broker_refusals = _exact_count(facts["broker_recorded_refusal_count"])
 
     held: list[str] = []
 
@@ -165,7 +178,7 @@ def classify_cfg1_run(facts: Mapping[str, object]) -> str:
     ):
         return CLASSIFICATION_INDETERMINATE_NO_ACTIVITY_EVIDENCE
     # 6 -- BEFORE ACTIVE, and regardless of any aido_* activity.
-    if int(facts["runtime_reported_unexpected_tool_call_ids"]) > 0:
+    if _exact_count(facts["runtime_reported_unexpected_tool_call_ids"]) > 0:
         return CLASSIFICATION_INDETERMINATE_UNEXPECTED_TOOL_ACTIVITY
     # 7
     if facts["runtime_reported_unidentified_tool_call_id_seen"] is True:
@@ -174,16 +187,18 @@ def classify_cfg1_run(facts: Mapping[str, object]) -> str:
     if observation_disagreement_predicates(facts):
         return CLASSIFICATION_INDETERMINATE_OBSERVATION_DISAGREEMENT
 
-    expected_activity = int(facts["runtime_reported_aido_read_call_ids"]) + int(
-        facts["runtime_reported_aido_edit_call_ids"]
-    )
+    expected_activity = _exact_count(
+        facts["runtime_reported_aido_read_call_ids"]
+    ) + _exact_count(facts["runtime_reported_aido_edit_call_ids"])
     # 9
     if expected_activity >= 1:
         return CLASSIFICATION_ACTIVE
 
     stop_counts = facts["stop_reason_counts"]
-    provider_errors = int(stop_counts["error"]) + int(stop_counts["aborted"])  # type: ignore[index]
-    auto_retries = int(facts["auto_retry_events"])
+    provider_errors = _exact_count(stop_counts["error"]) + _exact_count(  # type: ignore[index]
+        stop_counts["aborted"]  # type: ignore[index]
+    )
+    auto_retries = _exact_count(facts["auto_retry_events"])
     # 10
     if (
         provider_errors >= 1
@@ -208,7 +223,7 @@ def run_is_length_terminated(facts: Mapping[str, object]) -> bool:
     requests no ``max_tokens`` at all, so a length stop reason names a BACKEND
     capability limit whose identity AIDO does not know and never invents.
     """
-    return int(facts["stop_reason_counts"]["length"]) >= 1  # type: ignore[index]
+    return _exact_count(facts["stop_reason_counts"]["length"]) >= 1  # type: ignore[index]
 
 
 # ---------------------------------------------------------------------------

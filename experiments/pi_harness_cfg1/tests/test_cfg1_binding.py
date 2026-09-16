@@ -27,7 +27,7 @@ from pi_harness_cfg1.binding import (
     verify_cfg1_run_artifact_binding,
     verify_cfg1_stage_closure_binding,
 )
-from pi_harness_cfg1.stage_runner import run_cfg1_stage
+from pi_harness_cfg1.stage_runner import _run_cfg1_stage_with_injected_executor as run_cfg1_stage
 from pi_harness_cfg1.writers import emit_cfg1_refusal_record, emit_cfg1_run_record
 
 NO_NEEDLES = ArtifactSafetyContext.none_declared()

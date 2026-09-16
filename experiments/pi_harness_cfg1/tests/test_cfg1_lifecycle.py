@@ -418,10 +418,10 @@ def test_t11_l24_precedes_l26_so_verification_never_sees_the_endpoint_on_disk(
     seen_during_verification: list[bool] = []
     state: dict = {}
 
-    def _write_config(*, owned_root, arm_id, base_url):
+    def _write_config(*, workspace, arm_id, base_url):
         from pi_harness_cfg1.cfg1_pi_config import write_cfg1_pi_config
 
-        config = write_cfg1_pi_config(owned_root, arm_id=arm_id, base_url=base_url)
+        config = write_cfg1_pi_config(workspace, arm_id=arm_id, base_url=base_url)
         state["models_path"] = config.models_path
         state["arm_id"] = arm_id
         return config
@@ -589,57 +589,92 @@ def test_t12_a_vanished_workspace_fails_its_re_proof_with_its_mint_intact(
         discard_cfg1_run_workspace(workspace)
 
 
-def test_t12_a_config_issuance_claim_is_refused_for_a_foreign_directory(tmp_path):
-    from pi_harness_cfg1.cfg1_pi_config import write_cfg1_pi_config
-    from pi_harness_cfg1.config_issuance import (
-        ConfigIssuanceError,
-        discard_config_issuance,
-        verify_config_issuance,
-    )
+def test_t12_a_config_issuance_claim_is_refused_for_a_foreign_directory(
+    tmp_path, git_executable
+):
+    """CFG1-IMPL-FU1 Finding 2: no bare path can stand in for a workspace at all."""
+    from pi_harness_cfg1.cfg1_pi_config import Cfg1PiConfigError, write_cfg1_pi_config
+    from pi_harness_cfg1.config_issuance import ConfigIssuanceError, derive_cfg1_config_paths
 
-    root = tmp_path / "owned"
-    root.mkdir()
-    config = write_cfg1_pi_config(str(root), arm_id="Q", base_url=SYNTHETIC_BASE_URL)
+    # The writer itself refuses a bare path outright.
+    with pytest.raises(Cfg1PiConfigError) as excinfo:
+        write_cfg1_pi_config(str(tmp_path), arm_id="Q", base_url=SYNTHETIC_BASE_URL)
+    assert excinfo.value.reason_code == "NOT_A_CFG1_RUN_WORKSPACE"
+
+    # And so does config_issuance's own derivation, independently.
+    with pytest.raises(ConfigIssuanceError) as excinfo:
+        derive_cfg1_config_paths(str(tmp_path))
+    assert excinfo.value.reason_code == "NOT_A_CFG1_RUN_WORKSPACE"
+
+    workspace, _built = run_workspace.mint_cfg1_run_workspace(
+        git_executable=git_executable
+    )
     try:
-        verify_config_issuance(
-            token=config.issuance_token,
-            config_dir=config.config_dir,
-            settings_path=config.settings_path,
-            models_path=config.models_path,
-        )
-        # A genuine token, presented for a DIFFERENT directory.
-        with pytest.raises(ConfigIssuanceError) as excinfo:
-            verify_config_issuance(
-                token=config.issuance_token,
-                config_dir=str(tmp_path / "elsewhere"),
-                settings_path=config.settings_path,
-                models_path=config.models_path,
-            )
-        assert excinfo.value.reason_code == "ISSUANCE_PATH_MISMATCH"
-        # A forged token, for the genuine directory.
+        config = write_cfg1_pi_config(workspace, arm_id="Q", base_url=SYNTHETIC_BASE_URL)
+        from pi_harness_cfg1.config_issuance import verify_config_issuance
+
+        # Genuine positive control.
+        verify_config_issuance(token=config.issuance_token, workspace=workspace)
+
+        # A forged token, for the genuine workspace.
         for forged in ("forged", "", None, 7):
             with pytest.raises(ConfigIssuanceError):
+                verify_config_issuance(token=forged, workspace=workspace)
+
+        # A genuine token, presented under a DIFFERENT genuine workspace.
+        other_workspace, _other_built = run_workspace.mint_cfg1_run_workspace(
+            git_executable=git_executable
+        )
+        try:
+            with pytest.raises(ConfigIssuanceError) as excinfo:
                 verify_config_issuance(
-                    token=forged,
-                    config_dir=config.config_dir,
-                    settings_path=config.settings_path,
-                    models_path=config.models_path,
+                    token=config.issuance_token, workspace=other_workspace
                 )
+            assert excinfo.value.reason_code == "ISSUANCE_WORKSPACE_MISMATCH"
+        finally:
+            run_workspace.remove_cfg1_run_workspace(other_workspace)
+
         # Tampered on-disk content is caught by the finalized digest.
         Path(config.settings_path).write_text("{}", encoding="utf-8")
         with pytest.raises(ConfigIssuanceError) as excinfo:
-            verify_config_issuance(
-                token=config.issuance_token,
-                config_dir=config.config_dir,
-                settings_path=config.settings_path,
-                models_path=config.models_path,
-            )
+            verify_config_issuance(token=config.issuance_token, workspace=workspace)
         assert excinfo.value.reason_code == "SETTINGS_CONTENT_MISMATCH"
     finally:
-        discard_config_issuance(config.issuance_token)
+        run_workspace.remove_cfg1_run_workspace(workspace)
 
 
-def test_t12_the_child_environment_refuses_a_config_it_cannot_re_prove(tmp_path):
+def test_t12_a_genuine_config_cannot_be_registered_for_a_foreign_root(git_executable):
+    """A caller cannot bless an existing directory by naming it explicitly."""
+    from pi_harness_cfg1.config_issuance import (
+        derive_cfg1_config_paths,
+        register_config_issuance,
+    )
+
+    workspace, _built = run_workspace.mint_cfg1_run_workspace(
+        git_executable=git_executable
+    )
+    try:
+        config_dir, settings_path, models_path = derive_cfg1_config_paths(workspace)
+        Path(config_dir).mkdir(parents=False, exist_ok=False)
+        Path(settings_path).write_text("{}", encoding="utf-8")
+        Path(models_path).write_text("{}", encoding="utf-8")
+
+        # register_config_issuance takes no path parameter at all: it derives
+        # the same location from `workspace` alone, so it cannot be pointed
+        # anywhere else, no matter what a caller believes the location is.
+        token = register_config_issuance(
+            workspace=workspace, arm_id="Q", provider_id="p", model_id="m"
+        )
+        from pi_harness_cfg1.config_issuance import verify_config_issuance
+
+        verify_config_issuance(token=token, workspace=workspace)
+    finally:
+        run_workspace.remove_cfg1_run_workspace(workspace)
+
+
+def test_t12_the_child_environment_refuses_a_config_it_cannot_re_prove(
+    git_executable,
+):
     from pi_harness_cfg1.cfg1_pi_config import write_cfg1_pi_config
     from pi_harness_cfg1.config_issuance import (
         ConfigIssuanceError,
@@ -647,23 +682,28 @@ def test_t12_the_child_environment_refuses_a_config_it_cannot_re_prove(tmp_path)
     )
     from pi_harness_cfg1.environment import build_cfg1_child_environment
 
-    root = tmp_path / "owned"
-    root.mkdir()
-    config = write_cfg1_pi_config(str(root), arm_id="Q", base_url=SYNTHETIC_BASE_URL)
-    discard_config_issuance(config.issuance_token)  # the run already ended
+    workspace, _built = run_workspace.mint_cfg1_run_workspace(
+        git_executable=git_executable
+    )
+    try:
+        config = write_cfg1_pi_config(workspace, arm_id="Q", base_url=SYNTHETIC_BASE_URL)
+        discard_config_issuance(config.issuance_token)  # the run already ended
 
-    with pytest.raises(ConfigIssuanceError) as excinfo:
-        build_cfg1_child_environment(
-            ambient_environ={"SystemRoot": r"C:\Windows"},
-            node_executable=r"C:\Program Files\nodejs\node.exe",
-            generated_config=config,
-            credential_value="cfg1-synthetic-key",
-        )
-    assert excinfo.value.reason_code == "UNKNOWN_ISSUANCE_TOKEN"
+        with pytest.raises(ConfigIssuanceError) as excinfo:
+            build_cfg1_child_environment(
+                ambient_environ={"SystemRoot": r"C:\Windows"},
+                node_executable=r"C:\Program Files\nodejs\node.exe",
+                generated_config=config,
+                workspace=workspace,
+                credential_value="cfg1-synthetic-key",
+            )
+        assert excinfo.value.reason_code == "UNKNOWN_ISSUANCE_TOKEN"
+    finally:
+        run_workspace.remove_cfg1_run_workspace(workspace)
 
 
 def test_t12_a_blank_credential_carrier_is_refused_rather_than_silently_launched(
-    tmp_path,
+    git_executable,
 ):
     from pi_harness_cfg1.cfg1_pi_config import write_cfg1_pi_config
     from pi_harness_cfg1.config_issuance import discard_config_issuance
@@ -672,21 +712,26 @@ def test_t12_a_blank_credential_carrier_is_refused_rather_than_silently_launched
         build_cfg1_child_environment,
     )
 
-    root = tmp_path / "owned"
-    root.mkdir()
-    config = write_cfg1_pi_config(str(root), arm_id="Q", base_url=SYNTHETIC_BASE_URL)
+    workspace, _built = run_workspace.mint_cfg1_run_workspace(
+        git_executable=git_executable
+    )
     try:
-        for blank in ("", "   ", None, 7):
-            with pytest.raises(Cfg1EnvironmentPolicyError) as excinfo:
-                build_cfg1_child_environment(
-                    ambient_environ={"SystemRoot": r"C:\Windows"},
-                    node_executable=r"C:\Program Files\nodejs\node.exe",
-                    generated_config=config,
-                    credential_value=blank,
-                )
-            assert excinfo.value.reason_code == "BLANK_CREDENTIAL_CARRIER"
+        config = write_cfg1_pi_config(workspace, arm_id="Q", base_url=SYNTHETIC_BASE_URL)
+        try:
+            for blank in ("", "   ", None, 7):
+                with pytest.raises(Cfg1EnvironmentPolicyError) as excinfo:
+                    build_cfg1_child_environment(
+                        ambient_environ={"SystemRoot": r"C:\Windows"},
+                        node_executable=r"C:\Program Files\nodejs\node.exe",
+                        generated_config=config,
+                        workspace=workspace,
+                        credential_value=blank,
+                    )
+                assert excinfo.value.reason_code == "BLANK_CREDENTIAL_CARRIER"
+        finally:
+            discard_config_issuance(config.issuance_token)
     finally:
-        discard_config_issuance(config.issuance_token)
+        run_workspace.remove_cfg1_run_workspace(workspace)
 
 
 # ---------------------------------------------------------------------------
@@ -713,7 +758,7 @@ def test_a_full_nine_ordinal_stage_leaks_no_resource_and_no_registry_entry(
         verify_cfg1_stage_closure_binding,
     )
     from pi_harness_cfg1.run_contract import Cfg1RunOutcome
-    from pi_harness_cfg1.stage_runner import run_cfg1_stage
+    from pi_harness_cfg1.stage_runner import _run_cfg1_stage_with_injected_executor as run_cfg1_stage
 
     minted_roots: list[str] = []
 

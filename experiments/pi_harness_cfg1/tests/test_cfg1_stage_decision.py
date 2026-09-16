@@ -66,7 +66,7 @@ def with_live_decision(authority, callback, *, executor=None, monkeypatch=None):
         return outcome if outcome is not None else _CONFIRMED
 
     monkeypatch.setattr(stage_runner, "emit_cfg1_stage_closure", _stub)
-    result = stage_runner.run_cfg1_stage(
+    result = stage_runner._run_cfg1_stage_with_injected_executor(
         authority, run_executor=executor or synthetic_run_executor()
     )
     return result, captured
@@ -81,7 +81,7 @@ def test_t102_a_genuine_sealed_decision_produces_a_valid_written_closure(make_au
     from pi_harness_cfg1.binding import verify_cfg1_stage_closure_binding
 
     authority = make_authority("S1-X1")
-    result = stage_runner.run_cfg1_stage(authority, run_executor=synthetic_run_executor())
+    result = stage_runner._run_cfg1_stage_with_injected_executor(authority, run_executor=synthetic_run_executor())
     assert result.disposition == "STAGE_COMPLETED"
     assert result.stage_closure_confirmed is True
     closure_path = Path(authority.execution_directory, "S1_stage_closure.json")
@@ -223,7 +223,7 @@ def test_t106_the_sealing_step_is_never_reached_before_l29_is_in_the_ledger():
     Mirrors T-101's technique, applied to a lexically-scoped step rather than a
     call to a separately-nameable function -- because FU10 removed the latter.
     """
-    source = inspect.getsource(stage_runner.run_cfg1_stage)
+    source = inspect.getsource(stage_runner._run_cfg1_stage_with_injected_executor)
 
     record_at = source.index("_record_ordinal_result(run_ordinal, emission.emission_status)")
     l30_at = source.index('_fire("l30:enter"')
@@ -267,7 +267,7 @@ def test_t107_l30_runs_once_per_admitted_ordinal_and_only_terminal_ones_seal(
             )
 
     authority = make_authority("S1-X1")
-    result = stage_runner.run_cfg1_stage(
+    result = stage_runner._run_cfg1_stage_with_injected_executor(
         authority, run_executor=synthetic_run_executor(), _internal_probe=_probe
     )
 
@@ -291,7 +291,7 @@ def test_t107a_a_second_seal_before_any_consumption_is_refused(
             reports.append(context.force_second_seal_reach())
 
     authority = make_authority("S1-X1")
-    stage_runner.run_cfg1_stage(
+    stage_runner._run_cfg1_stage_with_injected_executor(
         authority, run_executor=synthetic_run_executor(), _internal_probe=_probe
     )
     assert len(reports) == 1
@@ -322,7 +322,7 @@ def test_t107b_a_second_seal_after_consumption_revocation_is_refused_identically
             reports.append(context.force_second_seal_reach())
 
     authority = make_authority("S1-X1")
-    result = stage_runner.run_cfg1_stage(
+    result = stage_runner._run_cfg1_stage_with_injected_executor(
         authority, run_executor=synthetic_run_executor(), _internal_probe=_probe
     )
     assert result.stage_closure_confirmed is True
@@ -640,7 +640,7 @@ def test_t126_a_non_final_successful_ordinal_admits_without_sealing_anything(
             sealed_at_branch_b.append(len(_STAGE_DECISION_SEALED))
 
     authority = make_authority("S1-X1")
-    stage_runner.run_cfg1_stage(
+    stage_runner._run_cfg1_stage_with_injected_executor(
         authority, run_executor=synthetic_run_executor(), _internal_probe=_probe
     )
     assert sealed_at_branch_b == [0] * 8
@@ -679,7 +679,7 @@ def test_t127_and_t128_the_final_ordinal_succeeding_seals_success_and_issues_no_
     monkeypatch.setattr(stage_runner, "emit_cfg1_stage_closure", _capture)
 
     authority = make_authority(f"{stage_id}-X1", stage_id=stage_id)
-    result = stage_runner.run_cfg1_stage(authority, run_executor=_executor)
+    result = stage_runner._run_cfg1_stage_with_injected_executor(authority, run_executor=_executor)
 
     # (1) no admission token for LAST_ORDINAL + 1 was ever issued.
     assert admitted == list(range(1, last_ordinal + 1))
@@ -736,7 +736,7 @@ def test_t130_a_halted_ordinal_seals_a_halted_decision_from_the_same_ledger(
         )
 
     authority = make_authority("S1-X1")
-    result = stage_runner.run_cfg1_stage(authority, run_executor=_executor)
+    result = stage_runner._run_cfg1_stage_with_injected_executor(authority, run_executor=_executor)
 
     assert result.disposition == "STAGE_HALTED"
     assert result.halted_after_ordinal == 3
@@ -862,7 +862,7 @@ def test_t134_seal_history_survives_a_failed_write_and_authority_retirement(
 
         monkeypatch.setattr(writers, "_open_exclusive", _open)
 
-    result = stage_runner.run_cfg1_stage(
+    result = stage_runner._run_cfg1_stage_with_injected_executor(
         authority, run_executor=synthetic_run_executor(), _internal_probe=_probe
     )
     assert result.stage_closure_confirmed is False
@@ -881,7 +881,7 @@ def test_t136_seal_history_lives_for_the_whole_invocation_and_no_longer(
             during.append(context.force_second_seal_reach()["seal_history_present"])
 
     authority = make_authority("S1-X1")
-    stage_runner.run_cfg1_stage(
+    stage_runner._run_cfg1_stage_with_injected_executor(
         authority, run_executor=synthetic_run_executor(), _internal_probe=_probe
     )
     # Present through sealing, the write, and authority retirement...

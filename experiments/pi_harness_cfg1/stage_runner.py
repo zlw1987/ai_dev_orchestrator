@@ -6,7 +6,10 @@ preoccupation), Sec. 19.1/19.5/19.6 (admission, halt precedence, and the exact
 three-way terminal transition).
 
 **Sealing has no reachable name.** ``_record_ordinal_result`` and
-``_seal_terminal_decision`` are nested inside :func:`run_cfg1_stage`. They are
+``_seal_terminal_decision`` are nested inside
+:func:`_run_cfg1_stage_with_injected_executor` (the offline dependency-
+injection seam; :func:`run_cfg1_stage` is the sole authoritative entry point
+and delegates to it with the genuine executor). They are
 never assigned to a module attribute, never exported, never importable, and
 never discoverable by introspecting any object a caller can obtain by holding
 only a ``CFG1StageOutputAuthority`` -- the authority carries no reference to
@@ -34,6 +37,7 @@ from __future__ import annotations
 import os
 import secrets
 from dataclasses import dataclass, field
+from pathlib import Path
 from types import SimpleNamespace
 
 from .halt import (
@@ -108,15 +112,70 @@ class Cfg1StageResult:
 
 _RUN_ID_BYTES = 16
 
+#: Independently captured, from THIS module's own file location -- never from
+#: :mod:`stage_output`'s module attribute, which offline tests deliberately
+#: rebind (Sec. 16.3.4's accepted test-harness seam). Both modules ship in the
+#: same package directory, so in a genuine, untouched installation the two
+#: values are always equal; only a test's own rebinding of
+#: ``stage_output._CAPTURED_PACKAGE_DIR`` ever makes them differ. This is the
+#: ground truth the offline-injection branch below checks itself against, so
+#: a CALLER-SUPPLIED (non-genuine) executor cannot be used at all against the
+#: genuine, installed package root (CFG1-IMPL-FU1 Finding 1).
+_GENUINE_PACKAGE_DIRECTORY = str(Path(__file__).resolve().parent)
 
-def run_cfg1_stage(
+
+def run_cfg1_stage(authority: CFG1StageOutputAuthority, /) -> Cfg1StageResult:
+    """THE sole authoritative, evidence-producing CFG1 stage entry point.
+
+    ``authority`` is positional-only, and there is no other parameter of any
+    kind. In particular there is no ``run_executor``, no ``ports``, and no
+    ``_internal_probe`` -- a caller holding only a genuine, ACTIVE
+    ``CFG1StageOutputAuthority`` has no supported way, through this function,
+    to substitute a run executor, a hand-built ``Cfg1RunOutcome``, or a
+    live-port set, and therefore no way to make this routine emit a genuine
+    ``pi-harness-cfg1-run.v1`` or stage-closure artifact from anything but the
+    genuine L1-L28 executor (CFG1-IMPL-FU1 Finding 1). The genuine executor is
+    bound HERE, mechanically, via :func:`run_executor.
+    bind_genuine_cfg1_run_executor` -- never accepted as an argument.
+    """
+    from .run_executor import bind_genuine_cfg1_run_executor
+
+    genuine_executor = bind_genuine_cfg1_run_executor()
+    return _run_cfg1_stage_with_injected_executor(
+        authority, run_executor=genuine_executor, _internal_probe=None
+    )
+
+
+def _run_cfg1_stage_with_injected_executor(
     authority: CFG1StageOutputAuthority,
     /,
     *,
     run_executor,
     _internal_probe=None,
 ) -> Cfg1StageResult:
-    """Execute one CFG1 stage: L0-L30 for every admitted ordinal, then terminate.
+    """L0-L30 orchestration. Reached by ``run_cfg1_stage`` (genuine) and by the
+    offline suite's own dependency-injection seam (synthetic) alike -- but the
+    two are NOT equally privileged.
+
+    ``run_executor`` is either:
+
+    * a genuine :class:`run_executor.Cfg1GenuineRunExecutor` -- unforgeable by
+      API (its own mint-registry re-check, Sec. 16.3.3's shape, applies), so
+      reaching this branch proves the executor came from
+      :func:`run_executor.bind_genuine_cfg1_run_executor` and nowhere else.
+      This branch is unconditional: it is exactly what genuine production
+      evidence requires, and the genuine, installed package root is where it
+      is SUPPOSED to write; or
+    * anything else -- a bare callable, a lambda, a test double. This is the
+      OFFLINE dependency-injection seam, and it is refused outright unless
+      :mod:`stage_output`'s ``RESULTS_ROOT`` capture has been retargeted away
+      from the genuine, installed package directory. A production process's
+      capture is never retargeted, so a CALLER-SUPPLIED executor mechanically
+      cannot write into the genuine results namespace there, regardless of
+      what ``authority`` it is given (CFG1-IMPL-FU1 Finding 1). Holding only a
+      genuine authority does not let a caller construct a genuine
+      ``Cfg1GenuineRunExecutor`` of its own: its ``__post_init__`` refuses any
+      instance whose token this process did not itself mint.
 
     ``authority`` is positional-only and everything else keyword-only, so this
     routine cannot be reached with an additional positional argument. It
@@ -135,6 +194,18 @@ def run_cfg1_stage(
     failure by raising, and can force a malformed second reach of the sealing
     step -- which is always refused, and can never return a decision object.
     """
+    from .run_executor import Cfg1GenuineRunExecutor
+
+    if type(run_executor) is Cfg1GenuineRunExecutor:
+        _invoke_executor = run_executor.invoke
+    else:
+        from . import stage_output as _stage_output_module
+
+        if _stage_output_module._CAPTURED_PACKAGE_DIR == _GENUINE_PACKAGE_DIRECTORY:
+            raise Cfg1StageRunnerError(
+                "OFFLINE_EXECUTOR_INJECTION_REFUSED_IN_GENUINE_PACKAGE_ROOT"
+            )
+        _invoke_executor = run_executor
     # An EXACT type gate only. The provenance re-proof belongs to L0, inside
     # the guarded body, because a failing re-proof is a Sec. 16.3.7 hard stop
     # -- which must retire the authority and report one closed console code,
@@ -438,7 +509,7 @@ def run_cfg1_stage(
 
             # ================= L1 - L28 =================
             try:
-                outcome = run_executor(admission)
+                outcome = _invoke_executor(admission)
             except Exception:  # noqa: BLE001 - reduced here; no raw text escapes
                 _retire_stage_output_authority(authority)
                 raise Cfg1StageRunnerError("RUN_EXECUTOR_RAISED") from None

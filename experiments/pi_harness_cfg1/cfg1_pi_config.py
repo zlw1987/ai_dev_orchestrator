@@ -199,28 +199,42 @@ class GeneratedCfg1Config:
 
 
 def write_cfg1_pi_config(
-    workspace_root: str, *, arm_id: str, base_url: str, model_id: str = CFG1_MODEL_ID
+    workspace, *, arm_id: str, base_url: str, model_id: str = CFG1_MODEL_ID
 ) -> GeneratedCfg1Config:
     """Write one run's ``settings.json`` + ``models.json`` for one arm.
 
-    The directory is created with ``exist_ok=False`` inside the run's own
-    owned workspace root -- the ONE on-disk location of this run's endpoint
-    value, verified-unlinked at L24 before any model-influenced code runs
-    (Sec. 16.2).
+    ``workspace`` is a genuine, ACTIVE ``Cfg1RunWorkspace`` ownership handle --
+    never a bare path. The directory is created with ``exist_ok=False`` at the
+    location :func:`config_issuance.derive_cfg1_config_paths` derives from that
+    handle's own re-verified ``experiment_root`` -- the ONE on-disk location of
+    this run's endpoint value, verified-unlinked at L24 before any
+    model-influenced code runs (Sec. 16.2). A caller cannot select a different
+    location: there is no parameter through which one could be named
+    (CFG1-IMPL-FU1 Finding 2).
     """
     from . import config_issuance
+    from .run_workspace import Cfg1RunWorkspace
 
     if type(arm_id) is not str or arm_id not in ARM_COMPAT:
         raise Cfg1PiConfigError("UNKNOWN_ARM_ID")
+    if type(workspace) is not Cfg1RunWorkspace:
+        raise Cfg1PiConfigError("NOT_A_CFG1_RUN_WORKSPACE")
 
-    config_dir = Path(workspace_root) / CFG1_CONFIG_DIR_NAME
+    try:
+        config_dir_str, settings_path_str, models_path_str = (
+            config_issuance.derive_cfg1_config_paths(workspace)
+        )
+    except config_issuance.ConfigIssuanceError as exc:
+        raise Cfg1PiConfigError("WORKSPACE_AUTHORITY_UNVERIFIED") from exc
+
+    config_dir = Path(config_dir_str)
     try:
         config_dir.mkdir(parents=False, exist_ok=False)
     except OSError as exc:
         raise Cfg1PiConfigError("CONFIG_DIR_NOT_CREATED") from exc
 
-    settings_path = config_dir / "settings.json"
-    models_path = config_dir / "models.json"
+    settings_path = Path(settings_path_str)
+    models_path = Path(models_path_str)
     try:
         settings_path.write_text(
             serialize_config_document(settings_document()), encoding="utf-8"
@@ -235,17 +249,15 @@ def write_cfg1_pi_config(
         raise Cfg1PiConfigError("CONFIG_FILES_NOT_WRITTEN") from exc
 
     token = config_issuance.register_config_issuance(
-        config_dir=str(config_dir),
-        settings_path=str(settings_path),
-        models_path=str(models_path),
+        workspace=workspace,
         arm_id=arm_id,
         provider_id=PROVIDER_ID,
         model_id=model_id,
     )
     return GeneratedCfg1Config(
-        config_dir=str(config_dir),
-        settings_path=str(settings_path),
-        models_path=str(models_path),
+        config_dir=config_dir_str,
+        settings_path=settings_path_str,
+        models_path=models_path_str,
         arm_id=arm_id,
         provider_id=PROVIDER_ID,
         model_id=model_id,

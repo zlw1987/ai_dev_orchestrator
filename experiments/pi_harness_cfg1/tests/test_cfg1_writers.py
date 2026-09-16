@@ -560,7 +560,7 @@ def test_t72_exactly_one_serialization_and_the_same_bytes_are_written(
     make_authority, monkeypatch
 ):
     """For all three record kinds."""
-    from pi_harness_cfg1.stage_runner import run_cfg1_stage
+    from pi_harness_cfg1.stage_runner import _run_cfg1_stage_with_injected_executor as run_cfg1_stage
 
     from cfg1_builders import synthetic_run_executor
 
@@ -717,7 +717,7 @@ def test_t74_the_stage_closure_writer_never_calls_the_refusal_writer(
 ):
     from cfg1_builders import synthetic_run_executor
 
-    from pi_harness_cfg1.stage_runner import run_cfg1_stage
+    from pi_harness_cfg1.stage_runner import _run_cfg1_stage_with_injected_executor as run_cfg1_stage
 
     authority = make_authority("S1-X1")
     if failure_point == "create_collision":

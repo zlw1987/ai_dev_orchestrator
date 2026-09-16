@@ -189,7 +189,7 @@ def test_finding_c_a_non_bool_lifecycle_value_never_becomes_a_plausible_true(
 
 
 def test_finding_c_the_runner_reads_the_lifecycle_bool_exactly_never_coerced():
-    source = inspect.getsource(stage_runner.run_cfg1_stage)
+    source = inspect.getsource(stage_runner._run_cfg1_stage_with_injected_executor)
     assert 'bool(payload["lifecycle_all_closed"])' not in source
     assert "if type(lifecycle_all_closed) is not bool:" in source
 
@@ -214,7 +214,7 @@ def test_finding_c_a_truthy_non_bool_payload_halts_rather_than_admitting(
         )
 
     authority = make_authority("S1-X1")
-    result = stage_runner.run_cfg1_stage(authority, run_executor=_executor)
+    result = stage_runner._run_cfg1_stage_with_injected_executor(authority, run_executor=_executor)
     assert result.halted_after_ordinal == 2
     # The payload validator refused it as an implementation defect, and the
     # stage halted rather than admitting ordinal 3 on a coerced truthy value.
@@ -253,7 +253,7 @@ def test_finding_d_seal_history_cleanup_refuses_a_bare_nonce_string(
             observed.append(report["second_decision_registered"] is False)
 
     authority = make_authority("S1-X1")
-    stage_runner.run_cfg1_stage(
+    stage_runner._run_cfg1_stage_with_injected_executor(
         authority, run_executor=synthetic_run_executor(), _internal_probe=_probe
     )
     assert observed == [True, True, True]
@@ -286,7 +286,7 @@ def test_finding_e_a_forced_reach_before_any_seal_registers_nothing(
             reports.append(context.force_second_seal_reach())
 
     authority = make_authority("S1-X1")
-    result = stage_runner.run_cfg1_stage(
+    result = stage_runner._run_cfg1_stage_with_injected_executor(
         authority, run_executor=synthetic_run_executor(), _internal_probe=_probe
     )
     assert len(reports) == 8
@@ -518,13 +518,13 @@ def test_repeated_lifecycle_operations_are_idempotent_or_refused(make_authority)
 
 def test_a_second_stage_run_on_a_retired_authority_is_a_hard_stop(make_authority):
     authority = make_authority("S1-X1")
-    first = stage_runner.run_cfg1_stage(
+    first = stage_runner._run_cfg1_stage_with_injected_executor(
         authority, run_executor=synthetic_run_executor()
     )
     assert first.disposition == "STAGE_COMPLETED"
 
     executions: list = []
-    second = stage_runner.run_cfg1_stage(
+    second = stage_runner._run_cfg1_stage_with_injected_executor(
         authority, run_executor=lambda admission: executions.append(admission)
     )
     assert second.disposition == "STAGE_OUTPUT_AUTHORITY_HARD_STOP"
@@ -533,11 +533,41 @@ def test_a_second_stage_run_on_a_retired_authority_is_a_hard_stop(make_authority
 
 
 def test_the_stage_runner_declares_no_decision_fact_parameter():
-    parameters = list(inspect.signature(stage_runner.run_cfg1_stage).parameters)
+    parameters = list(
+        inspect.signature(stage_runner._run_cfg1_stage_with_injected_executor).parameters
+    )
     assert parameters == ["authority", "run_executor", "_internal_probe"]
     for forbidden in ("ordinal_status", "halted_after_ordinal", "halt_reason_code"):
         assert forbidden not in parameters
     # And it returns a result, never a decision.
+    assert inspect.signature(
+        stage_runner._run_cfg1_stage_with_injected_executor
+    ).return_annotation in (
+        "Cfg1StageResult",
+        stage_runner.Cfg1StageResult,
+    )
+
+
+def test_the_authoritative_entry_point_accepts_only_authority_CFG1_IMPL_FU1():
+    """Finding 1: the sole authoritative entry has no executor/ports/probe seam.
+
+    ``run_cfg1_stage`` is the ONLY supported way to obtain genuine CFG1
+    evidence. A caller holding merely a genuine, ACTIVE
+    ``CFG1StageOutputAuthority`` must find no parameter here through which a
+    substitute executor, a hand-built outcome, or a live-port set could ever
+    be supplied.
+    """
+    parameters = list(inspect.signature(stage_runner.run_cfg1_stage).parameters)
+    assert parameters == ["authority"]
+    for forbidden in (
+        "run_executor",
+        "ports",
+        "_internal_probe",
+        "ordinal_status",
+        "halted_after_ordinal",
+        "halt_reason_code",
+    ):
+        assert forbidden not in parameters
     assert inspect.signature(stage_runner.run_cfg1_stage).return_annotation in (
         "Cfg1StageResult",
         stage_runner.Cfg1StageResult,
@@ -558,7 +588,7 @@ def test_an_off_schedule_arm_can_never_be_admitted_by_any_supported_entry(
         raise AssertionError("stop after the first admission")
 
     with pytest.raises(stage_runner.Cfg1StageRunnerError):
-        stage_runner.run_cfg1_stage(authority, run_executor=_executor)
+        stage_runner._run_cfg1_stage_with_injected_executor(authority, run_executor=_executor)
     assert admitted == ["Q"]  # the frozen schedule's own arm for ordinal 1
 
     # S1 never schedules H, at any ordinal.
@@ -586,7 +616,7 @@ def test_os_path_lexists_is_what_l0_uses_so_a_symlink_occupant_is_detected(
     assert os.path.exists(str(link)) is False
     assert os.path.lexists(str(link)) is True
 
-    result = stage_runner.run_cfg1_stage(
+    result = stage_runner._run_cfg1_stage_with_injected_executor(
         authority, run_executor=synthetic_run_executor()
     )
     assert result.disposition == "OUTPUT_NAMESPACE_PREOCCUPIED"
@@ -705,7 +735,7 @@ def test_a_results_root_redirected_mid_stage_is_caught_at_the_next_boundary(
                 pytest.skip("this platform grants neither symlink nor junction creation")
         return synthetic_run_executor()(admission)
 
-    result = stage_runner.run_cfg1_stage(authority, run_executor=_executor)
+    result = stage_runner._run_cfg1_stage_with_injected_executor(authority, run_executor=_executor)
 
     assert result.disposition == "STAGE_OUTPUT_AUTHORITY_HARD_STOP"
     assert result.console_codes == ("RESULTS_ROOT_REDIRECTED",)
@@ -747,10 +777,10 @@ def test_generated_material_lands_beside_the_repository_never_inside_it(
 
     observed: dict[str, str] = {}
 
-    def _write_config(*, owned_root, arm_id, base_url):
+    def _write_config(*, workspace, arm_id, base_url):
         from pi_harness_cfg1.cfg1_pi_config import write_cfg1_pi_config
 
-        config = write_cfg1_pi_config(owned_root, arm_id=arm_id, base_url=base_url)
+        config = write_cfg1_pi_config(workspace, arm_id=arm_id, base_url=base_url)
         observed["config_dir"] = config.config_dir
         return config
 
@@ -1022,6 +1052,7 @@ def test_every_live_port_binding_calls_its_frozen_callee_with_a_valid_signature(
         ambient_environ={},
         node_executable=sentinel,
         generated_config=object(),
+        workspace=object(),
         credential_value=sentinel,
         git_executable=sentinel,
     )

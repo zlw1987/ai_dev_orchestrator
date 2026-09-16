@@ -494,7 +494,7 @@ def test_t44_a_genuine_unretired_authority_passes_every_writer_in_one_stage(
 
 
 def _drive_stage(authority, executor, probe=None):
-    from pi_harness_cfg1.stage_runner import run_cfg1_stage
+    from pi_harness_cfg1.stage_runner import _run_cfg1_stage_with_injected_executor as run_cfg1_stage
 
     return run_cfg1_stage(authority, run_executor=executor, _internal_probe=probe)
 

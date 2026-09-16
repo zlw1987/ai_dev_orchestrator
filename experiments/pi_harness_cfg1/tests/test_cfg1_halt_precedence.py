@@ -186,7 +186,7 @@ def test_t101_only_the_four_resolved_statuses_are_readable_at_all():
 
 
 def test_t101_the_runner_records_l29_before_it_ever_evaluates_l30():
-    source = inspect.getsource(stage_runner.run_cfg1_stage)
+    source = inspect.getsource(stage_runner._run_cfg1_stage_with_injected_executor)
     emit_at = source.index("emission = emit_cfg1_run_record(")
     record_at = source.index("_record_ordinal_result(run_ordinal, emission.emission_status)")
     admission_at = source.index("admissible = _admission_conditions_hold(")
@@ -218,7 +218,7 @@ def _halting_executor(ordinal: int, overrides: dict):
 
 def test_t14_a_lifecycle_failure_admits_no_later_ordinal(make_authority):
     authority = make_authority("S1-X1")
-    result = stage_runner.run_cfg1_stage(
+    result = stage_runner._run_cfg1_stage_with_injected_executor(
         authority,
         run_executor=_halting_executor(
             2,
@@ -244,7 +244,7 @@ def test_t14_a_lifecycle_failure_admits_no_later_ordinal(make_authority):
 
 def test_t14_a_pre_dispatch_refusal_admits_no_later_ordinal(make_authority):
     authority = make_authority("S1-X1")
-    result = stage_runner.run_cfg1_stage(
+    result = stage_runner._run_cfg1_stage_with_injected_executor(
         authority,
         run_executor=_halting_executor(
             1, pre_dispatch_refusal_overrides("BROKER_NOT_READY", "L13")
@@ -267,7 +267,7 @@ def test_t14_an_emission_collision_admits_no_later_ordinal(make_authority, monke
         return real_open(path)
 
     monkeypatch.setattr(writers, "_open_exclusive", _open)
-    result = stage_runner.run_cfg1_stage(
+    result = stage_runner._run_cfg1_stage_with_injected_executor(
         authority, run_executor=synthetic_run_executor()
     )
     assert result.halted_after_ordinal == 2
@@ -294,7 +294,7 @@ def test_t14_a_non_empty_run_scoped_registry_admits_no_later_ordinal(make_author
             live_references_released=admission.run_ordinal != 2,
         )
 
-    result = stage_runner.run_cfg1_stage(authority, run_executor=_executor)
+    result = stage_runner._run_cfg1_stage_with_injected_executor(authority, run_executor=_executor)
     assert result.halted_after_ordinal == 2
     assert result.halt_reason_code == "RUN_SCOPED_REGISTRY_NOT_EMPTY"
 
@@ -322,7 +322,7 @@ def test_an_evidence_refusal_alone_does_not_halt_the_stage(make_authority):
         )
 
     authority = make_authority("S1-X1")
-    result = stage_runner.run_cfg1_stage(authority, run_executor=_executor)
+    result = stage_runner._run_cfg1_stage_with_injected_executor(authority, run_executor=_executor)
     assert result.disposition == "STAGE_COMPLETED"
     assert result.halted_after_ordinal is None
     assert dict(result.ordinal_status)[2] == "EVIDENCE_REFUSED"

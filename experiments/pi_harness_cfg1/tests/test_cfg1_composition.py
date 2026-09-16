@@ -41,22 +41,25 @@ SYNTHETIC_CREDENTIAL = "cfg1-synthetic-key"
 
 
 def test_t1_arm_q_generated_documents_are_byte_identical_to_the_frozen_generator(
-    tmp_path,
+    tmp_path, git_executable
 ):
     from qualification import i2_issuance
     from qualification.i2_pi_config import write_qualification_pi_config
 
+    from pi_harness_cfg1 import run_workspace
+
     frozen_root = tmp_path / "frozen"
-    cfg1_root = tmp_path / "cfg1"
     frozen_root.mkdir()
-    cfg1_root.mkdir()
 
     frozen = write_qualification_pi_config(
         str(frozen_root), model_id=CFG1_MODEL_ID, base_url=SYNTHETIC_BASE_URL
     )
+    workspace, _built = run_workspace.mint_cfg1_run_workspace(
+        git_executable=git_executable
+    )
     try:
         generated = write_cfg1_pi_config(
-            str(cfg1_root), arm_id="Q", base_url=SYNTHETIC_BASE_URL
+            workspace, arm_id="Q", base_url=SYNTHETIC_BASE_URL
         )
 
         assert (
@@ -74,15 +77,22 @@ def test_t1_arm_q_generated_documents_are_byte_identical_to_the_frozen_generator
         i2_issuance._discard_issuance(
             token=frozen.authority_token, config_dir=frozen.config_dir
         )
+        run_workspace.remove_cfg1_run_workspace(workspace)
 
 
-def test_the_generated_documents_never_contain_a_credential_value(tmp_path):
-    cfg1_root = tmp_path / "cfg1"
-    cfg1_root.mkdir()
-    generated = write_cfg1_pi_config(
-        str(cfg1_root), arm_id="Q", base_url=SYNTHETIC_BASE_URL
+def test_the_generated_documents_never_contain_a_credential_value(git_executable):
+    from pi_harness_cfg1 import run_workspace
+
+    workspace, _built = run_workspace.mint_cfg1_run_workspace(
+        git_executable=git_executable
     )
-    models_text = Path(generated.models_path).read_text(encoding="utf-8")
+    try:
+        generated = write_cfg1_pi_config(
+            workspace, arm_id="Q", base_url=SYNTHETIC_BASE_URL
+        )
+        models_text = Path(generated.models_path).read_text(encoding="utf-8")
+    finally:
+        run_workspace.remove_cfg1_run_workspace(workspace)
     assert SYNTHETIC_CREDENTIAL not in models_text
     # Exactly the `$ENV_NAME` interpolation form -- never `$$`, never `!shell`.
     assert f'"apiKey": "${CREDENTIAL_ENV_VAR_NAME}"' in models_text
@@ -174,12 +184,15 @@ def test_the_declared_shape_and_effective_values_agree_with_the_compat_subtree()
 # ---------------------------------------------------------------------------
 
 
-def test_t4_the_cfg1_child_environment_matches_the_frozen_i2_builder(tmp_path):
+def test_t4_the_cfg1_child_environment_matches_the_frozen_i2_builder(
+    tmp_path, git_executable
+):
     from qualification import i2_issuance
     from qualification.i2_environment import build_child_environment
     from qualification.i2_pi_config import write_qualification_pi_config
     from qualification.i2_secret_context import build_secret_context
 
+    from pi_harness_cfg1 import run_workspace
     from pi_harness_cfg1.environment import build_cfg1_child_environment
 
     ambient = {
@@ -198,12 +211,13 @@ def test_t4_the_cfg1_child_environment_matches_the_frozen_i2_builder(tmp_path):
     node_executable = r"C:\Program Files\nodejs\node.exe"
 
     frozen_root = tmp_path / "frozen"
-    cfg1_root = tmp_path / "cfg1"
     frozen_root.mkdir()
-    cfg1_root.mkdir()
 
     frozen_config = write_qualification_pi_config(
         str(frozen_root), model_id=CFG1_MODEL_ID, base_url=SYNTHETIC_BASE_URL
+    )
+    workspace, _built = run_workspace.mint_cfg1_run_workspace(
+        git_executable=git_executable
     )
     try:
         secret_context = build_secret_context(
@@ -219,12 +233,13 @@ def test_t4_the_cfg1_child_environment_matches_the_frozen_i2_builder(tmp_path):
         )
 
         cfg1_config = write_cfg1_pi_config(
-            str(cfg1_root), arm_id="Q", base_url=SYNTHETIC_BASE_URL
+            workspace, arm_id="Q", base_url=SYNTHETIC_BASE_URL
         )
         cfg1_env = build_cfg1_child_environment(
             ambient_environ=ambient,
             node_executable=node_executable,
             generated_config=cfg1_config,
+            workspace=workspace,
             credential_value=SYNTHETIC_CREDENTIAL,
         )
 
@@ -245,9 +260,11 @@ def test_t4_the_cfg1_child_environment_matches_the_frozen_i2_builder(tmp_path):
         i2_issuance._discard_issuance(
             token=frozen_config.authority_token, config_dir=frozen_config.config_dir
         )
+        run_workspace.remove_cfg1_run_workspace(workspace)
 
 
-def test_no_decoy_name_and_no_profile_name_ever_reaches_the_child(tmp_path):
+def test_no_decoy_name_and_no_profile_name_ever_reaches_the_child(git_executable):
+    from pi_harness_cfg1 import run_workspace
     from pi_harness_cfg1.environment import audit_withheld_names, build_cfg1_child_environment
 
     ambient = {
@@ -264,15 +281,20 @@ def test_no_decoy_name_and_no_profile_name_ever_reaches_the_child(tmp_path):
         "APPDATA": r"C:\Users\decoy\AppData",
         "EDITOR": "notepad",
     }
-    cfg1_root = tmp_path / "cfg1"
-    cfg1_root.mkdir()
-    config = write_cfg1_pi_config(str(cfg1_root), arm_id="R", base_url=SYNTHETIC_BASE_URL)
-    built = build_cfg1_child_environment(
-        ambient_environ=ambient,
-        node_executable=r"C:\Program Files\nodejs\node.exe",
-        generated_config=config,
-        credential_value=SYNTHETIC_CREDENTIAL,
+    workspace, _built = run_workspace.mint_cfg1_run_workspace(
+        git_executable=git_executable
     )
+    try:
+        config = write_cfg1_pi_config(workspace, arm_id="R", base_url=SYNTHETIC_BASE_URL)
+        built = build_cfg1_child_environment(
+            ambient_environ=ambient,
+            node_executable=r"C:\Program Files\nodejs\node.exe",
+            generated_config=config,
+            workspace=workspace,
+            credential_value=SYNTHETIC_CREDENTIAL,
+        )
+    finally:
+        run_workspace.remove_cfg1_run_workspace(workspace)
     audit = audit_withheld_names(
         ambient_environ=ambient, built_environment=built.environment
     )

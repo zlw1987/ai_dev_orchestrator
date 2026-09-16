@@ -93,7 +93,7 @@ def _drive(authority, failure_point, *, force_second_reach, closure_spy):
     harness = _MintFailureHarness(
         authority, failure_point, force_second_reach=force_second_reach
     )
-    result = stage_runner.run_cfg1_stage(
+    result = stage_runner._run_cfg1_stage_with_injected_executor(
         authority,
         run_executor=synthetic_run_executor(),
         _internal_probe=harness.probe,
@@ -260,7 +260,7 @@ def test_t139_no_code_path_can_construct_a_decision_for_the_orphaned_entry(
 
     authority = make_authority("S1-X1")
     harness = _Harness(authority, "after_registration", force_second_reach=False)
-    stage_runner.run_cfg1_stage(
+    stage_runner._run_cfg1_stage_with_injected_executor(
         authority, run_executor=synthetic_run_executor(), _internal_probe=harness.probe
     )
 
@@ -331,7 +331,7 @@ def test_t136_the_history_fact_is_absent_only_after_an_ordinary_run_returns(
             seen.append(authority.mint_nonce in _STAGE_TERMINAL_SEAL_HISTORY)
 
     authority = make_authority("S1-X1")
-    result = stage_runner.run_cfg1_stage(
+    result = stage_runner._run_cfg1_stage_with_injected_executor(
         authority, run_executor=synthetic_run_executor(), _internal_probe=_probe
     )
     assert result.disposition == "STAGE_COMPLETED"
