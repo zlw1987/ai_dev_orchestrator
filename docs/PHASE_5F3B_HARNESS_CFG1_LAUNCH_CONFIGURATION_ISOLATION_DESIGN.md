@@ -710,12 +710,58 @@ other test id is added, removed, renumbered, or altered; T-142-T-162 remains
 the exact, unchanged regression scope, all of it now implementable. The
 itemized changelog is §38 (appended, not rewritten).
 
+**This revision also incorporates 5F3B-HARNESS-CFG1-DESIGN-FU16** — a narrow
+design correction against two frozen statements that actual Win32 execution
+during `CFG1-IMPL-FU3` proved false or unconstructible. It does not reopen the
+CFG1-IMPL-FU3 architecture through FU15-D1 beyond these two points, does not
+authorize LIVE-S1, DX1, or M4, and does not modify production code or tests.
+**First**, FU15's W10 (§37.2) attributed dangling-symlink safety at leaf
+creation to bare Python `open(path, "x")` / `O_CREAT|O_EXCL` and bare Win32
+`CreateFileW(..., CREATE_NEW, ...)`. Target-platform probing during
+`CFG1-IMPL-FU3` established a counterexample: against a **dangling** symlink
+planted at the leaf name, both bare forms **follow** the reparse point and
+create the endpoint at its target, rather than refusing — a write through the
+link. `CreateFileW(..., CREATE_NEW, FILE_FLAG_OPEN_REPARSE_POINT)` operates on
+the reparse point itself and refuses the occupied leaf name, dangling symlink
+included, without ever creating anything at the far end. The implementation
+therefore correctly uses `FILE_FLAG_OPEN_REPARSE_POINT`, and W10 and §37.3.1
+step 6 are corrected in place to match; **T-147's invariant is unchanged** — a
+planted ordinary file or symlink at either generated-config leaf still refuses
+L9, leaves the occupant unchanged, and writes nothing to the symlink target.
+**Second**, frozen T-152(a) named a lifecycle state — "after `settings.json`
+is written but before `models.json` is created" — that the frozen step-6/
+step-7/step-8 ordering (both children created together at step 6, content
+written to both only at step 8) cannot construct, since `models.json` already
+exists, empty, before either file's content is written.
+`CFG1-IMPL-FU3` correctly identified this contradiction rather than
+manufacturing a fake lifecycle state. The step ordering is **not** changed;
+T-152(a) and its one normative source (§37.3.2's partial-failure row) are
+rewritten to the constructible equivalent — after `settings.json` content has
+been written but before `models.json` content has been written — with the same
+disposition (L9 refuses, no issuance token, both pins released, residue inside
+the owned root for L27, no model-influenced code runs). **Third**, independent
+review separately found that CFG1-IMPL-FU3's module-level Win32 authority
+functions can currently return genuine pins/children/parentage proofs to a
+caller, and that `register_config_issuance` can consume those genuine objects
+to mint a genuine issuance token without going through `write_cfg1_pi_config`.
+**FU16 does not solve or redesign this**; it only records that
+`CFG1-IMPL-FU3` remains under independent implementation review on this point,
+that the existing frozen invariant (L9 pins are lexically owned by the one
+generator routine; no supported caller can obtain, supply, or replace them;
+issuance provenance must mean the generated config came through that authority
+path) already states the relevant requirement, and that a separate
+implementation FU must close or mechanically rebut the finding. `CLAUDE.md` is
+unmodified, no production module or test was changed, Pi was not launched,
+B300 was not contacted, no model was called, and no credential or endpoint
+value was read. **LIVE-S1 remains NOT authorized.** The itemized changelog is
+§39.
+
 ---
 
 ## 0. Status block
 
 ```text
-5F3B-HARNESS-CFG1-DESIGN (+FU1+FU2+FU3+FU4+FU5+FU6+FU7+FU8+FU9+FU10+FU11+FU12+FU13+FU14+FU15+FU15-D1+FU15-D2)  THIS DOCUMENT — ACCEPTED / FROZEN — OFFLINE IMPLEMENTATION CORRECTION AUTHORIZED, LIVE RUN NOT AUTHORIZED
+5F3B-HARNESS-CFG1-DESIGN (+FU1+FU2+FU3+FU4+FU5+FU6+FU7+FU8+FU9+FU10+FU11+FU12+FU13+FU14+FU15+FU15-D1+FU15-D2+FU16)  THIS DOCUMENT — ACCEPTED / FROZEN — OFFLINE IMPLEMENTATION CORRECTION AUTHORIZED, LIVE RUN NOT AUTHORIZED
 
 5F3B-HARNESS-OBS1-CONTRACT-A1            ACCEPTED / FROZEN
 5F3B-HARNESS-OBS1-DESIGN                 ACCEPTED / FROZEN
@@ -1548,7 +1594,7 @@ in **§22**. §21 governs what may never enter it.
 | **T-149** | **T-1's byte identity survives the handle-based writer (new, FU15, §37.3.1 step 8).** Arm Q's `settings.json` and `models.json`, written through the new descriptor path, are proven **byte-for-byte identical** to the frozen qualification generator's own `Path.write_text` output for the same synthetic inputs — including Windows newline translation. T-1 itself is unchanged; this row proves the mechanism change did not silently move the bytes, and a failure here blocks FU15 rather than amending T-1 |
 | **T-150** | **both pins are released on every L9 exit path, before L9 returns (new, FU15, §37.3.1 step 11).** For the success path and for **each** refusal and injected-failure path enumerated in §37.3.2, a handle spy proves both pins closed before control leaves L9, config directory first, then root. The row additionally proves the release is load-bearing rather than hygiene: with a pin deliberately leaked, L27's `remove_disposable_tree` is proven to fail, so a future regression in release is guaranteed to surface as a lifecycle failure rather than silently |
 | **T-151** | **pin-release failure degrades both L9 and the lifecycle evidence (new, FU15, §37.3.2 row 11).** A synthetic close failure is injected for each pin independently. The test proves: (1) L9 refuses with the corresponding closed code (`CONFIG_DIR_PIN_NOT_RELEASED` / `WORKSPACE_ROOT_PIN_NOT_RELEASED`); (2) no force-close, retry, or re-derivation of the handle from a name is attempted (spy-proven); (3) the run's durable lifecycle evidence carries `workspace_removed_verified = false` and `lifecycle_all_closed = false`, and the run classifies `INDETERMINATE_LIFECYCLE` with the stage halting per §18 row 10; (4) the L27 failure is reported, never suppressed |
-| **T-152** | **the two post-creation partial-failure points (new, FU15, §37.3.2 rows 7–8).** Failure is injected (a) after `settings.json` is written but before `models.json` is created, and (b) after both are written but before issuance is registered. For each: L9 refuses; `issued_token_count()` is unchanged, so no consumer can claim a generated config exists; both pins are released; the residue is proven to remain **inside** the owned root and to be removed by L27's root removal alone; `verification_attempted` is `false` with `verification_skip_reason == "PRE_DISPATCH_REFUSAL"`, proving no model-influenced code ran while an endpoint-bearing file was still on disk. For (b) specifically, the test proves L24's scrub branch was **not** entered (there is no issuance to prove ownership with) rather than entered and failed |
+| **T-152** | **the two post-content-write partial-failure points (corrected, FU16 — see below; new, FU15, §37.3.2 rows 7–8).** Failure is injected (a) after `settings.json` **content** has been written but before `models.json` **content** has been written, and (b) after both are written but before issuance is registered. At the injection point for (a), both `settings.json` and `models.json` already exist as the step-6 zero-content children: `settings.json` holds its finalized written content, and `models.json` remains the zero-content child from step 6, not yet written. For each of (a) and (b): L9 refuses; `issued_token_count()` is unchanged, so no consumer can claim a generated config exists; both pins are released; the residue is proven to remain **inside** the owned root and to be removed by L27's root removal alone; `verification_attempted` is `false` with `verification_skip_reason == "PRE_DISPATCH_REFUSAL"`, proving no model-influenced code ran while an endpoint-bearing file was still on disk. For (b) specifically, the test proves L24's scrub branch was **not** entered (there is no issuance to prove ownership with) rather than entered and failed. **FU16 correction:** the original wording named (a) as "after `settings.json` is written but before `models.json` is **created**", a state the frozen step-6/step-7/step-8 ordering cannot reach because both children are created together at step 6; the state semantics above are the constructible equivalent and the test's assertions are otherwise unchanged |
 | **T-153** | **pin-acquisition failure creates nothing and deletes nothing (new, FU15, §37.3.2 row 3).** For each pin independently, acquisition is made to fail. The test proves one closed refusal code, **zero** child-creation attempts (spy-proven), and — for the config-directory case — that the just-created empty directory is **left in place**, never removed by CFG1, because its ownership is not mechanically proven; its removal is proven to occur only via L27 |
 | **T-154** | **`R-WINDOW` is the FROZEN acceptance test for the reviewer-accepted residual, positively establishing its exact boundary (rewritten, FU15-D1, resolving `D-A` = A1; new, FU15, §37.3.6).** An ordinary directory is substituted at `<root>/cfg1_pi_config` in the `mkdir`→first-pin window. The test positively establishes three facts, and this row must never be read — and no future change may make it read — as proving the window itself was eliminated: (1) **the substitution wins** — the object L9 goes on to pin is proven, by file id, to be the substitute rather than the object `CreateDirectoryW` originally returned, and L9 does **not** detect this and does **not** refuse (§37.3.6's frozen statement); (2) **from the first pin onward, every escape/replacement/reparse attempt this design enumerates is mechanically refused against the substitute exactly as it is against a genuine directory** — rename, delete, in-place reparse conversion (T-144's pinned half), and a foreign-name leaf collision (T-147) are each attempted against the pinned substitute, proving the post-pin guarantee is a property of the pin, not of the pinned object's provenance; (3) **no sensitive byte is written before the post-pin authority proof completes** — spy-proven zero content-bearing writes before the step-7 parentage gate passes (T-146's discipline, applied to this exact substituted-object case), and the written `models.json` is separately proven to resolve inside the identity-proven owned root, with L24's scrub reaching and unlinking it and L27's removal reaching it. Any future change under which such a substitution produces a write outside the owned root, an endpoint-bearing file that survives L27, or a pre-pin content write, fails this row |
 | **T-155** | **L24's scrub is identity-bound and never deletes a non-matching object (new, FU15, §37.3.1 step 10, §37.3.2 row 9).** The issuance record is proven to carry the pinned config-directory identity and both child identities. The scrub target is then replaced, between issuance and L24, with a different object at the same path. The test proves: the scrub refuses, **no unlink of any kind occurs** (spy-proven, including no pathname unlink), `generated_config_scrub_verified` is `false`, L26 is skipped with `LIFECYCLE_UNPROVEN`, and the stage halts per §18 row 9 |
@@ -6152,10 +6198,26 @@ pin being causally responsible was additionally run as a matched
 | **W7** | Children can still be exclusively created inside a pinned directory while the pin is held | P4 | — |
 | **W8** | `GetFileInformationByHandleEx(FileIdExtdDirectoryInfo)` enumerates the pinned directory **from the handle**, with no pathname resolution; each entry's `FileId` equals `os.stat(fd).st_ino` of that child's own open descriptor, and `FileIdInfo.VolumeSerialNumber` equals `st_dev` | P2, P6 | — |
 | **W9** | That enumeration's cursor is **per-handle and does not restart** — a second call returns `ERROR_NO_MORE_FILES`. One pass per handle | P19 | 18 |
-| **W10** | Python's `open(path, "x")` is `O_CREAT \| O_EXCL`: it refuses an occupied name, including a pre-planted symlink, never writes through one, and its Windows share mode denies **delete** while open | P9, P17b | 32; `ERROR_FILE_EXISTS` (80) |
+| **W10** | **(corrected, FU16 — see note below the table)** Python's `open(path, "x")` (`O_CREAT \| O_EXCL`) and a bare Win32 `CreateFileW(..., CREATE_NEW, ...)` refuse an occupied ordinary name and deny **delete** while open, but on the target platform **neither is sufficient proof of dangling-symlink safety**: against a **dangling** symlink planted at the name, both **follow** the reparse point and create the endpoint at its target — a write through the link, not a refusal. `CreateFileW(..., CREATE_NEW, ..., FILE_FLAG_OPEN_REPARSE_POINT)` operates on the reparse point itself instead of following it, so it refuses the already-occupied leaf name — dangling symlink included — and creates nothing at the link's target. CFG1's accepted leaf-creation mechanism (§37.3.1 step 6) is this `FILE_FLAG_OPEN_REPARSE_POINT` form | P9, P17b; target-platform probing, CFG1-IMPL-FU3 | 32; `ERROR_FILE_EXISTS` (80) |
 | **W11** | A pin on a **directory** does **not** protect its children: another actor can delete an unheld child, and can still **create** new children inside the pinned directory | P18, control C5 | — |
 | **W12** | Handle-based deletion (`SetFileInformationByHandle` / `FileDispositionInfo`) requires `DELETE` in the handle's desired access. A descriptor from Python's `open()` lacks it; a `CreateFileW` handle that requests it works | P8, P17 | 5; success |
 | **W13** | `os.stat(fd)` on win32 returns `st_dev = VolumeSerialNumber` and `st_ino =` the 128-bit file id, and works on a directory handle adopted via `msvcrt.open_osfhandle` | P2, P2b | — |
+
+> **FU16 correction to W10.** FU15's original W10 stated that bare Python
+> `open(path, "x")` / `O_CREAT|O_EXCL` refuses a pre-planted symlink and never
+> writes through it. Actual Win32 execution during `CFG1-IMPL-FU3` disproved
+> this for the **dangling**-symlink case: bare `open(path, "x")` and a bare
+> `CreateFileW(CREATE_NEW)` both follow the dangling symlink and create the
+> target through it. `CreateFileW(..., CREATE_NEW, FILE_FLAG_OPEN_REPARSE_POINT)`
+> does not follow the reparse point and refuses the occupied leaf name — dangling
+> or not — creating nothing at the far end. The implementation therefore
+> correctly uses `FILE_FLAG_OPEN_REPARSE_POINT` for leaf creation (§37.3.1 step
+> 6, corrected FU16). This corrects the frozen **mechanism**, not the security
+> invariant: **T-147's invariant is unchanged** — a planted ordinary file or
+> symlink at either generated-config leaf refuses L9, leaves the occupant
+> unchanged, and writes nothing to the symlink target. FU15's original claim is
+> recorded here as a historical statement that CFG1-IMPL-FU3 corrected before
+> LIVE-S1, not rewritten as though it always read this way.
 
 **Mechanisms evaluated and rejected.**
 
@@ -6220,10 +6282,16 @@ scrub target and L27's removal are otherwise unchanged.
    and volume serial equal the pinned config identity. This proves, without
    any pathname, that the pinned directory is a child entry of the
    identity-proven owned root.
-6. **Child creation.** Create `settings.json` then `models.json` via
-   `CreateFileW(..., CREATE_NEW, GENERIC_READ | GENERIC_WRITE | DELETE,
-   dwShareMode = 0)`, adopted as ordinary descriptors. `CREATE_NEW` refuses an
-   occupied name (W10/P17b), including a pre-planted symlink; `dwShareMode = 0`
+6. **Child creation (corrected, FU16).** Create `settings.json` then
+   `models.json` via `CreateFileW(..., CREATE_NEW,
+   GENERIC_READ | GENERIC_WRITE | DELETE, dwShareMode = 0,
+   dwFlagsAndAttributes = FILE_FLAG_OPEN_REPARSE_POINT)`, adopted as ordinary
+   descriptors. `CREATE_NEW` alone is not sufficient here: against a
+   **dangling** pre-planted symlink it follows the reparse point and creates
+   the target through it (W10, corrected FU16). `FILE_FLAG_OPEN_REPARSE_POINT`
+   makes the call operate on the reparse point itself, so `CREATE_NEW` refuses
+   an occupied name — including a pre-planted symlink, dangling or not —
+   without ever creating anything at the link's target; `dwShareMode = 0`
    denies another actor both delete and write for the descriptors' lifetime;
    `DELETE` access is what makes §37.3.4's handle-based removal possible at all
    (W12). **Zero content bytes are written at this step.**
@@ -6258,7 +6326,7 @@ scrub target and L27's removal are otherwise unchanged.
 | Who may consume it | Only that same routine's own code — the identity proof, the two enumerations, and the release. Nothing else, mirroring §16.3.8.4's runner-local ledger precedent |
 | Is it transferable | **No.** It is a local of that routine. It is never stored on `GeneratedCfg1Config`, never registered, never returned, never passed to a port, never placed in a record, never rendered in any `repr`. It is not a capability object and confers no authority outside L9's own interval |
 | When is it closed | At the end of L9, on every exit path, **before control leaves L9** — success, every refusal, and every injected failure alike |
-| Failure after settings creation, before models creation | L9 refuses (`CONFIG_FILES_NOT_WRITTEN`); no issuance token is minted, so `state.generated_config` is never set and no consumer can claim a generated config exists. Both pins are released. The partial residue stays inside the owned root and is removed only by L27. No model-influenced code runs: L26 is skipped with `PRE_DISPATCH_REFUSAL` |
+| Failure after `settings.json` content has been written, before `models.json` content has been written (corrected, FU16 — both files already exist as the step-6 zero-content children at this point; the original "before models creation" wording named a state the step-6/step-7/step-8 ordering cannot reach, since both children are created together at step 6; see T-152(a)) | L9 refuses (`CONFIG_FILES_NOT_WRITTEN`); no issuance token is minted, so `state.generated_config` is never set and no consumer can claim a generated config exists. Both pins are released. The partial residue — `settings.json` holding its written content, `models.json` still the zero-content child created at step 6 — stays inside the owned root and is removed only by L27. No model-influenced code runs: L26 is skipped with `PRE_DISPATCH_REFUSAL` |
 | Failure after both writes, before issuance | Identical disposition, with one addition that matters: the endpoint-bearing `models.json` exists on disk with **no issuance record**. L24's scrub branch is therefore not entered (it is gated on a generated config existing), and removal is L27's root removal alone. If L27 fails, §18 row 10's already-frozen outcome applies — `INDETERMINATE_LIFECYCLE`, halt, residual never deleted by any later run |
 | How cleanup proves it acts on the same resource | Two ways, both identity-based. **Inside L9:** a failed parentage proof removes the zero-byte children **only** through `SetFileInformationByHandle`/`FileDispositionInfo` on the very descriptors that created them (W12) — never by pathname, so no pathname-resolved victim is reachable. **At L24:** the scrub re-opens its target and refuses to unlink unless `os.stat(fd)` matches the identity the issuance record bound at §37.3.1 step 10; a mismatch means scrub-unverified, never a delete |
 | How every partial-failure path avoids foreign deletion | No CFG1 code path deletes a directory it created, ever (the empty config directory is left for L27). The only handle-based deletions are of the two files CFG1 itself exclusively created and still holds. If a handle-based removal fails, the zero-byte file is **left untouched** and the failure is reported; it is never retried by pathname |
@@ -6345,7 +6413,7 @@ before any settings/models **content** byte is written:
    the empirically tested Windows access/share contract (W3);
 8. exclusive leaf creation still prevents pre-existing
    `settings.json`/`models.json` occupation or redirection (§37.3.1 step 6,
-   `CREATE_NEW`, W10);
+   `CREATE_NEW` with `FILE_FLAG_OPEN_REPARSE_POINT`, W10 corrected FU16);
 9. issuance is established only after the exact generated files are finalized
    and re-proven against this pinned authority (§37.3.1 steps 9-10) — never
    before.
@@ -6369,8 +6437,11 @@ Restating the required invariant against the mechanism, clause by clause:
   redirect a write outside that owned directory"* — **satisfied**. A reparse
   substitution is refused at step 4 whether it was planted after a delete or
   converted in place without one (W4 proves the latter is real). A leaf
-  symlink is refused by `CREATE_NEW` (W10). A post-pin delete or rename of the
-  directory, or of any ancestor, is impossible (W2, W6).
+  symlink, dangling or not, is refused by `CreateFileW(CREATE_NEW,
+  FILE_FLAG_OPEN_REPARSE_POINT)` without ever writing through it (W10,
+  corrected FU16 — bare `CREATE_NEW` alone follows a dangling symlink and is
+  insufficient, §37.2). A post-pin delete or rename of the directory, or of
+  any ancestor, is impossible (W2, W6).
 - *"A post-write provenance check is insufficient by itself"* — **honoured**.
   The gate is step 7, strictly before step 8. A failure writes zero content
   bytes.
@@ -6389,8 +6460,8 @@ Restating the required invariant against the mechanism, clause by clause:
 |---|---|---|
 | 1 | directory delete + replacement immediately after `mkdir` | If the replacement is a **reparse point**, step 4's `FILE_FLAG_OPEN_REPARSE_POINT` attribute check refuses before any child is created (W1/P11). If it is an **ordinary directory**, step 5 still proves it is a child entry of the identity-proven root, so the write cannot leave the owned tree — but its *identity as CFG1's own creation* is **not** proven. This is `R-WINDOW`, §37.3.6 |
 | 2 | junction/reparse conversion **without** delete | W4 proves Windows permits exactly this against an unpinned empty directory — the reviewer's premise is correct and `mklink` would have hidden it. Before the pin: refused by step 4's attribute check. After the pin: impossible, because the adversary's write-access open is itself refused (W3) |
-| 3 | settings-file leaf replacement | `CREATE_NEW` refuses an occupied name and never writes through a planted symlink (W10/P17b); `dwShareMode = 0` then denies both delete and write for the descriptor's lifetime |
-| 4 | replacement between settings and models creation | The pinned directory cannot be deleted, renamed or converted (W2/W3/W5), and no ancestor can be renamed (W6). A planted `models.json` is refused by `CREATE_NEW`; a planted foreign file is caught by step 7's exact-entry-set requirement; any redirect at all is caught by step 7 **before** a content byte |
+| 3 | settings-file leaf replacement | `CreateFileW(CREATE_NEW, FILE_FLAG_OPEN_REPARSE_POINT)` refuses an occupied name and never writes through a planted symlink, dangling or not (W10/P17b, corrected FU16 — bare `CREATE_NEW` alone follows a dangling symlink and is insufficient); `dwShareMode = 0` then denies both delete and write for the descriptor's lifetime |
+| 4 | replacement between settings and models creation | The pinned directory cannot be deleted, renamed or converted (W2/W3/W5), and no ancestor can be renamed (W6). A planted `models.json` — including a dangling symlink — is refused by `CreateFileW(CREATE_NEW, FILE_FLAG_OPEN_REPARSE_POINT)` (W10, corrected FU16); a planted foreign file is caught by step 7's exact-entry-set requirement; any redirect at all is caught by step 7 **before** a content byte |
 | 5 | failure after settings write, before models write | §37.3.2 row 7. No issuance token, so no consumer can claim a generated config; both pins released; residue removed only by L27; verification skipped `PRE_DISPATCH_REFUSAL` |
 | 6 | failure after both writes, before issuance | §37.3.2 row 8. Same, plus the explicit statement that an endpoint-bearing file without an issuance record is L27's responsibility alone, and §18 row 10 owns the case where L27 then fails |
 | 7 | directory-handle acquisition failure | §37.3.2 row 3. One closed refusal code, **zero** child creates attempted, and the created directory left untouched — CFG1 never removes a directory whose ownership it cannot prove |
@@ -6640,7 +6711,12 @@ because a refusal that would have happened anyway proves nothing (this is the
 error `mklink` produced during the FU15 investigation itself, §37.2). **No
 regression in T-142…T-155 may claim `R-WINDOW` itself has been eliminated**
 (FU15-D1) — T-154 exists specifically to prove its bounded consequence, never
-its closure.
+its closure. **FU16** corrects T-152(a)'s wording to a state the frozen step
+ordering can actually construct (§37.3.2, §39) and corrects the leaf-creation
+mechanism T-147 and T-152 both rely on to `CreateFileW(CREATE_NEW,
+FILE_FLAG_OPEN_REPARSE_POINT)` (§37.2 W10, §37.3.1 step 6); neither change adds,
+removes, or renumbers a test id, and T-147's and T-152's proved outcomes are
+otherwise unchanged.
 
 ---
 
@@ -6678,13 +6754,45 @@ endpoint value was read. LIVE-S1 is **not** authorized.
 
 ---
 
+## 39. Changelog — FU16 against FU15-D1
+
+FU16 is a narrow design correction, not a new investigation: no new Windows
+probe was run, no production code or test was modified, and the CFG1-IMPL-FU3
+architecture through FU15-D1 is unchanged except for the two rows below.
+
+| # | Finding (independent review of `CFG1-IMPL-FU3`) | Resolution |
+|---|---|---|
+| 1 | **Frozen W10 attributed dangling-symlink safety at leaf creation to a mechanism actual Win32 execution proved false.** Target-platform probing established that bare Python `open(path, "x")` / `O_CREAT\|O_EXCL` and a bare `CreateFileW(CREATE_NEW)` both **follow** a dangling symlink and create the endpoint at its target, rather than refusing; `CreateFileW(CREATE_NEW, FILE_FLAG_OPEN_REPARSE_POINT)` does not follow it and refuses the occupied name, dangling or not | **Corrected in place, §37.2 (W10) and §37.3.1 step 6.** The frozen mechanism is now `CreateFileW(..., CREATE_NEW, ..., FILE_FLAG_OPEN_REPARSE_POINT)`, matching what `CFG1-IMPL-FU3` already implements. §37.3.2b item 8, §37.3.3, and §37.3.4 rows 3–4 are updated to cite the corrected mechanism. **T-147's invariant is unchanged**: a planted ordinary file or symlink at either generated-config leaf still refuses L9, leaves the occupant unchanged, and writes nothing to the symlink target — only the frozen *mechanism* proving that outcome changed, not the outcome. FU15's original W10 statement is preserved as a historical record of what was frozen before this correction, not rewritten to pretend it always read this way |
+| 2 | **Frozen T-152(a) named a lifecycle state — "after `settings.json` is written but before `models.json` is created" — that the frozen step-6/step-7/step-8 ordering cannot reach**, since both children are created together at step 6, before either receives content at step 8 | **Rewritten in place, §11.3 (T-152) and §37.3.2's corresponding partial-failure row.** The step-6/step-7/step-8 architecture is unchanged — no child creation was reordered to make the old wording constructible. T-152(a) now reads: after `settings.json` content has been written but before `models.json` content has been written. At that point both children already exist, `settings.json` holds finalized content, `models.json` remains the zero-content child from step 6, no issuance token is minted, both pins are released, no model-influenced code runs, and the residue stays inside the owned root for L27. T-152(b) is unchanged except for wording alignment. No test id is added, removed, or renumbered |
+| 3 | **Independent review found a separate `CFG1-IMPL-FU3` implementation issue**: the module-level Win32 authority functions can return genuine pins/children/parentage proofs to a caller, and `register_config_issuance` can consume those genuine objects to mint a genuine issuance token without going through `write_cfg1_pi_config` | **Not solved or redesigned here.** FU16 only records that this remains open: the already-frozen invariant (L9 pins are lexically owned by the one generator routine; no supported caller can obtain, supply, or replace them; issuance provenance must mean the generated config came through that authority path) already states the requirement this finding is about. `CFG1-IMPL-FU3` remains under independent implementation review on this point, and **LIVE-S1 remains NOT authorized**. A separate implementation FU must close or mechanically rebut this finding |
+
+**Consistency sweep performed.** Every current normative use of `W10`,
+`CREATE_NEW`, `O_CREAT`/`O_EXCL`, `open(path, "x")`, `T-147`, and `T-152` was
+reviewed. No remaining current statement claims bare `open(path, "x")` or a
+bare `CreateFileW(CREATE_NEW)` alone is dangling-symlink-safe on the target
+Win32 platform, and no remaining current regression requires a lifecycle state
+impossible under the frozen step-6/step-7/step-8 ordering. The `O_EXCL`
+references in §16.3.8/§17–§18 (the unrelated stage-output/run-record writer
+under `RESULTS_ROOT`) are a different, already-frozen mechanism outside this
+finding's scope and are untouched.
+
+No frozen qualification, OBS1, AR2, runtime, compat, schedule, record-schema,
+stage-output-authority, seal-once/consume-once, emission-phase, lifecycle,
+resource-ownership, threat-model, or `D-A`/`R-WINDOW` acceptance is reopened.
+`CLAUDE.md` is unmodified, no production module or test was changed, Pi was not
+launched, B300 was not contacted, no model was called, and no credential or
+endpoint value was read. **LIVE-S1 is not authorized.**
+
 ---
 
-## FU15 / FU15-D1 / FU15-D2 status (read before acting on the outcome block below)
+---
+
+## FU15 / FU15-D1 / FU15-D2 / FU16 status (read before acting on the outcome block below)
 
 The outcome block below is the **CFG1 design's** own standing verdict and is
 unchanged: the design as frozen through FU14, plus all of FU15/FU15-D1
-(§37.4, §37.5, and now §37.2/§37.3), may be implemented.
+(§37.4, §37.5, and now §37.2/§37.3), as corrected in place by FU16 (§39), may
+be implemented.
 
 **`D-A` is resolved.** The reviewer accepted option A1: `R-WINDOW` (§37.3.6) is
 a documented, bounded residual, ACCEPTED on the explicit terms recorded there
@@ -6704,7 +6812,20 @@ relative-open authority.
   directory-level half as an open design question, should be updated by
   `CFG1-IMPL` to cite this resolution rather than continuing to read as an
   unstated gap.
-- **LIVE-S1 is not authorized**, by FU15, by FU15-D1, or otherwise.
+- **FU16 corrects two frozen statements that `CFG1-IMPL-FU3`'s actual Win32
+  execution proved false or unconstructible** (§39): W10/§37.3.1 step 6's
+  leaf-creation mechanism is now `CreateFileW(CREATE_NEW,
+  FILE_FLAG_OPEN_REPARSE_POINT)`, matching the implementation, and T-152(a)
+  now names a lifecycle state the frozen step ordering can actually reach.
+  Neither correction reopens the step-6/step-7/step-8 architecture, T-147's
+  security outcome, or any other accepted CFG1-IMPL-FU3 behavior.
+- **FU16 does NOT resolve the separate, independently-found `CFG1-IMPL-FU3`
+  issue that `register_config_issuance` can currently mint a genuine issuance
+  token from genuine authority objects without going through
+  `write_cfg1_pi_config`** (§39, Finding 3). `CFG1-IMPL-FU3` remains under
+  independent implementation review on this point pending a separate
+  implementation FU.
+- **LIVE-S1 is not authorized**, by FU15, by FU15-D1, by FU16, or otherwise.
 
 ---
 
