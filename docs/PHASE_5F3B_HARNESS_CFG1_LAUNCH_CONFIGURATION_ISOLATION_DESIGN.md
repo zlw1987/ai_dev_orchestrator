@@ -605,12 +605,117 @@ added; T-1…T-141 remains the exact implementation scope; T-136 remains the
 sole authoritative cleanup-timing regression, unmodified. The itemized
 changelog is §36.
 
+**This revision also incorporates 5F3B-HARNESS-CFG1-DESIGN-FU15** — Windows
+config-directory pinning and durable evidence projection closure. FU15 does not
+reopen the compat experiment, the S1/S2 schedules, the model/fixture/prompt,
+F1/F2, the L0-L30 lifecycle, stage-output filesystem authority, the mint/
+ACTIVE/RETIRED model, the seal-once/consume-once separation, the emission-phase
+model, the three record-family schemas, `HALT_REASON_CODES`, or
+`STAGE_DECISION_MINT_FAILED` — it addresses two gaps independent review found
+after CFG1-IMPL-FU2. **Finding A:** CFG1-IMPL-FU2 closed the *file*-level
+config-generation TOCTOU with exclusive leaf creation but left the
+*directory*-level one open — `mkdir(config_dir)`, then a concurrent
+delete/rename/junction substitution, then a pathname-based child create that
+follows the replacement, with only a later issuance re-proof detecting the
+redirect, by which time a foreign filesystem write has already occurred.
+**Finding B:** malformed load-bearing counts were still being projected into the
+durable record as observed exact zeros — `untracked_path_count` and
+`staged_path_count` via `_exact_count(...)` while
+`git_observation_1_performed == true`, and the `verification_counts` mapping
+likewise, even though FU2 had correctly stopped a malformed count from
+strengthening `verification_passed`.
+
+FU15 investigates Finding A **empirically on the actual target platform** rather
+than by assumption, and records thirteen established Windows semantics with
+matched controls (new §37.2). Three of them are load-bearing and were not
+obvious: a `CreateFileW` directory pin whose share mode omits
+`FILE_SHARE_DELETE` makes the directory un-renameable and un-removable **and**
+transitively prevents the rename of every ancestor at any depth; Windows
+**does** permit in-place junction conversion of an unpinned *empty* directory
+with no delete and no rename at all, so the reviewer's counterexample is real
+and `mklink` is an unsound oracle for it; and
+`GetFileInformationByHandleEx(FileIdExtdDirectoryInfo)` enumerates a directory
+**from its handle**, with no pathname resolution, yielding per-entry file ids
+that match `os.stat(fd)` on a child's own descriptor. From these, new §37.3
+specifies an L9 authority whose gate is a **pathname-free parentage proof
+performed strictly before the first content byte**. **§37.2/§37.3 are specified
+but NOT frozen:** one residual, `R-WINDOW` — the instant between
+`CreateDirectoryW` returning and the pin being acquired — cannot be closed by
+any supported Windows API, because no documented call both creates a directory
+and returns proof of what it created, and every alternative merely moves the
+window to the first pathname-based operation that follows. `NtCreateFile` would
+close it and is **rejected as a freeze** on this design's own
+"no native API on plausibility" rule. Rather than silently accept the race,
+FU15 states the residual exactly, proves what it cannot produce (no reparse
+redirect, no write outside the identity-proven owned root, no escape from L24's
+scrub or L27's removal, no foreign deletion), and stops for reviewer decision
+`D-A` (§37.3.6, §37.3.7). Finding B is **frozen** (new §37.4): malformed L25
+repository counts drive the whole observation to the already-frozen
+not-performed shape, reusing FU2's own accepted
+`broker_recorded_activity_available` pattern; malformed L26 verification counts
+instead become a non-content-bearing sentinel the run-record validator refuses
+by construction, taking §18 row 15's already-frozen self-validation-refusal
+path — an asymmetry that is stated and justified, because verification
+demonstrably ran and no existing shape could truthfully call it unperformed.
+The OBS1 question is answered **No, with the reason documented** (new §37.5):
+`RuntimeToolActivitySnapshot.__post_init__` already refuses every malformed
+count at construction, so no CFG1-side window exists for a second mechanism to
+guard, and T-162 guards against duplicating that authority. The threat model is
+restated explicitly and **not narrowed** (§37.1): concurrent same-user
+filesystem tampering during L9 remains inside CFG1's supported adversarial
+model. It adds regressions T-142-T-162, renumbering, reusing, deleting and
+rewriting nothing; T-142-T-155 are implementable only after `D-A`, and
+T-156-T-162 are implementable now. The itemized changelog is §38.
+
+**This revision also incorporates 5F3B-HARNESS-CFG1-DESIGN-FU15-D1** — the
+reviewer's decision on `D-A`. FU15-D1 does not repeat FU15's Windows probe
+campaign (no new probe was needed to resolve a contradiction), does not
+authorize implementation, and modifies only this document. **`D-A` is resolved
+as A1**, with narrower authority semantics than FU15's own draft framing had
+stated: same-user concurrent filesystem tampering during L9 remains explicitly
+in scope (§37.1, unchanged), and `R-WINDOW` is **ACCEPTED as a documented
+residual** — CFG1 is not required to adopt `NtCreateFile` or any other
+undocumented/native relative-open authority merely to eliminate that one
+window, and this acceptance does **not** extend to authorizing pathname-only
+trust after the first identity-bearing handle is acquired. FU15-D1 corrects
+two things in FU15's own draft, in place. First, FU15's draft justified the
+residual partly by "a same-user adversary could already read the file
+directly," which the reviewer rejected as the justification: the residual is
+justified **only** by the mechanically bounded owned namespace plus the
+identity pin before any sensitive content is written, and that paragraph is
+rewritten (§37.3.6, corrected FU15-D1). Second, FU15's own authority table
+attributed both the config directory's identity *and* the root's teardown
+authority to the same "ownership by creation" reasoning, which cannot
+truthfully cover a substituted object; FU15-D1 freezes an explicit distinction
+between **root-namespace teardown authority** (L27 — genuine, granted to the
+whole owned namespace including whatever descendants appear inside it during
+the run, and never requiring per-child creation provenance) and **precise
+child authority** (L24 — genuine only for the exact pinned/issued object, and
+never permitted to follow a redirect outside the root) (new §37.3.2a,
+"Namespace authority, not invented creator identity"). It restates the
+required post-first-pin invariant as nine explicit mechanical facts (new
+§37.3.2b) and the residual's security consequence as an exact permit/forbid
+list matching the reviewer's own enumeration (revised §37.3.6). §37.2/§37.3 are
+now **FROZEN**; the Windows mechanism FU15 selected is preserved unchanged, and
+`NtCreateFile` remains explicitly unauthorized. T-143 gains a matched positive control (a genuine,
+non-redirected directory's handle correctly reports non-reparse, so the
+junction case's refusal is attributable to the reparse evidence itself); T-154
+is rewritten to positively establish the residual's exact three-part boundary
+— the substitution wins before the first pin, every post-pin escape/
+replacement/reparse attempt is mechanically refused regardless of whether the
+pinned object was CFG1's own original creation, and no sensitive byte is
+written before the post-pin authority proof completes — and to state
+explicitly that no regression may claim the window itself was eliminated. No
+other test id is added, removed, renumbered, or altered; T-142-T-162 remains
+the exact, unchanged regression scope, all of it now implementable. The
+itemized changelog is §38 (appended, not rewritten).
+
 ---
 
 ## 0. Status block
 
 ```text
-5F3B-HARNESS-CFG1-DESIGN (+FU1+FU2+FU3+FU4+FU5+FU6+FU7+FU8+FU9+FU10+FU11+FU12+FU13+FU14)  THIS DOCUMENT — NOT IMPLEMENTED, NOT AUTHORIZED TO RUN
+5F3B-HARNESS-CFG1-DESIGN (+FU1+FU2+FU3+FU4+FU5+FU6+FU7+FU8+FU9+FU10+FU11+FU12+FU13+FU14+FU15+FU15-D1+FU15-D2)  THIS DOCUMENT — ACCEPTED / FROZEN — OFFLINE IMPLEMENTATION CORRECTION AUTHORIZED, LIVE RUN NOT AUTHORIZED
 
 5F3B-HARNESS-OBS1-CONTRACT-A1            ACCEPTED / FROZEN
 5F3B-HARNESS-OBS1-DESIGN                 ACCEPTED / FROZEN
@@ -1433,6 +1538,27 @@ in **§22**. §21 governs what may never enter it.
 | **T-139** | **decision-mint failure after decision registration but before object construction: explicit before-return / after-return ordering (new, FU13; temporal ordering frozen explicitly, FU14 Finding 3, §16.3.8.3's "Registry cleanup on mint failure").** A synthetic `__post_init__` failure injected strictly between requirement-6 steps 4 and 5 is proven to leave, immediately after the failure, a registered-but-orphaned `_STAGE_DECISION_SEALED` entry (the decision nonce and fields are present in the registry, but no `CFG1StageClosureDecision` object was ever returned to any caller) and an established `_STAGE_TERMINAL_SEAL_HISTORY` entry. The test proves two ordered groups of assertions, never conflated: **(I) while the stage-runner invocation is still active, after the mint failure but before final bounded cleanup:** (1) `_STAGE_TERMINAL_SEAL_HISTORY`'s entry for this authority remains present; (2) a test-only, harness-forced malformed second reach of the sealing step is refused at requirement-6 step 2, before any second decision registration — this forced reach is not an operational retry (mirroring T-135(a)/(b)'s own distinction); (3) the orphaned `_STAGE_DECISION_SEALED` entry authenticates no usable decision — no code path anywhere can construct or return an object satisfying `type(x) is CFG1StageClosureDecision` for it, because no caller ever obtains the exact, freshly-generated `decision_nonce` `__post_init__` would need to re-check (mirroring T-124's enumeration technique). **(II) after the stage-runner invocation exits:** (4) the orphaned `_STAGE_DECISION_SEALED` entry is proven absent (bounded cleanup, not left indefinitely); (5) the `_STAGE_TERMINAL_SEAL_HISTORY` entry is **also** proven absent, using T-136's own before/after-return comparison technique — group (II) never re-asserts group (I)'s item 2 after return, because no sealing-capable lexical path exists at that point for any backstop to guard |
 | **T-140** | **raw exception text from a synthetic mint failure never reaches console or any artifact (new, FU13, §16.3.8.3, §21.1's reduction rule).** For each of T-137/T-138/T-139's three injected failures, the synthetic exception carries a distinctive, deliberately identifying message and/or a distinctive exception type never otherwise used in this design's own code. The test captures the actual console output and every byte written to every run, refusal, and stage-closure path for the remainder of that stage execution, and proves: (1) the distinctive message/type appears in **none** of them; (2) the only code observable in the console output for this failure is the closed literal `STAGE_DECISION_MINT_FAILED`; (3) no traceback, `repr`, or `str(exc)` output of any kind reaches either sink |
 | **T-141** | **§19.4/§22.4.2/T-123's no-confirmed-closure enumeration is exactly four and includes `STAGE_DECISION_MINT_FAILED` (new, FU13, mirrors T-123's own audit technique one level up).** A source-of-truth check proves: (1) the set of stage-ending cases §19.4 and §22.4.2 each enumerate as writing no confirmed stage-closure record has exactly four members in both sections, and the two sections' sets are identical; (2) `STAGE_DECISION_MINT_FAILED` is a member of that four-member set in both sections; (3) `STAGE_DECISION_MINT_FAILED` is, separately, proven **absent** from the closed `HALT_REASON_CODES` set (§19.4) and absent from all three closed record schemas (§22.1, §22.4.1, §22.4.2) — the same negative sweep technique T-94 already applies to the removed run-record fields, applied here to a code that must never be added to any of the four sets in the first place |
+| **T-142** | **the owned root is bound by IDENTITY, not by name, before anything is created (new, FU15, §37.3.1 steps 1–2; win32-conditional, must actually run on win32).** With a synthetic workspace, the identity CFG1 recorded at L2 is made to disagree with the object the root path now resolves to (the genuine root is moved aside and an ordinary directory of the same name substituted, entirely under `tmp_path`). L9 is proven to refuse with the closed `WORKSPACE_ROOT_IDENTITY_MISMATCH` code **before** `CreateDirectoryW` is called at all — spy-proven zero directory creations, zero child creations, zero bytes written anywhere — and to leave the substitute untouched. A matched control with the genuine root proves the same code path proceeds, so the refusal is attributable to the identity check and not to an unrelated failure |
+| **T-143** | **a reparse point at the config-directory name is refused, never followed, WITH a matched positive control (extended, FU15-D1; new, FU15, §37.3.1 step 4; win32-conditional).** A junction is planted at `<root>/cfg1_pi_config` pointing at a second synthetic directory under `tmp_path`. L9 is proven to refuse with `CONFIG_DIR_REDIRECTED`, and the junction target is proven to contain **no file of any name** afterwards — in particular no `settings.json` and no `models.json`, of any length including zero. The test asserts the refusal came from the handle's own `FILE_ATTRIBUTE_REPARSE_POINT`/`ReparseTag` evidence rather than from a lexical name check, by proving the same refusal for a junction whose target path is lexically inside the owned root. **Matched positive control (FU15-D1):** against a genuine, non-redirected ordinary directory at the identical name, the same handle-based check is proven to report `FILE_ATTRIBUTE_REPARSE_POINT` absent and `ReparseTag == 0`, and L9 is proven to proceed past step 4 rather than refuse — without this control, a version of L9 that refused every directory regardless of reparse status would pass the negative half alone; this half proves the refusal is attributable to the reparse evidence specifically |
+| **T-144** | **the pin is what prevents in-place reparse conversion, and the OS really does permit it without one (new, FU15, §37.2 W3/W4; win32-conditional).** Two matched halves, both required: (a) against an **unpinned** empty directory, a direct `FSCTL_SET_REPARSE_POINT` through a write-access handle **succeeds**, proving the reviewer's "conversion without delete" counterexample is real on this platform and that `mklink`'s refusal is an unsound oracle; (b) against the **same directory pinned as L9 pins it**, the adversary's write-access open is itself refused with `ERROR_SHARING_VIOLATION` and the FSCTL is never reached. A test that only proves (b) is insufficient and does not satisfy this row |
+| **T-145** | **the pinned directory and its whole ancestor chain are rename/delete-stable for the pin's lifetime (new, FU15, §37.2 W2/W6; win32-conditional).** While the config-directory pin is held: the pinned directory cannot be renamed or removed, and **no ancestor at any depth** can be renamed or (being non-empty) removed. Three matched controls are mandatory: the identical operations against the identical tree with **no** pin held must succeed; and they must succeed **again** after the pin is released. Without both controls the row proves nothing, since a rename may fail for reasons unrelated to the pin |
+| **T-146** | **the parentage proof is a PRE-WRITE gate, and its failure writes zero content bytes (new, FU15, §37.3.1 steps 6–7 — the core of Finding A).** A redirect is forced at the pathname layer so the two exclusively-created children land in a directory that is not the pinned object. The test proves, in order: (1) L9 refuses with `CONFIG_FILES_NOT_IN_PINNED_DIRECTORY`; (2) the foreign directory's `models.json`, at the moment of refusal, is exactly **zero bytes** and at no point contained the base URL, the model id, the provider id, or any `settings.json` content — asserted against the actual bytes, not against a digest; (3) the two zero-byte leaves are removed **only** through handle-based disposition, spy-proven with **zero** pathname-based `remove`/`unlink`/`rmdir` calls of any kind; (4) when that handle-based removal is itself made to fail, the leaf is left untouched, the failure is reported, and no pathname fallback is attempted |
+| **T-147** | **exclusive child creation refuses an occupied name and never writes through a planted link (new, FU15, §37.3.1 step 6; win32-conditional).** For each of `settings.json` and `models.json` independently: with an ordinary file pre-planted at the name, and again with a **symlink** pre-planted at the name pointing outside the owned root, L9 refuses with `CONFIG_FILE_ALREADY_EXISTS`, the pre-planted occupant's bytes are proven unchanged, and the symlink's target is proven to have received nothing |
+| **T-148** | **content bytes reach only the proven descriptors (new, FU15, §37.3.1 step 8).** An I/O spy covering the whole L9 interval proves that after the step-7 gate passes, **zero** pathname-based opens or writes of either config path occur: every content byte, and every finalization read-back, goes through the two descriptors whose file ids the parentage proof matched, and the digests are computed from those same descriptors rather than from a re-opened path |
+| **T-149** | **T-1's byte identity survives the handle-based writer (new, FU15, §37.3.1 step 8).** Arm Q's `settings.json` and `models.json`, written through the new descriptor path, are proven **byte-for-byte identical** to the frozen qualification generator's own `Path.write_text` output for the same synthetic inputs — including Windows newline translation. T-1 itself is unchanged; this row proves the mechanism change did not silently move the bytes, and a failure here blocks FU15 rather than amending T-1 |
+| **T-150** | **both pins are released on every L9 exit path, before L9 returns (new, FU15, §37.3.1 step 11).** For the success path and for **each** refusal and injected-failure path enumerated in §37.3.2, a handle spy proves both pins closed before control leaves L9, config directory first, then root. The row additionally proves the release is load-bearing rather than hygiene: with a pin deliberately leaked, L27's `remove_disposable_tree` is proven to fail, so a future regression in release is guaranteed to surface as a lifecycle failure rather than silently |
+| **T-151** | **pin-release failure degrades both L9 and the lifecycle evidence (new, FU15, §37.3.2 row 11).** A synthetic close failure is injected for each pin independently. The test proves: (1) L9 refuses with the corresponding closed code (`CONFIG_DIR_PIN_NOT_RELEASED` / `WORKSPACE_ROOT_PIN_NOT_RELEASED`); (2) no force-close, retry, or re-derivation of the handle from a name is attempted (spy-proven); (3) the run's durable lifecycle evidence carries `workspace_removed_verified = false` and `lifecycle_all_closed = false`, and the run classifies `INDETERMINATE_LIFECYCLE` with the stage halting per §18 row 10; (4) the L27 failure is reported, never suppressed |
+| **T-152** | **the two post-creation partial-failure points (new, FU15, §37.3.2 rows 7–8).** Failure is injected (a) after `settings.json` is written but before `models.json` is created, and (b) after both are written but before issuance is registered. For each: L9 refuses; `issued_token_count()` is unchanged, so no consumer can claim a generated config exists; both pins are released; the residue is proven to remain **inside** the owned root and to be removed by L27's root removal alone; `verification_attempted` is `false` with `verification_skip_reason == "PRE_DISPATCH_REFUSAL"`, proving no model-influenced code ran while an endpoint-bearing file was still on disk. For (b) specifically, the test proves L24's scrub branch was **not** entered (there is no issuance to prove ownership with) rather than entered and failed |
+| **T-153** | **pin-acquisition failure creates nothing and deletes nothing (new, FU15, §37.3.2 row 3).** For each pin independently, acquisition is made to fail. The test proves one closed refusal code, **zero** child-creation attempts (spy-proven), and — for the config-directory case — that the just-created empty directory is **left in place**, never removed by CFG1, because its ownership is not mechanically proven; its removal is proven to occur only via L27 |
+| **T-154** | **`R-WINDOW` is the FROZEN acceptance test for the reviewer-accepted residual, positively establishing its exact boundary (rewritten, FU15-D1, resolving `D-A` = A1; new, FU15, §37.3.6).** An ordinary directory is substituted at `<root>/cfg1_pi_config` in the `mkdir`→first-pin window. The test positively establishes three facts, and this row must never be read — and no future change may make it read — as proving the window itself was eliminated: (1) **the substitution wins** — the object L9 goes on to pin is proven, by file id, to be the substitute rather than the object `CreateDirectoryW` originally returned, and L9 does **not** detect this and does **not** refuse (§37.3.6's frozen statement); (2) **from the first pin onward, every escape/replacement/reparse attempt this design enumerates is mechanically refused against the substitute exactly as it is against a genuine directory** — rename, delete, in-place reparse conversion (T-144's pinned half), and a foreign-name leaf collision (T-147) are each attempted against the pinned substitute, proving the post-pin guarantee is a property of the pin, not of the pinned object's provenance; (3) **no sensitive byte is written before the post-pin authority proof completes** — spy-proven zero content-bearing writes before the step-7 parentage gate passes (T-146's discipline, applied to this exact substituted-object case), and the written `models.json` is separately proven to resolve inside the identity-proven owned root, with L24's scrub reaching and unlinking it and L27's removal reaching it. Any future change under which such a substitution produces a write outside the owned root, an endpoint-bearing file that survives L27, or a pre-pin content write, fails this row |
+| **T-155** | **L24's scrub is identity-bound and never deletes a non-matching object (new, FU15, §37.3.1 step 10, §37.3.2 row 9).** The issuance record is proven to carry the pinned config-directory identity and both child identities. The scrub target is then replaced, between issuance and L24, with a different object at the same path. The test proves: the scrub refuses, **no unlink of any kind occurs** (spy-proven, including no pathname unlink), `generated_config_scrub_verified` is `false`, L26 is skipped with `LIFECYCLE_UNPROVEN`, and the stage halts per §18 row 9 |
+| **T-156** | **a malformed `untracked_path_count` makes the whole L25 observation not-performed (new, FU15, §37.4.1 — the primary Finding B row).** With every other member of the repository snapshot well-formed, `untracked_path_count` is made a `bool`, a `float`, a numeric string, a negative int, and an object with `__index__` — each case independently. For every one, the durable run record is proven to carry `git_observation_1_performed = false` with every observation-#1 companion at its frozen not-performed shape, and — the point of the row — the record is proven to contain **no manufactured `0` presented as an observed count**. §12.2's D-4 predicate is proven not to be evaluated |
+| **T-157** | **identical proof for a malformed `staged_path_count` (new, FU15, §37.4.1).** Same five malformed shapes, same all-or-nothing disposition, same absence of an invented zero |
+| **T-158** | **the two adjacent L25 launderings are closed with the counts (new, FU15, §37.4.1).** (a) `changed_tracked_paths` missing entirely, and present but containing a non-`str` member; (b) `head` missing, and present but not an exact `str`. Each is proven to drive the same not-performed disposition, rather than becoming a durable empty `changed_tracked_paths` meaning "nothing changed" or a durable `head_moved = false` meaning "HEAD did not move" |
+| **T-159** | **a genuine zero is still recordable (new, FU15, §37.4.1).** A well-formed snapshot reporting exact `0` for both counts, an empty `changed_tracked_paths`, and an unchanged `head` is proven to record `git_observation_1_performed = true` with `untracked_path_count == 0` and `staged_path_count == 0`. Without this row, T-156/T-157 could be satisfied by a change that made observed zeros unrepresentable, which would be a different falsehood |
+| **T-160** | **a malformed verification count refuses the record instead of inventing one (new, FU15, §37.4.2).** With the verification port reporting `passed = true` and a malformed member of `verification_counts` (each of the five malformed shapes, and a missing key, independently), the test proves: (1) the payload's `verification_counts` carries the fixed non-content-bearing sentinel, never a manufactured integer; (2) `_require_valid_cfg1_run_payload` refuses at `verification_counts`; (3) §18 row 15 fires — a refusal record with `refused_record_kind` and finding code `RECORD_INVARIANT`, emission status `EVIDENCE_REFUSED`; (4) the stage halts unconditionally; (5) no durable artifact anywhere carries `verification_passed: true`, and none carries an invented count |
+| **T-161** | **the malformed verification value never reaches any sink (new, FU15, §37.4.2; mirrors T-140's containment technique).** The malformed member is an object whose `__str__`/`__repr__` carry a distinctive, deliberately identifying literal never otherwise used in this design. The test captures the console output and every byte written to every run, refusal and stage-closure path for the remainder of that stage execution, and proves the distinctive literal appears in none of them — the sentinel substitution, not the malformed object, is what reaches the payload |
+| **T-162** | **OBS1's frozen boundary already owns count integrity, and CFG1 adds no second mechanism (new, FU15, §37.5).** Two halves. (a) Through `RuntimeToolActivitySnapshot`'s **actual frozen public boundary**, a malformed count (a `bool`, a `float`, a negative int, a value above `MAX_ACTIVITY_TOOL_COUNT`, and an `__index__` lookalike) is proven to raise `ActivityRecordInvariantError` at construction — so no constructed snapshot can ever hold one — and CFG1's consumption is proven to convert that into the already-frozen unavailable shape, with `runtime_reported_tool_activity_available = false`, a closed reason code, and no exception text retained. (b) A source-of-truth sweep proves CFG1 defines **no** second availability flag, predicate, or exactness gate for any `runtime_reported_*` count, and that no `_exact_count`-style reduction is applied to one on the projection path — duplicating OBS1's authority is itself the regression this half guards against |
 
 **T-3 network-safety rule (FU1, frozen):**
 
@@ -1881,7 +2007,7 @@ authorizes no execution, no manifest-bearing CFG1 arm, and no merge with DX1.
 ### 14.1 Sequence
 
 1. **`5F3B-HARNESS-CFG1-IMPL`** — offline only. Implements §7.4, §7.5, §11, §12,
-   and §16–§22, plus **T-1…T-141** (FU6 extended the regression list from
+   and §16–§22, plus **T-1…T-162** (FU6 extended the regression list from
    T-1…T-68 to T-1…T-82; FU7 extended it to T-1…T-93; FU8 extended it to
    T-1…T-101; FU9 extended it to T-1…T-123; FU10 extended it to T-1…T-132;
    FU12 extended it to T-1…T-136 — T-133–T-136 (new, FU12); T-107 revised
@@ -1889,20 +2015,44 @@ authorizes no execution, no manifest-bearing CFG1 arm, and no merge with DX1.
    T-137–T-141 (new, FU13); T-135 rewritten and T-136 extended in place,
    FU13; FU14 adds no new regression id and leaves the scope at T-1…T-141,
    correcting T-135, T-138, and T-139 in place for wording/ordering only
-   (§11.3, this section unaffected in range). **No CFG1-IMPL authorization
-   may omit T-124…T-132**
-   (new, FU11), **T-133…T-136** (new, FU12), **or T-137…T-141** (new,
-   FU13) — the first group proves the terminal-issuance boundary and
-   successful-completion closure FU10 froze, the second proves the
-   seal-once-versus-consume-once separation FU12 froze, and the third
-   proves the terminal-decision-mint-failure disposition FU13 froze; an
+   (§11.3, this section unaffected in range); FU15 extended it to T-1…T-162 —
+   T-142…T-162 (new, FU15), renumbering, reusing, deleting and rewriting no
+   existing row (**FU15-D1 further extends T-143 and rewrites T-154 in
+   place, wording only, resolving `D-A` = A1; no test id changes**).
+   **`D-A` is resolved (FU15-D1): T-142…T-155 are no longer gated and are
+   implementable immediately**, alongside T-156…T-162, which were already
+   frozen. **No CFG1-IMPL authorization may omit any of the following six
+   groups** (synchronized, FU15-D2 — the prior four-group list collapsed
+   T-142…T-162 into a single undifferentiated entry and never named
+   T-142…T-155 as its own non-omissible group, even though FU15-D1 had by
+   then unblocked it): **T-124…T-132** (new, FU11), **T-133…T-136** (new,
+   FU12), **T-137…T-141** (new, FU13), **T-142…T-155** (new, FU15;
+   unblocked, FU15-D1), **T-156…T-161** (new, FU15), or **T-162** (new,
+   FU15) — the first proves the terminal-issuance boundary and
+   successful-completion closure FU10 froze; the second proves the
+   seal-once-versus-consume-once separation FU12 froze; the third proves
+   the terminal-decision-mint-failure disposition FU13 froze; the fourth
+   proves the Windows config-directory authority — identity pinning,
+   partial failures, `R-WINDOW`'s accepted boundary, and sensitive-file
+   scrub authority — FU15/FU15-D1 froze; the fifth proves truthful durable
+   repository/verification evidence projection (Finding B) FU15 froze; and
+   the sixth proves that OBS1 remains the sole owner of runtime
+   tool-activity count validity and that CFG1 adds no duplicate authority
+   mechanism (the OBS1 disposition) FU15 froze. An
    implementation lacking any group would be unverified against exactly
    the defect class its own FU exists to close. T-3 needs explicit
    authorization to execute the
    installed Pi library offline under Node with §11.3's interception rules;
    T-29/T-31/T-43/T-63 need explicit authorization to create real
    symlinks/junctions under `tmp_path` for filesystem-tampering regressions
-   (still no live Pi/network/model/credential activity).
+   (still no live Pi/network/model/credential activity). **T-142…T-155 need
+   that same authorization plus one addition of their own** (new, FU15;
+   unblocked, FU15-D1): T-144 must issue a real
+   `DeviceIoControl(FSCTL_SET_REPARSE_POINT)` against a synthetic directory
+   under `tmp_path`, because `mklink` cannot prove what that row exists to
+   prove (§37.2, §38 row A′) — still entirely local, still no live
+   Pi/network/model/credential activity, and still never against a real
+   project directory.
 2. **`5F3B-HARNESS-CFG1-LIVE-S1`** — must authorize, verbatim and exhaustively:
    - one declared `stage_execution_id` literal (for example `S1-X1`), which
      must itself satisfy the §16.3.1 grammar (`type(...) is str`,
@@ -5939,10 +6089,627 @@ what its FU13 version proved about the design; T-136 is untouched and
 remains the sole authoritative cleanup-timing regression; T-1…T-141 remains
 the exact, unchanged implementation scope (§14.1, wording-only note added).
 
+## 37. FU15 — Windows config-directory pinning and durable evidence projection
+
+**Status of this section (updated, FU15-D1).** §37.4 (Finding B) and §37.5 (the
+OBS1 disposition) were already **frozen** in FU15. §37.2/§37.3 (Finding A's
+Windows directory-generation authority) are now **FROZEN as well**: the
+reviewer resolved `D-A` as option A1 (§37.3.7) — `R-WINDOW` (§37.3.6) is
+ACCEPTED as a documented, bounded residual rather than mechanically closed, on
+the explicit condition that same-user concurrent tampering stays in scope
+(§37.1) and that acceptance never extends to pathname-only trust after the
+first pin. `CFG1-IMPL` may now implement §37.2/§37.3 in full, including
+T-142…T-155, subject only to the corrections FU15-D1 makes in place below
+(§37.3.2, §37.3.2a, §37.3.6) and the extended/rewritten regressions (T-143,
+T-154).
+
+### 37.1 Threat model — explicit, unchanged, not narrowed
+
+**Concurrent filesystem tampering by another same-user process during L9 is
+INSIDE CFG1's supported adversarial model.** FU15 does not propose excluding
+it, does not narrow the actor set, and does not reclassify any already-accepted
+case as out of scope.
+
+What FU15 *does* report is that one instant inside that model cannot be covered
+by any supported mechanism (§37.3.6). That is a limit on what the model can be
+*guaranteed against*, not a change to who is in it, and it is the subject of
+`D-A`.
+
+Two things this model has never claimed, and still does not:
+
+- **Confidentiality of the generated `models.json` against a same-user
+  process.** That process can open the genuine file directly; nothing in CFG1
+  prevents it, and no FU15 mechanism is presented as preventing it.
+- **Any protection against a different-user or elevated actor.** Out of scope
+  here and unchanged.
+
+What the model *does* require, and what §37.2's mechanism is measured against,
+is that **no endpoint-bearing byte is written outside CFG1's own owned,
+identity-proven disposable root**, and that **no cleanup ever deletes or
+mutates a resource whose ownership is not mechanically proven**.
+
+### 37.2 The Windows investigation — what was evaluated, and what was proven
+
+Every result below was established **empirically on the actual target
+platform** (Windows 11 Enterprise 10.0.26200, NTFS, CPython on win32) with an
+adversarial probe that performed the attacker's own operations directly,
+including a direct `DeviceIoControl(FSCTL_SET_REPARSE_POINT)` rather than
+`mklink`. `mklink` was found to be an **unsound oracle** for this question: it
+refuses with `ERROR_ALREADY_EXISTS` because it tries to *create* the name
+first, so a `mklink` refusal proves nothing about whether in-place conversion
+of an existing directory is permitted. Each claim below that depends on the
+pin being causally responsible was additionally run as a matched
+**no-pin control** and a **pin-released control**.
+
+| # | Established fact | How established | Win32 error |
+|---|---|---|---|
+| **W1** | `CreateFileW(..., OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS \| FILE_FLAG_OPEN_REPARSE_POINT)` opens a **directory** handle and surfaces a junction **as** a reparse point instead of following it | probe P1, P11 | — |
+| **W2** | A directory pinned with `dwShareMode = FILE_SHARE_READ` cannot be **renamed** or **removed** by another actor | P5a, P12b | `ERROR_SHARING_VIOLATION` (32) |
+| **W3** | While that pin is held, an adversary's **write-access open of the directory is itself refused**, so `FSCTL_SET_REPARSE_POINT` is never reached — in-place junction conversion of a pinned directory is impossible | P15c | 32 at the open |
+| **W4** | An **unpinned, empty** directory **can** be converted in place to a junction with no delete and no rename at all | P15a, P15d | success |
+| **W5** | A **non-empty** directory cannot be converted in place, pinned or not | P15b, P16c | `ERROR_DIRECTORY_NOT_EMPTY` (145) |
+| **W6** | While **any** descendant handle is open, **no ancestor at any depth** can be renamed; a non-empty ancestor can be neither removed nor converted | P16, P16b, P16c; controls C1/C2/C3 | `ERROR_ACCESS_DENIED` (5); 145 |
+| **W7** | Children can still be exclusively created inside a pinned directory while the pin is held | P4 | — |
+| **W8** | `GetFileInformationByHandleEx(FileIdExtdDirectoryInfo)` enumerates the pinned directory **from the handle**, with no pathname resolution; each entry's `FileId` equals `os.stat(fd).st_ino` of that child's own open descriptor, and `FileIdInfo.VolumeSerialNumber` equals `st_dev` | P2, P6 | — |
+| **W9** | That enumeration's cursor is **per-handle and does not restart** — a second call returns `ERROR_NO_MORE_FILES`. One pass per handle | P19 | 18 |
+| **W10** | Python's `open(path, "x")` is `O_CREAT \| O_EXCL`: it refuses an occupied name, including a pre-planted symlink, never writes through one, and its Windows share mode denies **delete** while open | P9, P17b | 32; `ERROR_FILE_EXISTS` (80) |
+| **W11** | A pin on a **directory** does **not** protect its children: another actor can delete an unheld child, and can still **create** new children inside the pinned directory | P18, control C5 | — |
+| **W12** | Handle-based deletion (`SetFileInformationByHandle` / `FileDispositionInfo`) requires `DELETE` in the handle's desired access. A descriptor from Python's `open()` lacks it; a `CreateFileW` handle that requests it works | P8, P17 | 5; success |
+| **W13** | `os.stat(fd)` on win32 returns `st_dev = VolumeSerialNumber` and `st_ino =` the 128-bit file id, and works on a directory handle adopted via `msvcrt.open_osfhandle` | P2, P2b | — |
+
+**Mechanisms evaluated and rejected.**
+
+| Mechanism | Verdict | Why |
+|---|---|---|
+| POSIX `dir_fd` / `openat` via `os` | **Unavailable** | CPython exposes no `dir_fd` support on win32; not a design choice, a platform fact |
+| `CreateFileW`/`CreateFile2` to *create* the directory and obtain its handle atomically | **Impossible** | Neither API creates a directory. Only `CreateDirectoryW`/`CreateDirectoryExW` do, and neither returns a handle. This is the whole of `R-WINDOW` |
+| `NtCreateFile`/`ZwCreateFile` with `FILE_CREATE \| FILE_DIRECTORY_FILE`, and relative opens via `OBJECT_ATTRIBUTES.RootDirectory` | **Rejected** | This is the only true `openat` equivalent and the only call that creates a directory and returns proof of what it created — so it *would* close `R-WINDOW`. Rejected anyway: it is documented for kernel-mode drivers, its user-mode `ntdll` surface is explicitly subject to change, and it would require hand-marshalled `UNICODE_STRING`/`OBJECT_ATTRIBUTES`/`IO_STATUS_BLOCK`/`NTSTATUS` through `ctypes`. This design does not freeze a native API merely because it is plausible, and a *fallback* to the documented path would reinstate the very window the native call was adopted to close |
+| Name-based re-proof (`GetFinalPathNameByHandleW` on the directory, compared with the child's own final path) | **Rejected as unsound** | Two name readings are two instants. A counterexample exists: read `D_canon = G\R\cfg1_pi_config`; the adversary renames `G\R` → `G\R2` and creates a fresh `G\R`; the child's own final path then reads `G\R\cfg1_pi_config\models.json` and the two agree while referring to different objects. Names are racy; **file ids are not**. `GetFinalPathNameByHandleW` is retained only as a non-authoritative containment/diagnostic check |
+| Pinning the whole ancestor chain up to the volume root | **Rejected** | Unnecessary (W6 makes one pin protect the entire chain) and a bad neighbour (a restrictive share mode on a shared ancestor such as `C:\` would degrade unrelated processes) |
+| Relocating the config directory outside the workspace root | **Rejected** | `PI_CODING_AGENT_DIR` (L12), L24's scrub and L27's removal are all frozen around `<root>/cfg1_pi_config`, and any alternative location is equally reachable by a same-user process — it moves the problem without closing it |
+
+**Mechanism selected: `CreateFileW` directory pin + handle-relative parentage
+proof.** It uses only documented Win32 (`CreateFileW`,
+`GetFileInformationByHandleEx`, `SetFileInformationByHandle`,
+`GetFinalPathNameByHandleW`, `CloseHandle`) plus stdlib `os`/`msvcrt`, and it
+carries **two independent** guarantees, one of which is entirely pathname-free:
+
+```text
+pin  →  the lexical name cannot be rebound        (W2, W3, W5, W6)
+id   →  the bytes go into the pinned OBJECT       (W8, W13) — no pathname involved
+```
+
+The second is what satisfies "a post-write provenance check is insufficient by
+itself": the parentage proof runs **strictly before the first content byte**,
+and a failed proof means no byte is ever written, not that a foreign write is
+detected afterwards.
+
+### 37.3 The L9 directory-generation authority (FROZEN — `D-A` resolved A1, FU15-D1)
+
+#### 37.3.1 Sequence
+
+Amends L9 only. §17's row 3 resource, `PI_CODING_AGENT_DIR`'s target, L24's
+scrub target and L27's removal are otherwise unchanged.
+
+1. **L2 addendum (CFG1-owned, no frozen module touched).** Immediately after
+   `build_case_repository` returns, CFG1 records
+   `experiment_root_identity = (st_dev, st_ino)` into its own
+   `_WorkspaceMintRecord`, alongside the authority it already registers. From
+   this point the owned root has an **identity**, not only a name.
+2. **Root pin.** L9 re-proves workspace authority, then pins
+   `experiment_root` with `CreateFileW(..., OPEN_EXISTING,
+   FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)`, share
+   `FILE_SHARE_READ | FILE_SHARE_WRITE` — omitting **only** `FILE_SHARE_DELETE`
+   (control C6 proves this shape still blocks rename and delete; the root must
+   stay openable for write by the fixture, Git and the verification child,
+   and being non-empty it cannot be converted in place anyway, W5).
+   Then it proves, **from the handle**: not a reparse point, and
+   `FileIdInfo == experiment_root_identity`. A mismatch refuses
+   (`WORKSPACE_ROOT_IDENTITY_MISMATCH`) before anything is created.
+3. **Directory creation.** `CreateDirectoryW(<root>/cfg1_pi_config)`
+   (`mkdir(parents=False, exist_ok=False)`), unchanged.
+4. **Config-directory pin.** `CreateFileW` on that path, share
+   `FILE_SHARE_READ` only, same flags. Prove from the handle: it is a
+   directory, `FILE_ATTRIBUTE_REPARSE_POINT` is **absent** and `ReparseTag`
+   is `0`. A reparse point here refuses (`CONFIG_DIR_REDIRECTED`) — this is
+   what closes the "junction conversion without delete" counterexample, which
+   W4 proves Windows really does permit against an unpinned empty directory.
+   Capture `FileIdInfo` as the **pinned config identity**.
+5. **Containment proof.** Enumerate the **root pin** once (W9: one pass per
+   handle) and require an entry named exactly `cfg1_pi_config` whose `FileId`
+   and volume serial equal the pinned config identity. This proves, without
+   any pathname, that the pinned directory is a child entry of the
+   identity-proven owned root.
+6. **Child creation.** Create `settings.json` then `models.json` via
+   `CreateFileW(..., CREATE_NEW, GENERIC_READ | GENERIC_WRITE | DELETE,
+   dwShareMode = 0)`, adopted as ordinary descriptors. `CREATE_NEW` refuses an
+   occupied name (W10/P17b), including a pre-planted symlink; `dwShareMode = 0`
+   denies another actor both delete and write for the descriptors' lifetime;
+   `DELETE` access is what makes §37.3.4's handle-based removal possible at all
+   (W12). **Zero content bytes are written at this step.**
+7. **Parentage proof — the gate.** Enumerate the **config-directory pin**
+   once. Require the entry set to be exactly
+   `{".", "..", "settings.json", "models.json"}` and each of the two entries'
+   `FileId`/volume serial to equal its own descriptor's `os.stat(fd)`
+   `st_ino`/`st_dev`. The exact-set requirement also catches a foreign file
+   planted into CFG1's own directory (W11/C5 prove that remains possible).
+   Failure refuses (`CONFIG_FILES_NOT_IN_PINNED_DIRECTORY`) with **no content
+   byte written**.
+8. **Content.** Only now are the two documents written, each through its own
+   proven descriptor, flushed and closed. Exactly one serialization per
+   document (§16.3.8.1's discipline), and the newline translation must remain
+   byte-identical to the frozen qualification generator's own
+   `Path.write_text` — T-1 is unchanged and is the proof (T-149).
+9. **Finalization.** Digests are read back **through the same descriptors**
+   (seek to 0), never by pathname, and compared with the pinned arm digests.
+10. **Issuance.** `register_config_issuance` additionally binds the pinned
+    config identity and both child identities. Its existing `_digest` read-backs
+    are taken through the held descriptors rather than by pathname.
+11. **Release.** Both pins are closed, config directory first, then root, in a
+    `finally`, on **every** exit path.
+
+#### 37.3.2 Authority and lifecycle — frozen answers
+
+| Question | Answer |
+|---|---|
+| Who creates it | The L9 generator routine's own lexically-owned code, once per run, in the order above |
+| What proves it refers to the directory CFG1 just created | **Nothing does, completely** — that is `R-WINDOW` (§37.3.6). What *is* proven: the pinned object is a real directory, is not a reparse point, is a child entry **by file id** of the identity-proven owned root, and holds exactly the two children whose descriptors receive the bytes |
+| What is recorded if acquisition fails | One closed refusal code (`WORKSPACE_ROOT_NOT_PINNED`, `WORKSPACE_ROOT_IDENTITY_MISMATCH`, `CONFIG_DIR_NOT_PINNED`, `CONFIG_DIR_REDIRECTED`) → L9 refusal → `REFUSED_PRE_DISPATCH`, closure L24 + L27. Any already-created directory is **left untouched**: its ownership is not mechanically proven, so CFG1 never removes it; only L27's root removal may |
+| Who may consume it | Only that same routine's own code — the identity proof, the two enumerations, and the release. Nothing else, mirroring §16.3.8.4's runner-local ledger precedent |
+| Is it transferable | **No.** It is a local of that routine. It is never stored on `GeneratedCfg1Config`, never registered, never returned, never passed to a port, never placed in a record, never rendered in any `repr`. It is not a capability object and confers no authority outside L9's own interval |
+| When is it closed | At the end of L9, on every exit path, **before control leaves L9** — success, every refusal, and every injected failure alike |
+| Failure after settings creation, before models creation | L9 refuses (`CONFIG_FILES_NOT_WRITTEN`); no issuance token is minted, so `state.generated_config` is never set and no consumer can claim a generated config exists. Both pins are released. The partial residue stays inside the owned root and is removed only by L27. No model-influenced code runs: L26 is skipped with `PRE_DISPATCH_REFUSAL` |
+| Failure after both writes, before issuance | Identical disposition, with one addition that matters: the endpoint-bearing `models.json` exists on disk with **no issuance record**. L24's scrub branch is therefore not entered (it is gated on a generated config existing), and removal is L27's root removal alone. If L27 fails, §18 row 10's already-frozen outcome applies — `INDETERMINATE_LIFECYCLE`, halt, residual never deleted by any later run |
+| How cleanup proves it acts on the same resource | Two ways, both identity-based. **Inside L9:** a failed parentage proof removes the zero-byte children **only** through `SetFileInformationByHandle`/`FileDispositionInfo` on the very descriptors that created them (W12) — never by pathname, so no pathname-resolved victim is reachable. **At L24:** the scrub re-opens its target and refuses to unlink unless `os.stat(fd)` matches the identity the issuance record bound at §37.3.1 step 10; a mismatch means scrub-unverified, never a delete |
+| How every partial-failure path avoids foreign deletion | No CFG1 code path deletes a directory it created, ever (the empty config directory is left for L27). The only handle-based deletions are of the two files CFG1 itself exclusively created and still holds. If a handle-based removal fails, the zero-byte file is **left untouched** and the failure is reported; it is never retried by pathname |
+| Does handle-close failure affect L9 refusal, L24/L27 evidence, or both | **Both.** L9 refuses with `CONFIG_DIR_PIN_NOT_RELEASED` / `WORKSPACE_ROOT_PIN_NOT_RELEASED`, *and* the lifecycle evidence degrades, because a leaked pin makes L27's removal fail by construction (W2, and W6 for the root) — `workspace_removed_verified` false → `lifecycle_all_closed` false → `INDETERMINATE_LIFECYCLE` → halt (§18 row 10). There is no force-close, no retry, no re-derivation of the handle from a name, and no suppression of the L27 failure |
+
+Nothing here relies on caller convention: no supported caller can supply,
+replace, observe, or obtain either pin.
+
+#### 37.3.2a Namespace authority, not invented creator identity (new, FU15-D1)
+
+**The problem this closes.** §37.3.6's `R-WINDOW` means the object CFG1 pins at
+step 4 may, in the accepted residual case, be an ordinary directory a
+concurrent same-user actor created — not the object `CreateDirectoryW`
+returned at step 3. Describing that substituted object as "AIDO-created," or
+resting its later cleanup on the same "ownership by creation" reasoning
+§17/§37.3.2 uses for everything else, would be false. FU15-D1 freezes the
+distinction that makes cleanup of that object truthful anyway.
+
+**Two authorities, not one.**
+
+- **Root-namespace teardown authority (L27).** `Cfg1RunWorkspace` owns a
+  freshly created disposable root **namespace** — not merely the objects CFG1
+  itself individually created inside it. That root authority, re-proved by
+  `verify_cfg1_run_workspace` exactly as §17 already freezes, grants
+  `remove_cfg1_run_workspace`/`remove_disposable_tree` teardown authority over
+  the root **as a whole**, including any descendant that appeared inside that
+  owned namespace during the run — by CFG1's own writers, by Pi, or, in the
+  accepted `R-WINDOW` case, by a same-user actor that substituted the
+  `cfg1_pi_config` directory before the first pin. This authority does **not**
+  require, and does not claim, that CFG1 created every descendant it removes;
+  it requires only that the descendant is lexically and mechanically contained
+  inside the root the frozen creator built (the same containment §16.3.5
+  already proves for the execution directory).
+- **Precise child authority (L24, and L9's own internal cleanup, §37.3.2 rows
+  9-10).** Any cleanup operation that acts on **one individual generated
+  sensitive file** before root teardown — most importantly L24's verified
+  unlink of the endpoint-bearing `models.json` — is **not** covered by the
+  namespace authority above. It must still derive its target exclusively from
+  the verified config/issuance authority (§37.3.1 step 10,
+  `verify_config_issuance`) and prove, at the moment of the operation, that the
+  target remains contained and identity-matched. A namespace-teardown
+  authority is never substituted for this proof, and this proof is never
+  weakened to "somewhere inside the root is good enough."
+
+**What this does NOT grant.** Root-namespace teardown authority does **not**
+grant permission to follow a child redirect **outside** the root. If the
+pinned `cfg1_pi_config` object were ever found (it cannot be, post-pin, per
+§37.3.6's proven list) to reference storage outside the identity-proven owned
+root, no CFG1 code path — neither L24's precise cleanup nor L27's namespace
+teardown — is authorized to act on whatever lies at the far end of that
+reference. `remove_disposable_tree` is frozen to operate on `experiment_root`
+by path, and its own accepted implementation already refuses to leave the
+canonical root tree; FU15-D1 adds no new authority to that frozen behavior, it
+only names, for the first time, why L27's authority can truthfully reach a
+descendant CFG1 did not itself create while L24's cannot.
+
+**Scope.** This distinction applies **only** to disposable roots explicitly
+minted through `build_case_repository`/`mint_cfg1_run_workspace`. It is not a
+general "namespace ownership implies content ownership" rule, and must not be
+generalized to any other resource this design owns (§17's other rows are
+unaffected).
+
+#### 37.3.2b Required invariant after the first pin (new, FU15-D1)
+
+Restated as nine explicit mechanical facts, each of which FU15's own mechanism
+(§37.3.1) already establishes and each of which must hold, in this order,
+before any settings/models **content** byte is written:
+
+1. the run workspace/root authority is still genuine (§37.3.1 step 2's
+   `WORKSPACE_ROOT_IDENTITY_MISMATCH` re-proof);
+2. the pinned config object is a directory (§37.3.1 step 4's attribute check);
+3. the pinned config object is not a reparse point (§37.3.1 step 4's
+   `ReparseTag == 0` check, `CONFIG_DIR_REDIRECTED` on failure);
+4. handle-derived parentage/containment proves that object is the
+   `cfg1_pi_config` child of the genuine owned root (§37.3.1 step 5, by file
+   id, no pathname);
+5. the config-directory identity **remains pinned throughout** steps 4-10 —
+   every subsequent child creation, write, and finalization read-back in
+   §37.3.1 executes while that one handle from step 4 stays open, never
+   re-acquired, never re-derived from a name;
+6. replacement by delete/rename cannot occur while the pin is held (W2, W6,
+   §37.3.1 step 4's share mode);
+7. reparse conversion/modification cannot succeed while the pin is held, under
+   the empirically tested Windows access/share contract (W3);
+8. exclusive leaf creation still prevents pre-existing
+   `settings.json`/`models.json` occupation or redirection (§37.3.1 step 6,
+   `CREATE_NEW`, W10);
+9. issuance is established only after the exact generated files are finalized
+   and re-proven against this pinned authority (§37.3.1 steps 9-10) — never
+   before.
+
+A pathname re-check alone is never sufficient to establish any of these nine
+facts once the first pin exists (§37.2's rejection of name-based re-proof as
+unsound). A later provenance failure (for example L24's own re-verification)
+may refuse the run; it may never be read as retroactively justifying a foreign
+write that already happened, because none of the nine facts above permits one
+to happen in the first place.
+
+#### 37.3.3 What the invariant's own wording buys
+
+Restating the required invariant against the mechanism, clause by clause:
+
+- *"no settings/models byte may be written unless the destination is still the
+  exact directory CFG1 created"* — **satisfied from the pin onward**, by W2/W3/
+  W5/W6 for the name and, independently and without any pathname, by the step-7
+  parentage proof for the object. **Not satisfied across `R-WINDOW`.**
+- *"Concurrent delete/rename/junction/symlink/reparse substitution must not
+  redirect a write outside that owned directory"* — **satisfied**. A reparse
+  substitution is refused at step 4 whether it was planted after a delete or
+  converted in place without one (W4 proves the latter is real). A leaf
+  symlink is refused by `CREATE_NEW` (W10). A post-pin delete or rename of the
+  directory, or of any ancestor, is impossible (W2, W6).
+- *"A post-write provenance check is insufficient by itself"* — **honoured**.
+  The gate is step 7, strictly before step 8. A failure writes zero content
+  bytes.
+- *"No cleanup operation may delete or mutate a resource whose ownership is no
+  longer mechanically proven"* — **satisfied**, §37.3.2 rows 9 and 10.
+- *"T-1 byte identity remains frozen"* — **preserved**, T-149.
+- *"The endpoint-bearing `models.json` must never be written to a foreign
+  directory and then merely detected afterwards"* — **satisfied**: the only
+  thing that can ever exist at a foreign path is a **zero-byte, content-free**
+  file created before the gate, removed by handle, and never carrying a byte
+  of the endpoint.
+
+#### 37.3.4 Required adversarial analysis
+
+| # | Counterexample | The exact mechanical fact that prevents false authority / a foreign write / a false cleanup / invented evidence |
+|---|---|---|
+| 1 | directory delete + replacement immediately after `mkdir` | If the replacement is a **reparse point**, step 4's `FILE_FLAG_OPEN_REPARSE_POINT` attribute check refuses before any child is created (W1/P11). If it is an **ordinary directory**, step 5 still proves it is a child entry of the identity-proven root, so the write cannot leave the owned tree — but its *identity as CFG1's own creation* is **not** proven. This is `R-WINDOW`, §37.3.6 |
+| 2 | junction/reparse conversion **without** delete | W4 proves Windows permits exactly this against an unpinned empty directory — the reviewer's premise is correct and `mklink` would have hidden it. Before the pin: refused by step 4's attribute check. After the pin: impossible, because the adversary's write-access open is itself refused (W3) |
+| 3 | settings-file leaf replacement | `CREATE_NEW` refuses an occupied name and never writes through a planted symlink (W10/P17b); `dwShareMode = 0` then denies both delete and write for the descriptor's lifetime |
+| 4 | replacement between settings and models creation | The pinned directory cannot be deleted, renamed or converted (W2/W3/W5), and no ancestor can be renamed (W6). A planted `models.json` is refused by `CREATE_NEW`; a planted foreign file is caught by step 7's exact-entry-set requirement; any redirect at all is caught by step 7 **before** a content byte |
+| 5 | failure after settings write, before models write | §37.3.2 row 7. No issuance token, so no consumer can claim a generated config; both pins released; residue removed only by L27; verification skipped `PRE_DISPATCH_REFUSAL` |
+| 6 | failure after both writes, before issuance | §37.3.2 row 8. Same, plus the explicit statement that an endpoint-bearing file without an issuance record is L27's responsibility alone, and §18 row 10 owns the case where L27 then fails |
+| 7 | directory-handle acquisition failure | §37.3.2 row 3. One closed refusal code, **zero** child creates attempted, and the created directory left untouched — CFG1 never removes a directory whose ownership it cannot prove |
+| 8 | directory-handle close failure | §37.3.2 row 11. L9 refuses **and** the lifecycle evidence degrades to `INDETERMINATE_LIFECYCLE`; never force-closed, never retried |
+| 9 | malformed `untracked_path_count`, `git_observation_1_performed` otherwise true | §37.4.1: the exactness gate runs over the whole L25 snapshot **before** any field is projected, and a single malformed member drives the entire observation to the already-frozen not-performed shape. No `_exact_count` reduction is applied to a load-bearing repository count any more, so no manufactured `0` can be presented as observed |
+| 10 | malformed `staged_path_count` | Identical — same gate, same all-or-nothing disposition |
+| 11 | malformed verification count with provider `passed = true` | §37.4.2: `verification_passed` is already forced false (FU2), and FU15 additionally refuses to manufacture the durable counts: the malformed member becomes a fixed non-content-bearing sentinel that `_require_exact_int_mapping` rejects, so the run record is **self-validation-refused** (§18 row 15), a refusal record with `RECORD_INVARIANT` is written, and the stage halts. No zero is invented, and no `passed: true` survives |
+| 12 | OBS1 malformed-count construction through its actual frozen public boundary | §37.5: `RuntimeToolActivitySnapshot.__post_init__` calls `_require_exact_count` on every count (exact `int`, `bool` excluded, bounded) and raises `ActivityRecordInvariantError`. The snapshot is frozen and built only inside `project_runtime_tool_activity`, so a malformed count cannot reach a constructed object at all; CFG1 catches that exception and emits the already-frozen unavailable shape. **CFG1 adds no second availability mechanism** |
+
+#### 37.3.5 What FU15 must never be read as claiming
+
+- Never "the generated configuration directory is secure", "tamper-proof",
+  "isolated", or "sandboxed". It is **pinned for a bounded interval**, which is
+  a statement about rename, delete and reparse conversion, and nothing else.
+- Never that the endpoint value is confidential against a same-user process
+  (§37.1).
+- Never that Pi's own later writes into that directory are constrained; the
+  pin is released at the end of L9 precisely so L27 can remove the tree.
+- Never that the pin protects the two generated files after L9 returns. W11
+  proves a directory pin does not protect children, and the descriptors are
+  closed at step 8.
+
+#### 37.3.6 `R-WINDOW` — the one residual, ACCEPTED as a documented residual (`D-A` = A1, FU15-D1)
+
+> 1. CFG1 successfully creates the lexical child
+>    `<genuine CFG1-owned disposable root>/cfg1_pi_config` (`CreateDirectoryW`,
+>    §37.3.1 step 3).
+> 2. Before CFG1 acquires its first identity-bearing handle to that directory
+>    (§37.3.1 step 4), a same-user concurrent actor may replace the
+>    just-created empty directory object with **another ordinary directory
+>    object** at the same lexical child name.
+> 3. CFG1 subsequently opens and pins that ordinary replacement object.
+
+**No stronger claim is made that the pinned object must necessarily be the
+exact directory object returned by the immediately preceding successful
+`CreateDirectoryW`** (frozen wording, FU15-D1) — the mechanism proves
+containment and non-redirection of whatever object is pinned, never that it is
+numerically the same object step 3 created.
+
+**Why it cannot be closed.** No supported Windows API both creates a directory
+and returns proof of what it created (§37.2's rejection table, row 2). Every
+alternative merely *moves* the window to the first pathname-based operation
+that follows `CreateDirectoryW` — pinning, stat'ing, enumerating, or creating a
+marker child — because each of them resolves a name that the adversary has
+already had the opportunity to rebind. Only `NtCreateFile` eliminates it, and
+this design does not freeze a native API on plausibility.
+
+**Exactly what it does NOT permit** — restated against the reviewer's own
+enumeration (revised, FU15-D1), each clause proven above, not asserted:
+
+- **not** a junction/symlink/reparse redirect at first content write: refused
+  at step 4 before the pin (W1, W4) and impossible after the pin (W3) —
+  §37.3.4 row 2 proves both halves with matched controls (T-144);
+- **not** an external/out-of-root config write: step 5 proves by file id,
+  without any pathname, that the pinned object is a child entry of the root
+  object whose identity was recorded at L2 (T-142, T-146);
+- **not** an external, endpoint-bearing `models.json` write: the step-7
+  parentage gate runs strictly before step 8's content write (§37.3.3), so no
+  byte of the base URL, model id, or provider id can reach any location the
+  gate has not already proven contained (T-146, T-148);
+- **not** cleanup following a redirect outside the root: L24's precise child
+  authority never follows a mismatch (§37.3.2 row "how cleanup proves it acts
+  on the same resource"; §37.3.2a), and L27's namespace authority is bounded to
+  the owned root's own contained descendants (§37.3.2a) — neither is ever
+  pointed at a foreign location by this residual;
+- **not** a post-pin directory replacement: rename and delete of the pinned
+  object, and of every ancestor at any depth, are impossible while the pin is
+  held (W2, W6; T-145's three matched controls);
+- **not** a post-pin in-place reparse conversion: the adversary's own
+  write-access open of the pinned object is refused before
+  `FSCTL_SET_REPARSE_POINT` is ever reached (W3; T-144's pinned half);
+- **not** a caller-selected arbitrary config path: `derive_cfg1_config_paths`
+  (`config_issuance.py`) takes no path, prefix, or parent parameter of any
+  kind — the location is a pure function of the re-verified workspace handle,
+  unchanged by FU15/FU15-D1, and this residual creates no new parameter
+  through which one could be supplied;
+- **not** silent success on a leaf substitution: `CREATE_NEW` and the step-7
+  parentage proof are unaffected by which directory object was pinned
+  (T-147);
+- **not** a foreign deletion: CFG1 still removes only objects it holds handles
+  to, or that its re-verified namespace authority provably contains
+  (§37.3.2a; §37.3.2 rows 9-10).
+
+**What it does permit, and the correct justification for accepting it
+(rewritten, FU15-D1).** A same-user adversary that wins a sub-millisecond race
+chooses the directory *object* — and therefore its DACL and inheritable ACEs —
+that will hold the endpoint-bearing `models.json`, inside CFG1's own disposable
+root. FU15's own draft justified accepting this partly by arguing the
+adversary "could already read the file directly," which the reviewer rejected
+as the justification for `D-A`: an argument from what an adversary could
+already do elsewhere does not bound what THIS mechanism does, and must never be
+used to excuse a residual. **The correct and sole justification is the
+mechanically bounded owned namespace plus the identity pin before sensitive
+content**: whichever object wins the race, it is proven — not assumed — to (a)
+be a genuine, non-reparse directory, (b) be contained, by file id, inside the
+identity-proven owned root (§37.3.1 step 5), and (c) receive zero content bytes
+until the step-7 parentage gate passes. The residual is therefore bounded
+strictly to "an adversary may choose which ordinary, contained, later-proven
+directory object holds the file" — a namespace-level, pre-content-write choice
+— never to a redirect, a foreign write, or an escape from cleanup, each of
+which §37.3.4 proves separately and each of which the bullet list immediately
+above already restates against the reviewer's own enumeration.
+
+#### 37.3.7 `D-A` — the reviewer decision this phase stops for
+
+| Option | Consequence |
+|---|---|
+| **A1 (recommended)** — accept the narrowed invariant: "from the pin onward, and for the object, not the name", with `R-WINDOW` named, bounded and regression-pinned (T-154) | §37.2/§37.3 freeze as written. Every counterexample in §37.3.4 except row 1's ordinary-directory sub-case is mechanically closed, and that sub-case is provably incapable of producing a foreign write, a redirect, or an escape from cleanup. T-154 exists specifically so a future change that would let such a substitution produce a write outside the owned root fails a test rather than passing review |
+| **A2** — authorize `NtCreateFile` for directory creation and relative opens | Closes `R-WINDOW` completely. Costs: a native, kernel-documented API in CFG1's runtime path, hand-marshalled `ctypes` structures, and an explicit decision about what happens when it is unavailable — a documented-API fallback would reinstate the window, so the only coherent form is "refuse the run if the native path is unavailable" |
+| **A3** — relocate the generated configuration outside `<root>` | Rejected on analysis (§37.2's table, last row): it moves the problem without closing it, and reopens `PI_CODING_AGENT_DIR`, L24 and L27, all frozen |
+
+**Recommendation: A1.** A2 buys a genuinely stronger property, but it buys it
+with a native API in the one code path whose whole purpose is to be provable,
+and against a residual whose consequence is already bounded to "an ordinary
+directory inside the identity-proven owned root". A1 is the smaller,
+better-evidenced commitment.
+
+**Resolved (FU15-D1): A1.** The reviewer accepted `R-WINDOW` as a documented
+residual on the explicit, narrow terms recorded in §37.3.6's restated
+statement and permit/forbid list, and in §37.3.2a's invariant list. CFG1 is
+**not** required to adopt `NtCreateFile` or any other undocumented/native
+relative-open authority merely to eliminate this one window. This acceptance
+is an explicit, narrow threat-model amendment — it does **not** authorize
+pathname-only trust after the first handle is acquired, and it does not
+reopen or narrow the broader threat model of §37.1. §37.2/§37.3 are FROZEN as
+of this resolution, subject only to the in-place corrections FU15-D1 makes
+elsewhere in this section.
+
+### 37.4 Finding B — malformed count projection (FROZEN)
+
+Both dispositions below reuse **already-frozen** state; neither adds a schema
+field, a record kind, or a new availability flag.
+
+#### 37.4.1 L25 repository counts — the observation becomes not-performed
+
+**The defect.** A malformed `untracked_path_count` reached `_exact_count(...)`
+and became the durable integer `0` while `git_observation_1_performed` stayed
+`true` — an invented observation. `staged_path_count` was identical. Two
+further members of the same L25 projection had the same defect and are closed
+with it: `getattr(snapshot, "changed_tracked_paths", ())` turned a missing or
+malformed attribute into a durable empty list meaning "nothing changed", and
+`getattr(snapshot, "head", head_before)` turned a missing head into
+`head_moved = false`.
+
+**The frozen disposition.** L25's projection is **all-or-nothing**. An
+exactness *predicate* — never a reducer — runs over the whole snapshot before
+any field is projected:
+
+- `head` is an exact `str`;
+- `changed_tracked_paths` is an exact iterable whose every member is an exact
+  `str` (the intersection with `CFG1_T1_FILES` happens only after this);
+- `untracked_path_count` and `staged_path_count` are each an exact `int`,
+  `bool` excluded, `>= 0`.
+
+If any member fails, the run takes the **same branch the existing `except`
+already takes**: `git_observation_1_performed = false`, and every observation-#1
+companion stays at its already-frozen not-performed default. `_exact_count` is
+no longer applied to a load-bearing repository count at all, because its job —
+manufacturing a plausible value — is precisely the defect.
+
+**Why this shape.** It is the pattern FU2 already accepted one family over:
+`broker_recorded_activity_available` is exactly "every one of the raw facts was
+an exact non-negative int", and `classify_cfg1_run` gates on it. The repository
+family is the one FU2 missed, and `git_observation_1_performed` is its
+already-frozen equivalent — §12.2's D-4 predicate already gates on
+`git_observation_1_performed is True`, so no consumer changes.
+
+An **observed** exact zero is unaffected and still records as
+`performed = true` with `0` (T-159).
+
+#### 37.4.2 L26 verification counts — self-validation refusal
+
+**The defect.** FU2 correctly stopped a malformed count from strengthening
+`verification_passed`, but the durable `verification_counts` mapping could
+still carry manufactured zeros for `passed`/`failed`/`error`.
+
+**Why the §37.4.1 shape cannot be reused here.** There is no frozen "counts
+unavailable" shape for verification, and the verification demonstrably **ran** —
+declaring it not attempted or not completed would replace one false statement
+with another, and inventing a new availability flag is exactly the schema
+growth this phase's own instruction discourages.
+
+**The frozen disposition.** Any `verification_counts` member that is not an
+exact non-negative `int` is replaced by a fixed, non-content-bearing sentinel
+(`None`) that `_require_exact_int_mapping` refuses by construction. The run
+record therefore fails **its own** validator at L29 step 6 — the already-frozen
+§18 row 15 path: a refusal record with `refused_record_kind` and finding code
+`RECORD_INVARIANT`, emission status `EVIDENCE_REFUSED` if that artifact was
+written, and an unconditional stage halt. No count is invented, no
+`verification_passed: true` survives, and no new mechanism is introduced.
+
+The sentinel is deliberately **not** the malformed value itself: substituting a
+fixed `None` keeps the containment guarantee that no foreign object reaches a
+payload, a serializer, or a console sink (T-161), while still guaranteeing
+refusal. FU2's own precedent for not laundering — the broker adapter's
+deliberate refusal to pre-reduce `pending_operations_unreaped` — is the same
+principle applied one layer later.
+
+**Why halting is proportionate.** A malformed count means the verification port
+violated its declared contract, which makes its `passed` flag untrustworthy for
+the same reason. Verification is the run's semantic payload; an untrustworthy
+verification report is not evidence, and CFG1's standing preference is
+fail-closed refusal over a generalized repair.
+
+### 37.5 OBS1 disposition (FROZEN) — no second mechanism, and why
+
+**Source-inspected, not assumed.** `RuntimeToolActivitySnapshot` is a frozen
+dataclass whose `__post_init__` runs `_require_exact_count` over all twelve
+count fields — exact `int`, `bool` explicitly excluded as an `int` subclass, and
+bounded by `MAX_ACTIVITY_TOOL_COUNT` — plus `_require_exact_bool` and the
+cross-field invariants, raising `ActivityRecordInvariantError` rather than
+clamping or coercing. `project_runtime_tool_activity` returns that type and is
+the only constructor CFG1 reaches.
+
+**Therefore the upstream guarantee is sufficient**, for one exact reason: a
+malformed count cannot survive to a *constructed* snapshot, so CFG1 never holds
+an object from which a laundered zero could be read. There is no CFG1-side
+window between "malformed value observed" and "durable field written" for a
+second availability mechanism to guard — which is precisely the window that
+does exist for L25 and L26, and is why those two need §37.4 and OBS1 does not.
+
+CFG1's existing handling is already the correct and complete consumption: the
+`ActivityRecordInvariantError` is caught and converted to
+`unavailable_activity_fields(...)`, whose zeroed counts are safe **because**
+they are paired with `runtime_reported_tool_activity_available = false` and a
+closed reason code, and §22.3's unavailable branch checks exactly that shape.
+
+**FU15 therefore adds nothing to the OBS1 path**, and T-162 proves it does not:
+duplicating that authority would create a second, independently-evolving
+definition of what a valid OBS1 count is, which is the failure mode this
+disposition exists to prevent.
+
+### 37.6 Regression scope
+
+FU15 adds **T-142…T-162** and renumbers, reuses and deletes nothing. **Updated,
+FU15-D1: `D-A` is now resolved (A1), so T-142…T-155 are implementable
+immediately, subject to T-143's extension and T-154's rewrite above.**
+T-156…T-162 belong to Findings B and OBS1 and were already frozen and
+implementable in FU15.
+
+Every Finding-A regression that depends on Win32 semantics must **actually
+execute on win32** — CFG1's target platform. A Windows authority regression
+that reports as skipped on the target platform is not a proof of anything and
+is explicitly not an acceptable LIVE-S1 input. Where a test asserts that the
+pin is what produced a refusal, it must include the matched **no-pin control**,
+because a refusal that would have happened anyway proves nothing (this is the
+error `mklink` produced during the FU15 investigation itself, §37.2). **No
+regression in T-142…T-155 may claim `R-WINDOW` itself has been eliminated**
+(FU15-D1) — T-154 exists specifically to prove its bounded consequence, never
+its closure.
+
+---
+
+## 38. Changelog — FU15 against FU14
+
+| # | Finding (independent review) | Resolution |
+|---|---|---|
+| A | **Directory-level config-generation TOCTOU.** `mkdir(config_dir)` → substitution → pathname-based exclusive child create follows the replacement → only a later issuance re-proof detects the redirect, by which point a foreign filesystem write has already happened. A post-write provenance check is insufficient, and the endpoint-bearing `models.json` must never be written to a foreign directory and merely detected afterwards | **Investigated on the target platform, specified in full, and STOPPED for one reviewer decision.** New §37.2 records the Windows investigation — thirteen empirically established semantics (W1–W13), each with matched controls where causality was claimed, plus a table of the five mechanisms evaluated and rejected. New §37.3 specifies the L9 authority: an identity-bound root pin (§37.3.1 steps 1–2), a `CreateFileW` config-directory pin proven non-reparse from the handle (step 4), a handle-relative containment proof (step 5), exclusive child creation with deny-all sharing (step 6), and — the core — a **pathname-free parentage proof that gates every content byte** (step 7). §37.3.2 freezes the full authority/lifecycle answer set; §37.3.3 restates the required invariant clause by clause against the mechanism; §37.3.4 answers all twelve required counterexamples; §37.3.5 bounds what the mechanism may never be read as claiming. **§37.2/§37.3 are NOT frozen**: §37.3.6 states the one irreducible residual, `R-WINDOW`, and §37.3.7 puts it to the reviewer as `D-A` with three options and a recommendation, rather than silently accepting the race |
+| A′ | **Is `mklink` an acceptable oracle for "can a directory be converted to a junction in place?"** | **No — and the correction matters.** `mklink /J` refuses an existing name with `ERROR_ALREADY_EXISTS` because it attempts to create the name first; it never attempts in-place conversion, so its refusal proves nothing. A direct `DeviceIoControl(FSCTL_SET_REPARSE_POINT)` probe established that Windows **does** permit in-place conversion of an unpinned **empty** directory with no delete and no rename (W4) — the reviewer's premise was correct — and refuses it for a **non-empty** one (W5) and for a **pinned** one, at the adversary's own open (W3). T-144 requires both halves so the pin is proven load-bearing rather than incidental |
+| A″ | **Is POSIX `dir_fd`/`openat` the only solution, and is a native Windows relative-open acceptable?** | Neither. `dir_fd` is unavailable on win32 through CPython's `os`, and no **documented** Win32 API provides a relative open or a create-with-handle for directories. `NtCreateFile` with `FILE_CREATE \| FILE_DIRECTORY_FILE` and `OBJECT_ATTRIBUTES.RootDirectory` is the only true equivalent and is the only mechanism that would close `R-WINDOW` — and it is **rejected as a freeze** (§37.2), because it is kernel-documented, its user-mode surface is subject to change, and a documented-API fallback would reinstate the very window it was adopted to close. It survives only as option A2 of `D-A`, for the reviewer |
+| B1 | **Malformed L25 repository counts became durable observed zeros.** `untracked_path_count` and `staged_path_count` reached `_exact_count(...)` and were written as `0` while `git_observation_1_performed == true` | **Frozen, §37.4.1.** L25's projection becomes all-or-nothing: an exactness **predicate** — never a reducer — runs over the whole snapshot before any field is projected, and a single malformed member takes the branch the existing `except` already takes, emitting the already-frozen not-performed shape. `_exact_count` is no longer applied to a load-bearing repository count at all. This reuses FU2's own accepted `broker_recorded_activity_available` pattern rather than adding a schema field, and §12.2's D-4 already gates on `git_observation_1_performed is True`, so no consumer changes. Two adjacent launderings in the same projection are closed with them: a missing/malformed `changed_tracked_paths` had become a durable "nothing changed", and a missing `head` a durable `head_moved = false` (T-158) |
+| B2 | **Malformed L26 verification counts could still be manufactured zeros**, even though FU2 correctly stopped them strengthening `verification_passed` | **Frozen, §37.4.2.** The §37.4.1 shape is deliberately **not** reused: verification demonstrably ran, so no existing shape can truthfully represent it and a new availability flag is the schema growth this phase discourages. Instead the malformed member becomes a fixed, non-content-bearing sentinel that `_require_exact_int_mapping` refuses by construction, so the run record fails **its own** validator and takes the already-frozen §18 row 15 path — refusal record, `RECORD_INVARIANT`, `EVIDENCE_REFUSED`, unconditional halt. The sentinel, rather than the malformed object itself, is what reaches the payload, preserving containment (T-161). The asymmetry between B1 and B2 is stated and justified, not incidental |
+| C | **Does OBS1 need a second CFG1 availability mechanism for `runtime_reported_*` counts?** | **No — frozen and documented, §37.5, as the phase required.** Source inspection (not assumption) establishes that `RuntimeToolActivitySnapshot.__post_init__` runs `_require_exact_count` over all twelve counts — exact `int`, `bool` excluded, bounded — and raises rather than coercing, and that it is constructed only inside `project_runtime_tool_activity`. A malformed count therefore cannot reach a constructed snapshot, so CFG1 never holds an object from which a laundered zero could be read: there is no CFG1-side window for a second mechanism to guard, which is exactly the window that **does** exist for L25 and L26. T-162's second half guards against duplicating that authority, which would create a second, independently-evolving definition of a valid OBS1 count |
+| D | **Threat-model decision** | **Stated explicitly and NOT narrowed, §37.1.** Concurrent same-user filesystem tampering during L9 is **inside** the supported adversarial model; FU15 proposes no exclusion and no reclassification. What it reports is that one instant inside that model (`R-WINDOW`) cannot be covered by any supported mechanism — a limit on what can be guaranteed, not a change to who is in scope — and it stops for the reviewer rather than narrowing the model to fit the mechanism. §37.1 also restates the two things this model has never claimed and still does not: confidentiality of the endpoint against a same-user process, and any protection against a different-user or elevated actor |
+| D-A | **Reviewer decision on `R-WINDOW` (new, FU15-D1, §37.3.6, §37.3.7).** Resolved as **A1**: `R-WINDOW` is ACCEPTED as a documented, bounded residual; same-user tampering stays in scope, unnarrowed; CFG1 is not required to adopt `NtCreateFile` or any other native relative-open authority; and the acceptance does not extend to pathname-only trust after the first pin. Two corrections applied in place: FU15's own residual justification partly argued from what a same-user adversary "could already do" elsewhere, which the reviewer rejected as the justification — rewritten to rest solely on the mechanically bounded owned namespace plus the identity pin before content (§37.3.6); and FU15's authority table did not distinguish creation-based ownership from namespace-based teardown authority, which cannot truthfully cover a substituted object — a new explicit distinction between L27's genuine root-namespace teardown authority and L24's precise, never-redirect-following child authority is frozen (new §37.3.2a "Namespace authority, not invented creator identity"). The required post-first-pin invariant is restated as nine explicit mechanical facts (new §37.3.2b). §37.2/§37.3 are now FROZEN. T-143 gains a matched positive non-reparse control and T-154 is rewritten to positively establish the residual's exact three-part boundary, both wording-only extensions of existing rows; no test id is added, removed, or renumbered |
+
+**T-142…T-162 added (new, FU15).** No existing test id is renumbered, reused,
+deleted, or rewritten. T-142…T-155 prove Finding A's mechanism; **`D-A` is now
+resolved (FU15-D1, row `D-A` above), so T-142…T-155 are implementable
+immediately**, alongside T-156…T-162, which prove Findings B and the OBS1
+disposition and were already implementable. Every Finding-A row that depends on
+Win32 semantics must **actually execute on win32** — a skipped Windows
+authority test on the target platform proves nothing and is explicitly not an
+acceptable LIVE-S1 input — and every row asserting that the pin caused a
+refusal must carry its matched no-pin control, because a refusal that would
+have occurred anyway proves nothing. That requirement is not theoretical: it is
+the exact error `mklink` produced during this investigation (§37.2, changelog
+row A′).
+
+No frozen qualification, OBS1, AR2, runtime, compat, schedule, record-schema,
+stage-output-authority, seal-once/consume-once, or emission-phase contract is
+reopened. `CLAUDE.md` is unmodified, no production module was changed, Pi was
+not launched, B300 was not contacted, no model was called, and no credential or
+endpoint value was read. LIVE-S1 is **not** authorized.
+
+---
+
+---
+
+## FU15 / FU15-D1 / FU15-D2 status (read before acting on the outcome block below)
+
+The outcome block below is the **CFG1 design's** own standing verdict and is
+unchanged: the design as frozen through FU14, plus all of FU15/FU15-D1
+(§37.4, §37.5, and now §37.2/§37.3), may be implemented.
+
+**`D-A` is resolved.** The reviewer accepted option A1: `R-WINDOW` (§37.3.6) is
+a documented, bounded residual, ACCEPTED on the explicit terms recorded there
+and in §37.3.2a — same-user concurrent tampering during L9 stays in scope
+(§37.1), and acceptance never extends to pathname-only trust after the first
+pin. CFG1 is not required to adopt `NtCreateFile` or any other native
+relative-open authority.
+
+- **`CFG1-IMPL` may now implement all of §37.2/§37.3/§37.4/§37.5, and
+  T-142…T-162.** T-143 carries FU15-D1's extension (a matched positive
+  non-reparse control) and T-154 carries FU15-D1's rewrite (positively
+  establishing the residual's three-part boundary); every other row is
+  unchanged from FU15.
+- **The directory-level TOCTOU is CLOSED from the first pin onward, and
+  ACCEPTED as a documented, bounded residual before it** — never claimed
+  eliminated. CFG1-IMPL-FU2's own source comment, which described the
+  directory-level half as an open design question, should be updated by
+  `CFG1-IMPL` to cite this resolution rather than continuing to read as an
+  unstated gap.
+- **LIVE-S1 is not authorized**, by FU15, by FU15-D1, or otherwise.
+
 ---
 
 ## Final outcome
 
 ```text
-CFG1 DESIGN READY — IMPLEMENTATION MAY BE AUTHORIZED
+CFG1 DESIGN ACCEPTED / FROZEN — OFFLINE IMPLEMENTATION CORRECTION AUTHORIZED — LIVE-S1 NOT AUTHORIZED
 ```

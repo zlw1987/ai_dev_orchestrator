@@ -85,7 +85,7 @@ def test_finding1_a_hand_built_genuine_executor_lookalike_is_refused():
         run_executor.Cfg1GenuineRunExecutor(
             token="not-a-real-token", call=lambda admission: calls.append(admission)
         )
-    assert excinfo.value.reason_code == "UNKNOWN_EXECUTOR_TOKEN"
+    assert excinfo.value.reason_code == "EXECUTOR_BINDING_UNPROVEN"
     assert calls == []
 
 

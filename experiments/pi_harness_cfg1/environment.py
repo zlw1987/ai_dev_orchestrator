@@ -156,30 +156,42 @@ def build_cfg1_child_environment(
 ) -> Cfg1LaunchEnvironment:
     """Build the explicit, positive-allowlist Pi child environment for one run.
 
-    ``PI_CODING_AGENT_DIR`` has exactly ONE source: the generated config's own
-    directory, RE-VERIFIED here at this consumption boundary against CFG1's
-    issuance registry -- bound to ``workspace``'s own ownership handle, never
-    a bare path -- before it is trusted. Neither a global ``~/.pi/agent``
-    directory nor an arbitrary sibling config can reach the child through this
-    API, because there is no parameter through which one could be named, and a
-    genuine config minted for a DIFFERENT workspace is refused here even when
-    its recorded paths happen to match (CFG1-IMPL-FU1 Finding 2).
+    ``PI_CODING_AGENT_DIR`` has exactly ONE source: the VERIFIED issuance
+    record's own ``config_dir`` -- never ``generated_config.config_dir`` --
+    RE-DERIVED here at this consumption boundary from CFG1's issuance
+    registry, bound to ``workspace``'s own ownership handle, never a bare
+    path. ``generated_config`` is a caller-mutable, plain-attribute object
+    (``GeneratedCfg1Config`` is not frozen): a caller presenting a genuine
+    ``issuance_token`` alongside a SUBSTITUTED ``config_dir`` field must gain
+    no authority from the token's own validity, so this builder never reads
+    ``generated_config.config_dir`` for anything -- only the record
+    :func:`verify_config_issuance` itself just re-derived and re-proved is
+    trusted (CFG1-IMPL-FU2 Finding 2; CFG1-IMPL-FU1 Finding 2 established the
+    token/workspace binding this corrects the remaining gap in). Neither a
+    global ``~/.pi/agent`` directory nor an arbitrary sibling config can reach
+    the child through this API, because there is no parameter through which
+    one could be named, and a genuine config minted for a DIFFERENT workspace
+    is refused here even when its recorded paths happen to match.
 
     This builder takes no arm parameter, so arm symmetry is structural: R, E
     and H differ from Q ONLY inside the generated ``models.json``, never in the
     environment the child is launched with.
     """
-    verify_config_issuance(token=generated_config.issuance_token, workspace=workspace)
+    issuance_record = verify_config_issuance(
+        token=generated_config.issuance_token, workspace=workspace
+    )
     if type(credential_value) is not str or not credential_value.strip():
         # Defensive: this route has no keyless mode, and a blank carrier would
         # look like a successful launch while authenticating nothing.
         raise Cfg1EnvironmentPolicyError("BLANK_CREDENTIAL_CARRIER")
 
+    verified_config_dir = issuance_record.config_dir
+
     environment: dict[str, str] = {
         name: ambient_environ[name] for name in BASE_WINDOWS_NAMES if name in ambient_environ
     }
     environment["PATH"] = _narrowed_path(node_executable, git_executable, ambient_environ)
-    environment["PI_CODING_AGENT_DIR"] = generated_config.config_dir
+    environment["PI_CODING_AGENT_DIR"] = verified_config_dir
     environment["PI_OFFLINE"] = "1"
     environment["PI_SKIP_VERSION_CHECK"] = "1"
     environment["PI_TELEMETRY"] = "0"
@@ -198,7 +210,7 @@ def build_cfg1_child_environment(
         _raw_environment=environment,
         included_names=tuple(sorted(environment)),
         path_entry_count=len([p for p in environment["PATH"].split(os.pathsep) if p]),
-        pi_config_dir=generated_config.config_dir,
+        pi_config_dir=verified_config_dir,
     )
 
 

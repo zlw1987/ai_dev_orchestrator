@@ -197,6 +197,21 @@ def _run_cfg1_stage_with_injected_executor(
     from .run_executor import Cfg1GenuineRunExecutor
 
     if type(run_executor) is Cfg1GenuineRunExecutor:
+        # CFG1-IMPL-FU2 Finding 1's test-hook boundary: a non-None probe is
+        # TEST-ONLY adversarial scaffolding for the OFFLINE injection seam
+        # (the `else` branch below), never a production capability of the
+        # genuine branch. Nothing previously refused the combination of a
+        # genuine executor with a caller-supplied probe -- both
+        # `bind_genuine_cfg1_run_executor` and this routine are importable, so
+        # a caller could otherwise reach the genuine branch (which the offline
+        # `_CAPTURED_PACKAGE_DIR` guard below never gates) while also firing a
+        # probe capable of raising mid-seal or forcing a second seal-history
+        # contest against the GENUINE results namespace. Refused mechanically,
+        # by type, never merely by convention or the leading underscore.
+        if _internal_probe is not None:
+            raise Cfg1StageRunnerError(
+                "TEST_PROBE_AGAINST_GENUINE_EXECUTOR_REFUSED"
+            )
         _invoke_executor = run_executor.invoke
     else:
         from . import stage_output as _stage_output_module

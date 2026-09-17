@@ -669,11 +669,19 @@ def _dispatch_phase(
         available, counts = project_stop_reasons(state.supervisor.sanitized_events())
     except Exception:  # noqa: BLE001
         available, counts = False, {key: 0 for key in _STOP_REASON_KEYS}
-    observations["stop_reasons_available"] = available
+    raw_auto_retry_events = getattr(state.supervisor.activity, "auto_retry_events", 0)
+    auto_retry_events_exact = type(raw_auto_retry_events) is int and raw_auto_retry_events >= 0
+    observations["auto_retry_events"] = _exact_count(raw_auto_retry_events)
+    # CFG1-IMPL-FU2 Finding 3: a malformed raw ``auto_retry_events`` must not
+    # be laundered into a plausible "0 retries happened" that lets
+    # `classify_cfg1_run` row 10 fall through as if no retry evidence problem
+    # existed. Reusing `stop_reasons_available` -- the sibling "is this run's
+    # provider-activity evidence trustworthy" flag already gating that same
+    # row -- routes a malformed count to the existing
+    # ``INDETERMINATE_PROVIDER`` classification rather than inventing a new
+    # field for it.
+    observations["stop_reasons_available"] = available and auto_retry_events_exact
     observations["stop_reason_counts"] = counts
-    observations["auto_retry_events"] = _exact_count(
-        getattr(state.supervisor.activity, "auto_retry_events", 0)
-    )
     observations["extension_error_count"] = len(
         getattr(state.supervisor.activity, "extension_errors", ()) or ()
     )
@@ -758,17 +766,25 @@ def _closure_phase(
     if state.broker is not None:
         try:
             counts = state.broker.diagnostics_counts()
-            observations["broker_recorded_activity_available"] = True
-            observations["broker_recorded_read_operation_count"] = _exact_count(
-                counts["read_operations"]
+            raw_read = counts["read_operations"]
+            raw_edit = counts["edit_operations"]
+            raw_edited = counts["edited_paths"]
+            raw_refusals = counts["refusals"]
+            # CFG1-IMPL-FU2 Finding 3: "available" must mean every one of the
+            # four raw facts was an exact, non-negative int -- not merely that
+            # the dict access itself did not raise. A dict that came back with
+            # a malformed VALUE (as opposed to a missing key or an exception)
+            # must not read as available while silently reporting a
+            # manufactured ``0`` for the field that was actually malformed;
+            # `classify_cfg1_run` row 5 routes on this exact flag.
+            observations["broker_recorded_activity_available"] = all(
+                type(value) is int and value >= 0
+                for value in (raw_read, raw_edit, raw_edited, raw_refusals)
             )
-            observations["broker_recorded_edit_operation_count"] = _exact_count(
-                counts["edit_operations"]
-            )
-            observations["broker_recorded_edited_path_count"] = _exact_count(
-                counts["edited_paths"]
-            )
-            observations["broker_recorded_refusal_count"] = _exact_count(counts["refusals"])
+            observations["broker_recorded_read_operation_count"] = _exact_count(raw_read)
+            observations["broker_recorded_edit_operation_count"] = _exact_count(raw_edit)
+            observations["broker_recorded_edited_path_count"] = _exact_count(raw_edited)
+            observations["broker_recorded_refusal_count"] = _exact_count(raw_refusals)
         except Exception:  # noqa: BLE001
             observations["broker_recorded_activity_available"] = False
 
@@ -795,9 +811,27 @@ def _closure_phase(
         state.workspace.experiment_root if state.workspace is not None else None
     )
     if state.generated_config is not None:
-        observations["generated_config_scrub_verified"] = _verified_unlink(
-            state.generated_config.models_path, owned_root=owned_root
-        )
+        # CFG1-IMPL-FU2 Finding 2: the scrub target is the VERIFIED issuance
+        # record's own ``models_path``, never ``state.generated_config.
+        # models_path`` -- that object is a caller-mutable plain attribute
+        # holder, and a genuine ``issuance_token`` paired with a substituted
+        # ``models_path`` must not be able to steer L24 into unlinking an
+        # arbitrary path. A token that fails re-verification (already
+        # discarded, workspace mismatch, redirected, digest mismatch) yields
+        # no scrub target at all rather than falling back to the unverified
+        # field, and the scrub is reported unverified.
+        try:
+            issuance_record = config_issuance.verify_config_issuance(
+                token=state.generated_config.issuance_token, workspace=state.workspace
+            )
+        except config_issuance.ConfigIssuanceError:
+            issuance_record = None
+        if issuance_record is None:
+            observations["generated_config_scrub_verified"] = False
+        else:
+            observations["generated_config_scrub_verified"] = _verified_unlink(
+                issuance_record.models_path, owned_root=owned_root
+            )
         config_issuance.discard_config_issuance(state.generated_config.issuance_token)
     if state.extension is not None:
         observations["extension_binding_scrub_verified"] = _scrub_extension_binding(
@@ -869,11 +903,25 @@ def _closure_phase(
             observations["verification_return_code"] = (
                 return_code if type(return_code) is int else None
             )
-            observations["verification_passed"] = _exact_bool(getattr(outcome, "passed", False))
             raw_counts = getattr(outcome, "counts", {}) or {}
+            verification_counts_all_exact = all(
+                type(raw_counts.get(key, 0)) is int and raw_counts.get(key, 0) >= 0
+                for key in _VERIFICATION_COUNT_KEYS
+            )
             observations["verification_counts"] = {
                 key: _exact_count(raw_counts.get(key, 0)) for key in _VERIFICATION_COUNT_KEYS
             }
+            # CFG1-IMPL-FU2 Finding 3: a malformed verification count must
+            # never STRENGTHEN a passing verification claim. Folding
+            # verification_counts' own exactness into `verification_passed`
+            # means a malformed count can only ever pull a claim of "passed"
+            # back to "not proven passed" -- it can never turn a genuine
+            # failure into a false pass either, since `passed` is already
+            # ANDed here rather than substituted.
+            observations["verification_passed"] = (
+                _exact_bool(getattr(outcome, "passed", False))
+                and verification_counts_all_exact
+            )
             # A child that never yielded a return code was never reaped.
             observations["verification_child_reaped_or_not_started"] = return_code is not None
         try:
@@ -897,9 +945,20 @@ def _closure_phase(
         if observations["workspace_authority_reproved"]:
             try:
                 removal = workspace_module.remove_cfg1_run_workspace(state.workspace)
-                observations["workspace_removed_verified"] = _exact_bool(removal.get("removed"))
-                observations["workspace_residual_file_count"] = _exact_count(
-                    removal.get("residual_file_count", 0)
+                raw_residual = removal.get("residual_file_count", 0)
+                residual_exact = type(raw_residual) is int and raw_residual >= 0
+                observations["workspace_residual_file_count"] = _exact_count(raw_residual)
+                # CFG1-IMPL-FU2 Finding 3: `compute_lifecycle_closure` treats
+                # `workspace_residual_file_count == 0` (with `type(...) is
+                # int`, always true after `_exact_count`) as one half of L27's
+                # closure proof. A malformed raw residual count laundered to
+                # `0` would satisfy that check despite the true residual state
+                # being UNKNOWN, not proven zero -- so a malformed residual
+                # count forces `workspace_removed_verified` false regardless
+                # of the frozen remover's own `removed` flag, which is the
+                # OTHER half of the same closure proof and already gates L27.
+                observations["workspace_removed_verified"] = (
+                    _exact_bool(removal.get("removed")) and residual_exact
                 )
             except Exception:  # noqa: BLE001
                 observations["workspace_removed_verified"] = False
@@ -1132,38 +1191,73 @@ def default_cfg1_run_ports(*, ambient_environ: Mapping[str, str]) -> Cfg1RunPort
                 self.server.start()
 
             def diagnostics_counts(self) -> dict:
-                """Sec. 16.2 L22: four bounded ints, from their real sources.
+                """Sec. 16.2 L22: four RAW facts, from their real sources.
 
-                The accepted-operation counts and the distinct edited-path
-                count come from ``RunState``'s own consumption accounting --
-                the authority the broker itself enforces budgets against --
-                rather than from ``BrokerDiagnostics.as_dict()``, whose
-                ``accepted``/``refused`` maps are keyed by operation name and
-                by ``operation:code``.
+                CFG1-IMPL-FU2 Finding 3: this adapter must NOT reduce
+                ``read_operations``/``edit_operations``/``refusals`` with
+                ``_exact_count`` here -- doing so would launder a malformed
+                frozen-broker value into a manufactured, plausible ``0``
+                BEFORE L22's own exact-type check ever sees it, defeating the
+                very check that is supposed to catch it (the same class of
+                defect the adapter's ``pending_operations_unreaped`` field
+                had). Every raw value is reduced at the step that catches it
+                (Sec. 21.1), which is L22 in ``_closure_phase``, not here.
+
+                ``edited_paths`` is exempt: ``len(...)`` on a real ``list``
+                object is unconditionally an exact, non-negative ``int`` by
+                construction, so there is nothing to launder.
 
                 The refusal count sums those ``operation:code`` buckets and
-                keeps ONLY the total: the codes and their reason strings are
-                bounded diagnostics that never cross into a record (Sec. 21.2).
+                keeps ONLY the total -- but the sum itself is reported ONLY
+                when every individual bucket is already an exact, non-negative
+                int; if any bucket is malformed the raw, unsummed value list is
+                returned instead, which is itself not an ``int`` and therefore
+                fails L22's exact-type check rather than silently contributing
+                a partial, manufactured total.
                 """
                 consumed = self.run_state.consumed
                 diagnostics = self.handler.diagnostics
+                refusal_values = list(diagnostics.refused.values())
+                refusals_all_exact = all(
+                    type(value) is int and value >= 0 for value in refusal_values
+                )
                 return {
-                    "read_operations": _exact_count(consumed.read_operations),
-                    "edit_operations": _exact_count(consumed.edit_operations),
+                    "read_operations": consumed.read_operations,
+                    "edit_operations": consumed.edit_operations,
                     "edited_paths": len(self.run_state.mutated_paths),
-                    "refusals": sum(
-                        _exact_count(count) for count in diagnostics.refused.values()
-                    ),
+                    "refusals": sum(refusal_values) if refusals_all_exact else refusal_values,
                 }
 
             def shutdown_for_cfg1(self) -> dict:
                 lifecycle = self.server.shutdown(TRIGGER_AIDO_TEARDOWN)
-                # Bounded literals and bools only. ``worker_error`` is raw text
-                # and is deliberately NOT carried across this boundary.
+                # Bounded literals only. ``worker_error`` is raw text and is
+                # deliberately NOT carried across this boundary.
+                #
+                # CFG1-IMPL-FU2 Finding 3: ``pending_operations_unreaped`` is
+                # returned RAW -- never pre-reduced with ``_exact_count`` --
+                # because L23's own consumption check
+                # (``type(pending_unreaped) is int and pending_unreaped == 0``)
+                # is exactly the exact-type-and-value proof this design relies
+                # on to tell an OBSERVED exact zero apart from a malformed
+                # value. Reducing it here first would manufacture a plausible
+                # ``0`` that check could no longer tell apart from the real
+                # thing -- the defect this correction closes. There is
+                # deliberately no ``.get(..., 0)`` default either: a MISSING
+                # key becomes ``None``, which the same check also correctly
+                # treats as not-proven-zero, rather than a manufactured zero
+                # for an absent fact.
+                #
+                # ``worker_termination_observed`` keeps its existing
+                # ``_exact_bool`` reduction here: unlike a count whose
+                # observed-zero and malformed-defaulted-zero are otherwise
+                # indistinguishable, ``_exact_bool``'s only two outcomes are
+                # "proven true" and "not proven true" -- and "not proven true"
+                # is already the correct, fail-closed answer for a malformed
+                # value, so pre-reducing it here does not launder anything.
                 return {
                     "state_reached": lifecycle.get("state_reached"),
-                    "pending_operations_unreaped": _exact_count(
-                        lifecycle.get("pending_operations_unreaped", 0)
+                    "pending_operations_unreaped": lifecycle.get(
+                        "pending_operations_unreaped"
                     ),
                     "worker_termination_observed": _exact_bool(
                         lifecycle.get("worker_termination_observed", False)
@@ -1289,11 +1383,25 @@ def _python_executable() -> str:
 # ---------------------------------------------------------------------------
 # CFG1-IMPL-FU1 Finding 1 -- the genuine executor, mint-registry-unforgeable
 # ---------------------------------------------------------------------------
+#
+# CFG1-IMPL-FU2 Finding 1 correction: FU1's registry stored only TOKEN
+# MEMBERSHIP (``token -> True``), so a genuine token copied onto a
+# ``Cfg1GenuineRunExecutor`` built with a SUBSTITUTED ``call`` still passed
+# both ``__post_init__`` and ``invoke``'s re-check -- neither ever compared
+# the presented callable against the one this module actually minted for that
+# token. The registry now binds ``token -> the exact callable object minted
+# for it``, and every check below is an IDENTITY comparison (``is``, never
+# ``==``) against that record, re-read fresh at construction AND at every
+# ``invoke`` call. A token whose recorded callable does not match the
+# instance's own ``call`` -- whether because the instance was hand-built with
+# a substituted callable, or because ``call`` was reassigned after mint via
+# ``object.__setattr__`` (frozen only blocks ordinary attribute assignment,
+# never that), or because the instance was rebuilt via ``dataclasses.replace``
+# -- is refused, never invoked.
 
-#: token -> registered. Process-local, in-memory only, never persisted, never
-#: an evidence field. Mirrors the exact shape :mod:`stage_output` already
-#: uses for :class:`~pi_harness_cfg1.stage_output.CFG1StageOutputAuthority`.
-_GENUINE_RUN_EXECUTOR_MINTED: dict[str, bool] = {}
+#: token -> the exact callable minted for it. Process-local, in-memory only,
+#: never persisted, never an evidence field.
+_GENUINE_RUN_EXECUTOR_MINTED: dict[str, Callable[[Cfg1RunAdmission], Cfg1RunOutcome]] = {}
 
 _GENUINE_RUN_EXECUTOR_TOKEN_BYTES = 16
 
@@ -1306,32 +1414,49 @@ class Cfg1GenuineRunExecutorError(Exception):
         self.reason_code = reason_code
 
 
+def _genuine_executor_binding_holds(token: object, call: object) -> bool:
+    """The ONE mechanical proof: this exact token maps to this exact callable.
+
+    An identity comparison, never equality: two distinct callables that
+    happen to compare equal (or a mock configured to do so) must not pass.
+    """
+    if type(token) is not str or token not in _GENUINE_RUN_EXECUTOR_MINTED:
+        return False
+    return _GENUINE_RUN_EXECUTOR_MINTED[token] is call
+
+
 @dataclass(frozen=True)
 class Cfg1GenuineRunExecutor:
     """The ONE unforgeable handle to the genuine, mechanically-bound L1-L28
     executor. Valid by construction and unforgeable by API.
 
     ``bind_genuine_cfg1_run_executor`` is the ONLY supported path to a genuine
-    instance: ``__post_init__`` refuses any instance whose ``token`` is
-    unregistered, so a caller cannot construct one wrapping a substitute
-    callable of its own -- constructing ``Cfg1GenuineRunExecutor(token="x",
-    call=my_fake)`` directly fails before ``my_fake`` is ever reachable from
-    anywhere. The bound callable is ``field(repr=False)`` and is invoked only
-    through :meth:`invoke`, never exposed as a bare attribute a caller could
-    detach and pass elsewhere.
+    instance: ``__post_init__`` refuses any instance whose ``(token, call)``
+    pair does not match the mint registry EXACTLY -- by identity, not merely
+    by the token's membership -- so a caller cannot construct one pairing a
+    genuine token with a substitute callable of its own (CFG1-IMPL-FU2
+    Finding 1). The bound callable is ``field(repr=False)`` and is invoked
+    only through :meth:`invoke`, never exposed as a bare attribute a caller
+    could detach and pass elsewhere.
     """
 
     token: str = field(repr=False)
     call: object = field(repr=False)
 
     def __post_init__(self) -> None:
-        if type(self.token) is not str or self.token not in _GENUINE_RUN_EXECUTOR_MINTED:
-            raise Cfg1GenuineRunExecutorError("UNKNOWN_EXECUTOR_TOKEN")
+        if not _genuine_executor_binding_holds(self.token, self.call):
+            raise Cfg1GenuineRunExecutorError("EXECUTOR_BINDING_UNPROVEN")
 
     def invoke(self, admission: Cfg1RunAdmission) -> Cfg1RunOutcome:
-        """Re-proves the token is still registered, THEN invokes. Every call."""
-        if self.token not in _GENUINE_RUN_EXECUTOR_MINTED:
-            raise Cfg1GenuineRunExecutorError("UNKNOWN_EXECUTOR_TOKEN")
+        """Re-proves ``(token, call)`` still matches the mint, THEN invokes.
+
+        Re-checked on EVERY call, not merely at construction -- so a ``call``
+        reassigned after mint via ``object.__setattr__`` (which ``frozen=True``
+        does not prevent) is caught here even when it slipped past
+        ``__post_init__`` at a time it was still genuine.
+        """
+        if not _genuine_executor_binding_holds(self.token, self.call):
+            raise Cfg1GenuineRunExecutorError("EXECUTOR_BINDING_UNPROVEN")
         return self.call(admission)
 
     def __repr__(self) -> str:  # noqa: D105 - the bound callable is never rendered
@@ -1349,7 +1474,7 @@ def bind_genuine_cfg1_run_executor() -> Cfg1GenuineRunExecutor:
     separately required, Sec. 14.1); it exists so :func:`stage_runner.
     run_cfg1_stage` can bind the genuine executor mechanically, with nothing
     left for a caller holding only a stage-output authority to substitute
-    (CFG1-IMPL-FU1 Finding 1).
+    (CFG1-IMPL-FU1 Finding 1, CFG1-IMPL-FU2 Finding 1).
     """
     import os
     import secrets
@@ -1362,5 +1487,5 @@ def bind_genuine_cfg1_run_executor() -> Cfg1GenuineRunExecutor:
     token = secrets.token_hex(_GENUINE_RUN_EXECUTOR_TOKEN_BYTES)
     if token in _GENUINE_RUN_EXECUTOR_MINTED:  # pragma: no cover - a 128-bit collision
         raise Cfg1GenuineRunExecutorError("EXECUTOR_TOKEN_ALREADY_REGISTERED")
-    _GENUINE_RUN_EXECUTOR_MINTED[token] = True
+    _GENUINE_RUN_EXECUTOR_MINTED[token] = _call
     return Cfg1GenuineRunExecutor(token=token, call=_call)

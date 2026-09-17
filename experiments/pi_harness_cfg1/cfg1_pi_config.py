@@ -198,6 +198,30 @@ class GeneratedCfg1Config:
         )
 
 
+def _write_new_text_file_exclusive(path: Path, text: str) -> None:
+    """Create ``path`` and write ``text``, refusing anything already there.
+
+    CFG1-IMPL-FU2 Finding 4 (the file-level half of the config-generation
+    TOCTOU). Python's ``"x"`` mode is ``O_CREAT | O_EXCL``: the OS refuses the
+    open with ``FileExistsError`` when ANYTHING already occupies the exact
+    path -- a regular file, or a symlink/reparse point planted there ahead of
+    this call -- and, critically, it never follows an existing symlink to
+    write through it the way a plain ``"w"``-mode open (what
+    ``Path.write_text`` uses) would. This is the identical exclusive-create
+    idiom :func:`pi_harness_cfg1.writers._open_exclusive` already uses for the
+    run-record artifact, applied here to the two generated config files.
+
+    Text mode (not the writer's own binary ``"xb"``) is deliberate: it is the
+    same ``io.TextIOWrapper`` universal-newline translation
+    ``Path.write_text(text, encoding="utf-8")`` performs (``\\n`` becoming
+    ``os.linesep`` on write), which is what makes T-1's byte-for-byte
+    agreement with the frozen qualification generator's own
+    ``Path.write_text`` call hold unchanged.
+    """
+    with open(path, "x", encoding="utf-8") as handle:
+        handle.write(text)
+
+
 def write_cfg1_pi_config(
     workspace, *, arm_id: str, base_url: str, model_id: str = CFG1_MODEL_ID
 ) -> GeneratedCfg1Config:
@@ -211,6 +235,24 @@ def write_cfg1_pi_config(
     model-influenced code runs (Sec. 16.2). A caller cannot select a different
     location: there is no parameter through which one could be named
     (CFG1-IMPL-FU1 Finding 2).
+
+    **CFG1-IMPL-FU2 Finding 4 -- what this closes, and what it does not.** The
+    two files are now created with :func:`_write_new_text_file_exclusive`
+    rather than ``Path.write_text``, which mechanically refuses to write
+    through a file or symlink an attacker planted at ``settings.json`` /
+    ``models.json``'s exact path in the window between this directory's own
+    ``mkdir(exist_ok=False)`` and these two writes -- the file-level half of
+    the TOCTOU. It does NOT close the directory-level half: if ``config_dir``
+    ITSELF is deleted and replaced with a symlink/junction in that same
+    window, both the exclusive file creates and this module's own digesting
+    would follow the replacement, because CPython's ``os``/``pathlib`` expose
+    no portable, Windows-supported directory-handle-relative create (POSIX
+    ``dir_fd``/``openat`` is not available on Windows through this API, per
+    CPython's own platform support table). Closing that remaining window
+    would need a NEW Windows-specific directory-handle/reparse-verification
+    authority this design has never frozen -- a design question, not an
+    implementation defect, and it is reported as such rather than silently
+    left implied-closed by this correction.
     """
     from . import config_issuance
     from .run_workspace import Cfg1RunWorkspace
@@ -236,15 +278,15 @@ def write_cfg1_pi_config(
     settings_path = Path(settings_path_str)
     models_path = Path(models_path_str)
     try:
-        settings_path.write_text(
-            serialize_config_document(settings_document()), encoding="utf-8"
-        )
-        models_path.write_text(
+        _write_new_text_file_exclusive(settings_path, serialize_config_document(settings_document()))
+        _write_new_text_file_exclusive(
+            models_path,
             serialize_config_document(
                 models_document(arm_id=arm_id, base_url=base_url, model_id=model_id)
             ),
-            encoding="utf-8",
         )
+    except FileExistsError as exc:
+        raise Cfg1PiConfigError("CONFIG_FILE_ALREADY_EXISTS") from exc
     except OSError as exc:
         raise Cfg1PiConfigError("CONFIG_FILES_NOT_WRITTEN") from exc
 
