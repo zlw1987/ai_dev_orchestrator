@@ -753,39 +753,103 @@ def test_f4_a_preexisting_symlink_at_settings_json_path_inside_a_fresh_directory
     tmp_path, monkeypatch, git_executable
 ):
     """A tighter reproduction: hold ``config_dir.mkdir`` back to keep the race
-    window open, plant the symlink, THEN let the write proceed -- proving the
+    window open, plant the symlink, THEN attempt the create -- proving the
     exclusive create (not merely the directory's own ``exist_ok=False``)
     is what refuses it.
+
+    **Both symlink shapes, and the second one is why this test changed
+    (CFG1-IMPL-FU3).** FU2 closed this with ``open(path, "x")`` and proved it
+    against a symlink whose TARGET ALREADY EXISTED -- where ``CREATE_NEW``
+    refuses for a reason that has nothing to do with the link. Against a
+    symlink whose target does NOT exist, ``open(path, "x")`` on win32
+    **followed the link and created the target**, because it is
+    ``CreateFileW(CREATE_NEW)`` underneath and name resolution walks the
+    reparse point. FU15's step-6 create adds
+    ``FILE_FLAG_OPEN_REPARSE_POINT``, which stops resolution at the link, so
+    both shapes now refuse and neither target receives anything.
     """
-    from pi_harness_cfg1 import cfg1_pi_config
-    from conftest import make_file_symlink
     from pathlib import Path
 
-    decoy_target = tmp_path / "decoy_settings_target_2.json"
-    decoy_target.write_text('{"attacker": "controlled"}', encoding="utf-8")
+    from conftest import make_file_symlink
+    from pi_harness_cfg1 import win_config_authority as win
+
+    if not win.PLATFORM_SUPPORTED:
+        pytest.skip("the FU15 exclusive-create authority is win32-only")
+
+    existing_target = tmp_path / "decoy_settings_target_2.json"
+    existing_target.write_text('{"attacker": "controlled"}', encoding="utf-8")
+    dangling_target = tmp_path / "decoy_settings_target_3.json"
+    assert not dangling_target.exists()
 
     workspace, _built = run_workspace.mint_cfg1_run_workspace(git_executable=git_executable)
     try:
-        config_dir_str, settings_path_str, _models_path_str = (
+        config_dir_str, settings_path_str, models_path_str = (
             config_issuance.derive_cfg1_config_paths(workspace)
         )
         Path(config_dir_str).mkdir(parents=False, exist_ok=False)
         try:
-            make_file_symlink(Path(settings_path_str), decoy_target)
+            make_file_symlink(Path(settings_path_str), existing_target)
+            make_file_symlink(Path(models_path_str), dangling_target)
         except OSError:
             pytest.skip("this platform grants no unprivileged file-symlink creation")
 
-        with pytest.raises(FileExistsError):
-            cfg1_pi_config._write_new_text_file_exclusive(
-                Path(settings_path_str), "{}"
-            )
-        # The decoy is never followed or overwritten.
-        assert decoy_target.read_text(encoding="utf-8") == '{"attacker": "controlled"}'
+        for name in ("settings.json", "models.json"):
+            with pytest.raises(win.Cfg1DirectoryAuthorityError) as excinfo:
+                win.create_exclusive_child(config_dir=config_dir_str, name=name)
+            assert excinfo.value.reason_code == "CONFIG_FILE_ALREADY_EXISTS"
+
+        # Neither target is followed: the existing one is untouched, and the
+        # dangling one is never brought into existence.
+        assert existing_target.read_text(encoding="utf-8") == '{"attacker": "controlled"}'
+        assert not dangling_target.exists(), (
+            "the exclusive create followed a dangling symlink and created a "
+            "file outside the owned root"
+        )
+        assert win.held_child_count() == 0
     finally:
         run_workspace.discard_cfg1_run_workspace(workspace)
         import shutil
 
         shutil.rmtree(Path(workspace.experiment_root), ignore_errors=True)
+
+
+def test_f4_pythons_own_exclusive_create_is_not_symlink_safe_on_win32(tmp_path):
+    """The evidence that made CFG1-IMPL-FU3 replace FU2's mechanism.
+
+    FU2's source claimed ``O_CREAT | O_EXCL`` "never follows an existing
+    symlink to write through it", and Sec. 37.2's W10 repeats that claim. This
+    test establishes, on the real platform, that the claim is FALSE for a
+    dangling symlink -- so the invariant FU2 and Sec. 37.3.4 row 3 state can
+    only be satisfied by the ``FILE_FLAG_OPEN_REPARSE_POINT`` create FU15's
+    step 6 now uses. If a future Windows makes ``open(path, "x")`` refuse
+    here, this test fails loudly and the residual can be re-reviewed rather
+    than silently carried.
+    """
+    import os
+
+    if os.name != "nt":
+        pytest.skip("this is a win32 name-resolution fact")
+
+    target = tmp_path / "outside_the_root.json"
+    link = tmp_path / "planted.json"
+    try:
+        os.symlink(str(target), str(link))
+    except (OSError, NotImplementedError):
+        pytest.skip("this platform grants no unprivileged file-symlink creation")
+
+    wrote_through = False
+    try:
+        with open(link, "x", encoding="utf-8") as handle:
+            handle.write("ENDPOINT")
+        wrote_through = True
+    except FileExistsError:
+        pass
+
+    assert wrote_through is True and target.exists(), (
+        "open(path, 'x') refused a dangling symlink on this platform; W10's "
+        "symlink clause may now hold and FU3's correction can be re-reviewed"
+    )
+    assert target.read_text(encoding="utf-8") == "ENDPOINT"
 
 
 def test_f4_genuine_write_is_still_byte_identical_after_the_exclusive_create_change(
@@ -822,25 +886,35 @@ def test_f4_genuine_write_is_still_byte_identical_after_the_exclusive_create_cha
 
 def test_f4_directory_level_replacement_remains_a_documented_residual_not_a_false_claim():
     """This is NOT a security proof -- it is the honest, mechanical record of
-    what FU2 does NOT claim to close. ``os.open``'s ``dir_fd`` parameter
-    (POSIX ``openat``), the only portable primitive that could bind a create
-    to a specific, already-verified directory HANDLE rather than a re-resolved
-    pathname, is unavailable on Windows through CPython's ``os`` module. This
-    test fails loudly if a future change removes the module's own documented
-    acknowledgement of that gap, so the residual can never be silently dropped
-    from the record without a reviewer noticing.
+    what CFG1 does NOT claim to close, updated for FU15/FU15-D1.
+
+    FU2's own source comment described the directory-level half of the
+    config-generation TOCTOU as an open design question needing a
+    Windows-specific directory-handle authority "this design has never
+    frozen". FU15 froze that authority and FU15-D1 accepted ``R-WINDOW`` as a
+    documented, bounded residual (``D-A`` = A1), so the source must now cite
+    that resolution rather than continue to read as an unstated gap -- and it
+    must still never claim the residual was eliminated. This test fails loudly
+    in EITHER direction.
     """
-    from pi_harness_cfg1 import cfg1_pi_config
+    from pi_harness_cfg1 import cfg1_pi_config, win_config_authority
 
     source = inspect.getsource(cfg1_pi_config.write_cfg1_pi_config)
-    assert "directory-level half" in source
-    assert "dir_fd" in source or "openat" in source
-    import os
+    # The resolution is cited, by name, where the gap used to be described.
+    assert "R-WINDOW" in source
+    assert "FU15-D1" in source
+    assert "ACCEPTED as a" in source and "residual" in source
+    # And the claim it must never make, stated as a prohibition in the source
+    # itself rather than merely absent from it.
+    assert "never" in source and "be described as proving the pinned object" in source
+    assert "must never be called secure, isolated" in source
 
-    # The actual platform fact this residual rests on, checked mechanically
-    # rather than asserted in prose alone.
-    if os.name == "nt":
-        assert os.open not in os.supports_dir_fd, (
-            "Windows appears to have gained os.open(dir_fd=...) support; "
-            "the directory-level TOCTOU residual should be re-reviewed"
-        )
+    module_source = inspect.getsource(win_config_authority)
+    assert "R-WINDOW" in module_source
+    assert "not closed and is not claimed closed" in module_source
+    # NtCreateFile stays unauthorized (Sec. 37.3.7's A2 was NOT taken), and
+    # nothing in this module loads or calls the native ntdll surface.
+    assert 'WinDLL("ntdll' not in module_source
+    assert "NtCreateFile" not in module_source.replace(
+        "``NtCreateFile`` is the only mechanism that would close ``R-WINDOW`` and is", ""
+    ).replace("NtCreateFile", "", 1)

@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import inspect
+
 import pytest
 from cfg1_doubles import (
     SYNTHETIC_BASE_URL,
@@ -644,30 +646,73 @@ def test_t12_a_config_issuance_claim_is_refused_for_a_foreign_directory(
 
 
 def test_t12_a_genuine_config_cannot_be_registered_for_a_foreign_root(git_executable):
-    """A caller cannot bless an existing directory by naming it explicitly."""
+    """A caller cannot bless an existing directory by naming it explicitly.
+
+    Two mechanical facts, neither of which is caller convention:
+
+    1. ``register_config_issuance`` has NO path parameter of any kind -- not
+       ``config_dir``, not ``settings_path``, not ``models_path``, not a
+       prefix or a parent. The location is derived from ``workspace`` alone.
+    2. Since FU15 it also requires the three UNFORGEABLE proofs L9's own gate
+       mints (``proven``, ``settings_child``, ``models_child``), so a caller
+       cannot register an issuance for files that never passed the parentage
+       gate -- even files it planted at exactly the right derived path.
+    """
+    import os
+
+    from pi_harness_cfg1.cfg1_pi_config import write_cfg1_pi_config
     from pi_harness_cfg1.config_issuance import (
+        ConfigIssuanceError,
         derive_cfg1_config_paths,
         register_config_issuance,
+        verify_config_issuance,
     )
+
+    signature = inspect.signature(register_config_issuance)
+    assert set(signature.parameters) == {
+        "workspace",
+        "arm_id",
+        "provider_id",
+        "model_id",
+        "proven",
+        "settings_child",
+        "models_child",
+    }
+    for name in ("config_dir", "settings_path", "models_path", "path", "root", "parent"):
+        assert name not in signature.parameters
 
     workspace, _built = run_workspace.mint_cfg1_run_workspace(
         git_executable=git_executable
     )
     try:
+        # Files planted at the exact derived location, by a caller that holds a
+        # genuine workspace, cannot be registered: there is no supported way to
+        # produce the proofs without going through L9 itself.
         config_dir, settings_path, models_path = derive_cfg1_config_paths(workspace)
         Path(config_dir).mkdir(parents=False, exist_ok=False)
         Path(settings_path).write_text("{}", encoding="utf-8")
         Path(models_path).write_text("{}", encoding="utf-8")
+        with pytest.raises(ConfigIssuanceError) as excinfo:
+            register_config_issuance(
+                workspace=workspace,
+                arm_id="Q",
+                provider_id="p",
+                model_id="m",
+                proven=object(),
+                settings_child=object(),
+                models_child=object(),
+            )
+        assert excinfo.value.reason_code == "PARENTAGE_NOT_PROVEN"
 
-        # register_config_issuance takes no path parameter at all: it derives
-        # the same location from `workspace` alone, so it cannot be pointed
-        # anywhere else, no matter what a caller believes the location is.
-        token = register_config_issuance(
-            workspace=workspace, arm_id="Q", provider_id="p", model_id="m"
+        # Positive control: the genuine path through L9 registers and verifies.
+        os.unlink(settings_path)
+        os.unlink(models_path)
+        os.rmdir(config_dir)
+        config = write_cfg1_pi_config(workspace, arm_id="Q", base_url=SYNTHETIC_BASE_URL)
+        record = verify_config_issuance(
+            token=config.issuance_token, workspace=workspace
         )
-        from pi_harness_cfg1.config_issuance import verify_config_issuance
-
-        verify_config_issuance(token=token, workspace=workspace)
+        assert record.arm_id == "Q"
     finally:
         run_workspace.remove_cfg1_run_workspace(workspace)
 

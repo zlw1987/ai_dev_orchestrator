@@ -127,7 +127,13 @@ def _no_leaked_cfg1_registry_state():
     registries are reset without assertion: several tests legitimately mint
     without a stage run to retire them.
     """
-    from pi_harness_cfg1 import config_issuance, run_workspace, stage_decision, stage_output
+    from pi_harness_cfg1 import (
+        config_issuance,
+        run_workspace,
+        stage_decision,
+        stage_output,
+        win_config_authority,
+    )
 
     try:
         yield
@@ -138,6 +144,22 @@ def _no_leaked_cfg1_registry_state():
         assert stage_decision._STAGE_TERMINAL_SEAL_HISTORY == set(), (
             "a terminal-seal history entry survived the test"
         )
+        # FU15: an OS handle leaked out of L9 is a genuine defect, and a leaked
+        # PIN in particular would make a later test's L27 removal fail for a
+        # reason that has nothing to do with that test. Asserting before
+        # clearing is what makes it detectable; a fixture that only cleared
+        # would mask exactly what T-150/T-151/T-153 exist to prove.
+        assert win_config_authority.held_pin_count() == 0, (
+            "a Win32 directory pin survived the test: L9's own finally did not "
+            "run, or a test held one without releasing it"
+        )
+        assert win_config_authority.held_child_count() == 0, (
+            "a config-child descriptor survived the test"
+        )
+        assert win_config_authority.close_failure_count() == 0, (
+            "a handle or descriptor was LEAKED to a failed close; a test that "
+            "injects one must account for it rather than leave it counted"
+        )
     finally:
         stage_output._STAGE_OUTPUT_MINTED.clear()
         stage_decision._STAGE_DECISION_SEALED.clear()
@@ -145,6 +167,12 @@ def _no_leaked_cfg1_registry_state():
         config_issuance._ISSUED.clear()
         run_workspace._MINTED.clear()
         run_workspace._CLAIMED.clear()
+        for pin_nonce in list(win_config_authority._PINS):
+            win_config_authority._PINS.pop(pin_nonce, None)
+        for child_nonce in list(win_config_authority._CHILDREN):
+            win_config_authority._CHILDREN.pop(child_nonce, None)
+        win_config_authority._PROVEN.clear()
+        win_config_authority._CLOSE_FAILURES.clear()
 
 
 #: Every environment name this experiment's live phase would ever read. The

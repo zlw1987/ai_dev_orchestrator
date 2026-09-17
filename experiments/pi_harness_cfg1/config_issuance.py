@@ -15,6 +15,21 @@ was finalized -- is the only ownership proof.
 The token is process-local, in-memory only, never persisted, never an evidence
 field, and never rendered in any repr.
 
+**FU15 (Sec. 37.3.1 step 10, Sec. 37.3.2a).** A digest is a statement about
+BYTES, and identical bytes can belong to a different object -- so the record
+now also binds the ``(volume_serial, file_id)`` of the pinned config directory
+and of each generated child, as L9's parentage gate proved them. That is what
+gives L24 a PRECISE child authority: it may unlink the generated
+``models.json`` only while the object still at that path is the object issuance
+bound, never merely one whose name and contents match. L27's root-namespace
+teardown is a different, broader authority and is deliberately not derived from
+this record.
+
+Registration additionally requires the unforgeable proofs L9 mints -- the
+parentage proof and the two exclusive children it was minted FOR -- so a
+caller cannot pair a genuine proof with substituted children, and cannot
+register an issuance for files that never passed the gate.
+
 **CFG1-IMPL-FU1 Finding 2.** Neither ``register_config_issuance`` nor
 ``verify_config_issuance`` accepts a ``config_dir``, ``settings_path`` or
 ``models_path`` parameter -- there is deliberately no parameter naming a path
@@ -40,6 +55,7 @@ from pathlib import Path
 
 from ai_dev_orchestrator.workspace.canonical import _is_symlink_or_reparse_point
 
+from . import win_config_authority as win
 from .run_workspace import (
     Cfg1RunWorkspace,
     Cfg1WorkspaceAuthorityError,
@@ -68,6 +84,14 @@ class _IssuanceRecord:
     model_id: str
     settings_sha256: str
     models_sha256: str
+    #: Sec. 37.3.1 step 10 (FU15). The ``(volume_serial, file_id)`` of the
+    #: pinned config directory and of each child, as the L9 parentage gate
+    #: proved them. These are what make L24's cleanup a statement about an
+    #: OBJECT rather than about a name: a same-name replacement planted after
+    #: issuance no longer matches, and a mismatch is a refusal, never a delete.
+    config_dir_identity: tuple[int, int] = field(repr=False, default=(-1, -1))
+    settings_identity: tuple[int, int] = field(repr=False, default=(-1, -1))
+    models_identity: tuple[int, int] = field(repr=False, default=(-1, -1))
 
     def __repr__(self) -> str:  # noqa: D105 - paths are never rendered
         return f"{type(self).__name__}(<bound>)"
@@ -125,38 +149,69 @@ def register_config_issuance(
     arm_id: str,
     provider_id: str,
     model_id: str,
+    proven: win.ProvenConfigChildren,
+    settings_child: win.ExclusiveChild,
+    models_child: win.ExclusiveChild,
 ) -> str:
     """Register the just-written config directory for ``workspace``'s run.
 
-    Digests are taken from the bytes actually READ BACK from disk, never from
-    the in-memory text re-encoded: ``Path.write_text`` performs newline
-    translation, so the two can legitimately differ. The directory itself is
-    never accepted as an argument here: :func:`derive_cfg1_config_paths`
-    re-derives it from ``workspace`` alone, so there is no supported way to
-    register a genuine issuance for any path but this run's own.
+    **The three FU15 inputs are unforgeable, not descriptive.** ``proven`` is
+    minted only by L9's parentage gate and ``settings_child``/``models_child``
+    only by L9's own exclusive creates; each is re-proven against its minting
+    registry here, so a caller cannot present a genuine workspace alongside
+    fabricated child identities, nor register an issuance for children that
+    never passed the gate. The directory itself is still never accepted as an
+    argument: :func:`derive_cfg1_config_paths` re-derives it from ``workspace``
+    alone, so there is no supported way to register a genuine issuance for any
+    path but this run's own.
+
+    Digests are taken from the bytes READ BACK THROUGH THE HELD DESCRIPTORS
+    (Sec. 37.3.1 steps 9-10), never by re-opening a pathname and never from the
+    in-memory text re-encoded -- the writer performs newline translation, so
+    text and on-disk bytes legitimately differ, and a fresh pathname open would
+    be asking about whatever the name resolves to a moment later rather than
+    about the object the gate proved.
     """
     config_dir, settings_path, models_path = derive_cfg1_config_paths(workspace)
-    _prove_not_redirected(config_dir)
-    _prove_not_redirected(settings_path)
+    if type(proven) is not win.ProvenConfigChildren:
+        raise ConfigIssuanceError("PARENTAGE_NOT_PROVEN")
+    if (
+        type(settings_child) is not win.ExclusiveChild
+        or type(models_child) is not win.ExclusiveChild
+    ):
+        raise ConfigIssuanceError("NOT_A_PROVEN_CONFIG_CHILD")
+    try:
+        # The proof is about THESE two objects, not about any two children.
+        win.require_proven_children(proven, (settings_child, models_child))
+        config_dir_identity = win.proven_config_identity(proven)
+        if win.child_name(settings_child) != "settings.json":
+            raise ConfigIssuanceError("CONFIG_CHILD_NAME_MISMATCH")
+        if win.child_name(models_child) != "models.json":
+            raise ConfigIssuanceError("CONFIG_CHILD_NAME_MISMATCH")
+        settings_identity = win.child_identity(settings_child)
+        models_identity = win.child_identity(models_child)
+        settings_bytes = win.read_child_bytes(settings_child)
+        models_bytes = win.read_child_bytes(models_child)
+    except win.Cfg1DirectoryAuthorityError as exc:
+        raise ConfigIssuanceError("GENERATED_FILES_UNREADABLE") from exc
 
     token = secrets.token_hex(_TOKEN_BYTES)
     if token in _ISSUED:  # pragma: no cover - a 128-bit collision
         raise ConfigIssuanceError("ISSUANCE_TOKEN_ALREADY_REGISTERED")
-    try:
-        record = _IssuanceRecord(
-            run_workspace_nonce=workspace.run_workspace_nonce,
-            config_dir=config_dir,
-            settings_path=settings_path,
-            models_path=models_path,
-            arm_id=arm_id,
-            provider_id=provider_id,
-            model_id=model_id,
-            settings_sha256=_digest(settings_path),
-            models_sha256=_digest(models_path),
-        )
-    except OSError as exc:
-        raise ConfigIssuanceError("GENERATED_FILES_UNREADABLE") from exc
-    _ISSUED[token] = record
+    _ISSUED[token] = _IssuanceRecord(
+        run_workspace_nonce=workspace.run_workspace_nonce,
+        config_dir=config_dir,
+        settings_path=settings_path,
+        models_path=models_path,
+        arm_id=arm_id,
+        provider_id=provider_id,
+        model_id=model_id,
+        settings_sha256=hashlib.sha256(settings_bytes).hexdigest(),
+        models_sha256=hashlib.sha256(models_bytes).hexdigest(),
+        config_dir_identity=config_dir_identity,
+        settings_identity=settings_identity,
+        models_identity=models_identity,
+    )
     return token
 
 

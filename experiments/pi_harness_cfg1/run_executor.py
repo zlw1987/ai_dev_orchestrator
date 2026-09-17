@@ -52,6 +52,15 @@ from .run_contract import Cfg1RunAdmission, Cfg1RunOutcome
 _STOP_REASON_KEYS = ("stop", "length", "toolUse", "error", "aborted", "other")
 _VERIFICATION_COUNT_KEYS = ("passed", "failed", "error")
 
+#: Sec. 37.4.2's fixed, non-content-bearing sentinel for a malformed
+#: verification count. It is JSON-serializable (so it reaches the validator
+#: rather than dying in canonicalization with the malformed object's own text
+#: attached) and it is refused by ``_require_exact_int_mapping`` by
+#: construction (so the record fails its own validator). It must never be a
+#: number: ``0``, ``-1`` and a string like ``"unknown"`` would each be an
+#: invented count wearing a different costume.
+_MALFORMED_VERIFICATION_COUNT = None
+
 
 def _exact_bool(value: object) -> bool:
     """Reduce one raw, port-mediated fact to a bool -- never truthiness-coerced.
@@ -74,8 +83,80 @@ def _exact_count(value: object) -> int:
     float, numeric string, negative number, or an object with a custom
     ``__int__``/``__index__`` becomes ``0`` -- the field's own documented
     minimum -- rather than a value ``int(...)`` would silently manufacture.
+
+    **Where this is still correct, and where FU15 removed it.** It remains the
+    right reduction for a count that feeds no observation claim of its own --
+    the broker diagnostics, ``auto_retry_events``, the extension error count,
+    and the L27 residual, each of which is separately gated by an availability
+    or closure bool. It is NO LONGER applied to a repository count (Sec.
+    37.4.1) or to a verification count (Sec. 37.4.2): there, the durable field
+    IS the observation, so manufacturing a plausible minimum states something
+    nobody observed. Those two families use an exactness predicate and a
+    refusal sentinel respectively -- see :func:`_exact_repository_snapshot` and
+    :data:`_MALFORMED_VERIFICATION_COUNT`. Do not reintroduce it there.
     """
     return value if (type(value) is int and value >= 0) else 0
+
+
+class _MalformedRepositorySnapshot(Exception):
+    """One L25/L26 repository-snapshot member failed its exactness predicate.
+
+    Carries nothing at all -- no value, no repr, no attribute name. It exists
+    only to reach the projection's own ``except`` and take the already-frozen
+    not-performed branch, so no malformed object can travel any further.
+    """
+
+
+def _exact_repository_snapshot(snapshot: object) -> tuple[str, tuple, int, int]:
+    """Sec. 37.4.1's exactness PREDICATE -- all-or-nothing, never a reducer.
+
+    Runs over the WHOLE snapshot before any field is projected, and raises if
+    any single member is malformed. The difference from a reducer is the whole
+    point of Finding B1: ``_exact_count`` turned a malformed
+    ``untracked_path_count`` into the durable integer ``0`` while
+    ``git_observation_1_performed`` stayed ``true`` -- an invented observation.
+    ``getattr(snapshot, "changed_tracked_paths", ())`` and
+    ``getattr(snapshot, "head", head_before)`` did the same, one becoming a
+    durable "nothing changed" and the other a durable ``head_moved = false``.
+
+    An OBSERVED exact zero is unaffected and still records as performed with
+    ``0`` -- a change that made observed zeros unrepresentable would be a
+    different falsehood, not a fix (T-159).
+
+    This is the shape FU2 already accepted one family over:
+    ``broker_recorded_activity_available`` is exactly "every one of the raw
+    facts was an exact non-negative int", and ``git_observation_1_performed``
+    is the repository family's already-frozen equivalent -- so no schema field,
+    no record kind and no new availability flag is added, and Sec. 12.2's D-4
+    predicate already gates on ``git_observation_1_performed is True``.
+    """
+    missing = object()
+
+    head = getattr(snapshot, "head", missing)
+    if type(head) is not str:
+        raise _MalformedRepositorySnapshot
+
+    changed = getattr(snapshot, "changed_tracked_paths", missing)
+    # A str is iterable and would silently decompose into characters, so the
+    # exact container types are named rather than "anything iterable".
+    if type(changed) not in (tuple, list):
+        raise _MalformedRepositorySnapshot
+    changed = tuple(changed)
+    for member in changed:
+        if type(member) is not str:
+            raise _MalformedRepositorySnapshot
+
+    counts = []
+    for name in ("untracked_path_count", "staged_path_count"):
+        value = getattr(snapshot, name, missing)
+        # ``type(...) is int`` refuses bool (an int subclass), float, a numeric
+        # string, and any object with ``__int__``/``__index__``; the range
+        # check refuses a negative. Nothing is coerced, defaulted or repaired.
+        if type(value) is not int or value < 0:
+            raise _MalformedRepositorySnapshot
+        counts.append(value)
+
+    return head, changed, counts[0], counts[1]
 
 
 @dataclass(frozen=True)
@@ -830,7 +911,9 @@ def _closure_phase(
             observations["generated_config_scrub_verified"] = False
         else:
             observations["generated_config_scrub_verified"] = _verified_unlink(
-                issuance_record.models_path, owned_root=owned_root
+                issuance_record.models_path,
+                owned_root=owned_root,
+                expected_identity=issuance_record.models_identity,
             )
         config_issuance.discard_config_issuance(state.generated_config.issuance_token)
     if state.extension is not None:
@@ -846,16 +929,22 @@ def _closure_phase(
                 workspace_root=state.workspace.workspace_root
             )
             head_before, _tracked = workspace_module.registered_baseline(state.workspace)
+            # Sec. 37.4.1 (FU15 Finding B1). The exactness PREDICATE runs over
+            # the whole snapshot BEFORE a single field is projected, and a
+            # single malformed member drives the entire observation to the
+            # already-frozen not-performed shape by raising into the same
+            # ``except`` below. Nothing here reduces, coerces or defaults: a
+            # reducer's job is to manufacture a plausible value, and that is
+            # precisely the defect -- a durable `0` presented as an observed
+            # count, or a durable empty list meaning "nothing changed", or a
+            # missing head meaning "HEAD did not move".
+            head, changed_paths, untracked, staged = _exact_repository_snapshot(snapshot)
             observations["git_observation_1_performed"] = True
-            observations["head_moved"] = getattr(snapshot, "head", head_before) != head_before
-            changed = sorted(set(getattr(snapshot, "changed_tracked_paths", ())) & CFG1_T1_FILES)
+            observations["head_moved"] = head != head_before
+            changed = sorted(set(changed_paths) & CFG1_T1_FILES)
             observations["changed_tracked_paths"] = changed
-            observations["untracked_path_count"] = _exact_count(
-                getattr(snapshot, "untracked_path_count", 0)
-            )
-            observations["staged_path_count"] = _exact_count(
-                getattr(snapshot, "staged_path_count", 0)
-            )
+            observations["untracked_path_count"] = untracked
+            observations["staged_path_count"] = staged
             observations["broker_git_cross_check_agrees"] = _broker_git_cross_check(
                 observations, changed
             )
@@ -904,13 +993,32 @@ def _closure_phase(
                 return_code if type(return_code) is int else None
             )
             raw_counts = getattr(outcome, "counts", {}) or {}
-            verification_counts_all_exact = all(
-                type(raw_counts.get(key, 0)) is int and raw_counts.get(key, 0) >= 0
-                for key in _VERIFICATION_COUNT_KEYS
-            )
-            observations["verification_counts"] = {
-                key: _exact_count(raw_counts.get(key, 0)) for key in _VERIFICATION_COUNT_KEYS
-            }
+            # Sec. 37.4.2 (FU15 Finding B2). Verification demonstrably RAN, so
+            # Sec. 37.4.1's not-performed shape cannot be reused here -- that
+            # would replace one false statement with another -- and inventing a
+            # new availability flag is exactly the schema growth this phase
+            # discourages. So a malformed member becomes a fixed,
+            # NON-CONTENT-BEARING sentinel that `_require_exact_int_mapping`
+            # refuses by construction: the run record fails its OWN validator
+            # at L29 step 6, taking the already-frozen Sec. 18 row 15 path --
+            # refusal record with `RECORD_INVARIANT`, `EVIDENCE_REFUSED` if
+            # that artifact was written, and an unconditional stage halt. No
+            # count is invented, and no `verification_passed: true` survives.
+            #
+            # The sentinel is deliberately NOT the malformed value itself:
+            # substituting a fixed `None` keeps the containment guarantee that
+            # no foreign object reaches a payload, a serializer, or a console
+            # sink, while still guaranteeing refusal (T-161).
+            projected_counts: dict[str, object] = {}
+            verification_counts_all_exact = True
+            for key in _VERIFICATION_COUNT_KEYS:
+                value = raw_counts.get(key, _MALFORMED_VERIFICATION_COUNT)
+                if type(value) is int and value >= 0:
+                    projected_counts[key] = value
+                else:
+                    projected_counts[key] = _MALFORMED_VERIFICATION_COUNT
+                    verification_counts_all_exact = False
+            observations["verification_counts"] = projected_counts
             # CFG1-IMPL-FU2 Finding 3: a malformed verification count must
             # never STRENGTHEN a passing verification claim. Folding
             # verification_counts' own exactness into `verification_passed`
@@ -928,9 +1036,19 @@ def _closure_phase(
             snapshot = ports.observe_repository(
                 workspace_root=state.workspace.workspace_root
             )
+            # Observation #2 reads the SAME snapshot type through the SAME
+            # port, so Sec. 37.4.1's own reasoning applies verbatim: a
+            # missing or malformed ``changed_tracked_paths`` must not become a
+            # durable "nothing changed" while ``git_observation_2_performed``
+            # stays true. The same predicate, the same all-or-nothing
+            # disposition, and the same already-frozen not-performed shape --
+            # no schema field and no new flag.
+            _head, changed_paths, _untracked, _staged = _exact_repository_snapshot(
+                snapshot
+            )
             observations["git_observation_2_performed"] = True
             observations["post_verification_changed_tracked_paths"] = sorted(
-                set(getattr(snapshot, "changed_tracked_paths", ())) & CFG1_T1_FILES
+                set(changed_paths) & CFG1_T1_FILES
             )
         except Exception:  # noqa: BLE001
             observations["git_observation_2_performed"] = False
@@ -1022,18 +1140,32 @@ def _scrub_extension_binding(extension_dir: object, *, owned_root: object) -> bo
     return _exact_bool(result.get("generated_binding_file_removed"))
 
 
-def _verified_unlink(path: object, *, owned_root: object) -> bool:
-    """Unlink one generated file and VERIFY absence. Never assumes removal.
+def _verified_unlink(
+    path: object, *, owned_root: object, expected_identity: object = None
+) -> bool:
+    """L24's PRECISE child authority. Identity-bound, never name-bound.
 
     **Contained, not merely named.** The path must lie inside the run's own
     owned workspace root, proven by canonical containment rather than by a
     prefix comparison on the raw strings. A cleanup helper that unlinked
     whatever path it was handed is exactly the "cleanup functions accepting
-    bare identifiers" shape this design refuses everywhere else -- and the two
-    call sites already hold the owned root, so there is no cost to proving it.
+    bare identifiers" shape this design refuses everywhere else -- and the call
+    site already holds the owned root, so there is no cost to proving it.
 
-    Returns ``True`` when nothing remains at the path afterwards, which is also
-    the correct answer when the file was never written.
+    **Sec. 37.3.2a, and why containment alone is not enough (FU15).** L27's
+    namespace teardown may truthfully remove a descendant CFG1 did not create,
+    because it re-proves authority over the whole owned root. An individual
+    sensitive-file operation may not: "somewhere inside the root, under the
+    right name" would let a same-name replacement planted between issuance and
+    L24 be deleted as though it were the generated file. So when the caller
+    supplies the identity the issuance record bound, the target is re-opened
+    without following a redirect, ``os.stat(fd)`` is compared against that
+    identity, and disposal happens THROUGH THAT SAME HANDLE. A mismatch deletes
+    nothing at all and reports the scrub unverified; there is no pathname
+    fallback, and the identity check is never skipped once bound.
+
+    Returns ``True`` when nothing the issuance authorized remains, which is
+    also the correct answer when the file was never written.
     """
     import os
 
@@ -1048,6 +1180,15 @@ def _verified_unlink(path: object, *, owned_root: object) -> bool:
             return False
         if resolved == resolved_root:
             return False
+    except (OSError, ValueError):
+        return False
+
+    if expected_identity is not None:
+        from . import win_config_authority as win
+
+        return win.identity_bound_unlink(path, expected_identity=expected_identity)
+
+    try:
         if os.path.exists(resolved):
             os.unlink(resolved)
     except (OSError, ValueError):

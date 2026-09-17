@@ -25,6 +25,7 @@ from ar2.capability import _verify_root_authority as _frozen_verify_root_authori
 from ar2.fixtures import BuiltFixture, build_case_repository, remove_disposable_tree
 
 from .fixture import CFG1_T1
+from .win_config_authority import Cfg1DirectoryAuthorityError, directory_identity_of_path
 
 
 class Cfg1WorkspaceAuthorityError(Exception):
@@ -44,6 +45,13 @@ class _WorkspaceMintRecord:
     workspace_root: str = field(repr=False)
     head_before: str = field(repr=False)
     tracked_paths: tuple[str, ...] = field(repr=False)
+    #: Sec. 37.3.1 step 1 (the FU15 L2 addendum). The owned root's
+    #: ``(volume_serial, file_id)``, read at the instant the frozen creator
+    #: returned it. From here on the owned root has an IDENTITY, not only a
+    #: name, and L9 re-proves that identity from a handle before it creates
+    #: anything -- so a root moved aside and replaced by an ordinary directory
+    #: of the same name is refused rather than written into.
+    experiment_root_identity: tuple[int, int] = field(repr=False)
 
     def __repr__(self) -> str:  # noqa: D105 - paths are never rendered
         return f"{type(self).__name__}(<bound>)"
@@ -96,6 +104,14 @@ def mint_cfg1_run_workspace(*, git_executable: str) -> tuple[Cfg1RunWorkspace, B
     evidence field.
     """
     built = build_case_repository(CFG1_T1, git_executable=git_executable)
+    # The FU15 L2 addendum, taken BEFORE the nonce exists, so a root whose
+    # identity cannot be read never becomes a registered authority at all. A
+    # failure here leaves the frozen creator's tree as the already-frozen
+    # Sec. 18 row 13 orphan: unregistered, and therefore never deleted.
+    try:
+        root_identity = directory_identity_of_path(built.experiment_root)
+    except Cfg1DirectoryAuthorityError as exc:
+        raise Cfg1WorkspaceAuthorityError("ROOT_IDENTITY_UNREADABLE") from exc
     nonce = secrets.token_hex(_NONCE_BYTES)
     if nonce in _MINTED:  # pragma: no cover - a 128-bit collision
         raise Cfg1WorkspaceAuthorityError("RUN_WORKSPACE_NONCE_ALREADY_MINTED")
@@ -105,6 +121,7 @@ def mint_cfg1_run_workspace(*, git_executable: str) -> tuple[Cfg1RunWorkspace, B
         workspace_root=built.repo_root,
         head_before=built.head_before,
         tracked_paths=tuple(built.tracked_paths),
+        experiment_root_identity=root_identity,
     )
     workspace = Cfg1RunWorkspace(
         run_workspace_nonce=nonce,
@@ -161,6 +178,18 @@ def registered_baseline(workspace: Cfg1RunWorkspace) -> tuple[str, tuple[str, ..
     verify_cfg1_run_workspace(workspace)
     record = _MINTED[workspace.run_workspace_nonce]
     return record.head_before, record.tracked_paths
+
+
+def registered_root_identity(workspace: Cfg1RunWorkspace) -> tuple[int, int]:
+    """The owned root's identity as it was at mint time (Sec. 37.3.1 step 1).
+
+    Verified first, every time. This is the ONLY baseline L9's root pin is
+    allowed to compare against: it was read before any adversary had a name to
+    race against, and it is never re-derived from the path afterwards, because
+    re-reading a name is exactly the racy re-proof Sec. 37.2 rejects.
+    """
+    verify_cfg1_run_workspace(workspace)
+    return _MINTED[workspace.run_workspace_nonce].experiment_root_identity
 
 
 def claim_cfg1_run_workspace(workspace: Cfg1RunWorkspace, *, run_id: str) -> None:
