@@ -42,6 +42,23 @@ reparse conversion and about nothing else.
 explicitly **unauthorized** (Sec. 37.2's rejection table, Sec. 37.3.7's A2).
 Do not adopt it here.
 
+**CFG1-IMPL-FU4 -- Win32 semantics are open; CFG1 issuance provenance is
+not.** Every entry point here stays callable, because the offline authority
+suite must exercise real pins, real exclusive creates and the real parentage
+gate against the real OS. What FU4 closes is the step after that: a caller
+could previously assemble genuine pins, genuine children and a genuine
+parentage proof from these module-level callables and hand them to
+``config_issuance.register_config_issuance``, minting a GENUINE issuance for
+caller-selected bytes without ever calling
+:func:`~pi_harness_cfg1.cfg1_pi_config.write_cfg1_pi_config`. So every pin,
+child and proof now records the :class:`GenerationInterval` that minted it,
+an interval can be opened only from the bound generator's own code object,
+and :func:`require_production_issuance_provenance` refuses anything else.
+Authority minted without an interval is fully functional at the OS level and
+worth exactly nothing at the issuance boundary -- which is the point:
+provenance is a statement about ORIGIN, never about bytes, names or
+identities.
+
 **Platform.** Every semantic above is a Win32 semantic, established
 empirically on the target platform. There is deliberately **no** portable
 fallback: a weaker mechanism under the same function names would reinstate
@@ -56,6 +73,7 @@ import io
 import os
 import secrets
 import sys
+import types
 
 from ai_dev_orchestrator.workspace.canonical import _is_symlink_or_reparse_point
 
@@ -256,19 +274,39 @@ def _create_file(path: str, access: int, share: int, disposition: int, flags: in
 # PinnedDirectory -- a mint-backed, non-transferable directory pin
 # ---------------------------------------------------------------------------
 
-#: nonce -> raw handle, for pins this module minted and has not yet released.
-#: Process-local, in-memory only, never persisted and never an evidence field.
-_PINS: dict[str, int] = {}
+#: nonce -> (raw handle, minting generation-interval nonce or ``None``), for
+#: pins this module minted and has not yet released. Process-local, in-memory
+#: only, never persisted and never an evidence field.
+_PINS: dict[str, tuple[int, str | None]] = {}
 
-#: nonce -> (fd, name), for children this module created exclusively.
-_CHILDREN: dict[str, tuple[int, str]] = {}
+#: nonce -> (fd, name, minting generation-interval nonce or ``None``), for
+#: children this module created exclusively.
+_CHILDREN: dict[str, tuple[int, str, str | None]] = {}
 
-#: nonce -> (config-directory identity, the EXACT child nonces proved).
+#: nonce -> (config-directory identity, the EXACT child nonces proved, the
+#: minting generation-interval nonce or ``None``).
 #: Binding the child nonces is what stops a genuine proof from being paired
 #: with substituted children at the issuance boundary: the proof answers
 #: "these objects are entries of that directory", and it must not be readable
 #: as "some objects are".
-_PROVEN: dict[str, tuple[tuple[int, int], frozenset[str]]] = {}
+_PROVEN: dict[str, tuple[tuple[int, int], frozenset[str], str | None]] = {}
+
+#: nonce -> ``None``, for generation intervals that are currently OPEN.
+#:
+#: **CFG1-IMPL-FU4.** This is the provenance registry the issuance boundary
+#: consults. An entry exists only between :func:`open_generation_interval` and
+#: :func:`close_generation_interval`, and the ONLY code that can open one is
+#: the CFG1 config generator's own code object (see
+#: :func:`bind_config_generator_authority`). Every pin, child and parentage
+#: proof records the interval that minted it -- or ``None`` when none was
+#: supplied -- and ``None``-stamped authority is deliberately USELESS at the
+#: issuance boundary however genuine its Win32 proofs are.
+_INTERVALS: dict[str, None] = {}
+
+#: The one code object permitted to open a production generation interval,
+#: captured from the CFG1 generator itself at that module's import. ``None``
+#: until then, and never rebindable afterwards.
+_GENERATOR_CODE: object | None = None
 
 #: Handles and descriptors whose CLOSE ITSELF FAILED. They are leaked, and
 #: saying so is the point: the registry entry is retired either way (a nonce
@@ -340,25 +378,137 @@ class ProvenConfigChildren(_MintBacked):
     _unknown_code = "PARENTAGE_NOT_PROVEN"
 
 
-def _pin_handle(pin: object) -> int:
+class GenerationInterval(_MintBacked):
+    """One OPEN L9 generation interval -- CFG1-IMPL-FU4's provenance carrier.
+
+    Minted only by :func:`open_generation_interval`, which refuses every
+    caller but the bound CFG1 generator's own code object, and retired by
+    :func:`close_generation_interval` on L9's own exit path. It is a local of
+    that one routine: it is never returned to a caller, never stored on a
+    public object, never registered anywhere else, and never rendered.
+
+    **What it is for.** Every Win32 semantic this module establishes is
+    reachable by any caller, and that is deliberate -- the offline suite must
+    be able to exercise real pins, real exclusive creates and the real
+    parentage gate. What a caller must NOT be able to do is turn those genuine
+    Win32 facts into a genuine CFG1 config issuance. So authority minted
+    without an interval is ``None``-stamped, behaves identically at the OS
+    level, and is refused at the issuance boundary by
+    :func:`require_production_issuance_provenance`. Provenance here is a
+    statement about ORIGIN, never about bytes, names or identities.
+    """
+
+    __slots__ = ()
+    _registry = _INTERVALS
+    _unknown_code = "NOT_AN_OPEN_GENERATION_INTERVAL"
+
+
+def bind_config_generator_authority() -> None:
+    """Bind THE one code object that may open a production interval. Once.
+
+    Called from the CFG1 config generator module's own body, at import, after
+    :func:`~pi_harness_cfg1.cfg1_pi_config.write_cfg1_pi_config` is defined.
+    It takes no argument and cannot be steered: it derives the code object
+    itself, from this package's own generator module, so a caller cannot
+    nominate a different one.
+
+    **Why it is one-shot, and why that is not merely hygiene.** A second bind
+    is refused outright rather than replacing the first, so a caller who runs
+    before the generator module is imported finds nothing to bind (and binds
+    nothing), and a caller who runs afterwards finds the genuine code object
+    already bound. Rebinding the generator module's ``write_cfg1_pi_config``
+    ATTRIBUTE afterwards therefore confers nothing either: what is bound is
+    the genuine code object captured at import, not a name looked up later.
+    """
+    global _GENERATOR_CODE
+    if _GENERATOR_CODE is not None:
+        raise Cfg1DirectoryAuthorityError("GENERATOR_AUTHORITY_ALREADY_BOUND")
+    module = sys.modules.get(f"{__package__}.cfg1_pi_config")
+    generator = getattr(module, "write_cfg1_pi_config", None)
+    if type(generator) is not types.FunctionType:
+        raise Cfg1DirectoryAuthorityError("GENERATOR_AUTHORITY_UNAVAILABLE")
+    _GENERATOR_CODE = generator.__code__
+
+
+def open_generation_interval() -> GenerationInterval:
+    """Open one production generation interval. ONLY the generator may.
+
+    The gate is CODE-OBJECT IDENTITY of the immediate caller's frame, not a
+    module name, a function name, a leading underscore, an ``__all__`` entry
+    or a docstring. A caller that is not executing the bound generator's own
+    code is refused, so there is no supported callable, and no sequence of
+    supported calls, that yields one of these.
+    """
+    _require_platform()
+    if _GENERATOR_CODE is None:
+        raise Cfg1DirectoryAuthorityError("GENERATOR_AUTHORITY_UNBOUND")
+    if sys._getframe(1).f_code is not _GENERATOR_CODE:
+        raise Cfg1DirectoryAuthorityError("NOT_THE_CONFIG_GENERATOR")
+    nonce = secrets.token_hex(_NONCE_BYTES)
+    if nonce in _INTERVALS:  # pragma: no cover - a 128-bit collision
+        raise Cfg1DirectoryAuthorityError("GENERATION_INTERVAL_ALREADY_MINTED")
+    _INTERVALS[nonce] = None
+    return GenerationInterval(nonce)
+
+
+def close_generation_interval(interval: object) -> None:
+    """Retire one generation interval. Idempotent, no I/O.
+
+    After this, authority minted inside that interval is no longer production
+    provenance: an issuance cannot be registered from it, so registration is
+    possible only DURING the genuine generation, never afterwards from objects
+    a caller kept.
+    """
+    if type(interval) is GenerationInterval:
+        _INTERVALS.pop(interval.nonce, None)
+
+
+def held_interval_count() -> int:
+    """How many generation intervals are still open. A green run leaves zero."""
+    return len(_INTERVALS)
+
+
+def _interval_nonce(interval: object) -> str | None:
+    """Resolve a supplied interval to its nonce, or ``None`` when none given.
+
+    An interval that is not an OPEN one is refused rather than downgraded to
+    ``None``: silently treating a retired interval as "no interval" would turn
+    an authority error into a quietly weaker mint.
+    """
+    if interval is None:
+        return None
+    if type(interval) is not GenerationInterval or interval.nonce not in _INTERVALS:
+        raise Cfg1DirectoryAuthorityError("NOT_AN_OPEN_GENERATION_INTERVAL")
+    return interval.nonce
+
+
+def _pin_entry(pin: object) -> tuple[int, str | None]:
     if type(pin) is not PinnedDirectory:
         raise Cfg1DirectoryAuthorityError("NOT_A_PINNED_DIRECTORY")
-    handle = _PINS.get(pin.nonce)
-    if handle is None:
+    entry = _PINS.get(pin.nonce)
+    if entry is None:
         raise Cfg1DirectoryAuthorityError("PIN_ALREADY_RELEASED")
-    return handle
+    return entry
 
 
-def _child_fd(child: object) -> int:
+def _pin_handle(pin: object) -> int:
+    return _pin_entry(pin)[0]
+
+
+def _child_entry(child: object) -> tuple[int, str, str | None]:
     if type(child) is not ExclusiveChild:
         raise Cfg1DirectoryAuthorityError("NOT_AN_EXCLUSIVE_CHILD")
     entry = _CHILDREN.get(child.nonce)
     if entry is None:
         raise Cfg1DirectoryAuthorityError("CHILD_ALREADY_CLOSED")
-    return entry[0]
+    return entry
 
 
-def _register_pin(handle: object) -> PinnedDirectory:
+def _child_fd(child: object) -> int:
+    return _child_entry(child)[0]
+
+
+def _register_pin(handle: object, *, interval: object = None) -> PinnedDirectory:
     """Register one RAW WIN32 HANDLE. The type gate is not decoration.
 
     T-124 sweeps every callable in every CFG1 module with a single positional
@@ -369,10 +519,11 @@ def _register_pin(handle: object) -> PinnedDirectory:
     """
     if type(handle) is not int:
         raise Cfg1DirectoryAuthorityError("NOT_A_WIN32_HANDLE")
+    interval_nonce = _interval_nonce(interval)
     nonce = secrets.token_hex(_NONCE_BYTES)
     if nonce in _PINS:  # pragma: no cover - a 128-bit collision
         raise Cfg1DirectoryAuthorityError("PIN_NONCE_ALREADY_MINTED")
-    _PINS[nonce] = handle
+    _PINS[nonce] = (handle, interval_nonce)
     return PinnedDirectory(nonce)
 
 
@@ -381,7 +532,9 @@ def _register_pin(handle: object) -> PinnedDirectory:
 # ---------------------------------------------------------------------------
 
 
-def acquire_root_pin(path: str, *, expected_identity: tuple[int, int]) -> PinnedDirectory:
+def acquire_root_pin(
+    path: str, *, expected_identity: tuple[int, int], interval: object = None
+) -> PinnedDirectory:
     """Step 2. Pin the owned root and prove its IDENTITY from the handle.
 
     Share mode is ``FILE_SHARE_READ | FILE_SHARE_WRITE`` -- omitting **only**
@@ -404,6 +557,10 @@ def acquire_root_pin(path: str, *, expected_identity: tuple[int, int]) -> Pinned
         or type(expected_identity[1]) is not int
     ):
         raise Cfg1DirectoryAuthorityError("MALFORMED_ROOT_IDENTITY")
+    # Resolved BEFORE the open, so an unusable interval refuses with no handle
+    # ever created -- a later refusal would strand a raw handle that was never
+    # registered and therefore could never be released.
+    _interval_nonce(interval)
 
     handle = _create_file(
         path,
@@ -415,7 +572,7 @@ def acquire_root_pin(path: str, *, expected_identity: tuple[int, int]) -> Pinned
     if handle is None:
         raise Cfg1DirectoryAuthorityError("WORKSPACE_ROOT_NOT_PINNED")
 
-    pin = _register_pin(handle)
+    pin = _register_pin(handle, interval=interval)
     try:
         attributes, reparse_tag = _handle_attributes(handle)
         if not attributes & FILE_ATTRIBUTE_DIRECTORY:
@@ -432,7 +589,7 @@ def acquire_root_pin(path: str, *, expected_identity: tuple[int, int]) -> Pinned
     return pin
 
 
-def acquire_config_pin(path: str) -> PinnedDirectory:
+def acquire_config_pin(path: str, *, interval: object = None) -> PinnedDirectory:
     """Step 4. Pin the config directory and prove it is a plain directory.
 
     Share mode is ``FILE_SHARE_READ`` only: while this is held, an adversary's
@@ -446,6 +603,7 @@ def acquire_config_pin(path: str) -> PinnedDirectory:
     _require_platform()
     if type(path) is not str or not path:
         raise Cfg1DirectoryAuthorityError("MALFORMED_PATH")
+    _interval_nonce(interval)  # see acquire_root_pin: refuse before the open
 
     handle = _create_file(
         path,
@@ -457,7 +615,7 @@ def acquire_config_pin(path: str) -> PinnedDirectory:
     if handle is None:
         raise Cfg1DirectoryAuthorityError("CONFIG_DIR_NOT_PINNED")
 
-    pin = _register_pin(handle)
+    pin = _register_pin(handle, interval=interval)
     try:
         attributes, reparse_tag = _handle_attributes(handle)
         if attributes & FILE_ATTRIBUTE_REPARSE_POINT or reparse_tag != 0:
@@ -552,7 +710,10 @@ def prove_child_directory_entry(
 
 
 def prove_config_parentage(
-    config_pin: object, *, children: tuple[ExclusiveChild, ...]
+    config_pin: object,
+    *,
+    children: tuple[ExclusiveChild, ...],
+    interval: object = None,
 ) -> ProvenConfigChildren:
     """Step 7 -- THE GATE. Runs strictly before the first content byte.
 
@@ -572,16 +733,22 @@ def prove_config_parentage(
     _require_platform()
     if type(children) is not tuple or not children:
         raise Cfg1DirectoryAuthorityError("MALFORMED_CHILD_SET")
+    # CFG1-IMPL-FU4: the proof inherits the provenance of what it is about, and
+    # inherits it EXACTLY. A pin or a child minted in a different interval --
+    # or in none -- cannot be folded into this proof, so neither a
+    # cross-generation mix nor a detached object can acquire production
+    # provenance by being proved alongside one that has it.
+    interval_nonce = _interval_nonce(interval)
+    if _pin_entry(config_pin)[1] != interval_nonce:
+        raise Cfg1DirectoryAuthorityError("GENERATION_PROVENANCE_MISMATCH")
     config_identity = pin_identity(config_pin)
 
     expected_names = {".", ".."}
     by_name: dict[str, tuple[int, int]] = {}
     for child in children:
-        if type(child) is not ExclusiveChild:
-            raise Cfg1DirectoryAuthorityError("NOT_AN_EXCLUSIVE_CHILD")
-        name = _CHILDREN[child.nonce][1] if child.nonce in _CHILDREN else None
-        if name is None:
-            raise Cfg1DirectoryAuthorityError("CHILD_ALREADY_CLOSED")
+        _descriptor, name, child_interval = _child_entry(child)
+        if child_interval != interval_nonce:
+            raise Cfg1DirectoryAuthorityError("GENERATION_PROVENANCE_MISMATCH")
         if name in by_name:
             raise Cfg1DirectoryAuthorityError("MALFORMED_CHILD_SET")
         by_name[name] = child_identity(child)
@@ -600,11 +767,17 @@ def prove_config_parentage(
     nonce = secrets.token_hex(_NONCE_BYTES)
     if nonce in _PROVEN:  # pragma: no cover - a 128-bit collision
         raise Cfg1DirectoryAuthorityError("PARENTAGE_NONCE_ALREADY_MINTED")
-    _PROVEN[nonce] = (config_identity, frozenset(child.nonce for child in children))
+    _PROVEN[nonce] = (
+        config_identity,
+        frozenset(child.nonce for child in children),
+        interval_nonce,
+    )
     return ProvenConfigChildren(nonce)
 
 
-def _proven_entry(proven: object) -> tuple[tuple[int, int], frozenset[str]]:
+def _proven_entry(
+    proven: object,
+) -> tuple[tuple[int, int], frozenset[str], str | None]:
     if type(proven) is not ProvenConfigChildren:
         raise Cfg1DirectoryAuthorityError("PARENTAGE_NOT_PROVEN")
     entry = _PROVEN.get(proven.nonce)
@@ -628,7 +801,7 @@ def require_proven_children(proven: object, children: tuple) -> None:
     ``GeneratedCfg1Config``. The proof is a statement about SPECIFIC objects,
     so it is checked against those objects and no others.
     """
-    _identity, proved_nonces = _proven_entry(proven)
+    _identity, proved_nonces, _interval = _proven_entry(proven)
     supplied = []
     for child in children:
         if type(child) is not ExclusiveChild:
@@ -636,6 +809,35 @@ def require_proven_children(proven: object, children: tuple) -> None:
         supplied.append(child.nonce)
     if frozenset(supplied) != proved_nonces or len(supplied) != len(proved_nonces):
         raise Cfg1DirectoryAuthorityError("PARENTAGE_CHILD_MISMATCH")
+
+
+def require_production_issuance_provenance(proven: object, children: tuple) -> None:
+    """CFG1-IMPL-FU4's issuance-provenance boundary. ORIGIN, not content.
+
+    Refuse unless ``proven`` and every child in ``children`` were minted inside
+    ONE generation interval that is still OPEN. That is the whole correction:
+
+    * a caller may still acquire genuine pins, create genuine exclusive
+      children and pass the genuine parentage gate -- every Win32 semantic
+      this module establishes stays reachable, which is what keeps the offline
+      authority suite honest;
+    * but everything it mints that way is ``None``-stamped, and ``None`` is
+      not a generation interval, so none of it can become a CFG1 issuance;
+    * and because the interval must still be OPEN, even authority genuinely
+      minted inside L9 stops being issuance provenance the instant L9's own
+      exit path retires the interval.
+
+    This says nothing about bytes. Content that is byte-for-byte identical to
+    the legitimate documents confers no provenance, and caller-selected content
+    is refused by the same rule and for the same reason: the question asked
+    here is where the authority came from, never what is in the files.
+    """
+    _identity, _nonces, interval_nonce = _proven_entry(proven)
+    if interval_nonce is None or interval_nonce not in _INTERVALS:
+        raise Cfg1DirectoryAuthorityError("NOT_GENERATION_PROVENANCE")
+    for child in children:
+        if _child_entry(child)[2] != interval_nonce:
+            raise Cfg1DirectoryAuthorityError("GENERATION_PROVENANCE_MISMATCH")
 
 
 def discard_parentage_proof(proven: object) -> None:
@@ -649,7 +851,9 @@ def discard_parentage_proof(proven: object) -> None:
 # ---------------------------------------------------------------------------
 
 
-def create_exclusive_child(*, config_dir: str, name: str) -> ExclusiveChild:
+def create_exclusive_child(
+    *, config_dir: str, name: str, interval: object = None
+) -> ExclusiveChild:
     """Create one config child exclusively, writing ZERO content bytes.
 
     ``CREATE_NEW`` refuses an occupied name, ``dwShareMode = 0`` denies another
@@ -673,6 +877,7 @@ def create_exclusive_child(*, config_dir: str, name: str) -> ExclusiveChild:
         raise Cfg1DirectoryAuthorityError("MALFORMED_PATH")
     if type(name) is not str or not name:
         raise Cfg1DirectoryAuthorityError("MALFORMED_CHILD_NAME")
+    interval_nonce = _interval_nonce(interval)
 
     handle = _create_file(
         os.path.join(config_dir, name),
@@ -696,7 +901,7 @@ def create_exclusive_child(*, config_dir: str, name: str) -> ExclusiveChild:
     if nonce in _CHILDREN:  # pragma: no cover - a 128-bit collision
         os.close(descriptor)
         raise Cfg1DirectoryAuthorityError("CHILD_NONCE_ALREADY_MINTED")
-    _CHILDREN[nonce] = (descriptor, name)
+    _CHILDREN[nonce] = (descriptor, name, interval_nonce)
     return ExclusiveChild(nonce)
 
 
@@ -712,9 +917,7 @@ def child_identity(child: object) -> tuple[int, int]:
 
 def child_name(child: object) -> str:
     """The exact leaf name this child was created under."""
-    if type(child) is not ExclusiveChild or child.nonce not in _CHILDREN:
-        raise Cfg1DirectoryAuthorityError("CHILD_ALREADY_CLOSED")
-    return _CHILDREN[child.nonce][1]
+    return _child_entry(child)[1]
 
 
 # ---------------------------------------------------------------------------
@@ -837,10 +1040,10 @@ def release_pin(pin: object) -> None:
     """
     if type(pin) is not PinnedDirectory:
         raise Cfg1DirectoryAuthorityError("NOT_A_PINNED_DIRECTORY")
-    handle = _PINS.pop(pin.nonce, None)
-    if handle is None:
+    entry = _PINS.pop(pin.nonce, None)
+    if entry is None:
         return
-    if not _K32.CloseHandle(handle):
+    if not _K32.CloseHandle(entry[0]):
         _CLOSE_FAILURES.append("pin")
         raise Cfg1DirectoryAuthorityError("PIN_NOT_RELEASED")
 

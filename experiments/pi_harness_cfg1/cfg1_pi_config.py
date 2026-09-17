@@ -235,6 +235,7 @@ def write_cfg1_pi_config(
 
     ::
 
+        0    open this generation's provenance      NOT_THE_CONFIG_GENERATOR
         1-2  root identity re-proved from a handle  WORKSPACE_ROOT_*
         3    CreateDirectoryW                       CONFIG_DIR_NOT_CREATED
         4    config pin, proven non-reparse         CONFIG_DIR_REDIRECTED
@@ -244,7 +245,9 @@ def write_cfg1_pi_config(
         8    content, through the proven descriptors
         9    finalization read-back, same descriptors
         10   issuance, bound to the proven identities
-        11   release: children, config directory, then root
+        11   release: children, config directory, then root -- a release
+             failure here retires step 10's own issuance before raising the
+             release code below (CFG1-IMPL-FU4-FU1)
 
     **What this closes, and what it does not.** From step 4 onward the pinned
     NAME cannot be rebound (W2, W3, W5, W6) and, independently and with no
@@ -306,11 +309,26 @@ def write_cfg1_pi_config(
     children: list = []
     proven = None
     token = None
+    interval = None
     try:
+        # -- step 0 (CFG1-IMPL-FU4): open THIS generation's provenance -------
+        # A local of this routine, exactly as the two pins are, and retired on
+        # every exit path below. It is what makes a genuine issuance token mean
+        # "L9 ran", rather than "somebody assembled genuine Win32 authority and
+        # asked the registry to bless it". Only this routine's own code object
+        # can open one, so there is no supported callable sequence that
+        # reproduces what the rest of this function does.
+        try:
+            interval = win.open_generation_interval()
+        except win.Cfg1DirectoryAuthorityError as exc:
+            raise Cfg1PiConfigError(exc.reason_code) from None
+
         # -- steps 1-2: the owned root, by IDENTITY, before anything exists --
         try:
             root_pin = win.acquire_root_pin(
-                workspace.experiment_root, expected_identity=root_identity
+                workspace.experiment_root,
+                expected_identity=root_identity,
+                interval=interval,
             )
         except win.Cfg1DirectoryAuthorityError as exc:
             raise Cfg1PiConfigError(exc.reason_code) from None
@@ -326,7 +344,7 @@ def write_cfg1_pi_config(
         # ownership is not mechanically proven, so CFG1 never removes it. Only
         # L27's root-namespace teardown may (Sec. 37.3.2a).
         try:
-            config_pin = win.acquire_config_pin(config_dir_str)
+            config_pin = win.acquire_config_pin(config_dir_str, interval=interval)
             win.prove_child_directory_entry(
                 root_pin,
                 name=CFG1_CONFIG_DIR_NAME,
@@ -339,14 +357,18 @@ def write_cfg1_pi_config(
         for name in ("settings.json", "models.json"):
             try:
                 children.append(
-                    win.create_exclusive_child(config_dir=config_dir_str, name=name)
+                    win.create_exclusive_child(
+                        config_dir=config_dir_str, name=name, interval=interval
+                    )
                 )
             except win.Cfg1DirectoryAuthorityError as exc:
                 raise Cfg1PiConfigError(exc.reason_code) from None
 
         # -- step 7: THE GATE ------------------------------------------------
         try:
-            proven = win.prove_config_parentage(config_pin, children=tuple(children))
+            proven = win.prove_config_parentage(
+                config_pin, children=tuple(children), interval=interval
+            )
         except win.Cfg1DirectoryAuthorityError as exc:
             _dispose_children_by_handle(children)
             children = []
@@ -389,6 +411,11 @@ def write_cfg1_pi_config(
         # nothing durable is lost, because the run executor reduces every L9
         # exception to the same ``CONFIG_GENERATION_FAILED`` code, and the
         # leaked pin is the more consequential of the two facts.
+        # The interval is retired FIRST, and unconditionally: from here on no
+        # object minted in it is issuance provenance any more, so nothing a
+        # caller could have retained -- including from a partial failure -- can
+        # be presented later to mint or resurrect an issuance.
+        win.close_generation_interval(interval)
         child_close_failed = False
         for child in children:
             if not win.close_child_quietly(child):
@@ -398,6 +425,33 @@ def write_cfg1_pi_config(
             config_pin
         )
         root_pin_failed = root_pin is not None and not win.release_pin_quietly(root_pin)
+
+        # CFG1-IMPL-FU4-FU1: step 10 may already have registered a GENUINE,
+        # ACTIVE issuance before any of the three release failures above was
+        # even known. L9 is about to raise instead of return, so that
+        # registration must not remain reachable authority merely because the
+        # token string itself was never handed back to a caller -- an
+        # un-retired registry entry is live authority regardless of who does
+        # or does not know its value (the traceback-harvest regressions prove
+        # exactly that a caller CAN read this frame's locals). Retirement
+        # happens here, before any of the three closed codes below is raised,
+        # so the transactional invariant holds for every SUPPORTED L9 failure:
+        # a raise never leaves that invocation's own issuance ACTIVE.
+        #
+        # ``discard_config_issuance`` is CFG1's own local, in-process registry
+        # pop (Sec. 19.1 item 4) -- no filesystem, network, subprocess, model
+        # or handle dependency, and idempotent by construction -- so there is
+        # no supported runtime failure mode here to model or report (FU4-FU2:
+        # an earlier draft wrapped this call and invented a
+        # ``CONFIG_ISSUANCE_NOT_RETIRED`` closed code for a synthetic
+        # monkeypatch-only "failure"; that was test-only interpreter
+        # manipulation treated as production authority, which the frozen
+        # threat model does not require CFG1 to defend against, so both the
+        # wrapping and the code were removed).
+        if token is not None and (
+            config_pin_failed or root_pin_failed or child_close_failed
+        ):
+            config_issuance.discard_config_issuance(token)
 
         if config_pin_failed:
             raise Cfg1PiConfigError("CONFIG_DIR_PIN_NOT_RELEASED")
@@ -417,3 +471,10 @@ def write_cfg1_pi_config(
         models_redacted_sha256=redacted_models_digest(arm_id=arm_id, model_id=model_id),
         issuance_token=token,
     )
+
+
+#: CFG1-IMPL-FU4. Bind THE one code object that may open a generation interval,
+#: at import, from this module's own genuine generator. Rebinding
+#: ``write_cfg1_pi_config`` afterwards confers nothing: what is bound is the
+#: code object captured here, not a name resolved later.
+win.bind_config_generator_authority()

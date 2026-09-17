@@ -359,8 +359,8 @@ def _redirect_children_to(monkeypatch, foreign_dir: Path) -> None:
     """
     real_create = win.create_exclusive_child
 
-    def _create(*, config_dir: str, name: str):
-        return real_create(config_dir=str(foreign_dir), name=name)
+    def _create(*, config_dir: str, name: str, **kwargs):
+        return real_create(config_dir=str(foreign_dir), name=name, **kwargs)
 
     monkeypatch.setattr(win, "create_exclusive_child", _create)
 
@@ -421,14 +421,14 @@ def test_t146_the_foreign_leaf_is_content_free_at_the_moment_of_refusal(
             writes_before_gate.append(win.child_name(child))
         return real_write(child, text)
 
-    def _prove(config_pin, *, children):
+    def _prove(config_pin, *, children, **kwargs):
         gate_entered.append(True)
         try:
             (foreign / "models.json").read_bytes()
             denied_while_held["models.json"] = "READABLE"
         except OSError:
             denied_while_held["models.json"] = "DENIED"
-        return real_prove(config_pin, children=children)
+        return real_prove(config_pin, children=children, **kwargs)
 
     monkeypatch.setattr(win, "prove_config_parentage", _prove)
     monkeypatch.setattr(win, "write_child_text", _write)
@@ -684,7 +684,7 @@ def test_t150_every_refusal_and_injected_failure_path_releases_both_pins(
         monkeypatch.setattr(
             win,
             "acquire_config_pin",
-            lambda path: (_ for _ in ()).throw(failure("CONFIG_DIR_NOT_PINNED")),
+            lambda path, **k: (_ for _ in ()).throw(failure("CONFIG_DIR_NOT_PINNED")),
         )
     elif injection == "containment_failure":
         monkeypatch.setattr(
@@ -696,11 +696,11 @@ def test_t150_every_refusal_and_injected_failure_path_releases_both_pins(
         real_create = win.create_exclusive_child
         calls: list[int] = []
 
-        def _create(*, config_dir, name):
+        def _create(*, config_dir, name, **kwargs):
             calls.append(1)
             if len(calls) == 2:
                 raise failure("CONFIG_FILE_ALREADY_EXISTS")
-            return real_create(config_dir=config_dir, name=name)
+            return real_create(config_dir=config_dir, name=name, **kwargs)
 
         monkeypatch.setattr(win, "create_exclusive_child", _create)
     elif injection == "parentage_failure":
@@ -834,8 +834,8 @@ def test_t151_a_leaked_pin_degrades_the_durable_lifecycle_evidence_end_to_end(
     real_config = win.acquire_config_pin
     real_release = win.release_pin_quietly
 
-    def _config(path):
-        pin = real_config(path)
+    def _config(path, **kwargs):
+        pin = real_config(path, **kwargs)
         leaked.append(pin)
         return pin
 
@@ -1009,7 +1009,7 @@ def test_t153_root_pin_acquisition_failure_creates_nothing_at_all(
     monkeypatch.setattr(
         win,
         "acquire_root_pin",
-        lambda path, *, expected_identity: (_ for _ in ()).throw(
+        lambda path, *, expected_identity, **k: (_ for _ in ()).throw(
             win.Cfg1DirectoryAuthorityError("WORKSPACE_ROOT_NOT_PINNED")
         ),
     )
@@ -1034,7 +1034,7 @@ def test_t153_config_pin_failure_leaves_the_created_directory_in_place(
     monkeypatch.setattr(
         win,
         "acquire_config_pin",
-        lambda path: (_ for _ in ()).throw(
+        lambda path, **k: (_ for _ in ()).throw(
             win.Cfg1DirectoryAuthorityError("CONFIG_DIR_NOT_PINNED")
         ),
     )
@@ -1090,7 +1090,7 @@ def test_t154_r_window_substitution_wins_and_l9_neither_detects_nor_refuses_it(
             writes_before_gate.append(win.child_name(child))
         return real_write(child, text)
 
-    def _prove(config_pin, *, children):
+    def _prove(config_pin, *, children, **kwargs):
         # (2) Every escape/replacement/reparse attempt this design enumerates,
         # run against the SUBSTITUTE while the pin is held.
         pinned_identity["pinned"] = win.pin_identity(config_pin)
@@ -1112,7 +1112,7 @@ def test_t154_r_window_substitution_wins_and_l9_neither_detects_nor_refuses_it(
             attacks["leaf_collision"] = "CREATED (BAD)"
         except win.Cfg1DirectoryAuthorityError as exc:
             attacks["leaf_collision"] = exc.reason_code
-        result = real_prove(config_pin, children=children)
+        result = real_prove(config_pin, children=children, **kwargs)
         gate_passed.append(True)
         return result
 
@@ -1349,8 +1349,8 @@ def test_t155_a_genuine_parentage_proof_cannot_be_paired_with_other_children(
     stolen: dict[str, object] = {}
     real_prove = win.prove_config_parentage
 
-    def _prove(config_pin, *, children):
-        proof = real_prove(config_pin, children=children)
+    def _prove(config_pin, *, children, **kwargs):
+        proof = real_prove(config_pin, children=children, **kwargs)
         stolen["proof"] = proof
         return proof
 

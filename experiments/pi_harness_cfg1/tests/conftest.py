@@ -156,6 +156,14 @@ def _no_leaked_cfg1_registry_state():
         assert win_config_authority.held_child_count() == 0, (
             "a config-child descriptor survived the test"
         )
+        # CFG1-IMPL-FU4: an OPEN generation interval outliving a test is a
+        # leaked production-provenance capability, and a later test could then
+        # mint an issuance it did not earn. Asserting before clearing is what
+        # makes that a loud failure rather than a silent widening.
+        assert win_config_authority.held_interval_count() == 0, (
+            "an L9 generation interval survived the test: L9's own finally did "
+            "not run, or a test opened one without closing it"
+        )
         assert win_config_authority.close_failure_count() == 0, (
             "a handle or descriptor was LEAKED to a failed close; a test that "
             "injects one must account for it rather than leave it counted"
@@ -172,6 +180,7 @@ def _no_leaked_cfg1_registry_state():
         for child_nonce in list(win_config_authority._CHILDREN):
             win_config_authority._CHILDREN.pop(child_nonce, None)
         win_config_authority._PROVEN.clear()
+        win_config_authority._INTERVALS.clear()
         win_config_authority._CLOSE_FAILURES.clear()
 
 

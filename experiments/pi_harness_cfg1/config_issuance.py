@@ -30,6 +30,47 @@ parentage proof and the two exclusive children it was minted FOR -- so a
 caller cannot pair a genuine proof with substituted children, and cannot
 register an issuance for files that never passed the gate.
 
+**CFG1-IMPL-FU4 -- a genuine token means L9 RAN, not that genuine-looking
+files exist.** Requiring the L9-minted proofs was necessary and was not
+sufficient: :mod:`win_config_authority`'s minting entry points are
+module-level callables, so a caller holding a genuine workspace could acquire
+genuine pins, create the two genuine exclusive children, pass the genuine
+parentage gate, write whatever bytes it liked through the proven descriptors,
+and register a GENUINE issuance -- never once calling
+``write_cfg1_pi_config``. Every object it presented was individually genuine;
+what was missing was origin. So registration now additionally requires
+:func:`win_config_authority.require_production_issuance_provenance`: the proof
+and both children must have been minted inside ONE generation interval that
+only the bound CFG1 generator's own code object can open, and that is still
+open. Byte-for-byte legitimate content does not substitute for it, and neither
+do correct path names, correct arm/provider/model literals or a genuine
+workspace.
+
+**CFG1-IMPL-FU4-FU1 -- a genuine token also means L9 RETURNED.** FU4 closed
+the origin question, but left one gap: a genuine generation that registered an
+issuance here and then failed during its OWN release cleanup (Sec. 37.3.2 row
+11 -- closing the children, releasing the config pin, releasing the root pin)
+still left that issuance ACTIVE in this registry, even though
+``write_cfg1_pi_config`` raised instead of returning it. The token string
+never left that routine, so no caller could present it -- but the registry
+FACT itself was still live, which is a state this module's own contract
+(Sec. 19.1 item 4) does not distinguish from a genuinely durable issuance.
+:func:`discard_config_issuance` is now called by L9's own ``finally`` whenever
+a registration it just made is about to be followed by a raise, so retirement
+is transactional with the generation: an ACTIVE record here is now also a
+statement that the generation which minted it reached its own successful
+*return*, never merely that it reached registration.
+
+**CFG1-IMPL-FU4-FU2.** :func:`discard_config_issuance` itself is a local,
+in-process registry pop with no filesystem, network, subprocess, model or
+handle dependency, and it is idempotent by construction -- there is no
+supported runtime failure mode for L9's retirement call to encounter, so it is
+called plainly, with no wrapping error-handling code and no closed code of its
+own for "retirement failed". An earlier draft invented one by monkeypatching
+this exact function into a throwing stand-in and treating that as a production
+fault; that was test-only interpreter manipulation, the same class the frozen
+FU4 threat model already excludes, not a state CFG1 must defend against.
+
 **CFG1-IMPL-FU1 Finding 2.** Neither ``register_config_issuance`` nor
 ``verify_config_issuance`` accepts a ``config_dir``, ``settings_path`` or
 ``models_path`` parameter -- there is deliberately no parameter naming a path
@@ -180,6 +221,17 @@ def register_config_issuance(
         or type(models_child) is not win.ExclusiveChild
     ):
         raise ConfigIssuanceError("NOT_A_PROVEN_CONFIG_CHILD")
+    # CFG1-IMPL-FU4, FIRST and on its own: the ORIGIN question, asked before
+    # any other. Genuine Win32 authority a caller assembled for itself is
+    # refused here whatever it proves about the filesystem and whatever bytes
+    # the children hold, and it gets its own closed code so a provenance
+    # refusal is never reported as an unreadable file.
+    try:
+        win.require_production_issuance_provenance(
+            proven, (settings_child, models_child)
+        )
+    except win.Cfg1DirectoryAuthorityError as exc:
+        raise ConfigIssuanceError("ISSUANCE_PROVENANCE_NOT_PROVEN") from exc
     try:
         # The proof is about THESE two objects, not about any two children.
         win.require_proven_children(proven, (settings_child, models_child))
