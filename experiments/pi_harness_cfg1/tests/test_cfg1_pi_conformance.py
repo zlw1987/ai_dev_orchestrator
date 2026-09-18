@@ -318,7 +318,15 @@ def test_t3_an_empty_or_explicitly_true_compat_block_is_payload_identical_to_q(
 def test_t3_the_serialized_model_carries_exactly_the_declared_compat_shape(
     conformance_report,
 ):
-    """What ``get_state`` can report is the DECLARED shape, never the effective one."""
+    """What ``get_state`` can report is the DECLARED shape, never the effective one.
+
+    CFG1-L16-FU2 scope correction (Sec. 11.6): ``serializedModelReasoning is
+    True`` below is a COMPOSER-LEVEL fact about the installed serializer. It is
+    not, and must never be cited as, live-path evidence: AR2 ingestion drops
+    every ``reasoning`` key before any record is published, which is exactly
+    why the v1 L16 projection could never observe it. The live-path link is
+    R-37, below.
+    """
     q = conformance_report["arms"]["Q"]
     assert q["serializedModelHasCompatKey"] is False  # JSON.stringify drops undefined
     assert q["serializedCompat"] is None
@@ -337,29 +345,73 @@ def test_t3_the_serialized_model_carries_exactly_the_declared_compat_shape(
         assert conformance_report["arms"][arm_id]["serializedModelReasoning"] is True
 
 
-def test_t3_the_cfg1_projection_agrees_with_the_installed_runtimes_own_shape(
-    conformance_report,
+def test_t3_r37_the_installed_composers_model_survives_the_real_receive_boundary(
+    conformance_report, tmp_path
 ):
-    """The CFG1 projection, run against the REAL composed model object.
+    """R-37: ``wire -> AR2 ingestion -> supervisor -> CFG1 L16``, per arm.
 
-    This is what closes the loop between Sec. 2.5's source derivation and
-    Sec. 8.2's live manipulation check: the projection is exercised against the
-    shape the installed composer actually produces, not against a fixture
-    someone wrote to match it.
+    REPLACES the former T-3 projection test, whose docstring claimed to "close
+    the loop between Sec. 2.5's source derivation and Sec. 8.2's live
+    manipulation check". That was an overclaim (CFG1-L16-FU2 Sec. 11.6): it
+    proved only COMPOSER SHAPE -> PROJECTION LOGIC, by handing a hand-built dict
+    to the projection, and so bypassed AR2 ingestion -- the exact place the
+    ``reasoning`` flag was being dropped.
+
+    Here the installed composer's model object, serialized by ``JSON.stringify``
+    (synthetic ``.invalid`` base URL only), is embedded VERBATIM in one
+    LF-terminated ``get_state`` frame shaped exactly as Sec. 16 establishes Pi
+    emits it. A synthetic peer under ``tmp_path`` answers the REAL supervisor's
+    probe with that frame, echoing the probe-minted id, and the REAL L16
+    function consumes the result. No Pi process is launched.
     """
+    import json as _json
+
+    from ar2.protocol import contains_reasoning
+    from cfg1_fu2_support import cfg1_supervisor, support
+
     from pi_harness_cfg1.arms import ARM_SHAPE
-    from pi_harness_cfg1.run_executor import project_get_state
+    from pi_harness_cfg1.records import build_cfg1_run_payload
+    from pi_harness_cfg1.run_executor import (
+        _initial_observations,
+        _RunState,
+        observe_l16_runtime_capabilities,
+    )
 
     for arm_id in ("Q", "R", "E", "H"):
-        arm = conformance_report["arms"][arm_id]
-        model: dict = {"reasoning": arm["serializedModelReasoning"]}
-        if arm["serializedModelHasCompatKey"]:
-            model["compat"] = arm["serializedCompat"]
-        projection = project_get_state(
-            {"model": model, "thinkingLevel": "medium"}, arm_id=arm_id
+        model_path = Path(conformance_report["arms"][arm_id]["serializedModelPath"])
+        model_json = model_path.read_text(encoding="utf-8")  # JSON.stringify's exact text
+        assert SYNTHETIC_BASE_URL in model_json and '"reasoning":true' in model_json
+        frame = (
+            '{"id":"__ID__","type":"response","command":"get_state","success":true,'
+            '"data":{"model":' + model_json + ',"thinkingLevel":"medium",'
+            '"isStreaming":false,"sessionFile":"C:/synthetic/session.jsonl",'
+            '"sessionId":"synthetic-session"}}'
         )
-        assert projection["runtime_reported_compat_shape"] == ARM_SHAPE[arm_id]
-        assert projection["manipulation_check_agrees"] is True
+        peer = support.make_peer(tmp_path, f"r37_{arm_id}", **support.respond_config([frame]))
+        supervisor = cfg1_supervisor(peer)
+        supervisor.launch()
+        try:
+            state = _RunState(supervisor=supervisor, l14_launched_supervisor=supervisor)
+            l16 = observe_l16_runtime_capabilities(state, arm_id=arm_id)
+        finally:
+            support.close(supervisor)
+        assert l16["h2_provider_model_identity_matched"] is True
+        assert l16["runtime_reported_model_reasoning"] == "TRUE"
+        assert l16["runtime_reported_compat_shape"] == ARM_SHAPE[arm_id]
+        assert l16["runtime_reported_thinking_level"] == "medium"
+        assert l16["manipulation_check_agrees"] is True
+        for record in supervisor.sanitized_events():
+            assert contains_reasoning(record) is False
+        observations = _initial_observations()
+        observations.update(l16)
+        payload = build_cfg1_run_payload(
+            stage_id="S1", stage_execution_id="S1-X1", run_ordinal=1,
+            observations=observations,
+        )
+        emitted = _json.dumps([l16, payload])
+        assert SYNTHETIC_BASE_URL not in emitted
+        assert '"reasoning"' not in emitted
+        assert contains_reasoning(payload) is False
 
 
 # ---------------------------------------------------------------------------
@@ -473,6 +525,50 @@ def test_the_installed_get_state_shape_matches_the_frozen_derivation():
     # `undefined` compat key is DROPPED rather than rendered as null.
     assert "replacer" not in jsonl
     assert "toJSON" not in jsonl
+
+
+def test_r31_the_installed_rpc_mode_echoes_the_probe_id_and_command_exactly():
+    """R-31 (CFG1-L16-FU2 Sec. 16): re-proven by READ-ONLY source inspection.
+
+    ``rpc-mode.js`` is first verified against its ``PINNED_PI_SEAM_DIGESTS``
+    entry, then the four facts the probe's correlation rests on are asserted
+    in that exact, digest-verified text. Pi is never launched. A mismatch means
+    the correlation design must be re-reviewed -- never weakened.
+    """
+    import hashlib
+    import re
+
+    from pi_harness_cfg1.preflight import PINNED_PI_SEAM_DIGESTS
+
+    pi_root = _installed_pi_root()
+    relative = "dist/modes/rpc/rpc-mode.js"
+    raw = pi_root.joinpath(*relative.split("/")).read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == PINNED_PI_SEAM_DIGESTS[relative]
+    assert (
+        PINNED_PI_SEAM_DIGESTS[relative]
+        == "e7e4724aa55c5aac73cf36793653b26736200e5c59d58373990fc31028f86477"
+    )
+    source = raw.decode("utf-8")
+
+    # 1. the success helper returns exactly { id, type: "response", command,
+    #    success: true, data }
+    assert re.search(
+        r'const success = \(id, command, data\) =>.*?'
+        r'return \{ id, type: "response", command, success: true, data \};',
+        source,
+        re.DOTALL,
+    )
+    # 2. the get_state case returns success(id, "get_state", state)
+    block_start = source.index('case "get_state"')
+    block = source[block_start : source.index("}", source.index("return success(", block_start))]
+    assert 'return success(id, "get_state", state)' in block
+    # 3. handleCommand binds the id straight from the command
+    assert re.search(
+        r"const handleCommand = async \(command\) => \{\s*const id = command\.id;", source
+    )
+    # 4. a thrown command error echoes the id and the type, with success: false
+    assert re.search(r'const error = \(id, command, message\) =>.*?success: false', source, re.DOTALL)
+    assert "error(command.id, command.type," in source
 
 
 def test_the_unregistered_tool_name_derivation_still_holds_in_the_installed_loop():

@@ -32,7 +32,7 @@ from cfg1_doubles import (
     FakeSupervisor,
     FakeVerificationOutcome,
     build_doubled_ports,
-    get_state_document,
+    probe_facts_for_arm,
     seam_digests_all_match,
 )
 from qualification.safety import ArtifactSafetyContext
@@ -126,10 +126,7 @@ def _hostile_ports(git_executable):
             "build_supervisor": lambda **kwargs: _HostileSupervisor(),
             "run_verification": lambda *, workspace_root, args: verification,
             "observe_repository": lambda *, workspace_root: FakeRepositorySnapshot(),
-            "evaluate_model_identity": lambda *, supervisor: (
-                FakeHandshake(),
-                get_state_document("Q"),
-            ),
+            "probe_facts": probe_facts_for_arm("Q"),
         },
     )
 

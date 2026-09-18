@@ -31,7 +31,13 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
 from . import obs1
-from .arms import ARM_SHAPE, EXPECTED_THINKING_LEVEL
+from .arms import (
+    ARM_SHAPE,
+    EXPECTED_THINKING_LEVEL,
+    RUNTIME_COMPAT_SHAPES,
+    RUNTIME_MODEL_REASONING_VALUES,
+    RUNTIME_THINKING_LEVELS,
+)
 from .baseline import (
     capture_cfg1_dispatch_baseline,
     map_runtime_wait_outcome_literal,
@@ -210,17 +216,23 @@ class Cfg1RunPorts:
         repository child
     ``build_supervisor(identity=..., extension=..., environment=...,
     workspace_root=...)``
-        a ``PiRpcSupervisor``-shaped object
+        a ``PiRpcSupervisor``-shaped object, constructed with the H2
+        expectations bound ONCE from the frozen ``PROVIDER_ID`` /
+        ``CFG1_MODEL_ID`` -- the same constants its argv is built from -- and
+        providing ``probe_runtime_capabilities()`` (CFG1-L16-FU2)
     ``evaluate_extension_identity(supervisor=..., extension=...)``
         ``.matched``
-    ``evaluate_model_identity(supervisor=...)``
-        ``(object with .matched, the raw get_state document)``
 
-    The frozen ``ar2`` handshakes return a bounded DICT carrying a ``passed``
-    verdict, so :func:`default_cfg1_run_ports` adapts each to this ``.matched``
-    shape rather than restating either evaluation. Only the verdict crosses the
-    boundary: the handshake's own diagnostic fields, and the raw ``get_state``
-    document's ``baseUrl``, are read past and discarded (Sec. 8.2, Sec. 21.2).
+    The frozen ``ar2`` H1 handshake returns a bounded DICT carrying a
+    ``passed`` verdict, so :func:`default_cfg1_run_ports` adapts it to this
+    ``.matched`` shape rather than restating the evaluation. Only the verdict
+    crosses the boundary (Sec. 21.2).
+
+    **There is deliberately no H2 / ``get_state`` port** (CFG1-L16-FU2,
+    R-CFG1-2). L16 calls the one parameterless AR2 probe directly on the run
+    state's OWN supervisor -- the object L14 launched -- and receives exactly
+    one ``bool`` and three closed literals. No state document, response, facts
+    or verdict can enter L16 through a port, because no port supplies one.
     """
 
     ambient_environ: Mapping[str, str]
@@ -238,7 +250,6 @@ class Cfg1RunPorts:
     build_broker: Callable[..., Any]
     build_supervisor: Callable[..., Any]
     evaluate_extension_identity: Callable[..., Any]
-    evaluate_model_identity: Callable[..., Any]
 
 
 def _initial_observations() -> dict[str, Any]:
@@ -341,81 +352,6 @@ def project_stop_reasons(events) -> tuple[bool, dict[str, int]]:
     return seen, counts
 
 
-def project_get_state(state: object, *, arm_id: str) -> dict[str, Any]:
-    """Sec. 8.2's DECLARED-shape projection. Bounded literals only.
-
-    ``get_state`` serializes the COMPOSED model object, not the request-time
-    ``getCompat`` result, so what is observable here is the arm's DECLARED
-    shape -- never the effective ``true``/``false`` values, which stay
-    source-derived offline facts.
-
-    The model object also carries ``baseUrl``. It is read past and discarded:
-    nothing but the three bounded projections below leaves this function.
-    """
-    projection = {
-        "runtime_reported_compat_shape": "NOT_OBSERVED",
-        "runtime_reported_model_reasoning": "NOT_OBSERVED",
-        "runtime_reported_thinking_level": "NOT_OBSERVED",
-        "manipulation_check_agrees": False,
-    }
-    if not isinstance(state, dict):
-        return projection
-
-    model = state.get("model")
-    if isinstance(model, dict):
-        if "compat" not in model:
-            projection["runtime_reported_compat_shape"] = "ABSENT"
-        else:
-            projection["runtime_reported_compat_shape"] = _classify_compat_object(
-                model.get("compat")
-            )
-        reasoning = model.get("reasoning")
-        if reasoning is True:
-            projection["runtime_reported_model_reasoning"] = "TRUE"
-        elif reasoning is False:
-            projection["runtime_reported_model_reasoning"] = "FALSE"
-        else:
-            projection["runtime_reported_model_reasoning"] = "OTHER"
-    else:
-        projection["runtime_reported_compat_shape"] = "OTHER"
-        projection["runtime_reported_model_reasoning"] = "OTHER"
-
-    if "thinkingLevel" in state:
-        level = state.get("thinkingLevel")
-        known = ("off", "minimal", "low", "medium", "high", "xhigh", "max")
-        projection["runtime_reported_thinking_level"] = (
-            level if isinstance(level, str) and level in known else "OTHER"
-        )
-
-    projection["manipulation_check_agrees"] = (
-        projection["runtime_reported_compat_shape"] == ARM_SHAPE[arm_id]
-        and projection["runtime_reported_model_reasoning"] == "TRUE"
-        and projection["runtime_reported_thinking_level"] == EXPECTED_THINKING_LEVEL
-    )
-    return projection
-
-
-def _classify_compat_object(compat: object) -> str:
-    """Exactly the four declared shapes, or ``OTHER``. Never a partial match.
-
-    A key set outside the four, or a value that is not exact JSON ``false``,
-    is ``OTHER`` -- the check never demands an explicit ``true`` for an absent
-    field, and never accepts a truthy stand-in for ``false``.
-    """
-    if not isinstance(compat, dict):
-        return "OTHER"
-    if any(value is not False for value in compat.values()):
-        return "OTHER"
-    keys = frozenset(compat)
-    if keys == frozenset({"supportsDeveloperRole"}):
-        return "DEVELOPER_ROLE_FALSE_ONLY"
-    if keys == frozenset({"supportsReasoningEffort"}):
-        return "REASONING_EFFORT_FALSE_ONLY"
-    if keys == frozenset({"supportsDeveloperRole", "supportsReasoningEffort"}):
-        return "BOTH_FALSE_ONLY"
-    return "OTHER"
-
-
 class _PreDispatchRefusal(Exception):
     """Internal control flow: one closed refusal code plus its step name."""
 
@@ -435,9 +371,67 @@ class _RunState:
     extension: Any = None
     broker: Any = None
     supervisor: Any = None
+    #: The exact object L14 built and launched. L16 refuses any other.
+    l14_launched_supervisor: Any = None
     capability: Any = None
     safety: Any = None
     console_codes: list[str] = field(default_factory=list)
+
+
+def observe_l16_runtime_capabilities(state: _RunState, *, arm_id: str) -> dict[str, Any]:
+    """Sec. 8.2's four L16 facts, from the run's OWN supervisor. Raises on refusal.
+
+    CFG1-L16-FU2 (R-CFG1-1..3). This replaces the former state-document
+    projection. There is deliberately NO parameter through which facts, a
+    literal, a verdict, a response, a state document, or any supervisor other
+    than the run state's own can enter: the facts are obtained HERE, by calling
+    the one parameterless AR2 probe on ``state.supervisor`` -- which must be the
+    identical object L14 launched -- and are type-checked and returned in the
+    same function. ``arm_id`` selects only which frozen declared shape the
+    unchanged manipulation predicate compares against.
+
+    The probe reduces the ONE AIDO-minted, correlated ``get_state`` response
+    to one ``bool`` and three closed literals BEFORE AR2's reasoning drop
+    removes ``data.model.reasoning`` (the defect this replaces could never
+    observe it). The facts stay ``runtime_reported_*`` UNTRUSTED CLAIMS.
+
+    A probe that raises, a supervisor that is not the L14 object, and a return
+    that is not exactly ``(bool, str, str, str)`` drawn from the closed domains
+    all refuse with the EXISTING ``RUNTIME_CORRELATION_FAILED`` at ``L16``;
+    nothing raw is formatted or retained.
+    """
+    supervisor = state.supervisor
+    if supervisor is None or supervisor is not state.l14_launched_supervisor:
+        raise _PreDispatchRefusal("RUNTIME_CORRELATION_FAILED", "L16")
+    try:
+        result = supervisor.probe_runtime_capabilities()
+    except Exception:  # noqa: BLE001 - reduced HERE; no raw text escapes
+        raise _PreDispatchRefusal("RUNTIME_CORRELATION_FAILED", "L16") from None
+    if type(result) is not tuple or len(result) != 4:
+        raise _PreDispatchRefusal("RUNTIME_CORRELATION_FAILED", "L16")
+    h2, reasoning, compat_shape, thinking_level = result
+    if not (
+        type(h2) is bool
+        and type(reasoning) is str
+        and reasoning in RUNTIME_MODEL_REASONING_VALUES
+        and type(compat_shape) is str
+        and compat_shape in RUNTIME_COMPAT_SHAPES
+        and type(thinking_level) is str
+        and thinking_level in RUNTIME_THINKING_LEVELS
+    ):
+        raise _PreDispatchRefusal("RUNTIME_CORRELATION_FAILED", "L16")
+    return {
+        "h2_provider_model_identity_matched": h2,
+        "runtime_reported_compat_shape": compat_shape,
+        "runtime_reported_model_reasoning": reasoning,
+        "runtime_reported_thinking_level": thinking_level,
+        # The frozen predicate, unchanged.
+        "manipulation_check_agrees": (
+            compat_shape == ARM_SHAPE[arm_id]
+            and reasoning == "TRUE"
+            and thinking_level == EXPECTED_THINKING_LEVEL
+        ),
+    }
 
 
 def execute_cfg1_run(admission: Cfg1RunAdmission, *, ports: Cfg1RunPorts) -> Cfg1RunOutcome:
@@ -687,6 +681,7 @@ def _dispatch_phase(
             observations["runtime_created"] = True
         raise _PreDispatchRefusal("RUNTIME_LAUNCH_FAILED", "L14") from None
     observations["runtime_created"] = True
+    state.l14_launched_supervisor = state.supervisor
 
     # ---------------- L15 RPC CORRELATION + H1 ----------------
     try:
@@ -700,12 +695,11 @@ def _dispatch_phase(
         raise _PreDispatchRefusal("H1_MISMATCH", "L15")
 
     # ---------------- L16 H2 + MANIPULATION CHECK ----------------
-    try:
-        h2, state_document = ports.evaluate_model_identity(supervisor=state.supervisor)
-    except Exception:  # noqa: BLE001
-        raise _PreDispatchRefusal("RUNTIME_CORRELATION_FAILED", "L16") from None
-    observations["h2_provider_model_identity_matched"] = _exact_bool(getattr(h2, "matched", False))
-    observations.update(project_get_state(state_document, arm_id=admission.arm_id))
+    # CFG1-L16-FU2: the ONE get_state is the AR2 probe's own, on this run's
+    # own supervisor; the four facts are reduced before AR2's reasoning drop.
+    observations.update(
+        observe_l16_runtime_capabilities(state, arm_id=admission.arm_id)
+    )
     if not observations["h2_provider_model_identity_matched"]:
         raise _PreDispatchRefusal("H2_MISMATCH", "L16")
     if not observations["manipulation_check_agrees"]:
@@ -1230,7 +1224,7 @@ def default_cfg1_run_ports(*, ambient_environ: Mapping[str, str]) -> Cfg1RunPort
         RunState,
     )
     from ar2.capability import CapDefinitions, mint_capability
-    from ar2.handshakes import evaluate_extension_identity, evaluate_model_identity
+    from ar2.handshakes import evaluate_extension_identity
     from ar2.launch import build_pi_argv, resolve_runtime_identity
     from ar2.observation import observe_repository
     from ar2.pi_config import write_disposable_extension
@@ -1286,6 +1280,9 @@ def default_cfg1_run_ports(*, ambient_environ: Mapping[str, str]) -> Cfg1RunPort
         )
 
     def _build_supervisor(*, identity, extension, environment, workspace_root: str):
+        # R-40: the argv's provider/model and the probe's H2 expectations come
+        # from the SAME frozen module constants -- never a literal, the
+        # environment, a config file, or anything runtime-derived.
         return PiRpcSupervisor(
             argv=build_pi_argv(
                 identity,
@@ -1297,6 +1294,8 @@ def default_cfg1_run_ports(*, ambient_environ: Mapping[str, str]) -> Cfg1RunPort
             cwd=workspace_root,
             environment=environment.as_launch_snapshot(),
             bounds=RunBounds(),
+            expected_provider=PROVIDER_ID,
+            expected_model=CFG1_MODEL_ID,
         )
 
     def _build_broker(*, capability):
@@ -1467,26 +1466,6 @@ def default_cfg1_run_ports(*, ambient_environ: Mapping[str, str]) -> Cfg1RunPort
             and _exact_bool(verdict.get("passed"))
         )
 
-    def _evaluate_model_identity(*, supervisor):
-        """H2: ``get_state``, returning the verdict AND the raw state document.
-
-        The document is handed straight to Sec. 8.2's projection, which retains
-        three bounded literals and reads past everything else -- including the
-        ``baseUrl`` the composed model object genuinely carries.
-        """
-        command_id = "h2-" + secrets.token_hex(8)
-        supervisor.send_command({"id": command_id, "type": "get_state"})
-        _outcome, response = supervisor.await_response(
-            command_id, timeout_seconds=RunBounds().startup_deadline_seconds
-        )
-        verdict = evaluate_model_identity(
-            response, expected_provider=PROVIDER_ID, expected_model=CFG1_MODEL_ID
-        )
-        state_document = {}
-        if response and isinstance(response.get("data"), dict):
-            state_document = response["data"]
-        return _HandshakeVerdict(matched=_exact_bool(verdict.get("passed"))), state_document
-
     return Cfg1RunPorts(
         ambient_environ=ambient_environ,
         git_executable=_git_executable,
@@ -1511,7 +1490,6 @@ def default_cfg1_run_ports(*, ambient_environ: Mapping[str, str]) -> Cfg1RunPort
         build_broker=_build_broker,
         build_supervisor=_build_supervisor,
         evaluate_extension_identity=_evaluate_extension_identity,
-        evaluate_model_identity=_evaluate_model_identity,
     )
 
 

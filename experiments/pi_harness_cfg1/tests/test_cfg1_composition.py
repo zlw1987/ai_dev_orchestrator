@@ -658,12 +658,13 @@ def test_t10_binding_the_live_ports_performs_no_live_action_by_itself():
         "build_broker",
         "write_extension",
         "evaluate_extension_identity",
-        "evaluate_model_identity",
         "build_supervisor",
         "read_connection",
         "observe_route",
     ):
         assert callable(getattr(ports, name)), name
+    # CFG1-L16-FU2 (R-CFG1-2): the H2 / get_state port is REMOVED, not renamed.
+    assert not hasattr(ports, "evaluate_model_identity")
     # No port is a refusing placeholder any more.
     assert not any(
         getattr(getattr(ports, name), "__name__", "") == "_refuse"

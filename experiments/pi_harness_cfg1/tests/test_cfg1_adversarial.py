@@ -818,7 +818,6 @@ def test_the_live_port_bindings_are_importable_and_free_of_latent_name_errors():
         "build_broker",
         "write_extension",
         "evaluate_extension_identity",
-        "evaluate_model_identity",
         "build_supervisor",
     ):
         port = getattr(ports, name)

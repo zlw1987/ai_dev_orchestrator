@@ -1,0 +1,21 @@
+{
+  "experiment": "pi_harness_cfg1",
+  "halt_reason_code": "PRE_DISPATCH_REFUSAL",
+  "halted_after_ordinal": 1,
+  "ordinal_status": {
+    "1": "RECORD_EMITTED",
+    "2": "NOT_EXECUTED",
+    "3": "NOT_EXECUTED",
+    "4": "NOT_EXECUTED",
+    "5": "NOT_EXECUTED",
+    "6": "NOT_EXECUTED",
+    "7": "NOT_EXECUTED",
+    "8": "NOT_EXECUTED",
+    "9": "NOT_EXECUTED"
+  },
+  "record_filename": "S1_stage_closure.json",
+  "record_kind": "cfg1 stage closure",
+  "record_version": "pi-harness-cfg1-stage-closure.v1",
+  "stage_execution_id": "CFG1-S1-A2",
+  "stage_id": "S1"
+}

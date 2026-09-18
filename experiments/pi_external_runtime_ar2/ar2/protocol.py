@@ -15,6 +15,13 @@ Framing rules, taken from Pi's shipped ``dist/modes/rpc/jsonl.js``:
 Reasoning rule (AR0 section 13.3, 5F2E-V2 precedent): reasoning-bearing content
 is dropped AT INGESTION, before any record is stored, counted, hashed, or
 written. AIDO builds no chain-of-thought observability.
+
+The ONE narrowed exception (CFG1-L16-FU2, R-AR2-1): for the single record that
+matches this reader's armed probe slot, the value at ``data.model.reasoning`` is
+subjected to the two identity tests ``is True`` / ``is False`` BEFORE the drop,
+and only the resulting closed literal is retained. No other key, path, record
+or operation is excepted; the drop then runs unchanged on the same decoded
+object. No reasoning-bearing value is ever stored by this process.
 """
 
 from __future__ import annotations
@@ -23,6 +30,17 @@ import json
 import threading
 from dataclasses import dataclass, field
 from typing import Any, IO
+
+from .runtime_probe import (
+    POISON_CLASSIFICATION_RAISED,
+    POISON_COMMAND_INVALID,
+    POISON_DUPLICATE_RESPONSE,
+    SLOT_ARMED,
+    SLOT_RESOLVED,
+    classify_correlated_raw_record,
+    is_correlated_response,
+    reduce_sanitized_get_state,
+)
 
 # ``assistantMessageEvent.type`` values that carry model reasoning.
 REASONING_DELTA_TYPES: frozenset[str] = frozenset(
@@ -286,6 +304,10 @@ class RecordStreamReader:
         self.protocol_violation: str | None = None
         self.eof = False
         self.read_error: str | None = None
+        # CFG1-L16-FU2: the supervisor's probe slot, bound at most once and
+        # only as the LAST install step. Until then every record is treated
+        # as having no armed probe. Guarded by ``self._lock``.
+        self._probe_slot = None
         self._thread = threading.Thread(
             target=self._run, name="ar2-pi-stdout", daemon=True
         )
@@ -325,8 +347,97 @@ class RecordStreamReader:
 
     def _publish(self, record: dict[str, Any]) -> None:
         with self._condition:
-            self._records.append(record)
-            self._condition.notify_all()
+            self._publish_locked(record)
+
+    def _publish_locked(self, record: dict[str, Any]) -> None:
+        """Append and wake waiters. The CALLER already holds ``self._lock``.
+
+        Split out so step (f) can resolve the probe slot and publish the same
+        record in ONE critical section without re-entering the non-reentrant
+        lock through :meth:`_publish` (design Sec. 5.4 (f), R-38).
+        """
+        self._records.append(record)
+        self._condition.notify_all()
+
+    # -- CFG1-L16-FU2: the one correlated probe record (design Sec. 5.4) ------
+
+    def _bind_probe_slot(self, slot: Any) -> None:
+        """Bind the supervisor's probe slot. Write-once; called only by L3."""
+        with self._condition:
+            if self._probe_slot is not None:
+                raise RuntimeError("probe slot is already bound")
+            self._probe_slot = slot
+
+    def _probe_match(self, decoded: dict[str, Any]) -> tuple[Any, str, str] | None:
+        """Step (a). Matching runs ONLY while the slot is ARMED or RESOLVED.
+
+        ARMED + match -> the one classification path (returns the slot and its
+        copied expectations). RESOLVED + match -> a duplicate: POISONED right
+        here, with no reclassification. Every other state: no matching at all.
+        """
+        with self._condition:
+            slot = self._probe_slot
+            if slot is None:
+                return None
+            state = slot.state
+            if state != SLOT_ARMED and state != SLOT_RESOLVED:
+                return None
+            try:
+                matched = is_correlated_response(decoded, slot.expected_id)
+            except Exception:  # noqa: BLE001 - contained; never formatted
+                slot.poison(POISON_CLASSIFICATION_RAISED)
+                return None
+            if not matched:
+                return None
+            if state == SLOT_RESOLVED:
+                slot.poison(POISON_DUPLICATE_RESPONSE)
+                return None
+            return slot, slot.expected_provider, slot.expected_model
+
+    def _probe_classify_raw(self, slot: Any, decoded: dict[str, Any]) -> tuple[bool, bool, str] | None:
+        """Steps (b) and (c), on the RAW decoded record, before ``ingest_record``."""
+        try:
+            raw_facts = classify_correlated_raw_record(decoded)
+            reason = POISON_COMMAND_INVALID
+        except Exception:  # noqa: BLE001 - contained; never formatted
+            raw_facts = None
+            reason = POISON_CLASSIFICATION_RAISED
+        if raw_facts is None:
+            with self._condition:
+                slot.poison(reason)
+        return raw_facts
+
+    def _probe_resolve_and_publish(
+        self,
+        pending: tuple[Any, str, str],
+        raw_facts: tuple[bool, bool, str],
+        sanitized: dict[str, Any],
+    ) -> None:
+        """Steps (e) and (f): reduce the reader-local sanitized record, then
+        resolve the slot and publish that record in ONE critical section."""
+        slot, expected_provider, expected_model = pending
+        success_ok, data_is_dict, reasoning = raw_facts
+        try:
+            h2, compat, thinking = reduce_sanitized_get_state(
+                sanitized,
+                success_ok=success_ok,
+                data_is_dict=data_is_dict,
+                expected_provider=expected_provider,
+                expected_model=expected_model,
+            )
+            reduced = (
+                type(h2) is bool and type(compat) is str and type(thinking) is str
+            )
+        except Exception:  # noqa: BLE001 - contained; never formatted
+            reduced = False
+        with self._condition:
+            if reduced:
+                # Resolves only from ARMED; a slot retired or consumed in the
+                # meantime keeps its state and these facts are discarded.
+                slot.resolve(h2, reasoning, compat, thinking)
+            else:
+                slot.poison(POISON_CLASSIFICATION_RAISED)
+            self._publish_locked(sanitized)
 
     def _run(self) -> None:
         buffer = b""
@@ -356,7 +467,19 @@ class RecordStreamReader:
                     except ProtocolViolation as exc:
                         self.protocol_violation = str(exc)
                         return
-                    self._publish(ingest_record(decoded, self._stats))
+                    pending = self._probe_match(decoded)
+                    raw_facts = (
+                        None
+                        if pending is None
+                        else self._probe_classify_raw(pending[0], decoded)
+                    )
+                    sanitized = ingest_record(decoded, self._stats)
+                    decoded = None  # the raw record is never retained
+                    if raw_facts is None:
+                        self._publish(sanitized)
+                    else:
+                        self._probe_resolve_and_publish(pending, raw_facts, sanitized)
+                    # Outside every critical section: record_count() takes the lock.
                     if self.record_count() >= self._max_records:
                         self.record_cap_exceeded = True
                         return
