@@ -35,6 +35,24 @@
 > `results/ar2_*.json` file was modified, and FU1A sent zero semantic prompts,
 > zero network calls, and launched zero Pi processes.
 
+> **Later amendment pointer (5F3B-HARNESS-CFG1-L16-FU2-DOCSYNC; pointer only).**
+> The later CFG1-specific phase **CFG1-L16-FU2** reuses and extends AR2's
+> supervisor/protocol receive boundary (`ar2/supervisor.py`, `ar2/protocol.py`,
+> plus `ar2/runtime_probe.py`) with a CFG1-specific bounded runtime capability
+> probe. Raw reasoning-bearing runtime data remains subject to AR2's existing
+> structural reasoning drop before publication. FU2 does not convert runtime
+> claims into repository or execution authority. The authoritative references
+> for that amendment are its accepted/frozen design
+> [`docs/PHASE_5F3B_HARNESS_CFG1_L16_FU2_RUNTIME_CAPABILITY_OBSERVATION_DESIGN.md`](../../docs/PHASE_5F3B_HARNESS_CFG1_L16_FU2_RUNTIME_CAPABILITY_OBSERVATION_DESIGN.md)
+> (R2), its erratum
+> [`docs/PHASE_5F3B_HARNESS_CFG1_L16_FU2_ERR1_R37_SIDECAR_TRANSPORT_ERRATUM.md`](../../docs/PHASE_5F3B_HARNESS_CFG1_L16_FU2_ERR1_R37_SIDECAR_TRANSPORT_ERRATUM.md)
+> (ERR1), and implementation commit
+> `bfae384370246e0ab4073a28a6b6df0558153864`. **Nothing in §§1–10 is reopened**:
+> every historical finding and verdict stands as recorded, no historical
+> `results/ar2_*.json` file was modified, and none is retroactively
+> reinterpreted. This pointer does not reopen AR2's broker/capability semantics
+> or any historical result record.
+
 **Five real semantic prompts were sent in total** — one per case for R1-a, R1-b,
 R2, R3 and R4. The brief's budget was four; the fifth exists because R1's first
 attempt was consumed by an infrastructure mismatch and the operator explicitly

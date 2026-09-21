@@ -1,5 +1,21 @@
 # Phase 5F3B-HARNESS-CFG1 — Isolating the Pi Launch-Configuration Hypothesis
 
+> **Documentation-sync pointer (5F3B-HARNESS-CFG1-L16-FU2-DOCSYNC; pointer
+> only — this note adds no normative text).** L16 runtime capability
+> observation (H2 and the §8.2 manipulation-check inputs) is governed by the
+> accepted/frozen amendment **CFG1-L16-FU2 R2**,
+> [`PHASE_5F3B_HARNESS_CFG1_L16_FU2_RUNTIME_CAPABILITY_OBSERVATION_DESIGN.md`](PHASE_5F3B_HARNESS_CFG1_L16_FU2_RUNTIME_CAPABILITY_OBSERVATION_DESIGN.md),
+> read together with its accepted/frozen R-37 sidecar-transport erratum
+> **ERR1**,
+> [`PHASE_5F3B_HARNESS_CFG1_L16_FU2_ERR1_R37_SIDECAR_TRANSPORT_ERRATUM.md`](PHASE_5F3B_HARNESS_CFG1_L16_FU2_ERR1_R37_SIDECAR_TRANSPORT_ERRATUM.md).
+> The implementation is accepted/frozen at commit
+> `bfae384370246e0ab4073a28a6b6df0558153864`. Where text in this document
+> conflicts with FU2 R2/ERR1 on L16 runtime capability observation, **the
+> amendment governs**; the amendment's own §9 lists exactly what it reopens.
+> This pointer reopens no other CFG1 contract, and this documentation sync
+> grants no live, `CFG1-S1-A3`, Stage-2, `H`, `LIVE-S2`, `DX1` or `M4`
+> authority.
+
 **DESIGN / SOURCE INSPECTION ONLY.** No production code or test was modified. Pi
 was not launched. B300 was not contacted. No model was called. No credential or
 endpoint value was read. Q1/Q2/Q3 were not re-run and their nine primary

@@ -15,6 +15,23 @@
 - `experiments/pi_external_runtime_ar1/` — the accepted AR1 experiment, reused
   where its machinery genuinely fits. **No AR1 result JSON was altered.**
 
+> **Later amendment pointer (5F3B-HARNESS-CFG1-L16-FU2-DOCSYNC; pointer only).**
+> The later CFG1-specific phase **CFG1-L16-FU2** reuses and extends this
+> experiment's supervisor/protocol receive boundary (`ar2/supervisor.py`,
+> `ar2/protocol.py`, plus `ar2/runtime_probe.py`) with a CFG1-specific bounded
+> runtime capability probe. Raw reasoning-bearing runtime data remains subject
+> to AR2's existing structural reasoning drop before publication. FU2 does not
+> convert runtime claims into repository or execution authority. The
+> authoritative references for that amendment are its accepted/frozen design
+> [`docs/PHASE_5F3B_HARNESS_CFG1_L16_FU2_RUNTIME_CAPABILITY_OBSERVATION_DESIGN.md`](../../docs/PHASE_5F3B_HARNESS_CFG1_L16_FU2_RUNTIME_CAPABILITY_OBSERVATION_DESIGN.md)
+> (R2), its erratum
+> [`docs/PHASE_5F3B_HARNESS_CFG1_L16_FU2_ERR1_R37_SIDECAR_TRANSPORT_ERRATUM.md`](../../docs/PHASE_5F3B_HARNESS_CFG1_L16_FU2_ERR1_R37_SIDECAR_TRANSPORT_ERRATUM.md)
+> (ERR1), and implementation commit
+> `bfae384370246e0ab4073a28a6b6df0558153864`. Historical AR2 results and
+> findings are unchanged and are not retroactively reinterpreted. This pointer
+> does not reopen AR2's broker/capability semantics or any historical result
+> record.
+
 ---
 
 ## The one question AR2 exists to answer
