@@ -20,7 +20,7 @@ import tls from "node:tls";
 import http from "node:http";
 import https from "node:https";
 import dns from "node:dns";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 // ---------------------------------------------------------------------------
@@ -136,7 +136,15 @@ for (const arm of config.arms) {
 
   // Sec. 2.5: `get_state` serializes the COMPOSED model object with plain
   // JSON.stringify, so this is exactly the shape a live runtime would report.
-  const serializedModel = JSON.parse(JSON.stringify(model));
+  // CFG1-L16-FU2 R-37: the exact serialized TEXT is written to a TEST-LOCAL
+  // file beside this arm's models.json -- never into the report, which stays
+  // free of the provider id -- so the Python side can wrap it verbatim in a
+  // synthetic `get_state` frame and send it through the REAL AR2 receive
+  // boundary.
+  const serializedModelJson = JSON.stringify(model);
+  const serializedModelPath = `${arm.modelsJsonPath}.composed-model.json`;
+  writeFileSync(serializedModelPath, serializedModelJson, "utf-8");
+  const serializedModel = JSON.parse(serializedModelJson);
 
   let capturedParams = null;
   const before = fetchCalls.length;
@@ -171,6 +179,7 @@ for (const arm of config.arms) {
     ),
     serializedCompat: serializedModel.compat ?? null,
     serializedModelReasoning: serializedModel.reasoning,
+    serializedModelPath,
     params: capturedParams,
     fetchCallsForThisArm: fetchCalls.length - before,
   };

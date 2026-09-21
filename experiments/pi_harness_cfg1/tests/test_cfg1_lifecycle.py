@@ -24,7 +24,7 @@ from cfg1_doubles import (
     FakeSupervisor,
     FakeVerificationOutcome,
     build_doubled_ports,
-    get_state_document,
+    probe_facts_for_arm,
     seam_digests_all_match,
 )
 
@@ -318,10 +318,7 @@ def test_t11_l16_h2_mismatch_and_config_shape_mismatch_are_distinct_codes(
     outcome, _made = _run(
         admission,
         git_executable,
-        evaluate_model_identity=lambda *, supervisor: (
-            FakeHandshake(matched=False),
-            get_state_document("Q"),
-        ),
+        probe_facts=(False, "TRUE", "ABSENT", "medium"),
     )
     assert outcome.observations["pre_dispatch_refusal_code"] == "H2_MISMATCH"
 
@@ -331,10 +328,7 @@ def test_t11_l16_h2_mismatch_and_config_shape_mismatch_are_distinct_codes(
     outcome, made = _run(
         admission,
         git_executable,
-        evaluate_model_identity=lambda *, supervisor: (
-            FakeHandshake(),
-            get_state_document("R"),
-        ),
+        probe_facts=probe_facts_for_arm("R"),
     )
     observations = outcome.observations
     assert observations["pre_dispatch_refusal_code"] == "CONFIG_SHAPE_MISMATCH"
@@ -351,10 +345,7 @@ def test_t11_l16_a_wrong_thinking_level_also_refuses_before_the_prompt(
     outcome, made = _run(
         admission,
         git_executable,
-        evaluate_model_identity=lambda *, supervisor: (
-            FakeHandshake(),
-            get_state_document("Q", thinking_level="high"),
-        ),
+        probe_facts=(True, "TRUE", "ABSENT", "high"),
     )
     assert outcome.observations["pre_dispatch_refusal_code"] == "CONFIG_SHAPE_MISMATCH"
     assert outcome.observations["runtime_reported_thinking_level"] == "high"
@@ -441,10 +432,7 @@ def test_t11_l24_precedes_l26_so_verification_never_sees_the_endpoint_on_disk(
         overrides={
             "write_config": _write_config,
             "run_verification": _run_verification,
-            "evaluate_model_identity": lambda *, supervisor: (
-                FakeHandshake(),
-                get_state_document("Q"),
-            ),
+            "probe_facts": probe_facts_for_arm("Q"),
         },
     )
     outcome = execute_cfg1_run(admission, ports=ports)

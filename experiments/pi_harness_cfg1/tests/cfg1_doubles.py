@@ -120,8 +120,22 @@ class FakeBroker:
         return dict(self.lifecycle)
 
 
+def probe_facts_for_arm(arm_id: str) -> tuple[bool, str, str, str]:
+    """The four L16 facts a runtime that loaded ``arm_id``'s declared shape reports."""
+    from pi_harness_cfg1.arms import ARM_SHAPE
+
+    return True, "TRUE", ARM_SHAPE[arm_id], "medium"
+
+
 class FakeSupervisor:
-    """A Pi RPC supervisor that launches nothing. Never a real process."""
+    """A Pi RPC supervisor that launches nothing. Never a real process.
+
+    CFG1-L16-FU2 (Sec. 12.2): its ``probe_runtime_capabilities()`` returns
+    SCRIPTED scalars. It exists so the rest of the state machine can be driven
+    offline, and so CFG1's own L16 type-check and refusal mapping can be
+    asserted. It proves nothing about the receive boundary: every row about
+    that drives the REAL supervisor over a synthetic peer instead.
+    """
 
     def __init__(
         self,
@@ -131,11 +145,18 @@ class FakeSupervisor:
         send_error: Exception | None = None,
         wait_outcome: str = "runtime_settled",
         events: list | None = None,
+        probe_facts: Any = None,
+        probe_error: Exception | None = None,
     ) -> None:
         self.activity = FakeActivity()
         self.process = None
         self.commands_sent: list[str] = []
         self.shutdown_calls = 0
+        #: A tuple, or a zero-argument callable producing one. ``None`` means
+        #: "the arm the run's config generator recorded" (build_doubled_ports).
+        self.probe_facts = probe_facts
+        self.probe_calls = 0
+        self._probe_error = probe_error
         self._launch_error = launch_error
         self._prompt_response = (
             {"type": "response", "command": "prompt", "success": True}
@@ -152,6 +173,17 @@ class FakeSupervisor:
         if self._launch_error is not None:
             raise self._launch_error
         self.process = object()
+
+    def probe_runtime_capabilities(self):
+        self.probe_calls += 1
+        if self._probe_error is not None:
+            raise self._probe_error
+        facts = self.probe_facts
+        if callable(facts):
+            facts = facts()
+        if facts is None:
+            facts = probe_facts_for_arm("Q")
+        return facts
 
     def send_command(self, command: dict) -> None:
         if self._send_error is not None:
@@ -180,40 +212,6 @@ class FakeSupervisor:
         return list(self._events)
 
 
-def get_state_document(arm_id: str, *, thinking_level: str = "medium") -> dict:
-    """A ``get_state`` response shaped exactly as the installed Pi 0.85.1 emits.
-
-    Includes ``baseUrl`` deliberately: the real composed model object carries
-    it, and the projection must read past it and retain only the three bounded
-    literals. A fixture that omitted it would not exercise that.
-    """
-    from pi_harness_cfg1.arms import ARM_COMPAT
-
-    model: dict[str, Any] = {
-        "id": "qwen3-coder-next",
-        "name": "qwen3-coder-next",
-        "api": "openai-completions",
-        "provider": "b300_pi_qualification",
-        "baseUrl": SYNTHETIC_BASE_URL,
-        "reasoning": True,
-        "input": ["text"],
-        "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
-        "contextWindow": 128000,
-        "maxTokens": 16384,
-    }
-    compat = ARM_COMPAT[arm_id]
-    if compat is not None:
-        model["compat"] = dict(compat)
-    return {
-        "model": model,
-        "thinkingLevel": thinking_level,
-        "isStreaming": False,
-        "isCompacting": False,
-        "messageCount": 0,
-        "pendingMessageCount": 0,
-    }
-
-
 def build_doubled_ports(
     *,
     git_executable: str,
@@ -226,13 +224,33 @@ def build_doubled_ports(
     inspect afterwards -- the frozen ports dataclass is deliberately not
     widened to carry test state, and is not hashable anyway (its
     ``ambient_environ`` field is a dict).
+
+    CFG1-L16-FU2: there is no H2 port any more. ``overrides`` may instead
+    carry ``probe_facts`` (and ``probe_error``) -- TEST-DOUBLE configuration,
+    never a port -- scripting what any :class:`FakeSupervisor` the run builds
+    returns from its probe. Absent both, the facts are those of a runtime that
+    loaded the arm the doubled config generator recorded.
     """
     from pi_harness_cfg1 import run_workspace
     from pi_harness_cfg1.cfg1_pi_config import write_cfg1_pi_config
     from pi_harness_cfg1.environment import build_cfg1_child_environment
 
-    overrides = overrides or {}
+    overrides = dict(overrides or {})
+    scripted_facts = overrides.pop("probe_facts", None)
+    scripted_error = overrides.pop("probe_error", None)
     made: dict[str, Any] = {}
+
+    def _script_probe(supervisor):
+        if isinstance(supervisor, FakeSupervisor) and supervisor.probe_facts is None:
+            if scripted_facts is not None:
+                supervisor.probe_facts = scripted_facts
+            else:
+                supervisor.probe_facts = lambda: probe_facts_for_arm(
+                    made.get("arm_id", arm_id)
+                )
+            if scripted_error is not None:
+                supervisor._probe_error = scripted_error
+        return supervisor
 
     def _write_extension(*, owned_root: str, broker):
         directory = Path(owned_root) / "pi_extension"
@@ -254,11 +272,6 @@ def build_doubled_ports(
         broker = made.get("broker") or FakeBroker()
         made["broker"] = broker
         return broker
-
-    def _evaluate_model_identity(*, supervisor):
-        # The arm the doubled config generator recorded, or the declared
-        # default when a test overrode ``write_config`` with its own.
-        return FakeHandshake(), get_state_document(made.get("arm_id", arm_id))
 
     def _mint_workspace(*, git_executable):
         workspace, built = run_workspace.mint_cfg1_run_workspace(
@@ -287,9 +300,10 @@ def build_doubled_ports(
         "build_broker": _build_broker,
         "build_supervisor": _build_supervisor,
         "evaluate_extension_identity": lambda *, supervisor, extension: FakeHandshake(),
-        "evaluate_model_identity": _evaluate_model_identity,
     }
     defaults.update(overrides)
+    builder = defaults["build_supervisor"]
+    defaults["build_supervisor"] = lambda **kwargs: _script_probe(builder(**kwargs))
     return Cfg1RunPorts(**defaults), made
 
 
