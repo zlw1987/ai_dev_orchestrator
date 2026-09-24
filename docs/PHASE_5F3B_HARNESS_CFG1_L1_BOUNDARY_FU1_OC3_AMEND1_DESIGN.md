@@ -11,7 +11,7 @@ AMENDS (does not edit) the ACCEPTED / FROZEN base design:
 REPOSITORY ADMISSION OBSERVED: HEAD 306493ac4ddd8a9a2ce180c5f4fa21bba5fe5715
 OC-3 ARCHAEOLOGY: ACCEPTED — primary verdict OC2_PREVENTS_OC3_PROOF
 REVIEWER DECISION FROZEN HERE: REMOVE THE LIVE --version PROBE
-EFFECTIVE DESIGN = R6 + THIS AMENDMENT (AMD-1 … AMD-9)
+EFFECTIVE DESIGN = R6 + THIS AMENDMENT (AMD-1 … AMD-8)
 GRANTS NOTHING. NO IMPLEMENTATION AUTHORITY.
 ```
 
@@ -138,7 +138,6 @@ sub-module, a Node REPL, a `pi.cmd` shim, or a Node `--check` of the package).
 | **AMD-6** *(first execution at L14)* | R6 §3 **AM-8** (R6 line 235) wording "the pair P3 proved"; R6 §4 diagram L14 row (R6 line 272); R6 §5 P6's identity-object shape "`ar2.launch.RuntimeIdentity`'s shape … `reported_version`" (R6 line 318); R6 §7.1 TOCTOU rows 3–5 and closing paragraph (R6 lines 575–587); R6 §12.1 rows "version and seam facts from different roots", "pair L14 launches", "individually valid Node and Pi objects" (R6 lines 1616, 1617, 1620). | AM-8's re-proof is **preserved and becomes the sole pre-first-execution proof**, in a fixed order (complete seam set → package-root identity → `node.exe` identity) with nothing that reads the Pi tree, resolves a name, or executes anything between it and `Popen` (§9). L14 consumes a **CFG1-owned static identity object** with no version or "reported" attribute (§10). |
 | **AMD-7** *(gate ambient)* | R6 §7.1 "Semantics" bullets on the probe child (R6 lines 537–549) and "Placement" sentence "The launcher text will read `PATH` and `SystemRoot`" (R6 lines 555–557); R6 §3 **AM-7** as to what the gate reads. | The gate reads exactly **one** ambient name, `PATH`, by name (§12). AM-7's placement and every other AM-7 obligation are preserved. |
 | **AMD-8** *(temporal trade, named)* | R6 §5.1 "Why the probe is kept at all" (R6 lines 457–462); R6 §12.2 items 4 and 5 (R6 §12.2); R6 §14 **D-6** (R6 line 1747); R6 §14 **OC-3** (R6 line 1749); R6 §17 item 2 text (R6 line 1825); R6 header/Status lines "Implementation additionally blocked on OC-3" (R6 lines 29–30, Status block). | Executability of the Node/Pi pair is learned at L14/L15, after consumption and after the credential read — accepted **by name** (§13). OC-3 is **closed by removal** (§14). D-6 is **withdrawn** (it had no object once no `--version` runs). |
-| **AMD-9** *(remote-form `PATH` entries)* | R6 §5 P1 row's entry filter "skip empty or non-absolute entries" (R6 line 312) — **extended, not weakened**. | Because the gate now claims "no child process" and "network-free" without qualification about a child, the filesystem is P's only remaining channel. P1 therefore **refuses resolution** (`PI_RESOLUTION_FAILED`) on reaching, **before** its candidate is found, any `PATH` entry whose lexical form is UNC (`\\server\share…`) or a Win32 device/namespace path (`\\?\…`, `\\.\…`) — decided lexically, with **zero** filesystem calls on it. Separable: striking AMD-9 changes nothing else here, but then §12's network claim must be restated with the qualification in §12.3. |
 
 ### 3.2 Superseded R6 minimum-suite rows and review text (details in §16)
 
@@ -171,8 +170,7 @@ Preserved **unchanged**, by reference:
   never executed, anchoring the two AR2 layouts; every lexical component
   inspected no-follow before use; containment checked on the **lexical** form
   and on the realpath'd destination; realpath only to confirm, never to launder;
-  **first candidate only**; both §7.2 identities captured in memory. (AMD-9 adds
-  one lexical refusal; it removes nothing.)
+  **first candidate only**; both §7.2 identities captured in memory.
 - **R6 §5 P2**: every key of the table, never a subset; no-follow at every
   component; regular file; bounded size; one-handle digest; compare; only
   pinned relative keys ever rendered. Its warning that a 20-file digest walk is
@@ -239,7 +237,7 @@ interface can make P execute anything, and a double cannot reorder P.
 | Stage | Action | Executes anything? | Anticipated failure → `pi_identity_failure_code` |
 |---|---|---|---|
 | **P0 inputs** | Exactly one ambient name, `PATH`, read **by name** from the explicit mapping. No iteration, no other name (`SystemRoot` is no longer read). The checkout root, derived from the executing CFG1 package's own location (as G6 proves), for containment refusal only. | no | — |
-| **P1 resolve + capture** | Exactly R6 §5 P1 (preserved, §4), plus **AMD-9**: before a candidate is found, an entry whose lexical form begins `\\` (UNC, `\\?\`, `\\.\`) refuses resolution outright, with no filesystem call on it. Captures in memory: lexical `node.exe` path; lexical package-root path; lexical `<root>\dist\cli.js`; the §7.2 identity of `node.exe` (**Iₙ**); the §7.2 identity of the package root (**Iᵣ**). | no | `PI_RESOLUTION_FAILED` |
+| **P1 resolve + capture** | Exactly R6 §5 P1 (preserved, §4; no resolution rule is added or changed). Captures in memory: lexical `node.exe` path; lexical package-root path; lexical `<root>\dist\cli.js`; the §7.2 identity of `node.exe` (**Iₙ**); the §7.2 identity of the package root (**Iᵣ**). | no | `PI_RESOLUTION_FAILED` |
 | **P2 complete seam proof** | Exactly R6 §5 P2 (preserved), over **all 20** keys, walked lexically from the package-root path P1 captured. Stages `pi_seam_digests_match`. | no | `PI_SEAM_UNPROVEN` |
 | **P2R final identity-consistency re-proof** | Only if P2 passed. In fixed order: (b) the package root re-proved against **Iᵣ** by §7.2 re-proof; (c) `node.exe` re-proved against **Iₙ**. No seam re-walk (§5.2). Stages nothing new: `pi_seam_digests_match` stays P2's staged `true`. | no | `PI_IDENTITY_DRIFTED_DURING_PROOF` |
 | **P-result** | Returns **one** typed result object. **Pass**: the static identity object of §10 (paths + Iₙ + Iᵣ, in memory only) and the durable family `pi_seam_digests_match = true`, `pi_identity_failure_code = null`. **Anticipated refusal**: `pi_identity_failure_code` ∈ the three codes (never `null`) and the staged `pi_seam_digests_match`; no identity object. L1 validates the object's exact shape, then commits `pi_seam_digests_match` and `pi_identity_failure_code` together — and, for a refusal, `refused_at_step`/`pre_dispatch_refusal_code` — as one sequence of plain assignments of already-validated values in which nothing can raise (R6 B14 discipline, preserved). | no | — |
@@ -406,7 +404,7 @@ PI_IDENTITY_DRIFTED_DURING_PROOF} ∪ {null}` — **three** codes.
 
 | R6 code | Fate | Reason |
 |---|---|---|
-| `PI_RESOLUTION_FAILED` | **kept** | P1 still refuses (now also on AMD-9 entries) |
+| `PI_RESOLUTION_FAILED` | **kept** | P1 still refuses |
 | `PI_SEAM_UNPROVEN` | **kept** | P2 still refuses |
 | `PI_IDENTITY_DRIFTED_BEFORE_PROBE` | **replaced** by `PI_IDENTITY_DRIFTED_DURING_PROOF` | the state survives (P2R still refuses on identity drift) but "before probe" names an event that no longer exists; its seam-byte variant is gone with P2R's seam walk (§5.2) |
 | `PI_PROBE_FAILED` | **deleted** | P3 does not exist |
@@ -594,7 +592,7 @@ statement about AR2.
 
 ---
 
-## 12. The pre-consumption gate after amendment (AMD-7, AMD-9)
+## 12. The pre-consumption gate after amendment (AMD-7)
 
 ### 12.1 What it is
 
@@ -621,14 +619,14 @@ text stays historical.
 - **non-consuming** — never calls `establish_stage_output_authority`, never
   touches `RESULTS_ROOT`, mints nothing;
 - **credential-free** — reads no ambient name but `PATH`;
-- **network-free, stated exactly** — P creates no socket and issues no network
-  protocol request of its own. Its only I/O is filesystem opens of lexical paths
-  derived from `PATH`. AMD-9 refuses the lexically recognizable remote forms
-  (UNC, `\\?\`, `\\.\`) before any open. **Residual, an operator precondition,
-  not detected:** a drive letter mapped to a remote share, or a reparse point
-  in an **ancestor** of a `PATH` entry (which R6 §5 P1 does not inspect), can
-  make the OS redirector perform network I/O to satisfy those opens. (If AMD-9
-  is struck, this bullet must additionally name UNC entries as undetected.)
+- **network, stated exactly** — P itself creates no socket and issues no network
+  protocol request. Its only I/O is read-only filesystem access to lexical paths
+  derived from `PATH`. That access may cause OS-level filesystem/redirector I/O
+  depending on operator-controlled `PATH`, drive mappings, or filesystem
+  topology. **No claim is made that the OS cannot perform network I/O while
+  servicing a filesystem open**, and no drive-type, mapping, or remote-path
+  detector is added by this amendment; P1's candidate-resolution rules are
+  exactly R6's.
 - **no stage-output authority and nothing reusable** — returns one closed code
   (pass, or one of the three P codes) and no identity object, token, digest,
   path, or timestamp. L1 re-proves from scratch.
@@ -641,7 +639,8 @@ bypasses no security invariant, because L1 (pre-credential) and L14
 
 ## 13. The named temporal trade (AMD-8)
 
-**R6 intended**, before L2 and before consumption (at the gate), to learn: that
+**R6 intended** to learn, at the pre-consumption gate and again at L1 (after
+consumption, before L2 and before the L4 credential read): that
 this `node.exe` can launch this `cli.js`, and that the running `cli.js` reports
 the pinned version.
 
@@ -653,7 +652,8 @@ learned at **L14** (process creation) or **L15** (start-up/correlation).
 **Consequence, stated without softening.** A broken `node.exe`, a Pi start-up
 failure, or a module-resolution failure in unpinned code now:
 
-1. **consumes the authorization** (it passes the gate and L1);
+1. **consumes the authorization** (it passed the pre-consumption gate; L1's
+   static proof follows consumption and passes as well);
 2. mints and populates the workspace (L2) and runs baseline verification (L3);
 3. **reads the credential and endpoint** (L4) and builds the secret context (L5);
 4. performs the **one authenticated non-inference route check** (L7) — one of
@@ -685,11 +685,16 @@ before consumption:**
   still prints `0.85.1` passes P3/P5 and then runs at L14 with the credential
   environment anyway (R6 §12.2 item 1 already said the seam proof does not make
   the probe safe). The probe's only unique detection is **accidental** breakage.
-- **It would have multiplied unbound executions.** Per admitted run, R6 would
-  execute unpinned Pi code **three** times — gate probe, L1 probe, L14 — two of
-  them before consumption, in the launcher's process tree, whose environment
-  block holds the live credential names (R6 §6's same-user honest limit). After
-  the amendment it executes **once**, at L14, the one execution the experiment
+- **It would have multiplied unbound executions.** Under R6, one Stage-1
+  execution performs **one** pre-consumption gate probe; then, after
+  consumption and before the L4 credential read, **one** L1 probe for each
+  reached run; then **one** L14 runtime execution for each reached run that gets
+  to L14 — all unpinned Pi code, in the launcher's process tree, whose
+  environment block holds the live credential names (R6 §6's same-user honest
+  limit). No fixed total is stated, because the stage may halt before all
+  ordinals are reached. The amendment removes the pre-consumption gate execution
+  and each reached run's post-consumption / pre-credential L1 execution. The
+  intended L14 runtime execution remains — the one execution the experiment
   exists to perform, immediately after the strongest re-proof.
 - **Its side effects are unprovable.** Because the first evaluated code is
   unpinned, whether `--version` reads `~/.pi/agent` settings/auth, reads
@@ -776,7 +781,7 @@ tests (AD, AG), never to P.
 
 | R6 test | Must now prove |
 |---|---|
-| **A** | L1 refusal for resolution (incl. AMD-9), seam, P2R identity drift, and `git_executable` — each separately — through the real executor and the stage-runner offline seam: mint-leaf count 0; W `NOT_ATTEMPTED`; closed lifecycle; `REFUSED_PRE_DISPATCH`; halt `PRE_DISPATCH_REFUSAL`; ordinals 2–9 `NOT_EXECUTED`; `(S, F)` per §8.2 and `S ∈ Allowed(F)`; `C == OFFLINE_PREFLIGHT_FAILED` throughout; Git case `F == null ∧ S == true`; **process-creation tripwire count 0** in every case; v2 validates. |
+| **A** | L1 refusal for resolution, seam, P2R identity drift, and `git_executable` — each separately — through the real executor and the stage-runner offline seam: mint-leaf count 0; W `NOT_ATTEMPTED`; closed lifecycle; `REFUSED_PRE_DISPATCH`; halt `PRE_DISPATCH_REFUSAL`; ordinals 2–9 `NOT_EXECUTED`; `(S, F)` per §8.2 and `S ∈ Allowed(F)`; `C == OFFLINE_PREFLIGHT_FAILED` throughout; Git case `F == null ∧ S == true`; **process-creation tripwire count 0** in every case; v2 validates. |
 | **D** | P2 failures (mismatch, missing file, reparse component, non-regular, oversize, and a `package.json` from another release): credential resolver, route observer counts 0; tripwire count 0; `S == false`, `F == PI_SEAM_UNPROVEN`; record carries no `pi_observed_version` / `pi_version_probe_attempted` key. |
 | **F** | P reads **only** `PATH`: an access-recording mapping holding decoys for every excluded name (incl. `SystemRoot`, `NODE_OPTIONS`, `PI_QUALIFICATION_B300_ROUTE_KEY`, `AIDO_LITELLM_API_KEY`, `AIDO_LITELLM_BASE_URL`, `AWS_SECRET_ACCESS_KEY`) records exactly one lookup, of `PATH`, for both the gate and L1; no mapping iteration. (The child-side assertions are deleted — there is no child.) |
 | **G** | Unexpected raise at L2, L5, L9, L10, L11, L14, L18 (post-write), L20 — unchanged — and inside P at: before P1 completes; after P1, before P2 completes; after P2, before P2R completes; after P2R, during result construction or shape validation; after P's commit (Git resolution). Inside P: REFUSAL mode, `C = UNEXPECTED_STEP_FAILURE`, `F == null`, `S == false` for the first four boundaries and `S == true` after the commit; the v2 validator run on the serialized record alone accepts each; tripwire count 0 for every L1 case. |
@@ -789,11 +794,7 @@ tests (AD, AG), never to P.
 ### 16.3 Unchanged (still minimum requirements)
 
 **B, C, I, J** (extended below), **L, N, P** (extended below), **Q, R, T, W, X,
-Y, Z** — exactly as R6 §11. **J** additionally: a UNC entry, a `\\?\` entry and
-a `\\.\` entry, each placed before the entry holding the candidate, refuse
-`PI_RESOLUTION_FAILED` with **zero** filesystem calls on that entry (recording
-leaf); the same entries placed after the candidate's entry are never reached.
-**L** additionally: P's injectable leaf set contains no process-creation or
+Y, Z** — exactly as R6 §11. **J** unchanged from R6 §11 (no remote-form case is added). **L** additionally: P's injectable leaf set contains no process-creation or
 environment-builder leaf (asserted structurally). **P** additionally: call-order
 recording of the L14 re-proof order.
 
@@ -920,12 +921,10 @@ L16-FU2 R2 + ERR1 (no version dependency); the refusal and stage-closure records
    with a stop-and-return rule. The alternative — constructing
    `RuntimeIdentity` — would require a `reported_version` value, which is
    exactly the misleading claim item 10 forbids.
-6. *"AMD-9 is scope growth."* It is the one rule beyond the reviewer's explicit
-   list. It exists because the amended gate newly claims "no child process" and
-   "network-free" without a child-based qualification, leaving the filesystem as
-   P's only channel; it is lexical, fail-closed, removes nothing, and is
-   separable (§3.1, §12.3). Mapped drives and ancestor reparse points remain an
-   operator precondition — stated, not detected, not claimed.
+6. *"The gate's network statement overclaims."* It does not: §12.3 states only
+   that P itself creates no socket and issues no network protocol request, and
+   expressly makes no claim about OS-level filesystem/redirector I/O. No
+   detector is added.
 7. *"The tripwire can be bypassed by `ctypes`."* Yes for the dynamic tripwire,
    which is why Test AA adds a static AST audit of the P/gate/leaf modules.
    Neither claims anything about a same-user process outside AIDO.
@@ -987,7 +986,6 @@ AMD-6  FIRST Node/Pi/JavaScript execution = L14 launch(), after full re-proof
        (20 seams → root identity → node.exe identity); CFG1 static identity object, no version
 AMD-7  gate reads PATH only
 AMD-8  temporal trade NAMED: executability learned at L14/L15, after consumption and L4
-AMD-9  UNC / \\?\ / \\.\ PATH entries refuse resolution lexically (separable)
 OC-3 CLOSED BY REMOVAL (on acceptance).  D-6 WITHDRAWN.  OC-2 OPEN as L14 runtime residual.
 v1 archived semantics UNCHANGED.  CFG1-S1-A3 CONSUMED.  A4 / Stage 2 NOT AUTHORIZED.
 NO IMPLEMENTATION AUTHORITY GRANTED.
