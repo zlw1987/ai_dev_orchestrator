@@ -23,6 +23,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from cfg1_issuance_cleanup import discard_config_for_test, discard_extension_for_test
 from cfg1_doubles import FakeSupervisor, build_doubled_ports, seam_digests_all_match
 from cfg1_fu1_support import HandleLog as _HandleLog
 from cfg1_fu1_support import make_admission
@@ -465,7 +466,7 @@ def test_w_every_unperturbed_arm_passes_step_9a(arm_id, workspace):
         )
         assert hashlib.sha256(canonical).hexdigest() == ARM_REDACTED_DIGEST[arm_id]
     finally:
-        config_issuance.discard_config_issuance(generated.issuance_token)
+        discard_config_for_test(generated.issuance_token)
 
 
 # ---------------------------------------------------------------------------
@@ -508,7 +509,7 @@ def test_r_a_successful_tree_is_byte_identical_to_the_frozen_writers_output(
             assert (ours / name).read_bytes() == (Path(reference.extension_dir) / name).read_bytes(), name
         assert record.entry_path == str(ours / "index.ts")
     finally:
-        extension_issuance.discard_extension_issuance(generated.issuance_token)
+        discard_extension_for_test(generated.issuance_token)
 
 
 def _inject_extension_fault(point: str, monkeypatch):
@@ -916,7 +917,7 @@ def test_z2_and_z5_sources_are_read_once_and_later_edits_never_reach_disk(
         for name, (_size, digest) in TEST_OWNED_SOURCE_PINS.items():
             assert recorded[name] == digest
     finally:
-        extension_issuance.discard_extension_issuance(generated.issuance_token)
+        discard_extension_for_test(generated.issuance_token)
 
 
 @pytest.mark.parametrize("shape", ["directory", "symlink", "oversize"])
@@ -995,7 +996,7 @@ def test_z4_the_golden_vector_is_reproduced_on_disk_by_the_genuine_writer(worksp
         )
         assert dict(record.child_sha256)["ar2_config.ts"] == GOLDEN_ON_DISK_SHA256
     finally:
-        extension_issuance.discard_extension_issuance(generated.issuance_token)
+        discard_extension_for_test(generated.issuance_token)
 
 
 def test_z_the_pin_module_is_loaded_by_the_audited_executor_lineage():
@@ -1059,7 +1060,7 @@ def test_am10_a_config_interval_cannot_mint_extension_provenance(workspace, monk
 
     monkeypatch.setattr(win, "prove_config_parentage", _prove)
     generated = write_cfg1_pi_config(workspace, arm_id="Q", base_url=SYNTHETIC_BASE_URL)
-    config_issuance.discard_config_issuance(generated.issuance_token)
+    discard_config_for_test(generated.issuance_token)
     assert attempts["extension_from_config"] == "GENERATION_INTERVAL_KIND_MISMATCH"
 
 
@@ -1078,6 +1079,6 @@ def test_am10_an_extension_interval_cannot_mint_config_provenance(workspace, mon
 
     monkeypatch.setattr(win, "prove_config_parentage", _prove)
     generated = _write_extension(workspace)
-    extension_issuance.discard_extension_issuance(generated.issuance_token)
+    discard_extension_for_test(generated.issuance_token)
     assert attempts["config_from_extension"] == "GENERATION_INTERVAL_KIND_MISMATCH"
     assert win.held_interval_count() == 0

@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 
 import pytest
+from cfg1_issuance_cleanup import discard_config_for_test
 from cfg1_builders import happy_observations
 from cfg1_doubles import SYNTHETIC_BASE_URL, SYNTHETIC_CREDENTIAL, build_doubled_ports
 from conftest import make_directory_redirect, make_file_symlink
@@ -343,7 +344,7 @@ def test_finding2_post_issuance_directory_redirect_is_refused(tmp_path, git_exec
         # The redirected path is no longer a genuine, removable CFG1 tree
         # member; only discard the in-memory records so the run-workspace
         # itself can still be torn down cleanly.
-        config_issuance.discard_config_issuance(config.issuance_token)
+        discard_config_for_test(config.issuance_token)
         run_workspace.discard_cfg1_run_workspace(workspace)
         try:
             os.unlink(config.config_dir)

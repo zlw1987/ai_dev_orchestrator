@@ -18,6 +18,7 @@ import dataclasses
 import inspect
 
 import pytest
+from cfg1_issuance_cleanup import discard_config_for_test
 from cfg1_doubles import SYNTHETIC_BASE_URL, SYNTHETIC_CREDENTIAL, FakeBroker, build_doubled_ports
 
 from pi_harness_cfg1 import classification, config_issuance, lifecycle, run_executor, run_workspace
@@ -221,7 +222,7 @@ def test_f2_environment_builder_ignores_a_mutated_config_dir_field(tmp_path, git
         assert built.environment["PI_CODING_AGENT_DIR"] != str(foreign)
         assert built.pi_config_dir == genuine_config_dir
     finally:
-        config_issuance.discard_config_issuance(config.issuance_token)
+        discard_config_for_test(config.issuance_token)
         run_workspace.remove_cfg1_run_workspace(workspace)
 
 
@@ -263,7 +264,7 @@ def test_f2_environment_builder_refuses_a_freshly_built_config_with_substituted_
         # directory is ever used -- never anything from `substituted` itself.
         assert built.environment["PI_CODING_AGENT_DIR"] == genuine_config_dir
     finally:
-        config_issuance.discard_config_issuance(genuine.issuance_token)
+        discard_config_for_test(genuine.issuance_token)
         run_workspace.remove_cfg1_run_workspace(workspace)
 
 

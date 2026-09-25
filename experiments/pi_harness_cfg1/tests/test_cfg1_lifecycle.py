@@ -727,10 +727,8 @@ def test_t12_the_child_environment_refuses_a_config_it_cannot_re_prove(
     git_executable,
 ):
     from pi_harness_cfg1.cfg1_pi_config import write_cfg1_pi_config
-    from pi_harness_cfg1.config_issuance import (
-        ConfigIssuanceError,
-        discard_config_issuance,
-    )
+    from cfg1_issuance_cleanup import discard_config_for_test as discard_config_issuance
+    from pi_harness_cfg1.config_issuance import ConfigIssuanceError
     from pi_harness_cfg1.environment import build_cfg1_child_environment
 
     workspace, _built = run_workspace.mint_cfg1_run_workspace(
@@ -757,7 +755,7 @@ def test_t12_a_blank_credential_carrier_is_refused_rather_than_silently_launched
     git_executable,
 ):
     from pi_harness_cfg1.cfg1_pi_config import write_cfg1_pi_config
-    from pi_harness_cfg1.config_issuance import discard_config_issuance
+    from cfg1_issuance_cleanup import discard_config_for_test as discard_config_issuance
     from pi_harness_cfg1.environment import (
         Cfg1EnvironmentPolicyError,
         build_cfg1_child_environment,

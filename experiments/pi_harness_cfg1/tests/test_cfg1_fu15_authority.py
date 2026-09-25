@@ -28,6 +28,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from cfg1_issuance_cleanup import discard_config_for_test
 
 from pi_harness_cfg1 import cfg1_pi_config, config_issuance, run_workspace
 from pi_harness_cfg1 import win_config_authority as win
@@ -157,7 +158,7 @@ def test_t142_matched_control_the_genuine_root_proceeds(workspace):
     generated = write_cfg1_pi_config(workspace, arm_id="Q", base_url=SYNTHETIC_BASE_URL)
     assert Path(generated.models_path).exists()
     assert win.held_pin_count() == 0
-    config_issuance.discard_config_issuance(generated.issuance_token)
+    discard_config_for_test(generated.issuance_token)
 
 
 # ---------------------------------------------------------------------------
@@ -227,7 +228,7 @@ def test_t143_matched_positive_control_a_genuine_directory_reports_no_reparse(
     # And end to end: L9 gets past step 4 and completes.
     generated = write_cfg1_pi_config(workspace, arm_id="Q", base_url=SYNTHETIC_BASE_URL)
     assert Path(generated.settings_path).exists()
-    config_issuance.discard_config_issuance(generated.issuance_token)
+    discard_config_for_test(generated.issuance_token)
 
 
 # ---------------------------------------------------------------------------
@@ -554,7 +555,7 @@ def test_t148_no_pathname_open_of_either_config_path_occurs_inside_l9(
         assert Path(generated.settings_path).read_bytes()
         assert Path(generated.models_path).read_bytes()
     finally:
-        config_issuance.discard_config_issuance(generated.issuance_token)
+        discard_config_for_test(generated.issuance_token)
 
 
 def test_t148_the_finalization_digest_comes_from_the_held_descriptor(workspace):
@@ -574,7 +575,7 @@ def test_t148_the_finalization_digest_comes_from_the_held_descriptor(workspace):
         assert record.models_identity == probe.file_identity(generated.models_path)
         assert record.settings_identity == probe.file_identity(generated.settings_path)
     finally:
-        config_issuance.discard_config_issuance(generated.issuance_token)
+        discard_config_for_test(generated.issuance_token)
 
 
 # ---------------------------------------------------------------------------
@@ -613,7 +614,7 @@ def test_t149_arm_q_bytes_are_unchanged_by_the_descriptor_writer(workspace, tmp_
         i2_issuance._discard_issuance(
             token=frozen.authority_token, config_dir=frozen.config_dir
         )
-        config_issuance.discard_config_issuance(generated.issuance_token)
+        discard_config_for_test(generated.issuance_token)
 
 
 # ---------------------------------------------------------------------------
@@ -654,7 +655,7 @@ def test_t150_the_success_path_releases_both_pins_config_directory_first(
 ):
     order = _release_order_spy(monkeypatch)
     generated = write_cfg1_pi_config(workspace, arm_id="Q", base_url=SYNTHETIC_BASE_URL)
-    config_issuance.discard_config_issuance(generated.issuance_token)
+    discard_config_for_test(generated.issuance_token)
     assert order == ["config", "root"]
     assert win.held_pin_count() == 0
     assert win.held_child_count() == 0
@@ -1163,7 +1164,7 @@ def test_t154_r_window_substitution_wins_and_l9_neither_detects_nor_refuses_it(
         ) is True
         assert Path(generated.models_path).read_bytes() == b""
     finally:
-        config_issuance.discard_config_issuance(generated.issuance_token)
+        discard_config_for_test(generated.issuance_token)
 
     # And L27's removal reaches the substituted directory: root-namespace
     # teardown authority covers a descendant CFG1 did not itself create
@@ -1213,7 +1214,7 @@ def test_t155_the_issuance_record_binds_the_config_and_both_child_identities(
         assert record.settings_identity == probe.file_identity(generated.settings_path)
         assert record.models_identity == probe.file_identity(generated.models_path)
     finally:
-        config_issuance.discard_config_issuance(generated.issuance_token)
+        discard_config_for_test(generated.issuance_token)
 
 
 def test_t155_a_same_name_same_bytes_replacement_is_untouched_and_never_unlinked(
@@ -1331,7 +1332,7 @@ def test_t155_a_genuine_parentage_proof_cannot_be_paired_with_other_children(
 
     monkeypatch.setattr(win, "prove_config_parentage", _prove)
     generated = write_cfg1_pi_config(workspace, arm_id="Q", base_url=SYNTHETIC_BASE_URL)
-    config_issuance.discard_config_issuance(generated.issuance_token)
+    discard_config_for_test(generated.issuance_token)
 
     # The proof is retired with L9, so it is not even re-presentable.
     with pytest.raises(win.Cfg1DirectoryAuthorityError) as excinfo:
@@ -1520,7 +1521,7 @@ def test_t155_the_scrub_never_follows_a_redirect_and_refuses_malformed_authority
     try:
         os.symlink(str(victim), generated.models_path)
     except (OSError, NotImplementedError):
-        config_issuance.discard_config_issuance(generated.issuance_token)
+        discard_config_for_test(generated.issuance_token)
         pytest.skip("this platform grants no unprivileged file-symlink creation")
 
     # L24 never resolves the name, so the redirect is never followed: the

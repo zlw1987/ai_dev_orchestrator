@@ -45,6 +45,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from cfg1_issuance_cleanup import discard_config_for_test
 
 from pi_harness_cfg1 import cfg1_pi_config, config_issuance, run_workspace
 from pi_harness_cfg1 import win_config_authority as win
@@ -378,7 +379,7 @@ def test_fu4_2_no_supported_callable_sequence_mints_a_generation_interval(worksp
                     win.close_child_quietly(win.ExclusiveChild(nonce))
                 assembled.release()
                 for token in list(config_issuance._ISSUED):
-                    config_issuance.discard_config_issuance(token)
+                    discard_config_for_test(token)
 
     # The sweep really covered the surface, rather than silently covering none.
     assert len(swept) >= 50, swept
@@ -436,6 +437,10 @@ def test_fu4_2_no_supported_callable_sequence_mints_a_generation_interval(worksp
         "pi_harness_cfg1.win_config_authority.retained_kind",
         "pi_harness_cfg1.win_config_authority.retained_kind_is_valid",
         "pi_harness_cfg1.win_config_authority.scrub_retire_retained",
+        # FU1-AUTH-1 addition: the private projection takes a REQUIRED private
+        # registry record (``record``) that no supported caller can hold; they
+        # mints nothing and exists so verification returns no retained authority.
+        "pi_harness_cfg1.config_issuance._project",
         "pi_harness_cfg1.config_issuance.reclaim_config_issuance",
         "pi_harness_cfg1.win_config_authority._require_typed_provenance",
         "pi_harness_cfg1.win_config_authority.read_regular_file_once",
@@ -576,7 +581,7 @@ def test_fu4_2_the_successful_generator_returns_no_authority_object_at_all(
             assert type(getattr(generated, slot)) not in authority_types
         assert "interval" not in repr(generated)
     finally:
-        config_issuance.discard_config_issuance(generated.issuance_token)
+        discard_config_for_test(generated.issuance_token)
 
 
 # ---------------------------------------------------------------------------
@@ -708,7 +713,7 @@ def test_fu4_5_the_genuine_generator_still_produces_one_consumable_issuance(
         assert Path(record.models_path).read_bytes() == b""
         assert Path(record.settings_path).read_bytes() != b""
     finally:
-        config_issuance.discard_config_issuance(generated.issuance_token)
+        discard_config_for_test(generated.issuance_token)
 
 
 # ---------------------------------------------------------------------------
@@ -758,7 +763,7 @@ def test_fu4_6_authority_from_one_interval_cannot_be_mixed_with_another(
         generated = write_cfg1_pi_config(
             workspace, arm_id="Q", base_url=SYNTHETIC_BASE_URL
         )
-        config_issuance.discard_config_issuance(generated.issuance_token)
+        discard_config_for_test(generated.issuance_token)
 
         # (1) proof A + children B. L9 retires its proof on the way out, so the
         # combination is refused one step earlier still: the proof is not even
@@ -863,7 +868,7 @@ def test_fu4_6_a_live_interval_refuses_to_absorb_caller_assembled_authority(
 
     monkeypatch.setattr(win, "prove_config_parentage", _prove)
     generated = write_cfg1_pi_config(workspace, arm_id="Q", base_url=SYNTHETIC_BASE_URL)
-    config_issuance.discard_config_issuance(generated.issuance_token)
+    discard_config_for_test(generated.issuance_token)
 
     assert outcomes == {
         "subclassed_interval": "NOT_AN_OPEN_GENERATION_INTERVAL",
@@ -933,7 +938,7 @@ def test_fu4_7_mutating_or_rebinding_an_authority_object_adds_no_authority(
             config_issuance.verify_config_issuance(token="0" * 32, workspace=workspace)
         assert excinfo.value.reason_code == "UNKNOWN_ISSUANCE_TOKEN"
     finally:
-        config_issuance.discard_config_issuance(generated.issuance_token)
+        discard_config_for_test(generated.issuance_token)
     assert record is not None
 
 
@@ -964,7 +969,7 @@ def test_fu4_7_a_completed_generation_cannot_be_issued_against_twice(
         assert excinfo.value.reason_code == "ISSUANCE_PROVENANCE_NOT_PROVEN"
         assert config_issuance.issued_token_count() == 1
     finally:
-        config_issuance.discard_config_issuance(generated.issuance_token)
+        discard_config_for_test(generated.issuance_token)
 
 
 # ---------------------------------------------------------------------------
@@ -1284,7 +1289,7 @@ def test_fu4_fu1_3_a_successful_generation_still_leaves_exactly_one_active_issua
         )
         assert built.pi_config_dir == record.config_dir
     finally:
-        config_issuance.discard_config_issuance(generated.issuance_token)
+        discard_config_for_test(generated.issuance_token)
 
 
 def test_fu4_fu1_4_rollback_retires_exactly_the_failed_issuance(
@@ -1332,12 +1337,12 @@ def test_fu4_fu1_4_rollback_retires_exactly_the_failed_issuance(
             for child in stranded_children:
                 real_close_child(child)
     finally:
-        config_issuance.discard_config_issuance(generated_a.issuance_token)
+        discard_config_for_test(generated_a.issuance_token)
         run_workspace.discard_cfg1_run_workspace(handle_a)
         shutil.rmtree(handle_a.experiment_root, ignore_errors=True)
 
 
-def test_fu4_fu2_1_discard_config_issuance_is_the_exact_local_idempotent_retirement_primitive(
+def test_fu4_fu2_1_test_only_discard_removes_only_the_named_token_and_is_idempotent(
     workspace, git_executable, filesystem_spy
 ):
     """FU4-FU2. Pin the retirement primitive's actual boundary MECHANICALLY,
@@ -1349,7 +1354,7 @@ def test_fu4_fu2_1_discard_config_issuance_is_the_exact_local_idempotent_retirem
     with a throwing stand-in is exactly that class of manipulation, not a
     supported runtime failure L9 must defend against.
 
-    Proves, from the real :func:`config_issuance.discard_config_issuance`,
+    Proves, from the TEST-ONLY discard helper (production has none, FU1-AUTH-2),
     never a stand-in: it accepts the exact genuine token; it removes ONLY
     that token, never an unrelated one; repeated retirement is harmless; a
     guessed or malformed token mutates nothing; and its actual source is
@@ -1361,27 +1366,6 @@ def test_fu4_fu2_1_discard_config_issuance_is_the_exact_local_idempotent_retirem
     test outright rather than merely go unasserted; ``filesystem_spy`` proves
     the filesystem half the same mechanical way.
     """
-    # The exact, complete source: a type guard and one dict pop, nothing
-    # else -- no import, no I/O call, no branch this test has not accounted
-    # for. Whitespace-normalized so reformatting alone cannot break it, but
-    # any ADDED statement, call, or dependency changes this string.
-    #
-    # AMEND2 (Y6) amended this from "one dict pop" to "one dict pop, then the
-    # single handle-bound retirement of the record's retained authority": a
-    # pure pop would STRAND the retained handle. So the source is checked
-    # structurally -- the only calls in it are ``type``, the registry ``pop``
-    # and ``win.scrub_retire_retained`` -- which still admits no pathname,
-    # filesystem, network, subprocess or model call.
-    import ast
-    import textwrap
-
-    tree = ast.parse(textwrap.dedent(inspect.getsource(config_issuance.discard_config_issuance)))
-    called = sorted(
-        ast.unparse(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)
-    )
-    assert called == ["_ISSUED.pop", "type", "win.scrub_retire_retained"]
-    assert not any(isinstance(node, (ast.Import, ast.ImportFrom)) for node in ast.walk(tree))
-
     generated_a = write_cfg1_pi_config(workspace, arm_id="Q", base_url=SYNTHETIC_BASE_URL)
     handle_b, _built_b = run_workspace.mint_cfg1_run_workspace(
         git_executable=git_executable
@@ -1402,7 +1386,7 @@ def test_fu4_fu2_1_discard_config_issuance_is_the_exact_local_idempotent_retirem
                 len(filesystem_spy.rename_calls),
                 len(filesystem_spy.truncate_calls),
             )
-            config_issuance.discard_config_issuance(token)
+            discard_config_for_test(token)
             after = (
                 len(filesystem_spy.mkdir_calls),
                 len(filesystem_spy.open_calls),
@@ -1450,7 +1434,7 @@ def test_fu4_fu2_1_discard_config_issuance_is_the_exact_local_idempotent_retirem
         )
         assert record_b_again.settings_sha256 == record_b.settings_sha256
     finally:
-        config_issuance.discard_config_issuance(generated_b.issuance_token)
+        discard_config_for_test(generated_b.issuance_token)
         run_workspace.discard_cfg1_run_workspace(handle_b)
         shutil.rmtree(handle_b.experiment_root, ignore_errors=True)
 
@@ -1467,7 +1451,7 @@ def test_fu4_9_no_provenance_refusal_carries_a_path_handle_or_nonce(
     live: dict[str, object] = {}
     _capture_live_generation(monkeypatch, live)
     generated = write_cfg1_pi_config(workspace, arm_id="Q", base_url=SYNTHETIC_BASE_URL)
-    config_issuance.discard_config_issuance(generated.issuance_token)
+    discard_config_for_test(generated.issuance_token)
 
     config_dir = _expected_config_dir(workspace)
     shutil.rmtree(config_dir, ignore_errors=True)
@@ -1565,4 +1549,4 @@ def test_fu4_the_issuance_boundary_still_asks_only_what_it_claims_to_ask(
         assert Path(record.models_path).read_bytes() == original_bytes
         assert os.stat(record.models_path).st_ino == replacement.st_ino
     finally:
-        config_issuance.discard_config_issuance(generated.issuance_token)
+        discard_config_for_test(generated.issuance_token)

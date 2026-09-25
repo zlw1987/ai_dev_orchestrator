@@ -33,6 +33,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from cfg1_issuance_cleanup import discard_config_for_test, discard_extension_for_test
 from cfg1_doubles import FakeSupervisor, build_doubled_ports, seam_digests_all_match
 from cfg1_fu1_support import HandleLog, make_admission
 
@@ -133,9 +134,9 @@ class _Target:
 
     def discard(self, token) -> None:
         if self.config:
-            config_issuance.discard_config_issuance(token)
+            discard_config_for_test(token)
         else:
-            extension_issuance.discard_extension_issuance(token)
+            discard_extension_for_test(token)
 
     def issued(self) -> int:
         return (
@@ -1030,9 +1031,9 @@ def test_y19_repeated_cleanup_is_false_with_zero_io(target, monkeypatch):
     assert target.scrub(token) is False
     assert reopens == []
     if target.config:
-        assert config_issuance.discard_config_issuance(token) is False
+        assert discard_config_for_test(token) is False
     else:
-        assert extension_issuance.discard_extension_issuance(token) is False
+        assert discard_extension_for_test(token) is False
     module = config_issuance if target.config else extension_issuance
     reclaim = module.reclaim_config_issuance if target.config else module.reclaim_extension_issuance
     assert reclaim(object()) is False
@@ -1246,8 +1247,8 @@ def test_malformed_values_at_every_new_boundary_are_refused(bad, target):
         assert win.scrub_child_through_creating_handle(bad) is False
         assert config_issuance.reclaim_config_issuance(bad) is False
         assert extension_issuance.reclaim_extension_issuance(bad) is False
-        assert config_issuance.discard_config_issuance(bad) is False
-        assert extension_issuance.discard_extension_issuance(bad) is False
+        assert discard_config_for_test(bad) is False
+        assert discard_extension_for_test(bad) is False
         with pytest.raises(win.Cfg1DirectoryAuthorityError):
             win.retained_identity(bad)
         assert win.retained_kind_is_valid(bad) is False

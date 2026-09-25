@@ -82,9 +82,8 @@ class ExtensionIssuanceError(Exception):
 
 @dataclass(frozen=True)
 class _ExtensionIssuanceRecord:
-    """One process-local extension issuance fact. Never leaves this module
-    except as the read-only verified view :func:`verify_extension_issuance`
-    returns to L14, L15 and L24."""
+    """One process-local extension issuance fact. Never leaves this module;
+    :func:`verify_extension_issuance` returns a projection without ``retained``."""
 
     run_workspace_nonce: str = field(repr=False)
     extension_dir: str = field(repr=False)
@@ -105,6 +104,45 @@ class _ExtensionIssuanceRecord:
 
     def __repr__(self) -> str:  # noqa: D105 - paths are never rendered
         return f"{type(self).__name__}(<bound>)"
+
+
+@dataclass(frozen=True)
+class VerifiedExtensionIssuance:
+    """The non-authority facts L14, L15 and L24 may see (FU1-AUTH-1).
+
+    No ``retained`` field, nonce or handle: the retained authority never leaves
+    this module through a verification return (AMEND2 RA-4/RA-5).
+    """
+
+    run_workspace_nonce: str = field(repr=False)
+    extension_dir: str = field(repr=False)
+    entry_path: str = field(repr=False)
+    config_path: str = field(repr=False)
+    child_paths: tuple[tuple[str, str], ...] = field(repr=False)
+    extension_dir_identity: tuple[int, int] = field(repr=False)
+    child_identities: tuple[tuple[str, tuple[int, int]], ...] = field(repr=False)
+    child_sha256: tuple[tuple[str, str], ...] = field(repr=False)
+
+    @property
+    def config_identity(self) -> tuple[int, int]:
+        """The issued ``ar2_config.ts`` identity, as recorded at registration."""
+        return dict(self.child_identities)[GENERATED_CONFIG_NAME]
+
+    def __repr__(self) -> str:  # noqa: D105 - paths are never rendered
+        return f"{type(self).__name__}(<bound>)"
+
+
+def _project(record: _ExtensionIssuanceRecord) -> VerifiedExtensionIssuance:
+    return VerifiedExtensionIssuance(
+        run_workspace_nonce=record.run_workspace_nonce,
+        extension_dir=record.extension_dir,
+        entry_path=record.entry_path,
+        config_path=record.config_path,
+        child_paths=record.child_paths,
+        extension_dir_identity=record.extension_dir_identity,
+        child_identities=record.child_identities,
+        child_sha256=record.child_sha256,
+    )
 
 
 #: token -> record. Process-local, in-memory only.
@@ -238,7 +276,7 @@ def _require_not_redirected(path: str) -> os.stat_result:
     return lexical
 
 
-def verify_extension_issuance(*, token: str, workspace: Cfg1RunWorkspace) -> _ExtensionIssuanceRecord:
+def verify_extension_issuance(*, token: str, workspace: Cfg1RunWorkspace) -> VerifiedExtensionIssuance:
     """Re-prove the issuance at a consumption boundary (L14, L15, L24). Fresh each time.
 
     Every path is re-derived from ``workspace`` -- never read from a
@@ -249,6 +287,9 @@ def verify_extension_issuance(*, token: str, workspace: Cfg1RunWorkspace) -> _Ex
     re-digested while it is still present (after L24's scrub it is zero-length,
     but no consumer verifies after L24: the entry is gone by then).
     Residual, stated not closed: the check->use sliver after this re-digest.
+
+    Returns a :class:`VerifiedExtensionIssuance`, never the registry record, so
+    no retained authority is reachable through the result (FU1-AUTH-1).
     """
     if type(token) is not str or not token:
         raise ExtensionIssuanceError("MALFORMED_ISSUANCE_TOKEN")
@@ -281,7 +322,7 @@ def verify_extension_issuance(*, token: str, workspace: Cfg1RunWorkspace) -> _Ex
                 raise ExtensionIssuanceError("EXTENSION_CONTENT_MISMATCH")
     except OSError as exc:
         raise ExtensionIssuanceError("GENERATED_FILES_UNREADABLE") from exc
-    return record
+    return _project(record)
 
 
 def reclaim_extension_issuance(retained: object) -> bool:
@@ -326,20 +367,10 @@ def scrub_extension_issuance(*, token: object, workspace: object) -> bool:
     return win.scrub_retire_retained(record.retained)
 
 
-def discard_extension_issuance(token: object) -> bool:
-    """Retire one extension issuance for cleanup, scrubbing rather than popping.
-
-    A pure pop would strand the retained handle (RA-6). No L24 ownership check;
-    idempotent, and an unknown token does nothing and returns ``False``.
-    """
-    if type(token) is not str:
-        return False
-    record = _ISSUED_EXTENSIONS.pop(token, None)
-    if record is None:
-        return False
-    return win.scrub_retire_retained(record.retained)
-
-
 def issued_extension_token_count() -> int:
     """How many extension issuances are still registered (Sec. 19.1 item 4)."""
     return len(_ISSUED_EXTENSIONS)
+
+
+# FU1-AUTH-2: no token-only retirement exists here either; see
+# :func:`scrub_extension_issuance` and :func:`reclaim_extension_issuance`.

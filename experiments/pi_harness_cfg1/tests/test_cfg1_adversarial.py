@@ -41,6 +41,7 @@ import os
 from pathlib import Path
 
 import pytest
+from cfg1_issuance_cleanup import discard_config_for_test
 from cfg1_builders import happy_observations, run_payload, synthetic_run_executor
 from qualification.safety import ArtifactSafetyContext
 
@@ -337,7 +338,7 @@ def test_finding_f_the_l24_scrub_is_handle_bound_and_never_name_bound(tmp_path):
     for token in (str(outside), str(owned / ".." / "not_ours.txt"), str(owned), "", None, 0):
         assert config_issuance.scrub_config_issuance(token=token, workspace=object()) is False
         assert extension_issuance.scrub_extension_issuance(token=token, workspace=object()) is False
-        assert config_issuance.discard_config_issuance(token) is False
+        assert discard_config_for_test(token) is False
     assert win.scrub_retire_retained(str(outside)) is False
     assert outside.read_text(encoding="utf-8") == "precious"
     assert inside.read_text(encoding="utf-8") == "{}"

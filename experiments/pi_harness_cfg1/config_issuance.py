@@ -55,13 +55,13 @@ still left that issuance ACTIVE in this registry, even though
 never left that routine, so no caller could present it -- but the registry
 FACT itself was still live, which is a state this module's own contract
 (Sec. 19.1 item 4) does not distinguish from a genuinely durable issuance.
-:func:`discard_config_issuance` is now called by L9's own ``finally`` whenever
+:func:`reclaim_config_issuance` (keyed by the private retained authority, never a token) is now called by L9's own ``finally`` whenever
 a registration it just made is about to be followed by a raise, so retirement
 is transactional with the generation: an ACTIVE record here is now also a
 statement that the generation which minted it reached its own successful
 *return*, never merely that it reached registration.
 
-**CFG1-IMPL-FU4-FU2.** :func:`discard_config_issuance` itself is a local,
+**CFG1-IMPL-FU4-FU2.** :func:`reclaim_config_issuance` itself is a local,
 in-process registry pop with no filesystem, network, subprocess, model or
 handle dependency, and it is idempotent by construction -- there is no
 supported runtime failure mode for L9's retirement call to encounter, so it is
@@ -143,6 +143,51 @@ class _IssuanceRecord:
 
     def __repr__(self) -> str:  # noqa: D105 - paths are never rendered
         return f"{type(self).__name__}(<bound>)"
+
+
+@dataclass(frozen=True)
+class VerifiedConfigIssuance:
+    """The non-authority facts a consumption boundary may see (FU1-AUTH-1).
+
+    A projection of :class:`_IssuanceRecord` that deliberately has NO
+    ``retained`` field, no retained nonce and no handle: the retained
+    exact-object authority stays private to the writer (before registration)
+    and to this module's registry (after), and never leaves through a
+    verification return (AMEND2 RA-4/RA-5).
+    """
+
+    run_workspace_nonce: str = field(repr=False)
+    config_dir: str = field(repr=False)
+    settings_path: str = field(repr=False)
+    models_path: str = field(repr=False)
+    arm_id: str
+    provider_id: str
+    model_id: str
+    settings_sha256: str
+    models_sha256: str
+    config_dir_identity: tuple[int, int] = field(repr=False)
+    settings_identity: tuple[int, int] = field(repr=False)
+    models_identity: tuple[int, int] = field(repr=False)
+
+    def __repr__(self) -> str:  # noqa: D105 - paths are never rendered
+        return f"{type(self).__name__}(<bound>)"
+
+
+def _project(record: _IssuanceRecord) -> VerifiedConfigIssuance:
+    return VerifiedConfigIssuance(
+        run_workspace_nonce=record.run_workspace_nonce,
+        config_dir=record.config_dir,
+        settings_path=record.settings_path,
+        models_path=record.models_path,
+        arm_id=record.arm_id,
+        provider_id=record.provider_id,
+        model_id=record.model_id,
+        settings_sha256=record.settings_sha256,
+        models_sha256=record.models_sha256,
+        config_dir_identity=record.config_dir_identity,
+        settings_identity=record.settings_identity,
+        models_identity=record.models_identity,
+    )
 
 
 #: token -> record. Process-local, in-memory only.
@@ -325,7 +370,7 @@ def register_config_issuance(
     return token
 
 
-def verify_config_issuance(*, token: str, workspace: Cfg1RunWorkspace) -> _IssuanceRecord:
+def verify_config_issuance(*, token: str, workspace: Cfg1RunWorkspace) -> VerifiedConfigIssuance:
     """Re-prove ownership of this run's own directory at a consumption boundary.
 
     Called fresh at every consumption point -- never once, and never trusted
@@ -338,6 +383,9 @@ def verify_config_issuance(*, token: str, workspace: Cfg1RunWorkspace) -> _Issua
     its digest and redirection are re-checked only while the file is still
     present; ``settings.json`` and the directory itself must always still
     exist, unredirected.
+
+    Returns a :class:`VerifiedConfigIssuance` -- never the registry record, so
+    no retained authority is reachable through the result (FU1-AUTH-1).
     """
     if type(token) is not str or not token:
         raise ConfigIssuanceError("MALFORMED_ISSUANCE_TOKEN")
@@ -371,7 +419,7 @@ def verify_config_issuance(*, token: str, workspace: Cfg1RunWorkspace) -> _Issua
                 raise ConfigIssuanceError("MODELS_CONTENT_MISMATCH")
     except OSError as exc:
         raise ConfigIssuanceError("GENERATED_FILES_UNREADABLE") from exc
-    return record
+    return _project(record)
 
 
 def reclaim_config_issuance(retained: object) -> bool:
@@ -429,24 +477,13 @@ def scrub_config_issuance(*, token: object, workspace: object) -> bool:
     return win.scrub_retire_retained(record.retained)
 
 
-def discard_config_issuance(token: object) -> bool:
-    """Retire one issuance for cleanup WITHOUT the L24 ownership check.
-
-    For a genuine issuance that must not simply be forgotten -- a caller that
-    abandons a generated config, or a test that generated one directly -- the
-    retained authority is scrub-retired rather than popped, because a pure pop
-    would STRAND the retained handle (RA-6). Idempotent: an unknown token does
-    nothing and returns ``False``. The executor's L24 uses
-    :func:`scrub_config_issuance`, which additionally binds the run's workspace.
-    """
-    if type(token) is not str:
-        return False
-    record = _ISSUED.pop(token, None)
-    if record is None:
-        return False
-    return win.scrub_retire_retained(record.retained)
-
-
 def issued_token_count() -> int:
     """How many issuance records are still registered (Sec. 19.1 item 4)."""
     return len(_ISSUED)
+
+
+# FU1-AUTH-2: there is deliberately NO token-only retirement here. The public
+# ``issuance_token`` is a lookup key, never authority: the only supported ways
+# an ACTIVE entry leaves this registry are :func:`scrub_config_issuance`
+# (genuine still-registered workspace whose nonce matches) and
+# :func:`reclaim_config_issuance` (the writer's own private retained authority).
