@@ -144,7 +144,19 @@ def test_t156_the_projection_no_longer_applies_a_reducer_to_a_repository_count()
     count anywhere on the projection path -- not restored later as a
     "harmless" default either.
     """
-    source = inspect.getsource(run_executor._closure_phase)
+    # OC-4: the L25 / L26 projection sites now live in their own step
+    # functions; audit exactly the functions that contain them (never the
+    # sequencer, which would pass vacuously).
+    source = "".join(
+        inspect.getsource(function)
+        for function in (
+            run_executor._closure_l25_git_observation_1,
+            run_executor._closure_l26_project_verification,
+            run_executor._closure_l26_verification,
+        )
+    )
+    # Non-vacuity: the audited text really contains the projection sites.
+    assert source.count("_exact_repository_snapshot(snapshot)") == 2
     for laundered in (
         '_exact_count(\n                getattr(snapshot, "untracked_path_count"',
         'getattr(snapshot, "untracked_path_count", 0)',

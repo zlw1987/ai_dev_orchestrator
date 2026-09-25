@@ -643,5 +643,7 @@ def test_c15_the_production_process_readers_are_exactly_the_reviewed_inventory()
         ("pi_implementer_qualification/qualification/semantic_live_adapters.py", "dispatch_semantic_prompt", "attribute"),
         ("pi_implementer_qualification/qualification/semantic_live_adapters.py", "dispatch_semantic_prompt", "attribute"),
         ("pi_harness_cfg1/run_executor.py", "_dispatch_phase", "getattr"),
-        ("pi_harness_cfg1/run_executor.py", "_closure_phase", "getattr"),
+        # OC-4: the closure's one `process` read moved with L21's applicability
+        # decision into its own helper (retargeted, never deleted or widened).
+        ("pi_harness_cfg1/run_executor.py", "_closure_l21_runtime_applicable", "getattr"),
     ])

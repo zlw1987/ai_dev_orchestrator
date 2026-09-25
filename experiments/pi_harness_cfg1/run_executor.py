@@ -461,6 +461,13 @@ class _RunState:
     #: AMEND1 Sec. 10: the static identity a passing L1 produced. In memory
     #: only; consumed by L12 and L14; never durable, never rendered.
     pi_identity: Any = None
+    #: OC-4 D-3: AIDO's OWN record that it called the side-effecting
+    #: ``supervisor.launch()`` boundary. Written by exactly one executor line,
+    #: immediately before that call; never reset; never read from a port, a
+    #: supervisor or a caller; in memory only -- never an observation, a record
+    #: field or a port field. L21 consults ``supervisor.process`` ONLY when this
+    #: is true, so a merely-built supervisor's ``process`` claim grants nothing.
+    runtime_launch_attempted: bool = False
 
 
 def observe_l16_runtime_capabilities(state: _RunState, *, arm_id: str) -> dict[str, Any]:
@@ -867,6 +874,7 @@ def _dispatch_phase(
         raise _PreDispatchRefusal("RUNTIME_LAUNCH_FAILED", "L14")
     # (3) launch() -> Popen. NOTHING that reads the Pi tree, resolves a name,
     # or executes anything sits between the re-proof above and this call.
+    state.runtime_launch_attempted = True
     try:
         state.supervisor.launch()
     except Exception:  # noqa: BLE001
@@ -1047,11 +1055,16 @@ def _scrub_generated_config(state: _RunState) -> bool:
     and every handle it had to release was released. The issuance is retired
     single-shot; a foreign same-name object is never opened, modified or
     deleted. L24 deletes no name -- L27 alone does namespace cleanup.
+
+    OC-4 (E-8): the token READ is inside the containment. A hostile
+    port-returned config object whose ``issuance_token`` accessor raises is an
+    unproven scrub -- ``False`` -- and cannot skip the extension scrub or any
+    later step.
     """
     from . import config_issuance
 
-    token = getattr(state.generated_config, "issuance_token", None)
     try:
+        token = getattr(state.generated_config, "issuance_token", None)
         return (
             config_issuance.scrub_config_issuance(token=token, workspace=state.workspace)
             is True
@@ -1066,12 +1079,12 @@ def _scrub_extension_binding(state: _RunState) -> bool:
     The exact counterpart of :func:`_scrub_generated_config` over the extension
     issuance's retained handle to the token-bearing object. Each file is
     scrubbed independently: a ``False`` on one never skips, upgrades or masks
-    the other.
+    the other. OC-4 (E-9): the token read is inside the containment.
     """
     from . import extension_issuance
 
-    token = getattr(state.extension, "issuance_token", None)
     try:
+        token = getattr(state.extension, "issuance_token", None)
         return (
             extension_issuance.scrub_extension_issuance(
                 token=token, workspace=state.workspace
@@ -1082,262 +1095,441 @@ def _scrub_extension_binding(state: _RunState) -> bool:
         return False
 
 
-def _closure_phase(
-    *, ports: Cfg1RunPorts, observations: dict[str, Any], state: _RunState
-) -> None:
-    """L21-L27, in the fixed order, skipping only never-created resources.
+# ---------------------------------------------------------------------------
+# OC-4 -- the L21-L27 closure ladder, total by STEP-LOCAL containment only.
+# ---------------------------------------------------------------------------
+#
+# Every step below owns its own protected region(s): invocation, exact
+# container validation, ONE read of each required member into a local, exact
+# validation of each local, and only then a commit of already-validated plain
+# values (R-REGION / R-COMMIT). Handlers are ``except Exception:`` with no
+# bound name and a constant-assignment body (R-HANDLER): nothing about a
+# contained exception is read, formatted, kept or chained, and nothing in a
+# handler can itself raise. No foreign value is ever compared, truth-tested,
+# iterated, hashed or converted before ``type(x) is T`` has established what it
+# is (R-PLAIN), and no missing member defaults to a positive value.
+#
+# There is deliberately NO ``try`` around the closure phase as a whole, or
+# around any span that covers more than one obligation (I-8): a raise from
+# code that touches only executor-owned values is an implementation defect and
+# must still surface as ``RUN_EXECUTOR_RAISED`` at the stage runner.
 
-    Never skipped because an earlier closure step failed: each step's own
-    outcome is recorded and the ladder continues, exactly as Sec. 18's
-    dependency notes require.
+
+def _closure_l21_runtime_applicable(
+    state: _RunState, observations: dict[str, Any]
+) -> bool:
+    """D-3: is L21 applicable? Decided by AIDO's own facts, never a port's claim.
+
+    * no supervisor -> not applicable;
+    * ``runtime_created`` already true (L14's own record) -> applicable, and
+      ``supervisor.process`` is not consulted at all;
+    * ``runtime_created`` false and AIDO never called ``launch()`` -> NOT
+      applicable, and ``supervisor.process`` is NOT consulted: a process claim
+      on a merely-built supervisor is a port-supplied claim and grants no
+      cleanup authority;
+    * ``runtime_created`` false, AIDO DID call ``launch()`` -> the process is
+      probed once: exactly ``None`` means no process is proven (not
+      applicable); anything else, or an accessor that raises, means AIDO cannot
+      prove none exists, so ``runtime_created`` moves ``False -> True`` (never
+      back) and L21 is applicable.
     """
-    from . import run_workspace as workspace_module
+    if state.supervisor is None:
+        return False
+    if observations["runtime_created"] is True:
+        return True
+    if state.runtime_launch_attempted is not True:
+        return False
+    try:
+        process_present = getattr(state.supervisor, "process", None) is not None
+    except Exception:  # noqa: BLE001 - cannot prove there is no process
+        process_present = True
+    if process_present:
+        observations["runtime_created"] = True
+    return process_present
 
-    # ---------------- L21 RUNTIME TEARDOWN ----------------
-    if state.supervisor is not None and getattr(state.supervisor, "process", None) is not None:
-        try:
-            record = state.supervisor.shutdown()
-        except Exception:  # noqa: BLE001
-            record = {}
-        observations["runtime_exit_observed"] = record.get("exit_status_observed") is not None
-        stdout_state = {}
-        try:
-            stdout_state = state.supervisor.stdout_state()
-        except Exception:  # noqa: BLE001
-            stdout_state = {}
-        stderr_state = {}
-        try:
-            stderr_state = state.supervisor.stderr_snapshot()
-        except Exception:  # noqa: BLE001
-            stderr_state = {}
-        observations["runtime_transport_eof_observed"] = _exact_bool(
-            stdout_state.get("eof")
-        ) and _exact_bool(stderr_state.get("eof"))
 
-    # ---------------- L22 PHI-5 BROKER COUNTS ----------------
-    if state.broker is not None:
-        try:
-            counts = state.broker.diagnostics_counts()
-            raw_read = counts["read_operations"]
-            raw_edit = counts["edit_operations"]
-            raw_edited = counts["edited_paths"]
-            raw_refusals = counts["refusals"]
-            # CFG1-IMPL-FU2 Finding 3: "available" must mean every one of the
-            # four raw facts was an exact, non-negative int -- not merely that
-            # the dict access itself did not raise. A dict that came back with
-            # a malformed VALUE (as opposed to a missing key or an exception)
-            # must not read as available while silently reporting a
-            # manufactured ``0`` for the field that was actually malformed;
-            # `classify_cfg1_run` row 5 routes on this exact flag.
-            observations["broker_recorded_activity_available"] = all(
-                type(value) is int and value >= 0
-                for value in (raw_read, raw_edit, raw_edited, raw_refusals)
-            )
-            observations["broker_recorded_read_operation_count"] = _exact_count(raw_read)
-            observations["broker_recorded_edit_operation_count"] = _exact_count(raw_edit)
-            observations["broker_recorded_edited_path_count"] = _exact_count(raw_edited)
-            observations["broker_recorded_refusal_count"] = _exact_count(raw_refusals)
-        except Exception:  # noqa: BLE001
-            observations["broker_recorded_activity_available"] = False
+def _closure_l21_runtime(state: _RunState, observations: dict[str, Any]) -> None:
+    """L21: the DIRECT child's exit status and both reader EOFs -- nothing more.
 
-    # ---------------- L23 BROKER SHUTDOWN ----------------
-    if observations["broker_resource_created"]:
-        try:
-            lifecycle = state.broker.shutdown_for_cfg1()
-        except Exception:  # noqa: BLE001
-            lifecycle = {}
-        observations["broker_state_closed"] = lifecycle.get("state_reached") == "CLOSED"
-        pending_unreaped = lifecycle.get("pending_operations_unreaped")
-        observations["broker_pending_unreaped_zero"] = (
-            type(pending_unreaped) is int and pending_unreaped == 0
-        )
-        observations["broker_worker_terminated_or_absent"] = _exact_bool(
-            lifecycle.get("worker_termination_observed", True)
-        )
+    Three independent sub-obligations, each attempted once whenever L21 is
+    applicable, whatever the others did. Only ``exit_status_observed`` and
+    ``eof`` are ever read; ``text_tail``, ``stdin_close_error`` and
+    ``claim_scope`` never are, and no returned container outlives its region.
+    """
+    if not _closure_l21_runtime_applicable(state, observations):
+        return
 
-    # ---------------- L24 GENERATED MATERIAL SCRUB ----------------
-    # Must precede any execution of model-influenced code (L26), which could
-    # otherwise read the endpoint from models.json or the token from the
-    # generated extension config. Each file's scrub is INDEPENDENT: a False on
-    # one never skips or upgrades the other. Neither is ever set True from a
-    # pathname observation (G7), and L27's later success never upgrades either
-    # (G5). A run that never reached L9 / L11 keeps that step's own value.
+    exit_observed = False
+    try:
+        record = state.supervisor.shutdown()
+        if type(record) is dict:
+            exit_status = record.get("exit_status_observed")
+            # ``bool`` is an int subclass: an exit status is an exact int.
+            exit_observed = type(exit_status) is int
+    except Exception:  # noqa: BLE001
+        exit_observed = False
+    observations["runtime_exit_observed"] = exit_observed
+
+    stdout_eof = False
+    try:
+        stdout_state = state.supervisor.stdout_state()
+        if type(stdout_state) is dict:
+            stdout_eof = stdout_state.get("eof") is True
+    except Exception:  # noqa: BLE001
+        stdout_eof = False
+
+    stderr_eof = False
+    try:
+        stderr_state = state.supervisor.stderr_snapshot()
+        if type(stderr_state) is dict:
+            stderr_eof = stderr_state.get("eof") is True
+    except Exception:  # noqa: BLE001
+        stderr_eof = False
+
+    # Both reads were attempted above; the conjunction is over exact bools.
+    observations["runtime_transport_eof_observed"] = stdout_eof and stderr_eof
+
+
+def _closure_l22_broker_counts(state: _RunState, observations: dict[str, Any]) -> None:
+    """L22: diagnostic counts -- ALL-OR-NOTHING, never lifecycle teardown.
+
+    ``broker_recorded_activity_available`` is true only when every one of the
+    four raw facts was an exact non-negative ``int``. When anything is
+    malformed the four counts stay ``0`` -- not partial real values beside an
+    "unavailable" flag, a state the frozen v2 validator refuses (M-2).
+    """
+    if state.broker is None:
+        return
+
+    available = False
+    read_operations = edit_operations = edited_paths = refusals = 0
+    try:
+        counts = state.broker.diagnostics_counts()
+        if type(counts) is dict:
+            raw_read = counts.get("read_operations")
+            raw_edit = counts.get("edit_operations")
+            raw_edited = counts.get("edited_paths")
+            raw_refusals = counts.get("refusals")
+            if (
+                type(raw_read) is int
+                and raw_read >= 0
+                and type(raw_edit) is int
+                and raw_edit >= 0
+                and type(raw_edited) is int
+                and raw_edited >= 0
+                and type(raw_refusals) is int
+                and raw_refusals >= 0
+            ):
+                available = True
+                read_operations = raw_read
+                edit_operations = raw_edit
+                edited_paths = raw_edited
+                refusals = raw_refusals
+    except Exception:  # noqa: BLE001
+        available = False
+        read_operations = edit_operations = edited_paths = refusals = 0
+
+    observations["broker_recorded_activity_available"] = available
+    observations["broker_recorded_read_operation_count"] = read_operations
+    observations["broker_recorded_edit_operation_count"] = edit_operations
+    observations["broker_recorded_edited_path_count"] = edited_paths
+    observations["broker_recorded_refusal_count"] = refusals
+
+
+def _closure_l23_broker_shutdown(state: _RunState, observations: dict[str, Any]) -> None:
+    """L23: three independent proofs from one exact-``dict`` shutdown record.
+
+    A missing or malformed member fails only its own fact -- and a MISSING
+    ``worker_termination_observed`` is unproven, never defaulted true (M-4).
+    ``worker_error`` (raw text) is never read.
+    """
+    if observations["broker_resource_created"] is not True:
+        return
+
+    state_closed = False
+    pending_zero = False
+    worker_terminated = False
+    try:
+        lifecycle = state.broker.shutdown_for_cfg1()
+        if type(lifecycle) is dict:
+            state_reached = lifecycle.get("state_reached")
+            pending_unreaped = lifecycle.get("pending_operations_unreaped")
+            worker_termination = lifecycle.get("worker_termination_observed")
+            # Exact ``str`` first, so ``==`` only ever runs ``str.__eq__``.
+            state_closed = type(state_reached) is str and state_reached == "CLOSED"
+            pending_zero = type(pending_unreaped) is int and pending_unreaped == 0
+            worker_terminated = worker_termination is True
+    except Exception:  # noqa: BLE001
+        state_closed = False
+        pending_zero = False
+        worker_terminated = False
+
+    observations["broker_state_closed"] = state_closed
+    observations["broker_pending_unreaped_zero"] = pending_zero
+    observations["broker_worker_terminated_or_absent"] = worker_terminated
+
+
+def _closure_l24_scrubs(state: _RunState, observations: dict[str, Any]) -> None:
+    """L24: the two AMEND2 handle-bound scrubs, each independent of the other.
+
+    Must precede any execution of model-influenced code (L26), which could
+    otherwise read the endpoint from models.json or the token from the
+    generated extension config. Neither is ever set True from a pathname
+    observation (G7), and L27's later success never upgrades either (G5). A run
+    that never reached L9 / L11 keeps that step's own value. Each helper is
+    itself total, so a False or a raise on one never skips the other.
+    """
     if state.generated_config is not None:
         observations["generated_config_scrub_verified"] = _scrub_generated_config(state)
     if state.extension is not None:
         observations["extension_binding_scrub_verified"] = _scrub_extension_binding(state)
 
-    # ---------------- L25 GIT OBSERVATION #1 ----------------
-    if state.workspace is not None:
-        try:
-            workspace_module.verify_cfg1_run_workspace(state.workspace)
-            snapshot = ports.observe_repository(
-                workspace_root=state.workspace.workspace_root
-            )
-            head_before, _tracked = workspace_module.registered_baseline(state.workspace)
-            # Sec. 37.4.1 (FU15 Finding B1). The exactness PREDICATE runs over
-            # the whole snapshot BEFORE a single field is projected, and a
-            # single malformed member drives the entire observation to the
-            # already-frozen not-performed shape by raising into the same
-            # ``except`` below. Nothing here reduces, coerces or defaults: a
-            # reducer's job is to manufacture a plausible value, and that is
-            # precisely the defect -- a durable `0` presented as an observed
-            # count, or a durable empty list meaning "nothing changed", or a
-            # missing head meaning "HEAD did not move".
-            head, changed_paths, untracked, staged = _exact_repository_snapshot(snapshot)
-            observations["git_observation_1_performed"] = True
-            observations["head_moved"] = head != head_before
-            changed = sorted(set(changed_paths) & CFG1_T1_FILES)
-            observations["changed_tracked_paths"] = changed
-            observations["untracked_path_count"] = untracked
-            observations["staged_path_count"] = staged
-            observations["broker_git_cross_check_agrees"] = _broker_git_cross_check(
-                observations, changed
-            )
-        except Exception:  # noqa: BLE001
-            observations["git_observation_1_performed"] = False
 
-    # ---------------- L26 VERIFICATION + GIT OBSERVATION #2 ----------------
+def _closure_l25_git_observation_1(
+    ports: Cfg1RunPorts, observations: dict[str, Any], state: _RunState
+) -> None:
+    """L25: an observation, not a closure fact. Locals first, then one commit."""
+    from . import run_workspace as workspace_module
+
+    if state.workspace is None:
+        return
+
+    try:
+        workspace_module.verify_cfg1_run_workspace(state.workspace)
+        snapshot = ports.observe_repository(
+            workspace_root=state.workspace.workspace_root
+        )
+        head_before, _tracked = workspace_module.registered_baseline(state.workspace)
+        # Sec. 37.4.1 (FU15 Finding B1). The exactness PREDICATE runs over the
+        # whole snapshot BEFORE a single field is projected, and a single
+        # malformed member drives the entire observation to the already-frozen
+        # not-performed shape by raising into the same ``except`` below.
+        # Nothing here reduces, coerces or defaults: a reducer's job is to
+        # manufacture a plausible value, and that is precisely the defect.
+        head, changed_paths, untracked, staged = _exact_repository_snapshot(snapshot)
+        head_moved = head != head_before
+        changed = sorted(set(changed_paths) & CFG1_T1_FILES)
+        cross_check_agrees = _broker_git_cross_check(observations, changed)
+    except Exception:  # noqa: BLE001
+        observations["git_observation_1_performed"] = False
+        return
+
+    # Every value is already a plain local: nothing below can raise, so no
+    # partially-performed shape is reachable.
+    observations["git_observation_1_performed"] = True
+    observations["head_moved"] = head_moved
+    observations["changed_tracked_paths"] = changed
+    observations["untracked_path_count"] = untracked
+    observations["staged_path_count"] = staged
+    observations["broker_git_cross_check_agrees"] = cross_check_agrees
+
+
+def _closure_l26_project_verification(outcome: object) -> dict[str, Any] | None:
+    """The all-or-nothing projection of one verification outcome (E-10..E-12).
+
+    Returns plain, already-validated values, or ``None`` when ANY accessor
+    raised -- in which case nothing at all is committed and the run takes the
+    frozen port-raise shape. ``counts`` must be an exact ``dict``; anything else
+    (missing, ``None``, a ``list``, a subclass, a foreign object) is a
+    container holding no members, so all three keys take Sec. 37.4.2's
+    non-content-bearing refusal sentinel -- never the malformed value itself,
+    never a truthiness test, never ``.get`` on a foreign object.
+    """
+    missing = object()
+    try:
+        started = getattr(outcome, "started", missing) is True
+        completed = getattr(outcome, "completed", missing) is True
+        timed_out = getattr(outcome, "timed_out", missing) is True
+        output_limit_exceeded = getattr(outcome, "output_limit_exceeded", missing) is True
+        passed = getattr(outcome, "passed", missing) is True
+        raw_return_code = getattr(outcome, "return_code", missing)
+        raw_counts = getattr(outcome, "counts", missing)
+
+        return_code = raw_return_code if type(raw_return_code) is int else None
+
+        # Sec. 37.4.2 (FU15 Finding B2). Verification demonstrably RAN, so Sec.
+        # 37.4.1's not-performed shape cannot be reused here, and inventing a
+        # new availability flag is exactly the schema growth this phase
+        # discourages. A malformed member becomes a fixed sentinel that
+        # ``_require_exact_int_mapping`` refuses by construction: the run
+        # record fails its OWN validator at L29 step 6.
+        projected_counts: dict[str, object] = {}
+        counts_all_exact = True
+        counts_is_dict = type(raw_counts) is dict
+        for key in _VERIFICATION_COUNT_KEYS:
+            value = raw_counts.get(key) if counts_is_dict else None
+            if type(value) is int and value >= 0:
+                projected_counts[key] = value
+            else:
+                projected_counts[key] = _MALFORMED_VERIFICATION_COUNT
+                counts_all_exact = False
+    except Exception:  # noqa: BLE001
+        return None
+
+    return {
+        "started": started,
+        "completed": completed,
+        "timed_out": timed_out,
+        "output_limit_exceeded": output_limit_exceeded,
+        "return_code": return_code,
+        "counts": projected_counts,
+        # CFG1-IMPL-FU2 Finding 3: a malformed count can only ever pull a claim
+        # of "passed" back to "not proven passed".
+        "passed": passed and counts_all_exact,
+    }
+
+
+def _closure_l26_verification(
+    ports: Cfg1RunPorts, observations: dict[str, Any], state: _RunState
+) -> None:
+    """L26: verification (three regions) and then Git observation #2 (its own).
+
+    Eligibility is unchanged and reads only executor-owned exact bools. When
+    verification is attempted, Git observation #2 is attempted whatever the
+    verification invocation or projection did.
+    """
     closure_proven = (
-        observations["runtime_exit_observed"]
-        and observations["runtime_transport_eof_observed"]
-        and observations["broker_state_closed"]
-        and observations["generated_config_scrub_verified"]
-        and observations["extension_binding_scrub_verified"]
+        observations["runtime_exit_observed"] is True
+        and observations["runtime_transport_eof_observed"] is True
+        and observations["broker_state_closed"] is True
+        and observations["generated_config_scrub_verified"] is True
+        and observations["extension_binding_scrub_verified"] is True
     )
     if observations["pre_dispatch_refusal_code"] is not None:
         observations["verification_attempted"] = False
         observations["verification_skip_reason"] = "PRE_DISPATCH_REFUSAL"
-    elif not closure_proven:
+        return
+    if not closure_proven:
         observations["verification_attempted"] = False
         observations["verification_skip_reason"] = "LIFECYCLE_UNPROVEN"
-    else:
-        observations["verification_attempted"] = True
-        observations["verification_skip_reason"] = None
-        try:
-            outcome = ports.run_verification(
-                workspace_root=state.workspace.workspace_root,
-                args=CFG1_T1.verification_args,
-            )
-        except Exception:  # noqa: BLE001
-            outcome = None
-        if outcome is None:
-            observations["verification_child_reaped_or_not_started"] = False
-        else:
-            observations["verification_started"] = _exact_bool(getattr(outcome, "started", False))
-            observations["verification_completed"] = _exact_bool(
-                getattr(outcome, "completed", False)
-            )
-            observations["verification_timed_out"] = _exact_bool(
-                getattr(outcome, "timed_out", False)
-            )
-            observations["verification_output_limit_exceeded"] = _exact_bool(
-                getattr(outcome, "output_limit_exceeded", False)
-            )
-            return_code = getattr(outcome, "return_code", None)
-            observations["verification_return_code"] = (
-                return_code if type(return_code) is int else None
-            )
-            raw_counts = getattr(outcome, "counts", {}) or {}
-            # Sec. 37.4.2 (FU15 Finding B2). Verification demonstrably RAN, so
-            # Sec. 37.4.1's not-performed shape cannot be reused here -- that
-            # would replace one false statement with another -- and inventing a
-            # new availability flag is exactly the schema growth this phase
-            # discourages. So a malformed member becomes a fixed,
-            # NON-CONTENT-BEARING sentinel that `_require_exact_int_mapping`
-            # refuses by construction: the run record fails its OWN validator
-            # at L29 step 6, taking the already-frozen Sec. 18 row 15 path --
-            # refusal record with `RECORD_INVARIANT`, `EVIDENCE_REFUSED` if
-            # that artifact was written, and an unconditional stage halt. No
-            # count is invented, and no `verification_passed: true` survives.
-            #
-            # The sentinel is deliberately NOT the malformed value itself:
-            # substituting a fixed `None` keeps the containment guarantee that
-            # no foreign object reaches a payload, a serializer, or a console
-            # sink, while still guaranteeing refusal (T-161).
-            projected_counts: dict[str, object] = {}
-            verification_counts_all_exact = True
-            for key in _VERIFICATION_COUNT_KEYS:
-                value = raw_counts.get(key, _MALFORMED_VERIFICATION_COUNT)
-                if type(value) is int and value >= 0:
-                    projected_counts[key] = value
-                else:
-                    projected_counts[key] = _MALFORMED_VERIFICATION_COUNT
-                    verification_counts_all_exact = False
-            observations["verification_counts"] = projected_counts
-            # CFG1-IMPL-FU2 Finding 3: a malformed verification count must
-            # never STRENGTHEN a passing verification claim. Folding
-            # verification_counts' own exactness into `verification_passed`
-            # means a malformed count can only ever pull a claim of "passed"
-            # back to "not proven passed" -- it can never turn a genuine
-            # failure into a false pass either, since `passed` is already
-            # ANDed here rather than substituted.
-            observations["verification_passed"] = (
-                _exact_bool(getattr(outcome, "passed", False))
-                and verification_counts_all_exact
-            )
-            # A child that never yielded a return code was never reaped.
-            observations["verification_child_reaped_or_not_started"] = return_code is not None
-        try:
-            snapshot = ports.observe_repository(
-                workspace_root=state.workspace.workspace_root
-            )
-            # Observation #2 reads the SAME snapshot type through the SAME
-            # port, so Sec. 37.4.1's own reasoning applies verbatim: a
-            # missing or malformed ``changed_tracked_paths`` must not become a
-            # durable "nothing changed" while ``git_observation_2_performed``
-            # stays true. The same predicate, the same all-or-nothing
-            # disposition, and the same already-frozen not-performed shape --
-            # no schema field and no new flag.
-            _head, changed_paths, _untracked, _staged = _exact_repository_snapshot(
-                snapshot
-            )
-            observations["git_observation_2_performed"] = True
-            observations["post_verification_changed_tracked_paths"] = sorted(
-                set(changed_paths) & CFG1_T1_FILES
-            )
-        except Exception:  # noqa: BLE001
-            observations["git_observation_2_performed"] = False
+        return
 
-    # ---------------- L27 WORKSPACE REMOVAL ----------------
-    # Decided by W, never by a path and never by ``refused_at_step`` (R6 Sec.
-    # 8): NOT_ATTEMPTED -> nothing to close; ATTEMPTED_NO_AUTHORITY -> nothing
-    # is ever deleted and the facts stay unproven; AUTHORITY_RETURNED -> the
-    # existing re-proof and removal, unchanged.
-    if (
+    observations["verification_attempted"] = True
+    observations["verification_skip_reason"] = None
+
+    # (a) invocation
+    try:
+        outcome = ports.run_verification(
+            workspace_root=state.workspace.workspace_root,
+            args=CFG1_T1.verification_args,
+        )
+    except Exception:  # noqa: BLE001
+        outcome = None
+
+    # (b)/(c) projection -- nothing is committed unless the whole outcome read
+    projected = None if outcome is None else _closure_l26_project_verification(outcome)
+    if projected is None:
+        # The frozen port-raise shape: every other ``verification_*`` fact
+        # stays at its current fail-closed value.
+        observations["verification_child_reaped_or_not_started"] = False
+    else:
+        observations["verification_started"] = projected["started"]
+        observations["verification_completed"] = projected["completed"]
+        observations["verification_timed_out"] = projected["timed_out"]
+        observations["verification_output_limit_exceeded"] = projected[
+            "output_limit_exceeded"
+        ]
+        observations["verification_return_code"] = projected["return_code"]
+        observations["verification_counts"] = projected["counts"]
+        observations["verification_passed"] = projected["passed"]
+        # A child that never yielded an exact-int return code was never reaped
+        # (M-5): a malformed non-None code is not a reaped child.
+        observations["verification_child_reaped_or_not_started"] = (
+            projected["return_code"] is not None
+        )
+
+    # (d) Git observation #2 -- its own region, attempted regardless of (a)-(c).
+    try:
+        snapshot = ports.observe_repository(
+            workspace_root=state.workspace.workspace_root
+        )
+        # Observation #2 reads the SAME snapshot type through the SAME port, so
+        # Sec. 37.4.1's own reasoning applies verbatim: the same predicate, the
+        # same all-or-nothing disposition, the same not-performed shape.
+        _head, changed_paths, _untracked, _staged = _exact_repository_snapshot(snapshot)
+        post_verification_changed = sorted(set(changed_paths) & CFG1_T1_FILES)
+    except Exception:  # noqa: BLE001
+        observations["git_observation_2_performed"] = False
+        return
+    observations["git_observation_2_performed"] = True
+    observations["post_verification_changed_tracked_paths"] = post_verification_changed
+
+
+def _closure_l27_workspace(observations: dict[str, Any], state: _RunState) -> None:
+    """L27: decided by W, never by a path and never by ``refused_at_step``.
+
+    NOT_ATTEMPTED -> nothing to close; ATTEMPTED_NO_AUTHORITY -> nothing is
+    ever deleted and the facts stay unproven; AUTHORITY_RETURNED -> the
+    existing re-proof and removal, each in its own region. A failure never
+    retries, never falls back to a name- or path-based delete, never marks
+    removal verified, and never hides a surviving registry entry: that entry is
+    what ``minted_workspace_count`` reports to L30.
+    """
+    from . import run_workspace as workspace_module
+
+    if not (
         observations["workspace_mint_state"] == WORKSPACE_MINT_AUTHORITY_RETURNED
         and state.workspace is not None
     ):
+        return
+
+    reproved = False
+    try:
+        workspace_module.verify_cfg1_run_workspace(state.workspace)
+        reproved = True
+    except Exception:  # noqa: BLE001
+        reproved = False
+    observations["workspace_authority_reproved"] = reproved
+
+    if not reproved:
+        # Ownership unprovable: the tree is NEVER deleted. A later run must not
+        # delete it either -- nothing is ever removed because its name looks
+        # expected. A discard that itself raises leaves the registry entry
+        # visible to L30; there is no second attempt.
         try:
-            workspace_module.verify_cfg1_run_workspace(state.workspace)
-            observations["workspace_authority_reproved"] = True
-        except Exception:  # noqa: BLE001
-            observations["workspace_authority_reproved"] = False
-        if observations["workspace_authority_reproved"]:
-            try:
-                removal = workspace_module.remove_cfg1_run_workspace(state.workspace)
-                raw_residual = removal.get("residual_file_count", 0)
-                residual_exact = type(raw_residual) is int and raw_residual >= 0
-                observations["workspace_residual_file_count"] = _exact_count(raw_residual)
-                # CFG1-IMPL-FU2 Finding 3: `compute_lifecycle_closure` treats
-                # `workspace_residual_file_count == 0` (with `type(...) is
-                # int`, always true after `_exact_count`) as one half of L27's
-                # closure proof. A malformed raw residual count laundered to
-                # `0` would satisfy that check despite the true residual state
-                # being UNKNOWN, not proven zero -- so a malformed residual
-                # count forces `workspace_removed_verified` false regardless
-                # of the frozen remover's own `removed` flag, which is the
-                # OTHER half of the same closure proof and already gates L27.
-                observations["workspace_removed_verified"] = (
-                    _exact_bool(removal.get("removed")) and residual_exact
-                )
-            except Exception:  # noqa: BLE001
-                observations["workspace_removed_verified"] = False
-        else:
-            # Ownership unprovable: the tree is NEVER deleted. A later run must
-            # not delete it either -- nothing is ever removed because its name
-            # looks expected.
             workspace_module.discard_cfg1_run_workspace(state.workspace)
+        except Exception:  # noqa: BLE001
+            pass
+        return
+
+    removed_verified = False
+    residual_count = 0
+    try:
+        removal = workspace_module.remove_cfg1_run_workspace(state.workspace)
+        if type(removal) is dict:
+            removed = removal.get("removed")
+            raw_residual = removal.get("residual_file_count")
+            # CFG1-IMPL-FU2 Finding 3: a malformed residual count forces
+            # ``workspace_removed_verified`` false regardless of ``removed``,
+            # and is never laundered into a plausible proven zero.
+            residual_exact = type(raw_residual) is int and raw_residual >= 0
+            residual_count = raw_residual if residual_exact else 0
+            removed_verified = removed is True and residual_exact
+    except Exception:  # noqa: BLE001
+        removed_verified = False
+        residual_count = 0
+    observations["workspace_removed_verified"] = removed_verified
+    observations["workspace_residual_file_count"] = residual_count
+
+
+def _closure_phase(
+    *, ports: Cfg1RunPorts, observations: dict[str, Any], state: _RunState
+) -> None:
+    """L21-L27, in the fixed order, skipping only never-created resources.
+
+    A pure sequencer over executor-owned values (OC-4 I-1..I-3, I-8): each step
+    is total by its OWN step-local containment, so no step is skipped because an
+    earlier one failed, and there is deliberately no ``try`` here. A raise that
+    reaches this function is an implementation defect and must still surface as
+    ``RUN_EXECUTOR_RAISED``.
+    """
+    _closure_l21_runtime(state, observations)
+    _closure_l22_broker_counts(state, observations)
+    _closure_l23_broker_shutdown(state, observations)
+    _closure_l24_scrubs(state, observations)
+    _closure_l25_git_observation_1(ports, observations, state)
+    _closure_l26_verification(ports, observations, state)
+    _closure_l27_workspace(observations, state)
 
 
 def _broker_git_cross_check(observations: Mapping[str, Any], changed: list[str]) -> bool:
@@ -1504,7 +1696,7 @@ def default_cfg1_run_ports(*, ambient_environ: Mapping[str, str]) -> Cfg1RunPort
                 very check that is supposed to catch it (the same class of
                 defect the adapter's ``pending_operations_unreaped`` field
                 had). Every raw value is reduced at the step that catches it
-                (Sec. 21.1), which is L22 in ``_closure_phase``, not here.
+                (Sec. 21.1), which is L22 in ``_closure_l22_broker_counts``, not here.
 
                 ``edited_paths`` is exempt: ``len(...)`` on a real ``list``
                 object is unconditionally an exact, non-negative ``int`` by
