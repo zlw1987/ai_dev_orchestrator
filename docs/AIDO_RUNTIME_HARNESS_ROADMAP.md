@@ -1,5 +1,49 @@
 # AIDO Roadmap — autonomous execution control plane, runtime qualification, and v1 sequencing
 
+> **CURRENT OPERATIONAL STATUS — 2026-09-24.**
+>
+> This block supersedes the older status snapshots in this roadmap **for CURRENT
+> STATUS ONLY**. It does not rewrite the historical text or any frozen document
+> below, and it **authorizes nothing**. Everything below this block that carries a
+> 2026-09-02 status (including the boxed status and revision rows that follow) is
+> a **historical snapshot** and is not the source for today's status. Policy:
+> [AIDO_PRODUCT_CLOSURE_AND_QUALIFICATION_POLICY.md](AIDO_PRODUCT_CLOSURE_AND_QUALIFICATION_POLICY.md).
+>
+> ```text
+> CFG1 FU1 R6 design            ACCEPTED / FROZEN
+> CFG1 OC3 AMEND1               ACCEPTED / FROZEN
+> CFG1 Y6 AMEND2                ACCEPTED / FROZEN
+> CFG1 FU1 implementation       ACCEPTED / FROZEN at
+>                               7f31217580b21027556b2061d5e765c7eef162c0
+> OC-3                          CLOSED BY PROBE REMOVAL
+>
+> Next pre-A4 blockers / sequence:
+>   OC-4 closure totality
+>   OC-5 L3 exact-type/truthiness
+>   operator restore of approved Pi 0.85.1
+>   read-only pre-A4 identity/seam verification
+>   separately reviewed A4 authorization
+>
+> A4                            NO-GO
+> Stage 2                       NO-GO
+> AR2 live                      NO-GO while OC-6 remains unresolved
+>
+> Candidate A  qwen3-coder-next IMPLEMENTER NOT_QUALIFIED / FROZEN
+>                               Category-B runtime compatibility
+>                               QUALIFIED / FROZEN (compatibility only)
+> Candidate B  minimax-m2.7     IMPLEMENTER NOT_QUALIFIED / FROZEN
+>                               Category-B runtime compatibility
+>                               QUALIFIED / FROZEN (compatibility only)
+> Candidate C  qwen3.6-27b      Q3 identity/design exists; live qualification
+>                               requires separate authorization; currently
+>                               NO-GO (not currently authorized)
+> Candidate D  qwen3.8-27b      PLANNED NEW candidate only; not in production
+>                               CANDIDATE_MODEL_IDS; not qualified; not
+>                               live-authorized
+> ```
+
+> **HISTORICAL SNAPSHOT — 2026-09-02.**
+>
 > **ROADMAP / ARCHITECTURE DOCUMENTATION ONLY.**
 >
 > This document authorizes nothing to execute. It creates no module, no config
