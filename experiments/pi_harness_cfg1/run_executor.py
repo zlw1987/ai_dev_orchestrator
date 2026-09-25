@@ -678,17 +678,25 @@ def _dispatch_phase(
     state.cursor = "L3"
     try:
         repo_root = workspace_module.verify_cfg1_run_workspace(state.workspace)
+    except Exception:  # noqa: BLE001
+        # Raised before any verification child could exist.
+        raise _PreDispatchRefusal("WORKSPACE_BASELINE_FAILED", "L3") from None
+    try:
         baseline_verification = ports.run_verification(
             workspace_root=repo_root, args=CFG1_T1.verification_args
         )
     except Exception:  # noqa: BLE001
-        raise _PreDispatchRefusal("WORKSPACE_BASELINE_FAILED", "L3") from None
-    if getattr(baseline_verification, "return_code", None) is None:
+        # OC-5: a raise out of the verification call cannot prove no child was
+        # created, so the lifecycle fact takes the same conservative value as
+        # L26's frozen port-raise shape.
         observations["verification_child_reaped_or_not_started"] = False
-        raise _PreDispatchRefusal("WORKSPACE_BASELINE_FAILED", "L3")
-    if getattr(baseline_verification, "passed", True):
-        # CFG1-T1 declares a seeded failure. A passing baseline means the
-        # fixture is not the task this record would claim it ran.
+        raise _PreDispatchRefusal("WORKSPACE_BASELINE_FAILED", "L3") from None
+    reaped, seeded_failure = _l3_project_baseline(baseline_verification)
+    if not reaped:
+        observations["verification_child_reaped_or_not_started"] = False
+    if not (reaped and seeded_failure):
+        # CFG1-T1 declares a seeded failure. Anything but an exact reaped child
+        # and an exact ``passed is False`` is not that task.
         raise _PreDispatchRefusal("WORKSPACE_BASELINE_FAILED", "L3")
 
     # ---------------- L4 CREDENTIAL BOUNDARY ----------------
@@ -1322,6 +1330,27 @@ def _closure_l25_git_observation_1(
     observations["untracked_path_count"] = untracked
     observations["staged_path_count"] = staged
     observations["broker_git_cross_check_agrees"] = cross_check_agrees
+
+
+def _l3_project_baseline(outcome: object) -> tuple[bool, bool]:
+    """OC-5: reduce the L3 baseline verification outcome to two exact facts.
+
+    Returns ``(child_reaped, seeded_failure)``. Each member is read once,
+    independently, under containment. ``child_reaped`` is true only for an exact
+    ``int`` return code (``bool`` is not ``int`` here); ``seeded_failure`` is true
+    only for ``passed is False``. No truthiness, ``bool()``, numeric coercion or
+    default is ever applied to a foreign value, and nothing read is retained.
+    """
+    try:
+        return_code = getattr(outcome, "return_code")
+        reaped = type(return_code) is int
+    except Exception:  # noqa: BLE001
+        reaped = False
+    try:
+        seeded_failure = getattr(outcome, "passed") is False
+    except Exception:  # noqa: BLE001
+        seeded_failure = False
+    return reaped, seeded_failure
 
 
 def _closure_l26_project_verification(outcome: object) -> dict[str, Any] | None:
