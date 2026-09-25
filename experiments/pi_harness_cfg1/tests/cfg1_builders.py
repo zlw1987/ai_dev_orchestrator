@@ -14,6 +14,7 @@ from typing import Any
 from pi_harness_cfg1 import obs1
 from pi_harness_cfg1.records import (
     CFG1_RUN_OBSERVATION_KEYS,
+    CFG1_RUN_OBSERVATION_KEYS_V2,
     build_cfg1_run_payload,
 )
 
@@ -27,8 +28,8 @@ def happy_observations(**overrides: Any) -> dict[str, Any]:
     actually produced and the one CFG1 exists to contrast against.
     """
     observations: dict[str, Any] = {
-        "pi_observed_version": "0.85.1",
         "pi_seam_digests_match": True,
+        "pi_identity_failure_code": None,
         "base_url_compat_detection_clear": True,
         "route_reachable": True,
         "route_configured_model_served": True,
@@ -41,6 +42,7 @@ def happy_observations(**overrides: Any) -> dict[str, Any]:
         "manipulation_check_agrees": True,
         "pre_dispatch_refusal_code": None,
         "refused_at_step": None,
+        "unexpected_failure_step": None,
         "dispatch_state": "CONFIRMED_SENT",
         "prompt_writes": 1,
         "automatic_semantic_retry": False,
@@ -84,6 +86,7 @@ def happy_observations(**overrides: Any) -> dict[str, Any]:
         "workspace_authority_reproved": True,
         "workspace_removed_verified": True,
         "workspace_residual_file_count": 0,
+        "workspace_mint_state": "AUTHORITY_RETURNED",
         "lifecycle_all_closed": True,
         "lifecycle_failure_steps": [],
         "git_observation_1_performed": True,
@@ -105,11 +108,118 @@ def happy_observations(**overrides: Any) -> dict[str, Any]:
         "verification_counts": {"passed": 0, "failed": 1, "error": 0},
     }
     observations.update(overrides)
-    assert frozenset(observations) == CFG1_RUN_OBSERVATION_KEYS, (
-        "the builder and the closed observation key set have drifted apart: "
-        f"{frozenset(observations) ^ CFG1_RUN_OBSERVATION_KEYS}"
+    assert frozenset(observations) == CFG1_RUN_OBSERVATION_KEYS_V2, (
+        "the builder and the closed v2 observation key set have drifted apart: "
+        f"{frozenset(observations) ^ CFG1_RUN_OBSERVATION_KEYS_V2}"
     )
     return observations
+
+
+def v1_run_payload(**field_overrides: Any) -> dict[str, Any]:
+    """An archived-shape ``pi-harness-cfg1-run.v1`` payload, built INDEPENDENTLY.
+
+    FU1 Test N: the production builder emits v2 only, so v1 payloads are
+    assembled here, by hand, from v1's own field set -- never by routing a v2
+    payload through a converter -- and handed to v1's own validator, closure
+    function and binding verifier exactly as an archived artifact's bytes would
+    be. ``field_overrides`` replace whole top-level fields.
+    """
+    from pi_harness_cfg1 import CLAIM_SCOPE, PACKAGE_ID, RUN_RECORD_KIND
+    from pi_harness_cfg1.arms import ARM_EFFECTIVE, ARM_REDACTED_DIGEST, ARM_SHAPE, PINNED_SETTINGS_SHA256
+    from pi_harness_cfg1.classification import classify_cfg1_run
+    from pi_harness_cfg1.fixture import CFG1_T1_REVISION, CFG1_TASK_ID
+    from pi_harness_cfg1.identity import BACKEND_GATEWAY_CLASS, CFG1_MODEL_ID, PROVIDER_ID
+    from pi_harness_cfg1.schedule import _schedule_arm_for, _schedule_block_position
+
+    stage_id, ordinal = "S1", 1
+    arm_id = _schedule_arm_for(stage_id, ordinal)
+    block, position = _schedule_block_position(stage_id, ordinal)
+    observations = happy_observations(runtime_reported_compat_shape=ARM_SHAPE[arm_id])
+    # v1's observation set: no v2 field, and the v1-only version projection.
+    for key in ("pi_identity_failure_code", "unexpected_failure_step", "workspace_mint_state"):
+        observations.pop(key)
+    observations["pi_observed_version"] = "0.85.1"
+    assert frozenset(observations) == CFG1_RUN_OBSERVATION_KEYS
+    payload: dict[str, Any] = {
+        "experiment": PACKAGE_ID,
+        "record_version": "pi-harness-cfg1-run.v1",
+        "record_kind": RUN_RECORD_KIND,
+        "scoring_authority": False,
+        "qualification_credit": False,
+        "is_review_packet": False,
+        "reviewer_invoked": False,
+        "claim_scope": CLAIM_SCOPE,
+        "stage_id": stage_id,
+        "stage_execution_id": "S1-X1",
+        "run_ordinal": ordinal,
+        "block": block,
+        "position": position,
+        "arm_id": arm_id,
+        "record_filename": f"{stage_id}_{ordinal:02d}_{arm_id}.json",
+        "declared_compat_shape": ARM_SHAPE[arm_id],
+        "models_json_redacted_sha256": ARM_REDACTED_DIGEST[arm_id],
+        "settings_json_sha256": PINNED_SETTINGS_SHA256,
+        "model_id": CFG1_MODEL_ID,
+        "provider_id": PROVIDER_ID,
+        "backend_gateway_class": BACKEND_GATEWAY_CLASS,
+        "fixture_task_id": CFG1_TASK_ID,
+        "fixture_revision": CFG1_T1_REVISION,
+    }
+    payload.update(ARM_EFFECTIVE[arm_id])
+    payload.update(observations)
+    payload.update(field_overrides)
+    payload["run_classification"] = classify_cfg1_run(payload)
+    return payload
+
+
+def a3_shaped_v1_payload() -> dict[str, Any]:
+    """A synthetic v1 payload SHAPED like A3's recorded L1 refusal.
+
+    Never the real results file. ``refused_at_step "L1"``, lifecycle NOT
+    closed with ``["L27"]`` -- the truthful output of v1's own rules, which
+    FU1 must never re-label.
+    """
+    return v1_run_payload(
+        pi_observed_version="0.87.0",
+        pi_seam_digests_match=False,
+        base_url_compat_detection_clear=False,
+        route_reachable=False,
+        route_configured_model_served=False,
+        broker_reached_ready=False,
+        h1_extension_identity_matched=False,
+        h2_provider_model_identity_matched=False,
+        runtime_reported_compat_shape="NOT_OBSERVED",
+        runtime_reported_model_reasoning="NOT_OBSERVED",
+        runtime_reported_thinking_level="NOT_OBSERVED",
+        manipulation_check_agrees=False,
+        pre_dispatch_refusal_code="OFFLINE_PREFLIGHT_FAILED",
+        refused_at_step="L1",
+        dispatch_state="NOT_ATTEMPTED",
+        prompt_writes=0,
+        runtime_wait_outcome="NOT_OBSERVED",
+        stop_reasons_available=False,
+        broker_recorded_activity_available=False,
+        runtime_created=False,
+        runtime_exit_observed=False,
+        runtime_transport_eof_observed=False,
+        broker_resource_created=False,
+        broker_state_closed=False,
+        broker_pending_unreaped_zero=False,
+        broker_worker_terminated_or_absent=False,
+        workspace_authority_reproved=False,
+        workspace_removed_verified=False,
+        lifecycle_all_closed=False,
+        lifecycle_failure_steps=["L27"],
+        git_observation_1_performed=False,
+        git_observation_2_performed=False,
+        verification_attempted=False,
+        verification_skip_reason="PRE_DISPATCH_REFUSAL",
+        verification_started=False,
+        verification_completed=False,
+        verification_return_code=None,
+        verification_counts={"passed": 0, "failed": 0, "error": 0},
+        **obs1.unavailable_activity_fields(None),
+    )
 
 
 def run_payload(

@@ -38,11 +38,23 @@ from .identity import CFG1_MODEL_ID, CREDENTIAL_ENV_VAR_NAME, PROVIDER_ID
 
 
 class Cfg1PiConfigError(Exception):
-    """The disposable per-arm Pi configuration could not be produced."""
+    """The disposable per-arm Pi configuration could not be produced.
 
-    def __init__(self, reason_code: str) -> None:
+    FU1 AM-13 (OC-11), restated by AMEND2 (Y6): carries one closed code AND one
+    exact bool, ``endpoint_material_outstanding`` -- ``True`` iff endpoint bytes
+    were attempted and it is NOT proven that the exact ``models.json`` object
+    this invocation created had its default stream SCRUBBED (truncate -> flush
+    -> ``EndOfFile == 0``) through genuine handle authority AND every material
+    handle (the creating handle and any retained handle) was released
+    successfully. A delete disposition and a close, alone, never make it
+    ``False``. A raise before any endpoint byte could exist carries ``False``.
+    No path, URL or exception text crosses this boundary.
+    """
+
+    def __init__(self, reason_code: str, endpoint_material_outstanding: bool = False) -> None:
         super().__init__(f"cfg1 pi config refused: {reason_code}")
         self.reason_code = reason_code
+        self.endpoint_material_outstanding = endpoint_material_outstanding
 
 
 #: The fixed placeholder substituted for the base URL before digesting.
@@ -215,6 +227,102 @@ def _dispose_children_by_handle(children) -> None:
         win.close_child_quietly(child)
 
 
+def _dispose_quietly(child: object) -> bool:
+    """Namespace cleanup through the creating handle, best effort.
+
+    AMEND2: a disposition is NOT evidence that material is gone and is no
+    longer an input to ``endpoint_material_outstanding``.
+    """
+    try:
+        return win.dispose_child_by_handle(child) is True
+    except Exception:  # noqa: BLE001 - reported as not disposed, never raised past release
+        return False
+
+
+def _scrub_child_quietly(child: object) -> bool:
+    """SCRUB-C through the still-held creating handle. Any failure is ``False``."""
+    try:
+        return win.scrub_child_through_creating_handle(child) is True
+    except Exception:  # noqa: BLE001 - an unknown scrub is never proven
+        return False
+
+
+#: ``retain_child`` reason codes that mean the retained handle WAS acquired
+#: (and then refused proof), as opposed to never having been obtained.
+_RETAINED_ACQUIRED_CODES = frozenset(
+    {"RETAINED_IDENTITY_MISMATCH", "RETAINED_INHERITABLE", "RETAINED_NOT_RELEASED"}
+)
+
+
+def _declared_newline_canonical(raw: bytes) -> bytes | None:
+    """Undo EXACTLY the declared text-mode newline translation, nothing else.
+
+    Step 8 writes through ``io.TextIOWrapper``, which maps ``\\n`` to
+    ``os.linesep`` -- ``\\r\\n`` on win32, the only platform L9 supports. Every
+    ``\\r`` must be immediately followed by ``\\n`` and every ``\\n`` preceded by
+    ``\\r``; a bare ``\\r`` or bare ``\\n`` returns ``None`` (refusal). No
+    whitespace, BOM, key-order or re-serialization normalization -- the bytes
+    are never parsed.
+    """
+    if raw.count(b"\r") != raw.count(b"\r\n") or raw.count(b"\n") != raw.count(b"\r\n"):
+        return None
+    return raw.replace(b"\r\n", b"\n")
+
+
+def _require_actual_bytes_match_pins(
+    settings_child, models_child, *, arm_id: str, base_url: str
+) -> tuple[str, str]:
+    """Step 9a (FU1 AM-11, R6 Sec. 9.2b) -- ACTUAL on-disk bytes vs. the PINS.
+
+    The bytes are read back through the held ``CREATE_NEW``/share-0 creating
+    descriptors -- no pathname is re-opened. ``models.json`` has exactly ONE
+    slot redacted: the JSON string literal of the ``base_url`` the caller
+    passed must occur exactly once, immediately after ``"baseUrl": ``, and is
+    replaced by the literal of :data:`REDACTED_BASE_URL`. The result must hash
+    to the independent per-arm pin ``ARM_REDACTED_DIGEST[arm_id]`` -- a literal
+    in :mod:`arms`, never recomputed from this generator -- and
+    ``settings.json`` (which carries no endpoint) to ``PINNED_SETTINGS_SHA256``.
+
+    ``redacted_models_digest()`` and ``models_redacted_sha256`` play NO part:
+    they describe an in-memory expected document, not actual output. The
+    endpoint literal, canonical bytes and redacted bytes are locals only; a
+    refusal carries one closed code. Returns the RAW SHA-256 of the exact bytes
+    checked, which step 10 binds as its expected read-back digest.
+    """
+    from .arms import ARM_REDACTED_DIGEST, PINNED_SETTINGS_SHA256
+
+    try:
+        settings_raw = win.read_child_bytes(settings_child)
+        models_raw = win.read_child_bytes(models_child)
+    except win.Cfg1DirectoryAuthorityError:
+        raise Cfg1PiConfigError("GENERATED_CONFIG_SHAPE_MISMATCH") from None
+
+    settings_canonical = _declared_newline_canonical(settings_raw)
+    models_canonical = _declared_newline_canonical(models_raw)
+    if settings_canonical is None or models_canonical is None:
+        raise Cfg1PiConfigError("GENERATED_CONFIG_SHAPE_MISMATCH")
+
+    endpoint_literal = json.dumps(base_url).encode("utf-8")
+    if models_canonical.count(endpoint_literal) != 1:
+        raise Cfg1PiConfigError("GENERATED_CONFIG_SHAPE_MISMATCH")
+    slot = models_canonical.index(endpoint_literal)
+    if not models_canonical[:slot].endswith(b'"baseUrl": '):
+        raise Cfg1PiConfigError("GENERATED_CONFIG_SHAPE_MISMATCH")
+    redacted = (
+        models_canonical[:slot]
+        + json.dumps(REDACTED_BASE_URL).encode("utf-8")
+        + models_canonical[slot + len(endpoint_literal):]
+    )
+    if hashlib.sha256(redacted).hexdigest() != ARM_REDACTED_DIGEST[arm_id]:
+        raise Cfg1PiConfigError("GENERATED_CONFIG_SHAPE_MISMATCH")
+    if hashlib.sha256(settings_canonical).hexdigest() != PINNED_SETTINGS_SHA256:
+        raise Cfg1PiConfigError("GENERATED_CONFIG_SHAPE_MISMATCH")
+    return (
+        hashlib.sha256(settings_raw).hexdigest(),
+        hashlib.sha256(models_raw).hexdigest(),
+    )
+
+
 def write_cfg1_pi_config(
     workspace, *, arm_id: str, base_url: str, model_id: str = CFG1_MODEL_ID
 ) -> GeneratedCfg1Config:
@@ -242,12 +350,23 @@ def write_cfg1_pi_config(
         5    containment by file id, no pathname    CONFIG_DIR_NOT_IN_OWNED_ROOT
         6    exclusive children, ZERO content bytes CONFIG_FILE_ALREADY_EXISTS
         7    THE GATE: handle-relative parentage    CONFIG_FILES_NOT_IN_PINNED_DIRECTORY
-        8    content, through the proven descriptors
+        8    content, through the proven descriptors (models.json second,
+             after its endpoint write-ahead -- FU1 AM-13)
         9    finalization read-back, same descriptors
-        10   issuance, bound to the proven identities
-        11   release: children, config directory, then root -- a release
-             failure here retires step 10's own issuance before raising the
-             release code below (CFG1-IMPL-FU4-FU1)
+        9a   ACTUAL bytes vs. the independent pins    GENERATED_CONFIG_SHAPE_MISMATCH
+             (FU1 AM-11 -- one declared newline map, one redacted slot)
+        10a  RETAIN: ReOpenFile(H_c, access 0) -> H_r, identity + non-inheritable
+        10   issuance, bound to the proven identities and to the bytes 9a checked
+             and owning H_r; the registry insert is its LAST statement
+        10c  the public result is built BEFORE any release
+        11   release: on a failure KNOWN before release after endpoint bytes
+             were attempted, RECLAIM, then SCRUB models.json (truncate ->
+             flush -> EndOfFile 0) through its creating handle STRICTLY BEFORE
+             any close (AMEND2 K); children, RELEASE-R, config directory, then
+             root. A release failure after a successful registration
+             reclaims and scrubs through H_r before raising (S'), so no raise
+             leaves this invocation's issuance ACTIVE (CFG1-IMPL-FU4-FU1).
+             Every raise carries ``endpoint_material_outstanding``.
 
     **What this closes, and what it does not.** From step 4 onward the pinned
     NAME cannot be rebound (W2, W3, W5, W6) and, independently and with no
@@ -307,9 +426,23 @@ def write_cfg1_pi_config(
     root_pin = None
     config_pin = None
     children: list = []
+    models_child = None
     proven = None
     token = None
     interval = None
+    # AMEND2 (Y6): the retained exact-object authority (H_r) and the public
+    # result, both built BEFORE any release so that after a successful release
+    # nothing but ``return`` executes.
+    retained = None
+    retained_acquired = False
+    retained_released = False
+    result = None
+    # FU1 AM-13: writer-local, never durable. ``endpoint_write_attempted`` is
+    # set IMMEDIATELY BEFORE the one call that can carry endpoint bytes, and is
+    # never reset (G4).
+    endpoint_write_attempted = False
+    failure_code: str | None = None
+    non_exception_failure: BaseException | None = None
     try:
         # -- step 0 (CFG1-IMPL-FU4): open THIS generation's provenance -------
         # A local of this routine, exactly as the two pins are, and retired on
@@ -374,15 +507,43 @@ def write_cfg1_pi_config(
             children = []
             raise Cfg1PiConfigError(exc.reason_code) from None
 
-        # -- steps 8-9: content, then finalization, through those descriptors -
+        # -- step 8: content, through those descriptors ----------------------
+        # ``settings.json`` first (it carries no endpoint), then the ONE call
+        # that can put endpoint bytes on disk, preceded by its write-ahead.
         settings_child, models_child = children
         try:
             win.write_child_text(settings_child, settings_text)
+            endpoint_write_attempted = True
             win.write_child_text(models_child, models_text)
         except win.Cfg1DirectoryAuthorityError as exc:
             raise Cfg1PiConfigError(exc.reason_code) from None
 
-        # -- step 10: issuance, bound to the proven identities ---------------
+        # -- steps 9 + 9a (FU1 AM-11, R6 Sec. 9.2b): ACTUAL bytes, read back
+        # through the same descriptors, vs. the independent pins -------------
+        checked_settings_sha256, checked_models_sha256 = _require_actual_bytes_match_pins(
+            settings_child, models_child, arm_id=arm_id, base_url=base_url
+        )
+
+        # -- steps 10a/10b (AMEND2, RA-1/RA-2): RETAIN, then prove identity ---
+        # ``ReOpenFile`` from ``models.json``'s creating handle, while that
+        # handle is still held: no pathname, no file id. A handle that fails
+        # the identity or inheritance proof is never written through.
+        try:
+            retained = win.retain_child(
+                models_child,
+                kind=win.RETAINED_KIND_CONFIG_MODELS,
+                interval=interval,
+            )
+        except win.Cfg1DirectoryAuthorityError as exc:
+            retained_acquired = exc.reason_code in _RETAINED_ACQUIRED_CODES
+            retained_released = exc.reason_code != "RETAINED_NOT_RELEASED"
+            raise Cfg1PiConfigError("CONFIG_RETAINED_AUTHORITY_REFUSED") from None
+        retained_acquired = True
+
+        # -- step 10: issuance, bound to the proven identities AND to the bytes
+        # step 9a checked. Every check runs while the creating handles are
+        # held; the registry insert -- which takes ownership of ``retained``
+        # -- is registration's LAST statement (AMEND2 C-1). --------------------
         try:
             token = config_issuance.register_config_issuance(
                 workspace=workspace,
@@ -392,85 +553,124 @@ def write_cfg1_pi_config(
                 proven=proven,
                 settings_child=settings_child,
                 models_child=models_child,
+                expected_settings_sha256=checked_settings_sha256,
+                expected_models_sha256=checked_models_sha256,
+                retained=retained,
             )
         except config_issuance.ConfigIssuanceError as exc:
             raise Cfg1PiConfigError("CONFIG_ISSUANCE_NOT_REGISTERED") from exc
-    finally:
-        # Step 11, on EVERY exit path, before control leaves L9: children
-        # first, then the config directory, then the root. EVERY handle gets
-        # its own release attempted before any failure is raised, so one
-        # failure cannot strand the rest, and there is no force-close, no
-        # retry, and no re-derivation of a handle from a name anywhere here.
-        #
-        # A close failure is LIFECYCLE-SIGNIFICANT, not memory hygiene: a
-        # leaked pin makes L27's removal fail by construction (W2, W6), so it
-        # is raised rather than swallowed. Exactly one closed code is reported,
-        # in a fixed precedence -- the config-directory pin first, because it
-        # is the one whose leak stops L27 outright. Raising here REPLACES an
-        # in-flight refusal (Python chains the original as ``__context__``);
-        # nothing durable is lost, because the run executor reduces every L9
-        # exception to the same ``CONFIG_GENERATION_FAILED`` code, and the
-        # leaked pin is the more consequential of the two facts.
-        # The interval is retired FIRST, and unconditionally: from here on no
-        # object minted in it is issuance provenance any more, so nothing a
-        # caller could have retained -- including from a partial failure -- can
-        # be presented later to mint or resurrect an issuance.
-        win.close_generation_interval(interval)
-        child_close_failed = False
-        for child in children:
-            if not win.close_child_quietly(child):
-                child_close_failed = True
-        win.discard_parentage_proof(proven)
-        config_pin_failed = config_pin is not None and not win.release_pin_quietly(
-            config_pin
+
+        # -- step 10c: build the public result BEFORE any release, so nothing
+        # but ``return`` executes after the last release. ---------------------
+        result = GeneratedCfg1Config(
+            config_dir=config_dir_str,
+            settings_path=str(Path(config_dir_str) / "settings.json"),
+            models_path=str(Path(config_dir_str) / "models.json"),
+            arm_id=arm_id,
+            provider_id=PROVIDER_ID,
+            model_id=model_id,
+            settings_sha256=settings_digest(),
+            models_redacted_sha256=redacted_models_digest(arm_id=arm_id, model_id=model_id),
+            issuance_token=token,
         )
-        root_pin_failed = root_pin is not None and not win.release_pin_quietly(root_pin)
+    except Cfg1PiConfigError as exc:
+        failure_code = exc.reason_code
+    except Exception:  # noqa: BLE001 - R6 Sec. 9.2c-A: marked, released, re-raised typed
+        failure_code = "CONFIG_WRITER_UNEXPECTED_FAILURE"
+    except BaseException as exc:  # noqa: BLE001 - released below, then re-raised as is
+        non_exception_failure = exc
 
-        # CFG1-IMPL-FU4-FU1: step 10 may already have registered a GENUINE,
-        # ACTIVE issuance before any of the three release failures above was
-        # even known. L9 is about to raise instead of return, so that
-        # registration must not remain reachable authority merely because the
-        # token string itself was never handed back to a caller -- an
-        # un-retired registry entry is live authority regardless of who does
-        # or does not know its value (the traceback-harvest regressions prove
-        # exactly that a caller CAN read this frame's locals). Retirement
-        # happens here, before any of the three closed codes below is raised,
-        # so the transactional invariant holds for every SUPPORTED L9 failure:
-        # a raise never leaves that invocation's own issuance ACTIVE.
-        #
-        # ``discard_config_issuance`` is CFG1's own local, in-process registry
-        # pop (Sec. 19.1 item 4) -- no filesystem, network, subprocess, model
-        # or handle dependency, and idempotent by construction -- so there is
-        # no supported runtime failure mode here to model or report (FU4-FU2:
-        # an earlier draft wrapped this call and invented a
-        # ``CONFIG_ISSUANCE_NOT_RETIRED`` closed code for a synthetic
-        # monkeypatch-only "failure"; that was test-only interpreter
-        # manipulation treated as production authority, which the frozen
-        # threat model does not require CFG1 to defend against, so both the
-        # wrapping and the code were removed).
-        if token is not None and (
-            config_pin_failed or root_pin_failed or child_close_failed
-        ):
-            config_issuance.discard_config_issuance(token)
+    failure_known = failure_code is not None or non_exception_failure is not None
 
-        if config_pin_failed:
-            raise Cfg1PiConfigError("CONFIG_DIR_PIN_NOT_RELEASED")
-        if root_pin_failed:
-            raise Cfg1PiConfigError("WORKSPACE_ROOT_PIN_NOT_RELEASED")
-        if child_close_failed:
-            raise Cfg1PiConfigError("CONFIG_FILE_NOT_CLOSED")
+    # Step 11, on EVERY exit path, before control leaves L9 -- ONE release and
+    # ONE decider of ``endpoint_material_outstanding`` (R6 Sec. 9.2c-A).
+    #
+    # The interval is retired FIRST, and unconditionally: from here on no
+    # object minted in it is issuance provenance any more, so nothing a caller
+    # could have retained -- including from a partial failure -- can be
+    # presented later to mint or resurrect an issuance.
+    win.close_generation_interval(interval)
 
-    return GeneratedCfg1Config(
-        config_dir=config_dir_str,
-        settings_path=str(Path(config_dir_str) / "settings.json"),
-        models_path=str(Path(config_dir_str) / "models.json"),
-        arm_id=arm_id,
-        provider_id=PROVIDER_ID,
-        model_id=model_id,
-        settings_sha256=settings_digest(),
-        models_redacted_sha256=redacted_models_digest(arm_id=arm_id, model_id=model_id),
-        issuance_token=token,
+    # AMEND2 (Y6) section 9 -- K / S / S'.
+    #
+    # K  a failure is KNOWN before release begins:
+    #      RECLAIM (if registered; no I/O), then -- if endpoint bytes were
+    #      attempted -- SCRUB-C through ``models.json``'s still-held creating
+    #      handle STRICTLY BEFORE any close, then dispositions (namespace
+    #      cleanup only, best effort, NEVER an input to the bool), then close
+    #      every child, RELEASE-R, and the pins.
+    # S  no failure is known: close every child, discard the parentage proof,
+    #      release the pins. S' -- if any of those releases failed -- RECLAIM
+    #      the registered entry, SCRUB-R through the retained handle, raise.
+    #
+    # A failure first discovered DURING release used to be unable to reach back
+    # (R6 G3); with a retained handle it can, so an ACTIVE issuance never
+    # survives a raise. Where the creating handle's own close failed, the bool
+    # stays ``True`` regardless of the probable scrub outcome.
+    scrubbed = False
+    if failure_known:
+        if retained is not None:
+            config_issuance.reclaim_config_issuance(retained)
+        if endpoint_write_attempted:
+            scrubbed = _scrub_child_quietly(models_child)
+            for child in children:
+                _dispose_quietly(child)
+
+    # Then EVERY handle gets its own release attempted before any failure is
+    # raised, so one failure cannot strand the rest, and there is no
+    # force-close, no retry, and no re-derivation of a handle from a name.
+    #
+    # A close failure is LIFECYCLE-SIGNIFICANT, not memory hygiene: a leaked
+    # pin makes L27's removal fail by construction (W2, W6), so it is raised
+    # rather than swallowed. Exactly one closed code is reported, in a fixed
+    # precedence -- the config-directory pin first, because it is the one
+    # whose leak stops L27 outright. It REPLACES an in-flight refusal code;
+    # the outstanding bool does not depend on which code wins.
+    models_closed = False
+    child_close_failed = False
+    for child in children:
+        closed = win.close_child_quietly(child)
+        if not closed:
+            child_close_failed = True
+        if child is models_child:
+            models_closed = closed
+    if failure_known and retained is not None:
+        retained_released = win.release_retained(retained)
+    win.discard_parentage_proof(proven)
+    config_pin_failed = config_pin is not None and not win.release_pin_quietly(
+        config_pin
     )
+    root_pin_failed = root_pin is not None and not win.release_pin_quietly(root_pin)
+    release_failed = config_pin_failed or root_pin_failed or child_close_failed
+
+    if not failure_known and release_failed and retained is not None:
+        # S': step 10 already registered a GENUINE, ACTIVE issuance before this
+        # release failure was known, and L9 is about to raise. RECLAIM it and
+        # scrub through the retained handle, so a raise never leaves that
+        # invocation's own issuance ACTIVE (CFG1-IMPL-FU4-FU1, kept). SCRUB-R's
+        # ``True`` is exactly "scrubbed AND retained released".
+        config_issuance.reclaim_config_issuance(retained)
+        scrubbed = win.scrub_retire_retained(retained) is True
+        retained_released = scrubbed
+
+    # ONE formula, computed once (AMEND2 section 9). The disposition result is
+    # not an input.
+    endpoint_material_outstanding = endpoint_write_attempted and not (
+        scrubbed and models_closed and (not retained_acquired or retained_released)
+    )
+
+    if non_exception_failure is not None:
+        raise non_exception_failure
+    if not failure_known and not release_failed:
+        return result
+    reason = failure_code
+    if config_pin_failed:
+        reason = "CONFIG_DIR_PIN_NOT_RELEASED"
+    elif root_pin_failed:
+        reason = "WORKSPACE_ROOT_PIN_NOT_RELEASED"
+    elif child_close_failed:
+        reason = "CONFIG_FILE_NOT_CLOSED"
+    raise Cfg1PiConfigError(reason, endpoint_material_outstanding) from None
 
 
 #: CFG1-IMPL-FU4. Bind THE one code object that may open a generation interval,

@@ -24,6 +24,9 @@ E. The test-only forced seal reach would MANUFACTURE a first seal if reached
    does not exist.
 F. ``_verified_unlink`` accepted any path. FIXED -- canonical containment
    inside the run's own owned root is proven before anything is unlinked.
+   SUPERSEDED by FU1 AM-12: L24 no longer reaches any pathname helper at all;
+   its only removal primitive is ``identity_bound_unlink`` (issued identity,
+   exactly one link, one exclusive handle interval, a successful close).
 G. A DIRECTORY occupying a run path produces ``EMISSION_FAILED``, not
    ``EMISSION_COLLISION``, on Windows. PINNED as correct fail-closed-on-
    ambiguity behaviour.
@@ -304,46 +307,59 @@ def test_finding_e_a_forced_reach_before_any_seal_registers_nothing(
 # ---------------------------------------------------------------------------
 
 
-def test_finding_f_the_verified_unlink_refuses_a_path_outside_the_owned_root(
-    tmp_path,
-):
+def test_finding_f_the_l24_scrub_is_handle_bound_and_never_name_bound(tmp_path):
+    """Finding F, as superseded by FU1 AMEND2 (Y6).
+
+    The pathname-fronting ``_verified_unlink`` and, after it, AM-12's
+    ``identity_bound_unlink`` (whose "exactly one link" premise Test Y-6 showed
+    to be false on the supported host) are REMOVED from L24's call graph. L24
+    now performs a handle-bound CONTENT scrub through the issuance-owned retained
+    handle: its authority is a registry entry bound to the run's workspace, and
+    its target proof is handle identity. No pathname is an input, so a foreign
+    file at any path -- an object outside the run, a traversal alias, the owned
+    root itself -- is never opened, modified or deleted.
+    """
+    from pi_harness_cfg1 import config_issuance, extension_issuance
+    from pi_harness_cfg1 import win_config_authority as win
+
+    assert not hasattr(run_executor, "_verified_unlink")
+    assert not hasattr(win, "identity_bound_unlink")
+
     owned = tmp_path / "owned"
     owned.mkdir()
     inside = owned / "models.json"
     inside.write_text("{}", encoding="utf-8")
-
     outside = tmp_path / "not_ours.txt"
     outside.write_text("precious", encoding="utf-8")
 
-    # Outside the owned root: refused, and the file is untouched.
-    assert run_executor._verified_unlink(str(outside), owned_root=str(owned)) is False
+    # Nothing a caller can name -- a path, a traversal, an unknown token, the
+    # wrong type -- reaches any file: there is no path parameter to name it.
+    for token in (str(outside), str(owned / ".." / "not_ours.txt"), str(owned), "", None, 0):
+        assert config_issuance.scrub_config_issuance(token=token, workspace=object()) is False
+        assert extension_issuance.scrub_extension_issuance(token=token, workspace=object()) is False
+        assert config_issuance.discard_config_issuance(token) is False
+    assert win.scrub_retire_retained(str(outside)) is False
     assert outside.read_text(encoding="utf-8") == "precious"
-
-    # A traversal that only LOOKS contained is refused by canonicalization.
-    traversal = str(owned / ".." / "not_ours.txt")
-    assert run_executor._verified_unlink(traversal, owned_root=str(owned)) is False
-    assert outside.exists()
-
-    # The owned root itself is never a target.
-    assert run_executor._verified_unlink(str(owned), owned_root=str(owned)) is False
+    assert inside.read_text(encoding="utf-8") == "{}"
     assert owned.is_dir()
 
-    # A missing owned root refuses rather than defaulting to "anywhere".
-    assert run_executor._verified_unlink(str(inside), owned_root=None) is False
-    assert inside.exists()
 
-    # The genuine case still works, and VERIFIES absence afterwards.
-    assert run_executor._verified_unlink(str(inside), owned_root=str(owned)) is True
-    assert not inside.exists()
-    # Idempotent: nothing left to remove is also "closed".
-    assert run_executor._verified_unlink(str(inside), owned_root=str(owned)) is True
+def test_finding_f_the_l24_primitives_take_no_path_parameter():
+    from pi_harness_cfg1 import config_issuance, extension_issuance
+    from pi_harness_cfg1 import win_config_authority as win
 
-
-def test_finding_f_the_scrub_helper_requires_an_owned_root_argument():
-    parameters = inspect.signature(run_executor._verified_unlink).parameters
-    assert "owned_root" in parameters
-    assert parameters["owned_root"].kind is inspect.Parameter.KEYWORD_ONLY
-    assert parameters["owned_root"].default is inspect.Parameter.empty
+    assert list(inspect.signature(win.scrub_retire_retained).parameters) == ["retained"]
+    for function in (config_issuance.scrub_config_issuance, extension_issuance.scrub_extension_issuance):
+        parameters = inspect.signature(function).parameters
+        assert list(parameters) == ["token", "workspace"]
+        assert all(p.kind is inspect.Parameter.KEYWORD_ONLY for p in parameters.values())
+    for function in (
+        win.scrub_retire_retained,
+        win.release_retained,
+        win.scrub_child_through_creating_handle,
+        win.retain_child,
+    ):
+        assert not any("path" in name for name in inspect.signature(function).parameters)
 
 
 # ---------------------------------------------------------------------------
@@ -842,19 +858,25 @@ def test_the_live_port_bindings_are_importable_and_free_of_latent_name_errors():
         assert unresolved == [], (name, unresolved)
 
 
-def test_the_token_bearing_extension_file_is_scrubbed_by_the_frozen_scrubber(
+def test_the_token_bearing_extension_file_is_scrubbed_only_through_its_issuance(
     git_executable, monkeypatch, tmp_path
 ):
-    """L24 consumes ``ar2.pi_config.scrub_generated_extension_config`` itself.
+    """FU1 AM-9 (R6/B12): the frozen pathname scrubber is OUT of CFG1's call graph.
 
-    Sec. 7.4 lists it among the modules CFG1 reuses UNMODIFIED, so the token
-    file is removed by the frozen, verified scrubber rather than by an
-    equivalent of CFG1's own. CFG1 adds only a containment proof in front.
+    ``ar2.pi_config.scrub_generated_extension_config`` derives ``ar2_config.ts``
+    BY PATHNAME and unlinks whatever answers there, and the frozen
+    ``write_disposable_extension`` has no issuance at all. CFG1 therefore calls
+    neither (both stay byte-for-byte as shipped for AR2's own callers): L11 is
+    the CFG1 transactional writer, and L24 removes the token file only through
+    a handle-bound content scrub through the extension issuance's retained handle
+    (AMEND2, which superseded AM-12's ``identity_bound_unlink``).
     """
     from cfg1_doubles import build_doubled_ports, seam_digests_all_match
 
+    from pi_harness_cfg1 import extension_issuance
     from pi_harness_cfg1.run_contract import Cfg1RunAdmission
     from pi_harness_cfg1.run_executor import (
+        _RunState,
         _scrub_extension_binding,
         execute_cfg1_run,
     )
@@ -872,37 +894,52 @@ def test_the_token_bearing_extension_file_is_scrubbed_by_the_frozen_scrubber(
         run_id="d" * 32,
     )
 
-    scrubber_calls: list[str] = []
+    frozen_calls: list[str] = []
     from ar2 import pi_config as frozen_pi_config
 
-    real_scrubber = frozen_pi_config.scrub_generated_extension_config
+    for name in ("scrub_generated_extension_config", "write_disposable_extension"):
+        real = getattr(frozen_pi_config, name)
+        monkeypatch.setattr(
+            frozen_pi_config,
+            name,
+            lambda *a, _n=name, _r=real, **k: (frozen_calls.append(_n), _r(*a, **k))[1],
+        )
 
-    def _spy(extension_dir):
-        scrubber_calls.append(extension_dir)
-        return real_scrubber(extension_dir)
+    from pi_harness_cfg1 import win_config_authority as win
 
-    monkeypatch.setattr(frozen_pi_config, "scrub_generated_extension_config", _spy)
+    unlinks: list[bool] = []
+    real_scrub = win.scrub_retire_retained
+    monkeypatch.setattr(
+        win, "scrub_retire_retained",
+        lambda retained: (unlinks.append(True), real_scrub(retained))[1],
+    )
 
     ports, made = build_doubled_ports(git_executable=git_executable)
     outcome = execute_cfg1_run(admission, ports=ports)
 
     assert outcome.observations["extension_binding_scrub_verified"] is True
-    assert len(scrubber_calls) == 1
-    # The scrubber was handed a directory inside this run's own owned root.
-    assert scrubber_calls[0].startswith(made["workspace"].experiment_root)
+    assert frozen_calls == []
+    # One handle-bound scrub for each sensitive file, and nothing else.
+    assert unlinks == [True, True]
+    assert extension_issuance.issued_extension_token_count() == 0
 
-    # And the containment proof in front of it refuses a foreign directory,
-    # with the frozen scrubber never reached.
+    # A foreign token file, with no issuance behind it, is never touched: an
+    # unknown issuance verifies nothing and deletes nothing.
     foreign = tmp_path / "not_ours"
     foreign.mkdir()
     token_file = foreign / "ar2_config.ts"
     token_file.write_text('export const TOKEN = "precious";\n', encoding="utf-8")
-    before = len(scrubber_calls)
-    assert (
-        _scrub_extension_binding(str(foreign), owned_root=str(tmp_path / "owned"))
-        is False
-    )
-    assert len(scrubber_calls) == before
+    state = _RunState()
+    state.workspace = made["workspace"]
+
+    class _ForeignExtension:
+        issuance_token = "0" * 32
+
+    state.extension = _ForeignExtension()
+    before = list(unlinks)
+    assert _scrub_extension_binding(state) is False
+    assert unlinks == before
+    assert frozen_calls == []
     assert token_file.read_text(encoding="utf-8") == 'export const TOKEN = "precious";\n'
 
 

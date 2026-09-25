@@ -56,8 +56,8 @@ from .records import (
     FINDING_SCRUB_NEEDLE_MATCH,
     FINDING_SIZE_BOUND_EXCEEDED,
     Cfg1RecordValidationError,
-    _require_valid_cfg1_refusal_payload,
-    _require_valid_cfg1_run_payload,
+    _require_valid_cfg1_refusal_payload_v2,
+    _require_valid_cfg1_run_payload_v2,
     _require_valid_cfg1_stage_closure_payload,
     _run_record_filename,
     _stage_closure_record_filename,
@@ -376,7 +376,7 @@ def emit_cfg1_run_record(
     try:
         canonical = _canonicalize(payload)  # step 4 -- the ONE walk
         # Step 5 -- `payload` is never read again from this line on.
-        _require_valid_cfg1_run_payload(canonical)  # step 6
+        _require_valid_cfg1_run_payload_v2(canonical)  # step 6 -- FU1: v2 only
         _bind_run_identity(canonical, authority, ordinal, arm_id)  # step 7
         _scrub(canonical, safety)  # step 8a
         artifact_bytes = _serialize_artifact(canonical)  # step 8b -- ONCE
@@ -521,7 +521,7 @@ def emit_cfg1_refusal_record(
 
     try:
         canonical = _canonicalize(refusal_payload)
-        _require_valid_cfg1_refusal_payload(canonical)
+        _require_valid_cfg1_refusal_payload_v2(canonical)  # FU1: v2 only
         _bind_refusal_identity(canonical, authority, ordinal, arm_id)
         _scrub(canonical, safety)
         artifact_bytes = _serialize_artifact(canonical)

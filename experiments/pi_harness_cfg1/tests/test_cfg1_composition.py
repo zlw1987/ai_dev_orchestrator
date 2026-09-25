@@ -487,7 +487,9 @@ def test_cfg1_emits_no_obs1_companion_artifact():
     """
     from pi_harness_cfg1 import (
         REFUSAL_RECORD_VERSION,
+        REFUSAL_RECORD_VERSION_V2,
         RUN_RECORD_VERSION,
+        RUN_RECORD_VERSION_V2,
         STAGE_CLOSURE_RECORD_VERSION,
     )
 
@@ -498,7 +500,13 @@ def test_cfg1_emits_no_obs1_companion_artifact():
         assert "AttemptIdentity(" not in source, source_path
 
     # The three CFG1 families are the ONLY record versions this package writes.
-    declared = {RUN_RECORD_VERSION, REFUSAL_RECORD_VERSION, STAGE_CLOSURE_RECORD_VERSION}
+    declared = {
+        RUN_RECORD_VERSION,
+        REFUSAL_RECORD_VERSION,
+        RUN_RECORD_VERSION_V2,
+        REFUSAL_RECORD_VERSION_V2,
+        STAGE_CLOSURE_RECORD_VERSION,
+    }
     version_pattern = re.compile(r'"(pi-[a-z0-9-]+\.v\d+)"')
     for source_path in sorted(_PACKAGE_DIR.glob("*.py")):
         for found in version_pattern.findall(source_path.read_text(encoding="utf-8")):

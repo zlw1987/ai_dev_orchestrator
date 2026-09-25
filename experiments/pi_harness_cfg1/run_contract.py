@@ -49,7 +49,7 @@ class Cfg1RunAdmission:
 class Cfg1RunOutcome:
     """One run's L28-finalized facts, as immutable plain data.
 
-    ``observations`` carries exactly ``records.CFG1_RUN_OBSERVATION_KEYS`` --
+    ``observations`` carries exactly ``records.CFG1_RUN_OBSERVATION_KEYS_V2`` --
     no live object of any kind (no supervisor, activity, broker, ``RunState``,
     ``Popen``, handle, ``Path`` or authority), because the record is sealed
     only after every lifecycle outcome is known and must never hold a reference

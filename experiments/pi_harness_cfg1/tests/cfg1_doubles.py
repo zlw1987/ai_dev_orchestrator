@@ -15,20 +15,114 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from pi_harness_cfg1.identity import PINNED_PI_VERSION
 from pi_harness_cfg1.run_executor import Cfg1RunPorts
 
 SYNTHETIC_BASE_URL = "https://cfg1-doubles.invalid/v1"
 SYNTHETIC_CREDENTIAL = "cfg1-synthetic-key"
 
 
+# ---------------------------------------------------------------------------
+# FU1 (AMEND1 AMD-1): the static Pi identity proof runs its GENUINE leaves over
+# a SYNTHETIC on-disk Pi tree with a TEST-OWNED pin table. Nothing here is Node
+# or Pi: ``node.exe`` is an inert byte string that is never executed, ``pi.cmd``
+# is never read, and the 20 "seam" files are synthetic bytes whose digests the
+# test itself pins (Test AC's "test-owned pin table").
+# ---------------------------------------------------------------------------
+
+import hashlib
+import os
+import tempfile
+
+from pi_harness_cfg1.preflight import PINNED_PI_SEAM_DIGESTS as _REAL_PINNED_TABLE
+
+SYNTHETIC_NODE_BYTES = b"synthetic node image -- never executed by the CFG1 suite\n"
+SYNTHETIC_PI_CMD_BYTES = b"@rem synthetic anchor -- never read, never executed\r\n"
+
+
+def synthetic_seam_bytes(relative: str) -> bytes:
+    """Deterministic synthetic bytes for one pinned seam key."""
+    return b"synthetic cfg1 seam file: " + relative.encode("ascii") + b"\n"
+
+
 @dataclass
-class FakeRuntimeIdentity:
-    node_executable: str = r"C:\Program Files\nodejs\node.exe"
-    pi_cli_js: str = r"C:\pi\dist\cli.js"
-    pi_package_root: str = r"C:\pi"
-    reported_version: str = PINNED_PI_VERSION
-    launch_shape: str = "node_direct"
+class SyntheticPiTree:
+    """One synthetic Pi installation on disk. Paths are real, bytes are not Pi."""
+
+    base: str
+    node_dir: str
+    npm_dir: str
+    node_exe: str
+    pi_cmd: str
+    package_root: str
+    pin_table: dict
+
+    @property
+    def path_value(self) -> str:
+        return f"{self.node_dir};{self.npm_dir}"
+
+    def seam_path(self, relative: str) -> str:
+        return os.path.join(self.package_root, *relative.split("/"))
+
+
+def build_synthetic_pi_tree(base: str) -> SyntheticPiTree:
+    """Create the synthetic tree under ``base`` (which must already exist)."""
+    node_dir = os.path.join(base, "nodejs")
+    npm_dir = os.path.join(base, "npm")
+    package_root = os.path.join(npm_dir, "node_modules", "@earendil-works", "pi-coding-agent")
+    os.makedirs(node_dir)
+    os.makedirs(package_root)
+    node_exe = os.path.join(node_dir, "node.exe")
+    pi_cmd = os.path.join(npm_dir, "pi.cmd")
+    with open(node_exe, "wb") as handle:
+        handle.write(SYNTHETIC_NODE_BYTES)
+    with open(pi_cmd, "wb") as handle:
+        handle.write(SYNTHETIC_PI_CMD_BYTES)
+    table = {}
+    for relative in sorted(_REAL_PINNED_TABLE):
+        target = os.path.join(package_root, *relative.split("/"))
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        data = synthetic_seam_bytes(relative)
+        with open(target, "wb") as handle:
+            handle.write(data)
+        table[relative] = hashlib.sha256(data).hexdigest()
+    return SyntheticPiTree(
+        base=base,
+        node_dir=node_dir,
+        npm_dir=npm_dir,
+        node_exe=node_exe,
+        pi_cmd=pi_cmd,
+        package_root=package_root,
+        pin_table=table,
+    )
+
+
+_SESSION_TREE: SyntheticPiTree | None = None
+
+
+def session_synthetic_pi_tree() -> SyntheticPiTree:
+    """ONE shared synthetic tree for the doubled executor ports.
+
+    Created lazily under the system temporary directory (never inside the
+    checkout) and never mutated by the doubles; a test that needs to mutate a
+    Pi tree builds its own under ``tmp_path``.
+    """
+    global _SESSION_TREE
+    if _SESSION_TREE is None:
+        import atexit
+        import shutil
+
+        base = tempfile.mkdtemp(prefix="cfg1_fu1_synthetic_pi_")
+        atexit.register(shutil.rmtree, base, True)
+        _SESSION_TREE = build_synthetic_pi_tree(base)
+    return _SESSION_TREE
+
+
+def use_test_owned_pin_table(monkeypatch, table: dict) -> None:
+    """Point the static proof at a TEST-OWNED 20-entry pin table."""
+    from pi_harness_cfg1 import pi_identity
+
+    assert len(table) == 20 and set(table) == set(_REAL_PINNED_TABLE)
+    monkeypatch.setattr(pi_identity, "PINNED_PI_SEAM_DIGESTS", dict(table))
 
 
 @dataclass
@@ -232,7 +326,9 @@ def build_doubled_ports(
     loaded the arm the doubled config generator recorded.
     """
     from pi_harness_cfg1 import run_workspace
+    from pi_harness_cfg1.cfg1_extension import write_cfg1_extension
     from pi_harness_cfg1.cfg1_pi_config import write_cfg1_pi_config
+    from pi_harness_cfg1.pi_identity import genuine_pi_proof_leaves
     from pi_harness_cfg1.environment import build_cfg1_child_environment
 
     overrides = dict(overrides or {})
@@ -252,16 +348,16 @@ def build_doubled_ports(
                 supervisor._probe_error = scripted_error
         return supervisor
 
-    def _write_extension(*, owned_root: str, broker):
-        directory = Path(owned_root) / "pi_extension"
-        directory.mkdir(parents=False, exist_ok=False)
-        entry = directory / "index.ts"
-        config = directory / "ar2_config.ts"
-        entry.write_text("// synthetic extension entry\n", encoding="utf-8")
-        config.write_text(
-            f'export const TOKEN = "{broker.token}";\n', encoding="utf-8"
+    def _write_extension(*, workspace, broker):
+        # FU1: the GENUINE CFG1 transactional writer (R6 AM-9/AM-14), over the
+        # real, pinned in-repository AR2 extension sources. It returns only an
+        # extension issuance token; L14/L15 re-verify it and L24 consumes it.
+        return write_cfg1_extension(
+            workspace,
+            pipe_name=broker.pipe_name,
+            capability_id=broker.capability_id,
+            token=broker.token,
         )
-        return FakeExtension(entry_path=str(entry), extension_dir=str(directory))
 
     def _build_supervisor(*, identity, extension, environment, workspace_root):
         supervisor = made.get("supervisor") or FakeSupervisor()
@@ -285,9 +381,12 @@ def build_doubled_ports(
         return write_cfg1_pi_config(workspace, arm_id=arm_id, base_url=base_url)
 
     defaults: dict[str, Any] = {
-        "ambient_environ": {"SystemRoot": r"C:\Windows", "PATH": r"C:\decoy"},
+        "ambient_environ": {
+            "SystemRoot": r"C:\Windows",
+            "PATH": session_synthetic_pi_tree().path_value,
+        },
         "git_executable": lambda: git_executable,
-        "resolve_runtime_identity": lambda: FakeRuntimeIdentity(),
+        "pi_proof_leaves": genuine_pi_proof_leaves(),
         "mint_workspace": _mint_workspace,
         "observe_repository": lambda *, workspace_root: FakeRepositorySnapshot(),
         "run_verification": lambda *, workspace_root, args: FakeVerificationOutcome(),
@@ -308,9 +407,44 @@ def build_doubled_ports(
 
 
 def seam_digests_all_match(monkeypatch) -> None:
-    """Make the pinned seam-digest check pass for a synthetic Pi package root."""
-    from pi_harness_cfg1 import run_executor
+    """Make the static seam proof pass for the doubled ports' synthetic tree.
 
-    monkeypatch.setattr(
-        run_executor, "verify_pi_seam_digests", lambda root: (True, ())
+    FU1: the proof itself is the GENUINE static P (and the genuine L14
+    re-proof); only its pin TABLE is test-owned, matching the synthetic tree's
+    synthetic bytes. Nothing executes: the tree's ``node.exe`` is never run.
+    """
+    use_test_owned_pin_table(monkeypatch, session_synthetic_pi_tree().pin_table)
+
+
+class StaticIdentityShape:
+    """A TEST-ONLY object with exactly the five AMEND1 Sec. 10 attributes.
+
+    The genuine :class:`pi_harness_cfg1.pi_identity.Cfg1PiIdentity` can be
+    produced only by a passing P; tests that exercise a port which merely
+    CONSUMES the identity shape (e.g. the genuine supervisor builder's argv)
+    use this instead. ``__slots__`` and no ``__getattr__``: reading any other
+    attribute raises (Test AG's discipline).
+    """
+
+    __slots__ = (
+        "node_executable",
+        "pi_cli_js",
+        "pi_package_root",
+        "node_identity",
+        "package_root_identity",
     )
+
+    def __init__(
+        self,
+        *,
+        node_executable: str = r"C:\cfg1-synthetic\nodejs\node.exe",
+        pi_cli_js: str = r"C:\cfg1-synthetic\pi\dist\cli.js",
+        pi_package_root: str = r"C:\cfg1-synthetic\pi",
+        node_identity: tuple = (1, 2),
+        package_root_identity: tuple = (1, 3),
+    ) -> None:
+        self.node_executable = node_executable
+        self.pi_cli_js = pi_cli_js
+        self.pi_package_root = pi_package_root
+        self.node_identity = node_identity
+        self.package_root_identity = package_root_identity

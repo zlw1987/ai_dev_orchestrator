@@ -150,7 +150,7 @@ def test_t40_an_off_schedule_arm_is_refused_at_step_6_not_step_7(make_authority)
         payload = run_payload(run_ordinal=1)
         payload["arm_id"] = wrong_arm
         with pytest.raises(Cfg1RecordValidationError) as excinfo:
-            records._require_valid_cfg1_run_payload(payload)
+            records._require_valid_cfg1_run_payload_v2(payload)
         assert excinfo.value.reason_code == "ARM_DISAGREES_WITH_SCHEDULE"
 
         authority = make_authority(f"S1-arm{wrong_arm}")
@@ -239,13 +239,13 @@ def test_t91_step_6_refusals_never_reach_step_7(make_authority):
     payload = run_payload(run_ordinal=1)
     payload["arm_id"] = "E"
     with pytest.raises(Cfg1RecordValidationError) as excinfo:
-        records._require_valid_cfg1_run_payload(payload)
+        records._require_valid_cfg1_run_payload_v2(payload)
     assert excinfo.value.category == "CROSS_FIELD_INVARIANT"
 
     payload = run_payload(run_ordinal=1)
     payload["record_filename"] = "S1_02_R.json"
     with pytest.raises(Cfg1RecordValidationError) as excinfo:
-        records._require_valid_cfg1_run_payload(payload)
+        records._require_valid_cfg1_run_payload_v2(payload)
     assert excinfo.value.reason_code == "RECORD_FILENAME_DISAGREES_WITH_DERIVATION"
 
     from cfg1_builders import stage_closure_payload
@@ -352,7 +352,7 @@ def test_t56_uncanonicalizable_and_incomplete_payloads_never_reach_step_7(make_a
     incomplete = run_payload(run_ordinal=2)
     del incomplete["head_moved"]
     with pytest.raises(Cfg1RecordValidationError) as excinfo:
-        records._require_valid_cfg1_run_payload(incomplete)
+        records._require_valid_cfg1_run_payload_v2(incomplete)
     assert excinfo.value.reason_code == "CLOSED_KEY_SET_VIOLATION"
 
 
@@ -405,9 +405,9 @@ def _valid_other_identity_run_payloads():
 def test_t92_every_step_7_candidate_first_passes_its_own_validator():
     """The meta-test: a step-7 regression is vacuous unless step 6 accepts it."""
     for case, payload in _valid_other_identity_run_payloads().items():
-        records._require_valid_cfg1_run_payload(payload), case
+        records._require_valid_cfg1_run_payload_v2(payload), case
     for case in ("A", "B", "C"):
-        records._require_valid_cfg1_refusal_payload(_refusal_case(case))
+        records._require_valid_cfg1_refusal_payload_v2(_refusal_case(case))
     for closure in _stage_closure_cases().values():
         records._require_valid_cfg1_stage_closure_payload(closure)
 
@@ -479,7 +479,7 @@ def test_t61_a_fully_bound_canonical_payload_is_accepted_and_written(make_author
     written = json.loads(
         Path(authority.execution_directory, "S1_01_Q.json").read_text(encoding="utf-8")
     )
-    records._require_valid_cfg1_run_payload(written)
+    records._require_valid_cfg1_run_payload_v2(written)
 
 
 # ---------------------------------------------------------------------------
@@ -534,7 +534,7 @@ def test_t71_one_byte_over_the_bound_is_refused_at_both_boundaries(
         writers,
         "_serialize_artifact",
         _padded_serializer(
-            MAX_CFG1_ARTIFACT_BYTES + 1, only_record_version="pi-harness-cfg1-run.v1"
+            MAX_CFG1_ARTIFACT_BYTES + 1, only_record_version="pi-harness-cfg1-run.v2"
         ),
     )
     result = _emit_run(authority)
@@ -664,7 +664,7 @@ def _inject_refusal_writer_failure(monkeypatch, failure_point: str) -> None:
     elif failure_point == "schema_validation":
         monkeypatch.setattr(
             writers,
-            "_require_valid_cfg1_refusal_payload",
+            "_require_valid_cfg1_refusal_payload_v2",
             _raiser(Cfg1RecordValidationError("SCHEMA_VIOLATION", "INJECTED")),
         )
     elif failure_point == "authority_binding":

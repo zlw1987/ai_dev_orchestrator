@@ -2,7 +2,8 @@
 
 Design Sec. 16.2 (the step table), Sec. 17 (resource ownership), Sec. 18 (the
 partial-failure table), Sec. 20 (evidence-versus-cleanup ordering), Sec. 21
-(containment).
+(containment), as corrected by ``PHASE_5F3B_HARNESS_CFG1_L1_BOUNDARY_FU1_DESIGN.md``
+(R6) and ``..._OC3_AMEND1_DESIGN.md`` (AMEND1).
 
 **Ports, not imports, at the boundary.** Every live-resource step is reached
 through one field of :class:`Cfg1RunPorts`, so the whole state machine is
@@ -11,9 +12,26 @@ opening a socket, reading a credential, or contacting a model.
 :func:`default_cfg1_run_ports` binds the frozen modules for the eventual,
 separately-authorized live phase; importing THIS module does not import them.
 
+**FU1 -- the first Node/Pi/JavaScript execution is L14.** L1 runs the ONE
+canonical static Pi identity proof (:func:`pi_identity.prove_pi_identity`,
+the same function object the pre-consumption gate calls), from scratch. It
+starts no process: there is no ``--version`` probe and no port whose genuine
+binding executes Node or Pi before L14. L14 re-walks all 20 seams and
+re-proves the package-root and ``node.exe`` identities immediately before
+``launch()``, with nothing that reads the Pi tree between that proof and
+``Popen``.
+
+**Attribution is the executor's own (FU1, R6 Sec. 9).** One monotonic step
+cursor is advanced at each step's entry, before its first side effect, and
+``refused_at_step`` is always the cursor. An unexpected raise before dispatch
+is ``UNEXPECTED_STEP_FAILURE`` at the cursor (REFUSAL mode); after the
+dispatch write-ahead, or at L19/L20, it is ``unexpected_failure_step`` and no
+refusal (POST_DISPATCH_UNEXPECTED mode). Nothing about an exception is read.
+
 **Closure always runs**, in the fixed order L21->L27, after the first
 resource-creating step -- skipping only steps whose resource was never created,
-and never skipped because an earlier closure step failed.
+and never skipped because an earlier closure step failed. L27's obligation is
+decided by the write-ahead workspace mint state W, never by a path.
 
 **Every raw value is reduced at the step that catches it** (Sec. 21.1). No
 ``str(exc)``, ``repr``, traceback, stderr tail, provider body, broker refusal
@@ -30,6 +48,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
+from . import extension_pins as _extension_pins  # noqa: F401 - audited lineage (G4/G5)
 from . import obs1
 from .arms import (
     ARM_SHAPE,
@@ -43,20 +62,36 @@ from .baseline import (
     map_runtime_wait_outcome_literal,
     map_turn_wait_outcome,
 )
+from .cfg1_extension import Cfg1ExtensionError
+from .cfg1_pi_config import Cfg1PiConfigError
 from .fixture import CFG1_T1, CFG1_T1_FILES
 from .identity import (
     BASE_URL_ENV_VAR_NAME,
     CFG1_MODEL_ID,
     CREDENTIAL_ENV_VAR_NAME,
-    PINNED_PI_VERSION,
     PROVIDER_ID,
     TOOL_ALLOWLIST,
 )
-from .preflight import base_url_compat_detection_clear, verify_pi_seam_digests
+from .lifecycle import (
+    WORKSPACE_MINT_ATTEMPTED_NO_AUTHORITY,
+    WORKSPACE_MINT_AUTHORITY_RETURNED,
+    WORKSPACE_MINT_NOT_ATTEMPTED,
+)
+from .pi_identity import (
+    PiProofLeaves,
+    genuine_pi_proof_leaves,
+    prove_pi_identity,
+    reprove_pi_identity_for_launch,
+    require_pi_proof_result_shape,
+)
+from .preflight import base_url_compat_detection_clear
 from .run_contract import Cfg1RunAdmission, Cfg1RunOutcome
 
 _STOP_REASON_KEYS = ("stop", "length", "toolUse", "error", "aborted", "other")
 _VERIFICATION_COUNT_KEYS = ("passed", "failed", "error")
+
+#: R6 Sec. 9.2: the closed code of an unexpected raise before dispatch.
+UNEXPECTED_STEP_FAILURE = "UNEXPECTED_STEP_FAILURE"
 
 #: Sec. 37.4.2's fixed, non-content-bearing sentinel for a malformed
 #: verification count. It is JSON-serializable (so it reaches the validator
@@ -181,12 +216,19 @@ class Cfg1RunPorts:
     never created, which is exactly what Sec. 17's "never, by construction"
     list forbids.
 
+    **FU1 (AMEND1 AMD-1/AMD-6): there is NO port that executes Node or Pi
+    before L14.** The former ``resolve_runtime_identity`` port (genuinely bound
+    to ``ar2.launch.resolve_runtime_identity``, which ran ``node cli.js
+    --version`` with the inherited environment) is removed, not replaced.
+    ``pi_proof_leaves`` supplies ONLY the static proof's leaf effects -- the
+    Sec. 7.2 no-follow inspection primitive and a one-handle digest reader --
+    and has no field through which a process-creating leaf could be passed.
+
     **The adapter surface each port must provide**, so the eventual LIVE
     binding has a contract rather than an inference:
 
-    ``resolve_runtime_identity()``
-        ``.node_executable``, ``.pi_cli_js``, ``.pi_package_root``,
-        ``.reported_version``
+    ``pi_proof_leaves``
+        a :class:`~pi_harness_cfg1.pi_identity.PiProofLeaves`
     ``mint_workspace(git_executable=...)``
         ``(Cfg1RunWorkspace, BuiltFixture)`` -- a GENUINE registry mint
     ``observe_repository(workspace_root=...)``
@@ -202,24 +244,28 @@ class Cfg1RunPorts:
     ``write_config(workspace=..., arm_id=..., base_url=...)``
         a :class:`~pi_harness_cfg1.cfg1_pi_config.GeneratedCfg1Config`, written
         BESIDE the repository child, never inside it -- ``workspace`` is the
-        run's own ``Cfg1RunWorkspace`` ownership handle, never a bare path
+        run's own ``Cfg1RunWorkspace`` ownership handle, never a bare path; a
+        failure raises :class:`~pi_harness_cfg1.cfg1_pi_config.Cfg1PiConfigError`
+        carrying ``endpoint_material_outstanding`` (AM-13)
     ``build_broker(capability=...)``
         ``.start()``, ``.token``, ``.pipe_name``, ``.capability_id``,
         ``.diagnostics_counts()`` -> ``{read_operations, edit_operations,
         edited_paths, refusals}``, ``.shutdown_for_cfg1()`` ->
         ``{state_reached, pending_operations_unreaped,
         worker_termination_observed}``
-    ``write_extension(owned_root=..., broker=...)``
-        ``.entry_path``, ``.extension_dir`` (the directory holding the
-        token-bearing ``ar2_config.ts`` L24 scrubs through the FROZEN
-        ``scrub_generated_extension_config``), likewise written beside the
-        repository child
+    ``write_extension(workspace=..., broker=...)``
+        a :class:`~pi_harness_cfg1.cfg1_extension.GeneratedCfg1Extension`
+        carrying ONLY an extension issuance token (AM-9) -- never a path; a
+        failure raises :class:`~pi_harness_cfg1.cfg1_extension.Cfg1ExtensionError`
+        carrying ``token_material_outstanding``
     ``build_supervisor(identity=..., extension=..., environment=...,
     workspace_root=...)``
         a ``PiRpcSupervisor``-shaped object, constructed with the H2
         expectations bound ONCE from the frozen ``PROVIDER_ID`` /
         ``CFG1_MODEL_ID`` -- the same constants its argv is built from -- and
-        providing ``probe_runtime_capabilities()`` (CFG1-L16-FU2)
+        providing ``probe_runtime_capabilities()`` (CFG1-L16-FU2).
+        ``identity`` is the CFG1 static identity object; ``extension.entry_path``
+        comes from a FRESH extension-issuance verification at L14
     ``evaluate_extension_identity(supervisor=..., extension=...)``
         ``.matched``
 
@@ -237,7 +283,7 @@ class Cfg1RunPorts:
 
     ambient_environ: Mapping[str, str]
     git_executable: Callable[[], str]
-    resolve_runtime_identity: Callable[[], Any]
+    pi_proof_leaves: PiProofLeaves
     mint_workspace: Callable[..., Any]
     observe_repository: Callable[..., Any]
     run_verification: Callable[..., Any]
@@ -253,15 +299,17 @@ class Cfg1RunPorts:
 
 
 def _initial_observations() -> dict[str, Any]:
-    """The "nothing has happened yet" observation set. Every field fail-closed.
+    """The "nothing has happened yet" v2 observation set. Every field fail-closed.
 
-    A run that refuses at L1 emits exactly this, with one refusal code and one
-    step name filled in -- never a partially-optimistic record that implies
-    observations nobody made.
+    A run that refuses at L1 emits exactly this, with P's family and one
+    refusal code and step filled in -- never a partially-optimistic record
+    that implies observations nobody made. There is no ``pi_observed_version``
+    and no ``pi_version_probe_attempted``: nothing before L14 executes Pi
+    (AMEND1 AMD-4), and no replacement version field exists.
     """
     observations: dict[str, Any] = {
-        "pi_observed_version": "UNRECOGNIZED",
         "pi_seam_digests_match": False,
+        "pi_identity_failure_code": None,
         "base_url_compat_detection_clear": False,
         "route_reachable": False,
         "route_configured_model_served": False,
@@ -274,6 +322,7 @@ def _initial_observations() -> dict[str, Any]:
         "manipulation_check_agrees": False,
         "pre_dispatch_refusal_code": None,
         "refused_at_step": None,
+        "unexpected_failure_step": None,
         "dispatch_state": "NOT_ATTEMPTED",
         "prompt_writes": 0,
         "automatic_semantic_retry": False,
@@ -296,13 +345,17 @@ def _initial_observations() -> dict[str, Any]:
         "broker_pending_unreaped_zero": False,
         "broker_worker_terminated_or_absent": False,
         # "Not created counts as closed": nothing has been written yet, so
-        # there is nothing whose scrub could be unverified.
+        # there is nothing whose scrub could be unverified. L9 and L11 each
+        # write their fact FALSE ahead of the call that could write sensitive
+        # bytes (FU1 AM-13, R6 Sec. 9.2a).
         "generated_config_scrub_verified": True,
         "extension_binding_scrub_verified": True,
         "verification_child_reaped_or_not_started": True,
         "workspace_authority_reproved": False,
         "workspace_removed_verified": False,
         "workspace_residual_file_count": 0,
+        # W (R6 Sec. 8): the mint port has not been called.
+        "workspace_mint_state": WORKSPACE_MINT_NOT_ATTEMPTED,
         "lifecycle_all_closed": False,
         "lifecycle_failure_steps": [],
         "git_observation_1_performed": False,
@@ -353,12 +406,35 @@ def project_stop_reasons(events) -> tuple[bool, dict[str, int]]:
 
 
 class _PreDispatchRefusal(Exception):
-    """Internal control flow: one closed refusal code plus its step name."""
+    """Internal control flow: one closed refusal code.
+
+    ``step`` is retained only as the raising site's own label. What is
+    RECORDED is always the executor's step cursor (R6 Sec. 9.1): if the two
+    ever disagreed, the cursor would win and the record would fail its own v2
+    step/code table rather than lie about how far the run got.
+    """
 
     def __init__(self, code: str, step: str) -> None:
         super().__init__(code)
         self.code = code
         self.step = step
+
+
+class _Cfg1VerifiedExtension:
+    """The extension view L14/L15 hand to a port: an entry path from a FRESH
+    extension-issuance verification at that consumption point, and nothing
+    else. Never stored; rebuilt at each consumption boundary."""
+
+    __slots__ = ("entry_path",)
+
+    def __init__(self, entry_path: str) -> None:
+        object.__setattr__(self, "entry_path", entry_path)
+
+    def __setattr__(self, name: str, value: object) -> None:  # noqa: D105
+        raise AttributeError("the verified extension view is immutable")
+
+    def __repr__(self) -> str:  # noqa: D105
+        return f"{type(self).__name__}(<bound>)"
 
 
 @dataclass
@@ -376,6 +452,15 @@ class _RunState:
     capability: Any = None
     safety: Any = None
     console_codes: list[str] = field(default_factory=list)
+    #: R6 Sec. 9.1: the ONE step cursor, advanced at each step's entry before
+    #: its first side effect, written by nothing else.
+    cursor: str = "L1"
+    #: R6 Sec. 9.3: set by the dispatch write-ahead, immediately before the one
+    #: prompt write. Decides REFUSAL vs POST_DISPATCH_UNEXPECTED for a raise.
+    dispatch_attempted: bool = False
+    #: AMEND1 Sec. 10: the static identity a passing L1 produced. In memory
+    #: only; consumed by L12 and L14; never durable, never rendered.
+    pi_identity: Any = None
 
 
 def observe_l16_runtime_capabilities(state: _RunState, *, arm_id: str) -> dict[str, Any]:
@@ -435,11 +520,19 @@ def observe_l16_runtime_capabilities(state: _RunState, *, arm_id: str) -> dict[s
 
 
 def execute_cfg1_run(admission: Cfg1RunAdmission, *, ports: Cfg1RunPorts) -> Cfg1RunOutcome:
-    """Run L1-L28 for one admitted ordinal. TOTAL: never raises.
+    """Run L1-L28 for one admitted ordinal. TOTAL for every dispatch-phase failure.
 
     Every failure becomes bounded observation facts. The stage runner owns L0,
     L29 and L30; nothing here sees the stage-output authority, derives an
     output path, writes an artifact, or learns any ordinal's emission status.
+
+    **The three exact modes (R6 Sec. 9.2, B6).** An anticipated refusal, or an
+    unexpected raise before the dispatch write-ahead, is REFUSAL mode:
+    ``refused_at_step`` = the cursor, with the anticipated code or
+    ``UNEXPECTED_STEP_FAILURE``. An unexpected raise after the write-ahead, or
+    at L19/L20, is POST_DISPATCH_UNEXPECTED mode: ``unexpected_failure_step`` =
+    the cursor and no refusal fields. No exception at all is
+    NO_DISPATCH_FAILURE: all three absent.
     """
     observations = _initial_observations()
     state = _RunState()
@@ -447,17 +540,20 @@ def execute_cfg1_run(admission: Cfg1RunAdmission, *, ports: Cfg1RunPorts) -> Cfg
         _dispatch_phase(admission, ports=ports, observations=observations, state=state)
     except _PreDispatchRefusal as refusal:
         observations["pre_dispatch_refusal_code"] = refusal.code
-        observations["refused_at_step"] = refusal.step
-    except Exception:  # noqa: BLE001 - reduced HERE; no raw text escapes
-        observations["pre_dispatch_refusal_code"] = "OFFLINE_PREFLIGHT_FAILED"
-        observations["refused_at_step"] = "L1"
+        observations["refused_at_step"] = state.cursor
+    except Exception:  # noqa: BLE001 - reduced HERE; nothing of it is read or kept
         state.console_codes.append("RUN_STEP_RAISED_UNEXPECTEDLY")
+        if state.dispatch_attempted or state.cursor in ("L19", "L20"):
+            observations["unexpected_failure_step"] = state.cursor
+        else:
+            observations["pre_dispatch_refusal_code"] = UNEXPECTED_STEP_FAILURE
+            observations["refused_at_step"] = state.cursor
 
     _closure_phase(ports=ports, observations=observations, state=state)
 
-    from .lifecycle import compute_lifecycle_closure
+    from .lifecycle import compute_lifecycle_closure_v2
 
-    closed, failure_steps = compute_lifecycle_closure(observations)
+    closed, failure_steps = compute_lifecycle_closure_v2(observations)
     observations["lifecycle_all_closed"] = closed
     observations["lifecycle_failure_steps"] = list(failure_steps)
 
@@ -471,6 +567,35 @@ def execute_cfg1_run(admission: Cfg1RunAdmission, *, ports: Cfg1RunPorts) -> Cfg
     )
 
 
+def _resolve_git_for_l1(ports: Cfg1RunPorts) -> str:
+    """L1's Git resolution, after P's success commit. Unchanged in kind (OC-7).
+
+    ``resolve_git_executable`` resolves by name and launches nothing. A port
+    that raises is the anticipated Git-resolution refusal -- the ONLY meaning
+    ``(L1, OFFLINE_PREFLIGHT_FAILED, pi_identity_failure_code = null)`` can have
+    (AMEND1 R-S3).
+    """
+    try:
+        return ports.git_executable()
+    except Exception:  # noqa: BLE001
+        raise _PreDispatchRefusal("OFFLINE_PREFLIGHT_FAILED", "L1") from None
+
+
+def _is_genuine_mint(minted: object) -> bool:
+    """R6 Sec. 8: exactly a 2-tuple whose first member is exactly a registered
+    ``Cfg1RunWorkspace`` -- registry membership, never a path. A malformed
+    return, a foreign type, or a genuine workspace inside a malformed tuple is
+    never "extracted" from: W stays ``ATTEMPTED_NO_AUTHORITY``."""
+    from . import run_workspace as workspace_module
+
+    return (
+        type(minted) is tuple
+        and len(minted) == 2
+        and type(minted[0]) is workspace_module.Cfg1RunWorkspace
+        and workspace_module.workspace_is_registered(minted[0])
+    )
+
+
 def _dispatch_phase(
     admission: Cfg1RunAdmission,
     *,
@@ -479,38 +604,50 @@ def _dispatch_phase(
     state: _RunState,
 ) -> None:
     """L1 through L20. Raises :class:`_PreDispatchRefusal` to transfer to closure."""
+    state.cursor = "L1"
     from qualification.safety import ArtifactSafetyContext
 
-    # ---------------- L1 OFFLINE PREFLIGHT ----------------
-    try:
-        identity = ports.resolve_runtime_identity()
-    except Exception:  # noqa: BLE001
-        raise _PreDispatchRefusal("OFFLINE_PREFLIGHT_FAILED", "L1") from None
-    observations["pi_observed_version"] = _bounded_version(
-        getattr(identity, "reported_version", None)
+    # ---------------- L1 OFFLINE PREFLIGHT: the static Pi identity proof ----
+    # The SAME function object the pre-consumption gate calls, run FROM
+    # SCRATCH: nothing the gate observed can reach this call. It starts no
+    # process and executes no Node, Pi or JavaScript (AMEND1 AMD-1). An
+    # anticipated refusal is RETURNED; anything else raises into the catch-all
+    # with nothing of P's family committed.
+    result = require_pi_proof_result_shape(
+        prove_pi_identity(ports.ambient_environ, leaves=ports.pi_proof_leaves)
     )
-    digests_match, _mismatched = verify_pi_seam_digests(identity.pi_package_root)
-    observations["pi_seam_digests_match"] = digests_match
-    if not digests_match or observations["pi_observed_version"] != PINNED_PI_VERSION:
-        # A seam or version mismatch refuses BEFORE any credential read. It
-        # means the derivation must be re-reviewed, never that Pi is broken.
+    # P's family, committed atomically: plain assignments of already-validated
+    # values in which nothing can raise.
+    identity = result.identity
+    failure_code = result.failure_code
+    observations["pi_seam_digests_match"] = result.seam_digests_match
+    observations["pi_identity_failure_code"] = failure_code
+    if failure_code is not None:
+        observations["pre_dispatch_refusal_code"] = "OFFLINE_PREFLIGHT_FAILED"
+        observations["refused_at_step"] = "L1"
         raise _PreDispatchRefusal("OFFLINE_PREFLIGHT_FAILED", "L1")
+    state.pi_identity = identity
 
-    try:
-        git_executable = ports.git_executable()
-    except Exception:  # noqa: BLE001
-        raise _PreDispatchRefusal("OFFLINE_PREFLIGHT_FAILED", "L1") from None
+    git_executable = _resolve_git_for_l1(ports)
 
     # ---------------- L2 WORKSPACE MINT + POPULATE ----------------
+    state.cursor = "L2"
     from . import run_workspace as workspace_module
 
+    # W write-ahead (R6 Sec. 8): BEFORE the port is invoked, so an exception,
+    # a partial tree, a malformed return or a crash inside it can never leave
+    # NOT_ATTEMPTED behind. W never moves backwards.
+    observations["workspace_mint_state"] = WORKSPACE_MINT_ATTEMPTED_NO_AUTHORITY
     try:
-        state.workspace, state.built_fixture = ports.mint_workspace(
-            git_executable=git_executable
-        )
+        minted = ports.mint_workspace(git_executable=git_executable)
     except Exception:  # noqa: BLE001 - an orphan root may exist and is NEVER deleted
         state.console_codes.append("WORKSPACE_MINT_PARTIAL")
         raise _PreDispatchRefusal("WORKSPACE_BASELINE_FAILED", "L2") from None
+    if not _is_genuine_mint(minted):
+        state.console_codes.append("WORKSPACE_MINT_PARTIAL")
+        raise _PreDispatchRefusal("WORKSPACE_BASELINE_FAILED", "L2")
+    state.workspace, state.built_fixture = minted
+    observations["workspace_mint_state"] = WORKSPACE_MINT_AUTHORITY_RETURNED
 
     # The claim is SINGLE-USE and binds this one synthetic workspace to this one
     # invocation. Guarded like every other step: a workspace already claimed --
@@ -531,6 +668,7 @@ def _dispatch_phase(
     # Repository-controlled code (AIDO's own fixture only) runs here, BEFORE
     # any credential exists in process memory -- the frozen
     # baseline-before-credential ordering.
+    state.cursor = "L3"
     try:
         repo_root = workspace_module.verify_cfg1_run_workspace(state.workspace)
         baseline_verification = ports.run_verification(
@@ -547,12 +685,14 @@ def _dispatch_phase(
         raise _PreDispatchRefusal("WORKSPACE_BASELINE_FAILED", "L3")
 
     # ---------------- L4 CREDENTIAL BOUNDARY ----------------
+    state.cursor = "L4"
     try:
         base_url, credential_value = ports.read_connection()
     except Exception:  # noqa: BLE001
         raise _PreDispatchRefusal("CREDENTIAL_BOUNDARY_FAILED", "L4") from None
 
     # ---------------- L5 SECRET CONTEXT ----------------
+    state.cursor = "L5"
     try:
         from qualification.i2_secret_context import (
             extract_endpoint_host,
@@ -570,6 +710,7 @@ def _dispatch_phase(
     )
 
     # ---------------- L6 BASE-URL COMPAT CLASSIFICATION ----------------
+    state.cursor = "L6"
     clear = base_url_compat_detection_clear(base_url)
     observations["base_url_compat_detection_clear"] = clear
     if not clear:
@@ -578,6 +719,7 @@ def _dispatch_phase(
     # ---------------- L7 ROUTE/MODEL CHECK ----------------
     # Placed BEFORE broker/runtime creation, unlike the frozen qualification
     # controller, so a route refusal creates no live resource at all.
+    state.cursor = "L7"
     try:
         route = ports.observe_route(
             base_url=base_url, api_key=credential_value, model_id=CFG1_MODEL_ID
@@ -595,6 +737,7 @@ def _dispatch_phase(
     # Two individually genuine objects must also AGREE: a workspace minted for
     # some other run is refused here even though both it and this run are
     # genuine. The claim is single-use, so this can only ever be this run's own.
+    state.cursor = "L8"
     if not workspace_module.workspace_is_claimed_by(
         state.workspace, run_id=admission.run_id
     ):
@@ -607,6 +750,10 @@ def _dispatch_phase(
         raise _PreDispatchRefusal("CAPABILITY_MINT_FAILED", "L8") from None
 
     # ---------------- L9 CFG1 CONFIG GENERATION ----------------
+    state.cursor = "L9"
+    # FU1 AM-13 (OC-11): the scrub fact is written FALSE immediately before the
+    # one call that can put endpoint bytes on disk (category B, write-ahead).
+    observations["generated_config_scrub_verified"] = False
     try:
         # The OWNED ROOT, not the repository child. The frozen I2 generator
         # writes beside the repo for the same reason: a config directory
@@ -618,11 +765,21 @@ def _dispatch_phase(
             arm_id=admission.arm_id,
             base_url=base_url,
         )
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        # ONE decision (R6 Sec. 9.2c-A, G6): only an EXACT ``False`` of the one
+        # closed bool on the EXACT genuine error type proves no endpoint-bearing
+        # object this invocation produced is known to remain. Anything else --
+        # the bool ``True``, a non-bool, another exception type -- leaves it
+        # ``False``. Reading that one bool is not reading the exception.
+        if (
+            type(exc) is Cfg1PiConfigError
+            and getattr(exc, "endpoint_material_outstanding", None) is False
+        ):
+            observations["generated_config_scrub_verified"] = True
         raise _PreDispatchRefusal("CONFIG_GENERATION_FAILED", "L9") from None
-    observations["generated_config_scrub_verified"] = False
 
     # ---------------- L10 BROKER CONSTRUCTION ----------------
+    state.cursor = "L10"
     try:
         state.broker = ports.build_broker(capability=state.capability)
     except Exception:  # noqa: BLE001
@@ -637,19 +794,33 @@ def _dispatch_phase(
     )
 
     # ---------------- L11 EXTENSION GENERATION ----------------
+    state.cursor = "L11"
+    # FU1 (R6 Sec. 9.2a): written FALSE before the call, so an L11 raise can
+    # never leave the shipped initial ``True`` behind.
+    observations["extension_binding_scrub_verified"] = False
     try:
         state.extension = ports.write_extension(
-            owned_root=state.workspace.experiment_root, broker=state.broker
+            workspace=state.workspace, broker=state.broker
         )
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        # The same one exact-type/exact-bool decision as L9: only an exact
+        # ``False`` of ``token_material_outstanding`` on the exact CFG1-owned
+        # type proves no token-bearing object this run wrote remains. It
+        # authorizes NO deletion; it only records that a handle-bound action
+        # the writer already took discharged the obligation.
+        if (
+            type(exc) is Cfg1ExtensionError
+            and getattr(exc, "token_material_outstanding", None) is False
+        ):
+            observations["extension_binding_scrub_verified"] = True
         raise _PreDispatchRefusal("EXTENSION_GENERATION_FAILED", "L11") from None
-    observations["extension_binding_scrub_verified"] = False
 
     # ---------------- L12 CHILD ENVIRONMENT ----------------
+    state.cursor = "L12"
     try:
         launch_environment = ports.build_environment(
             ambient_environ=ports.ambient_environ,
-            node_executable=identity.node_executable,
+            node_executable=state.pi_identity.node_executable,
             generated_config=state.generated_config,
             workspace=state.workspace,
             credential_value=credential_value,
@@ -659,6 +830,7 @@ def _dispatch_phase(
         raise _PreDispatchRefusal("CHILD_ENVIRONMENT_FAILED", "L12") from None
 
     # ---------------- L13 BROKER START -> READY ----------------
+    state.cursor = "L13"
     try:
         state.broker.start()
     except Exception:  # noqa: BLE001
@@ -667,16 +839,39 @@ def _dispatch_phase(
     observations["broker_resource_created"] = True
     observations["broker_reached_ready"] = True
 
-    # ---------------- L14 PI LAUNCH ----------------
+    # ---------------- L14 PI LAUNCH: the FIRST Node/Pi execution ----------
+    state.cursor = "L14"
+    # (1) Construct the supervisor in memory: the extension entry from a FRESH
+    # issuance verification, the argv from the static identity object. This
+    # reads no Pi file and starts nothing.
     try:
+        verified_extension = _verified_extension_view(state)
         state.supervisor = ports.build_supervisor(
-            identity=identity,
-            extension=state.extension,
+            identity=state.pi_identity,
+            extension=verified_extension,
             environment=launch_environment,
             workspace_root=state.workspace.workspace_root,
         )
+    except Exception:  # noqa: BLE001
+        raise _PreDispatchRefusal("RUNTIME_LAUNCH_FAILED", "L14") from None
+    # (2) The sole pre-first-execution proof, in its fixed order: all 20 seams,
+    # then the package root vs I_r, then node.exe vs I_n. Any failure -> no
+    # launch() call, no process, runtime_created stays false.
+    try:
+        reproved = reprove_pi_identity_for_launch(
+            state.pi_identity, leaves=ports.pi_proof_leaves
+        )
+    except Exception:  # noqa: BLE001
+        reproved = False
+    if reproved is not True:
+        raise _PreDispatchRefusal("RUNTIME_LAUNCH_FAILED", "L14")
+    # (3) launch() -> Popen. NOTHING that reads the Pi tree, resolves a name,
+    # or executes anything sits between the re-proof above and this call.
+    try:
         state.supervisor.launch()
     except Exception:  # noqa: BLE001
+        # CreateProcess failure is L14 with no process; a process that was
+        # created and then failed at start-up surfaces at L15 (AMEND1 Sec. 9).
         if getattr(state.supervisor, "process", None) is not None:
             observations["runtime_created"] = True
         raise _PreDispatchRefusal("RUNTIME_LAUNCH_FAILED", "L14") from None
@@ -684,9 +879,10 @@ def _dispatch_phase(
     state.l14_launched_supervisor = state.supervisor
 
     # ---------------- L15 RPC CORRELATION + H1 ----------------
+    state.cursor = "L15"
     try:
         h1 = ports.evaluate_extension_identity(
-            supervisor=state.supervisor, extension=state.extension
+            supervisor=state.supervisor, extension=_verified_extension_view(state)
         )
     except Exception:  # noqa: BLE001
         raise _PreDispatchRefusal("RUNTIME_CORRELATION_FAILED", "L15") from None
@@ -697,6 +893,7 @@ def _dispatch_phase(
     # ---------------- L16 H2 + MANIPULATION CHECK ----------------
     # CFG1-L16-FU2: the ONE get_state is the AR2 probe's own, on this run's
     # own supervisor; the four facts are reduced before AR2's reasoning drop.
+    state.cursor = "L16"
     observations.update(
         observe_l16_runtime_capabilities(state, arm_id=admission.arm_id)
     )
@@ -709,19 +906,20 @@ def _dispatch_phase(
         raise _PreDispatchRefusal("CONFIG_SHAPE_MISMATCH", "L16")
 
     # ---------------- L17 PRE-DISPATCH BASELINE ----------------
+    state.cursor = "L17"
     try:
         dispatch_baseline = capture_cfg1_dispatch_baseline(state.supervisor)
     except Exception:  # noqa: BLE001
         raise _PreDispatchRefusal("PRE_DISPATCH_BASELINE_FAILED", "L17") from None
 
     # ---------------- L18 ONE PROMPT WRITE ----------------
-    dispatch_state, refusal = _write_one_prompt(state.supervisor)
-    observations["dispatch_state"] = dispatch_state
-    observations["prompt_writes"] = 0 if dispatch_state == "NOT_ATTEMPTED" else 1
+    state.cursor = "L18"
+    refusal = _write_one_prompt(state.supervisor, observations=observations, state=state)
     if refusal is not None:
         raise _PreDispatchRefusal(refusal, "L18")
 
     # ---------------- L19 TURN OBSERVATION ----------------
+    state.cursor = "L19"
     try:
         wait_outcome = state.supervisor.await_settled(
             timeout_seconds=_turn_deadline_seconds()
@@ -733,6 +931,7 @@ def _dispatch_phase(
     # ---------------- L20 PHI-4 PROJECTION ----------------
     # Runtime facts are frozen into plain values BEFORE the runtime is torn
     # down. Nothing live is retained past this point.
+    state.cursor = "L20"
     observations.update(
         obs1.project_cfg1_runtime_activity(
             activity=state.supervisor.activity,
@@ -762,34 +961,66 @@ def _dispatch_phase(
     )
 
 
-def _write_one_prompt(supervisor) -> tuple[str, str | None]:
+def _verified_extension_view(state: _RunState) -> _Cfg1VerifiedExtension:
+    """A fresh extension-issuance verification at THIS consumption point.
+
+    The entry path is re-derived from the run's own workspace by the issuance
+    module -- never read from a caller-mutable attribute -- and the directory
+    and every static child are re-proven (identity and digest) each time.
+    """
+    from . import extension_issuance
+
+    record = extension_issuance.verify_extension_issuance(
+        token=getattr(state.extension, "issuance_token", None), workspace=state.workspace
+    )
+    return _Cfg1VerifiedExtension(record.entry_path)
+
+
+def _write_one_prompt(
+    supervisor, *, observations: dict[str, Any], state: _RunState
+) -> str | None:
     """L18. ONE write, one correlated wait, and never a second attempt.
 
     "Prompt sent?" here means only whether a prompt write reached Pi's stdin.
     It is never a claim that a model request did or did not occur.
+
+    **Write-ahead (R6 Sec. 9.3, AM-5).** Immediately before ``send_command``
+    the truthful "a write may have reached Pi's stdin" state is recorded --
+    ``SEND_STATE_INDETERMINATE`` and ``prompt_writes = 1`` -- and it is refined
+    to ``CONFIRMED_SENT``/``CONFIRMED_NOT_SENT`` only from a correlated
+    response of exactly the expected shape (a ``dict`` whose ``success`` is an
+    exact ``bool``). A non-``dict`` response, or any raise after the write
+    attempt, leaves the indeterminate state. Returns the refusal code, if any.
     """
     from ar2.supervisor import RunBounds
 
     command_id = _fresh_command_id()
+    observations["dispatch_state"] = "SEND_STATE_INDETERMINATE"
+    observations["prompt_writes"] = 1
+    state.dispatch_attempted = True
     try:
         supervisor.send_command(
             {"id": command_id, "type": "prompt", "message": CFG1_T1.prompt}
         )
     except Exception:  # noqa: BLE001 - the write itself may have partially landed
-        return "SEND_STATE_INDETERMINATE", None
+        return None
     try:
-        outcome, response = supervisor.await_response(
+        _outcome, response = supervisor.await_response(
             command_id, timeout_seconds=RunBounds().startup_deadline_seconds
         )
     except Exception:  # noqa: BLE001
-        return "SEND_STATE_INDETERMINATE", None
-    if response is None:
-        return "SEND_STATE_INDETERMINATE", None
-    if response.get("success") is False:
+        return None
+    if type(response) is not dict:
+        return None
+    success = response.get("success")
+    if success is False:
         # Written to Pi, and Pi itself declined it -- a systematic runtime
         # refusal, never a dispatch to a model.
-        return "CONFIRMED_NOT_SENT", "PROMPT_REFUSED_BY_RUNTIME"
-    return "CONFIRMED_SENT", None
+        observations["dispatch_state"] = "CONFIRMED_NOT_SENT"
+        return "PROMPT_REFUSED_BY_RUNTIME"
+    if success is True:
+        observations["dispatch_state"] = "CONFIRMED_SENT"
+    return None
 
 
 def _fresh_command_id() -> str:
@@ -804,6 +1035,53 @@ def _turn_deadline_seconds() -> float:
     return RunBounds().turn_deadline_seconds
 
 
+def _scrub_generated_config(state: _RunState) -> bool:
+    """L24 for ``models.json``: a handle-bound CONTENT scrub (AMEND2, Y6).
+
+    The token comes from the executor's own state and is only a lookup key: it
+    must name an ACTIVE config issuance whose run-workspace nonce equals this
+    run's genuine workspace. No pathname is opened, re-derived or consulted, no
+    path field of any public object is read, and no filesystem re-proof of the
+    root is a precondition (AMD2-4). ``True`` only after the retained handle
+    scrubbed the exact issued object (truncate -> flush -> ``EndOfFile == 0``)
+    and every handle it had to release was released. The issuance is retired
+    single-shot; a foreign same-name object is never opened, modified or
+    deleted. L24 deletes no name -- L27 alone does namespace cleanup.
+    """
+    from . import config_issuance
+
+    token = getattr(state.generated_config, "issuance_token", None)
+    try:
+        return (
+            config_issuance.scrub_config_issuance(token=token, workspace=state.workspace)
+            is True
+        )
+    except Exception:  # noqa: BLE001 - an unproven scrub is simply False
+        return False
+
+
+def _scrub_extension_binding(state: _RunState) -> bool:
+    """L24 for ``ar2_config.ts``: the same handle-bound content scrub.
+
+    The exact counterpart of :func:`_scrub_generated_config` over the extension
+    issuance's retained handle to the token-bearing object. Each file is
+    scrubbed independently: a ``False`` on one never skips, upgrades or masks
+    the other.
+    """
+    from . import extension_issuance
+
+    token = getattr(state.extension, "issuance_token", None)
+    try:
+        return (
+            extension_issuance.scrub_extension_issuance(
+                token=token, workspace=state.workspace
+            )
+            is True
+        )
+    except Exception:  # noqa: BLE001 - an unproven scrub is simply False
+        return False
+
+
 def _closure_phase(
     *, ports: Cfg1RunPorts, observations: dict[str, Any], state: _RunState
 ) -> None:
@@ -813,7 +1091,6 @@ def _closure_phase(
     outcome is recorded and the ladder continues, exactly as Sec. 18's
     dependency notes require.
     """
-    from . import config_issuance
     from . import run_workspace as workspace_module
 
     # ---------------- L21 RUNTIME TEARDOWN ----------------
@@ -881,39 +1158,14 @@ def _closure_phase(
     # ---------------- L24 GENERATED MATERIAL SCRUB ----------------
     # Must precede any execution of model-influenced code (L26), which could
     # otherwise read the endpoint from models.json or the token from the
-    # generated extension config.
-    owned_root = (
-        state.workspace.experiment_root if state.workspace is not None else None
-    )
+    # generated extension config. Each file's scrub is INDEPENDENT: a False on
+    # one never skips or upgrades the other. Neither is ever set True from a
+    # pathname observation (G7), and L27's later success never upgrades either
+    # (G5). A run that never reached L9 / L11 keeps that step's own value.
     if state.generated_config is not None:
-        # CFG1-IMPL-FU2 Finding 2: the scrub target is the VERIFIED issuance
-        # record's own ``models_path``, never ``state.generated_config.
-        # models_path`` -- that object is a caller-mutable plain attribute
-        # holder, and a genuine ``issuance_token`` paired with a substituted
-        # ``models_path`` must not be able to steer L24 into unlinking an
-        # arbitrary path. A token that fails re-verification (already
-        # discarded, workspace mismatch, redirected, digest mismatch) yields
-        # no scrub target at all rather than falling back to the unverified
-        # field, and the scrub is reported unverified.
-        try:
-            issuance_record = config_issuance.verify_config_issuance(
-                token=state.generated_config.issuance_token, workspace=state.workspace
-            )
-        except config_issuance.ConfigIssuanceError:
-            issuance_record = None
-        if issuance_record is None:
-            observations["generated_config_scrub_verified"] = False
-        else:
-            observations["generated_config_scrub_verified"] = _verified_unlink(
-                issuance_record.models_path,
-                owned_root=owned_root,
-                expected_identity=issuance_record.models_identity,
-            )
-        config_issuance.discard_config_issuance(state.generated_config.issuance_token)
+        observations["generated_config_scrub_verified"] = _scrub_generated_config(state)
     if state.extension is not None:
-        observations["extension_binding_scrub_verified"] = _scrub_extension_binding(
-            getattr(state.extension, "extension_dir", None), owned_root=owned_root
-        )
+        observations["extension_binding_scrub_verified"] = _scrub_extension_binding(state)
 
     # ---------------- L25 GIT OBSERVATION #1 ----------------
     if state.workspace is not None:
@@ -1048,7 +1300,14 @@ def _closure_phase(
             observations["git_observation_2_performed"] = False
 
     # ---------------- L27 WORKSPACE REMOVAL ----------------
-    if state.workspace is not None:
+    # Decided by W, never by a path and never by ``refused_at_step`` (R6 Sec.
+    # 8): NOT_ATTEMPTED -> nothing to close; ATTEMPTED_NO_AUTHORITY -> nothing
+    # is ever deleted and the facts stay unproven; AUTHORITY_RETURNED -> the
+    # existing re-proof and removal, unchanged.
+    if (
+        observations["workspace_mint_state"] == WORKSPACE_MINT_AUTHORITY_RETURNED
+        and state.workspace is not None
+    ):
         try:
             workspace_module.verify_cfg1_run_workspace(state.workspace)
             observations["workspace_authority_reproved"] = True
@@ -1096,109 +1355,6 @@ def _broker_git_cross_check(observations: Mapping[str, Any], changed: list[str])
     return True
 
 
-def _scrub_extension_binding(extension_dir: object, *, owned_root: object) -> bool:
-    """L24's extension scrub: the FROZEN verified scrubber, contained first.
-
-    Sec. 7.4 lists ``ar2.pi_config.scrub_generated_extension_config`` among the
-    modules CFG1 reuses UNMODIFIED, so CFG1 consumes it rather than
-    substituting an equivalent of its own -- it already removes the one
-    token-bearing generated file and VERIFIES the removal by stat.
-
-    CFG1 adds exactly one thing in front of it: a canonical containment proof
-    that the directory lies inside this run's own owned root. The frozen
-    scrubber takes a bare path, as it always has; proving ownership before
-    handing it one is this package's own responsibility, not an edit to it.
-    """
-    import os
-
-    if type(extension_dir) is not str or not extension_dir:
-        return True
-    if type(owned_root) is not str or not owned_root:
-        return False
-    try:
-        resolved = os.path.realpath(extension_dir)
-        resolved_root = os.path.realpath(owned_root)
-        if os.path.commonpath([resolved, resolved_root]) != resolved_root:
-            return False
-        if resolved == resolved_root:
-            return False
-    except (OSError, ValueError):
-        return False
-
-    from ar2.pi_config import scrub_generated_extension_config
-
-    try:
-        result = scrub_generated_extension_config(resolved)
-    except OSError:
-        return False
-    return _exact_bool(result.get("generated_binding_file_removed"))
-
-
-def _verified_unlink(
-    path: object, *, owned_root: object, expected_identity: object = None
-) -> bool:
-    """L24's PRECISE child authority. Identity-bound, never name-bound.
-
-    **Contained, not merely named.** The path must lie inside the run's own
-    owned workspace root, proven by canonical containment rather than by a
-    prefix comparison on the raw strings. A cleanup helper that unlinked
-    whatever path it was handed is exactly the "cleanup functions accepting
-    bare identifiers" shape this design refuses everywhere else -- and the call
-    site already holds the owned root, so there is no cost to proving it.
-
-    **Sec. 37.3.2a, and why containment alone is not enough (FU15).** L27's
-    namespace teardown may truthfully remove a descendant CFG1 did not create,
-    because it re-proves authority over the whole owned root. An individual
-    sensitive-file operation may not: "somewhere inside the root, under the
-    right name" would let a same-name replacement planted between issuance and
-    L24 be deleted as though it were the generated file. So when the caller
-    supplies the identity the issuance record bound, the target is re-opened
-    without following a redirect, ``os.stat(fd)`` is compared against that
-    identity, and disposal happens THROUGH THAT SAME HANDLE. A mismatch deletes
-    nothing at all and reports the scrub unverified; there is no pathname
-    fallback, and the identity check is never skipped once bound.
-
-    Returns ``True`` when nothing the issuance authorized remains, which is
-    also the correct answer when the file was never written.
-    """
-    import os
-
-    if type(path) is not str or not path:
-        return True
-    if type(owned_root) is not str or not owned_root:
-        return False
-    try:
-        resolved = os.path.realpath(path)
-        resolved_root = os.path.realpath(owned_root)
-        if os.path.commonpath([resolved, resolved_root]) != resolved_root:
-            return False
-        if resolved == resolved_root:
-            return False
-    except (OSError, ValueError):
-        return False
-
-    if expected_identity is not None:
-        from . import win_config_authority as win
-
-        return win.identity_bound_unlink(path, expected_identity=expected_identity)
-
-    try:
-        if os.path.exists(resolved):
-            os.unlink(resolved)
-    except (OSError, ValueError):
-        return False
-    return not os.path.exists(resolved)
-
-
-def _bounded_version(value: object) -> str:
-    """A bounded version literal, or the closed ``UNRECOGNIZED``."""
-    import re
-
-    if type(value) is str and re.fullmatch(r"[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}", value):
-        return value
-    return "UNRECOGNIZED"
-
-
 def default_cfg1_run_ports(*, ambient_environ: Mapping[str, str]) -> Cfg1RunPorts:
     """Bind the frozen modules for the eventual, separately-authorized live run.
 
@@ -1209,11 +1365,16 @@ def default_cfg1_run_ports(*, ambient_environ: Mapping[str, str]) -> Cfg1RunPort
     ``read_connection`` is the one place an endpoint or credential value is
     ever read, and it happens only when a run reaches L4 -- after every
     non-secret gate has already passed.
+
+    **FU1.** ``pi_proof_leaves`` is the SAME genuine leaf binding the
+    pre-consumption gate uses (:func:`pi_identity.genuine_pi_proof_leaves`);
+    ``ar2.launch.resolve_runtime_identity`` is no longer imported by CFG1 at
+    all, and neither is ``ar2.pi_config.write_disposable_extension`` -- L11 is
+    the CFG1-owned transactional writer.
     """
     import os
     import secrets
     from dataclasses import dataclass as _dataclass
-    from pathlib import Path
 
     from ar2.broker import (
         TRIGGER_AIDO_TEARDOWN,
@@ -1225,13 +1386,13 @@ def default_cfg1_run_ports(*, ambient_environ: Mapping[str, str]) -> Cfg1RunPort
     )
     from ar2.capability import CapDefinitions, mint_capability
     from ar2.handshakes import evaluate_extension_identity
-    from ar2.launch import build_pi_argv, resolve_runtime_identity
+    from ar2.launch import build_pi_argv
     from ar2.observation import observe_repository
-    from ar2.pi_config import write_disposable_extension
     from ar2.supervisor import PiRpcSupervisor, RunBounds
     from ar2.verification import run_verification
 
     from . import run_workspace as workspace_module
+    from .cfg1_extension import write_cfg1_extension
     from .cfg1_pi_config import write_cfg1_pi_config
     from .environment import build_cfg1_child_environment
 
@@ -1282,7 +1443,9 @@ def default_cfg1_run_ports(*, ambient_environ: Mapping[str, str]) -> Cfg1RunPort
     def _build_supervisor(*, identity, extension, environment, workspace_root: str):
         # R-40: the argv's provider/model and the probe's H2 expectations come
         # from the SAME frozen module constants -- never a literal, the
-        # environment, a config file, or anything runtime-derived.
+        # environment, a config file, or anything runtime-derived. ``identity``
+        # is the CFG1 static identity object: the frozen ``build_pi_argv``
+        # reads exactly its ``node_executable`` and ``pi_cli_js`` (Test AG).
         return PiRpcSupervisor(
             argv=build_pi_argv(
                 identity,
@@ -1413,32 +1576,18 @@ def default_cfg1_run_ports(*, ambient_environ: Mapping[str, str]) -> Cfg1RunPort
             capability_id=capability.capability_id,
         )
 
-    def _write_extension(*, owned_root: str, broker):
-        """The frozen writer, over the STATIC AR2 extension sources.
+    def _write_extension(*, workspace, broker):
+        """L11 -- the CFG1-owned transactional writer (FU1 AM-9, AM-14).
 
         The generated ``ar2_config.ts`` is the ONLY place the broker token
-        exists on disk, and it lives inside the run's own owned root -- which
-        is what makes L24's verified unlink a complete scrub of it.
+        exists on disk; the writer returns only an extension issuance token,
+        which L14/L15 re-verify and L24 consumes by identity.
         """
-        from ar2 import __file__ as _ar2_init
-
-        generated = write_disposable_extension(
-            owned_root,
-            source_dir=str(Path(_ar2_init).resolve().parent.parent / "extension"),
-            experiment_id="pi_harness_cfg1",
+        return write_cfg1_extension(
+            workspace,
             pipe_name=broker.pipe_name,
             capability_id=broker.capability_id,
             token=broker.token,
-        )
-
-        @_dataclass(frozen=True)
-        class _Cfg1Extension:
-            entry_path: str
-            extension_dir: str
-
-        return _Cfg1Extension(
-            entry_path=generated.extension_entry,
-            extension_dir=generated.extension_dir,
         )
 
     @_dataclass(frozen=True)
@@ -1469,9 +1618,7 @@ def default_cfg1_run_ports(*, ambient_environ: Mapping[str, str]) -> Cfg1RunPort
     return Cfg1RunPorts(
         ambient_environ=ambient_environ,
         git_executable=_git_executable,
-        resolve_runtime_identity=lambda: resolve_runtime_identity(
-            expected_version=PINNED_PI_VERSION
-        ),
+        pi_proof_leaves=genuine_pi_proof_leaves(),
         mint_workspace=workspace_module.mint_cfg1_run_workspace,
         observe_repository=lambda *, workspace_root: observe_repository(
             git_executable=_git_executable(), workspace_root=workspace_root

@@ -101,6 +101,7 @@ from .run_workspace import (
     Cfg1RunWorkspace,
     Cfg1WorkspaceAuthorityError,
     verify_cfg1_run_workspace,
+    workspace_is_registered,
 )
 
 
@@ -133,6 +134,12 @@ class _IssuanceRecord:
     config_dir_identity: tuple[int, int] = field(repr=False, default=(-1, -1))
     settings_identity: tuple[int, int] = field(repr=False, default=(-1, -1))
     models_identity: tuple[int, int] = field(repr=False, default=(-1, -1))
+    #: **AMEND2 (Y6).** The private, zero-access, exact-object authority this
+    #: issuance owns for ``models.json`` (RA-5). It is a mint-backed value that
+    #: carries a nonce only; the raw handle lives in
+    #: :data:`win_config_authority._RETAINED` and is never a field of anything
+    #: public. Never rendered.
+    retained: object = field(repr=False, default=None)
 
     def __repr__(self) -> str:  # noqa: D105 - paths are never rendered
         return f"{type(self).__name__}(<bound>)"
@@ -193,6 +200,9 @@ def register_config_issuance(
     proven: win.ProvenConfigChildren,
     settings_child: win.ExclusiveChild,
     models_child: win.ExclusiveChild,
+    expected_settings_sha256: str | None = None,
+    expected_models_sha256: str | None = None,
+    retained: win.RetainedAuthority | None = None,
 ) -> str:
     """Register the just-written config directory for ``workspace``'s run.
 
@@ -212,6 +222,24 @@ def register_config_issuance(
     text and on-disk bytes legitimately differ, and a fresh pathname open would
     be asking about whatever the name resolves to a moment later rather than
     about the object the gate proved.
+
+    **FU1 (R6 Sec. 9.2b item 6) -- issuance binds the bytes step 9a checked.**
+    ``expected_settings_sha256``/``expected_models_sha256`` are the raw
+    SHA-256 of the exact bytes L9's step 9a compared with the independent pins.
+    Registration REFUSES unless both are supplied and equal this function's own
+    read-back digests. Share mode 0 already makes equality expected; this makes
+    it mechanical. (They default to ``None`` only so that a caller omitting them
+    reaches the provenance refusal first; ``None`` is itself refused.)
+
+    **AMEND2 (Y6, RA-3/RA-5) -- the retained exact-object authority.**
+    ``retained`` is the ``config_models`` authority L9 acquired from
+    ``models.json``'s creating handle. Registration runs every check above
+    while the genuine creating handles are still held, then additionally
+    requires that ``retained`` is the exact type, of kind ``config_models``,
+    minted in the SAME typed interval as the proof and children, with an
+    identity equal to the models child's, and not already owned by another
+    issuance. The registry insert -- which takes ownership -- is the LAST
+    statement here, so a raise before it never leaves ownership half-taken.
     """
     config_dir, settings_path, models_path = derive_cfg1_config_paths(workspace)
     if type(proven) is not win.ProvenConfigChildren:
@@ -247,9 +275,38 @@ def register_config_issuance(
     except win.Cfg1DirectoryAuthorityError as exc:
         raise ConfigIssuanceError("GENERATED_FILES_UNREADABLE") from exc
 
+    settings_sha256 = hashlib.sha256(settings_bytes).hexdigest()
+    models_sha256 = hashlib.sha256(models_bytes).hexdigest()
+    if (
+        type(expected_settings_sha256) is not str
+        or type(expected_models_sha256) is not str
+        or settings_sha256 != expected_settings_sha256
+        or models_sha256 != expected_models_sha256
+    ):
+        raise ConfigIssuanceError("CHECKED_BYTES_NOT_BOUND")
+
+    try:
+        if type(retained) is not win.RetainedAuthority:
+            raise ConfigIssuanceError("RETAINED_AUTHORITY_NOT_BOUND")
+        if win.retained_kind(retained) != win.RETAINED_KIND_CONFIG_MODELS:
+            raise ConfigIssuanceError("RETAINED_AUTHORITY_NOT_BOUND")
+        if win.retained_interval_nonce(retained) != win.child_interval_nonce(models_child):
+            raise ConfigIssuanceError("RETAINED_AUTHORITY_NOT_BOUND")
+        if win.retained_identity(retained) != models_identity:
+            raise ConfigIssuanceError("RETAINED_AUTHORITY_NOT_BOUND")
+    except win.Cfg1DirectoryAuthorityError as exc:
+        raise ConfigIssuanceError("RETAINED_AUTHORITY_NOT_BOUND") from exc
+    if any(
+        record.retained is not None and record.retained.nonce == retained.nonce
+        for record in _ISSUED.values()
+    ):
+        raise ConfigIssuanceError("RETAINED_AUTHORITY_ALREADY_OWNED")
+
     token = secrets.token_hex(_TOKEN_BYTES)
     if token in _ISSUED:  # pragma: no cover - a 128-bit collision
         raise ConfigIssuanceError("ISSUANCE_TOKEN_ALREADY_REGISTERED")
+    # The insert, which takes ownership of ``retained`` (RA-5), is the LAST
+    # statement that can fail or be interrupted: nothing follows it but return.
     _ISSUED[token] = _IssuanceRecord(
         run_workspace_nonce=workspace.run_workspace_nonce,
         config_dir=config_dir,
@@ -258,11 +315,12 @@ def register_config_issuance(
         arm_id=arm_id,
         provider_id=provider_id,
         model_id=model_id,
-        settings_sha256=hashlib.sha256(settings_bytes).hexdigest(),
-        models_sha256=hashlib.sha256(models_bytes).hexdigest(),
+        settings_sha256=settings_sha256,
+        models_sha256=models_sha256,
         config_dir_identity=config_dir_identity,
         settings_identity=settings_identity,
         models_identity=models_identity,
+        retained=retained,
     )
     return token
 
@@ -316,11 +374,77 @@ def verify_config_issuance(*, token: str, workspace: Cfg1RunWorkspace) -> _Issua
     return record
 
 
-def discard_config_issuance(token: str) -> None:
-    """Forget one issuance record. Idempotent, no I/O."""
-    if type(token) is not str:
-        return
+def reclaim_config_issuance(retained: object) -> bool:
+    """RECLAIM (writer only): take a registered retained authority back. No I/O.
+
+    Ownership is decided by asking the registry, keyed by the retained authority
+    ITSELF -- never by a token string a caller holds and never by a path -- so a
+    registration that committed without the writer learning its token (an
+    interruption between the insert and ``return``) is still found (RA-5).
+    Removes the ACTIVE entry that references ``retained`` and returns ``True``;
+    ``False`` when none does. Idempotent: a second call finds nothing.
+    """
+    if type(retained) is not win.RetainedAuthority:
+        return False
+    for token, record in list(_ISSUED.items()):
+        held = record.retained
+        if held is not None and held.nonce == retained.nonce:
+            _ISSUED.pop(token, None)
+            return True
+    return False
+
+
+def scrub_config_issuance(*, token: object, workspace: object) -> bool:
+    """L24 for ``models.json``: retire the issuance WITH a handle-bound scrub.
+
+    **AMEND2 (Y6) section 12.** The authority is the genuine issuance registry
+    entry bound to THIS run's workspace, never a pathname. ``True`` only after
+    SCRUB-R completed on the exact object and every handle it had to release was
+    released.
+
+    1. ``token`` is a ``str`` naming an ACTIVE entry of this kind, and that
+       entry's ``run_workspace_nonce`` equals the nonce of the run's genuine,
+       still-registered :class:`Cfg1RunWorkspace` (type-exact). Any failure is
+       ``False`` and the entry, if any, is NOT touched and NO I/O occurs -- an
+       entry belonging to another run is never retired here.
+    2. The entry is removed FIRST (single-shot, RA-7) and its retained
+       authority scrubbed and released.
+
+    No pathname is read from the record or opened: no path field, identity or
+    digest of the public result object or of a filesystem re-proof is a
+    precondition (AMD2-4). A second call for the same token finds nothing and
+    returns ``False`` with no I/O.
+    """
+    if type(token) is not str or not token:
+        return False
+    record = _ISSUED.get(token)
+    if record is None:
+        return False
+    if (
+        not workspace_is_registered(workspace)
+        or workspace.run_workspace_nonce != record.run_workspace_nonce
+    ):
+        return False
     _ISSUED.pop(token, None)
+    return win.scrub_retire_retained(record.retained)
+
+
+def discard_config_issuance(token: object) -> bool:
+    """Retire one issuance for cleanup WITHOUT the L24 ownership check.
+
+    For a genuine issuance that must not simply be forgotten -- a caller that
+    abandons a generated config, or a test that generated one directly -- the
+    retained authority is scrub-retired rather than popped, because a pure pop
+    would STRAND the retained handle (RA-6). Idempotent: an unknown token does
+    nothing and returns ``False``. The executor's L24 uses
+    :func:`scrub_config_issuance`, which additionally binds the run's workspace.
+    """
+    if type(token) is not str:
+        return False
+    record = _ISSUED.pop(token, None)
+    if record is None:
+        return False
+    return win.scrub_retire_retained(record.retained)
 
 
 def issued_token_count() -> int:

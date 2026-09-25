@@ -410,6 +410,36 @@ def test_fu4_2_no_supported_callable_sequence_mints_a_generation_interval(worksp
         "pi_harness_cfg1.environment._narrowed_path",
         "pi_harness_cfg1.environment.audit_withheld_names",
         "pi_harness_cfg1.environment.build_cfg1_child_environment",
+        # FU1 additions, each uninvoked for the same reason -- a REQUIRED
+        # parameter no supported caller has a value for: raw bytes to write
+        # (``data``), a CRT descriptor (``descriptor``), raw file bytes
+        # (``raw``), an interval KIND (``kind``), and a read bound
+        # (``max_bytes``). None of them mints, stamps or consumes provenance;
+        # the AM-10 typed-interval boundary itself is swept above through
+        # ``require_production_issuance_provenance`` and is pinned directly by
+        # the FU1 AM-10 regressions.
+        "pi_harness_cfg1.win_config_authority.write_child_bytes",
+        # AMEND2 (Y6) additions, each uninvoked because a REQUIRED parameter has
+        # no supported value in the pool: a raw HANDLE / access mask / share
+        # mode (``handle``, ``access``), a retained authority (``retained``), or
+        # the retained KIND (``kind``). ``retain_child`` in particular needs an
+        # OPEN interval of the matching kind, which no caller can hold, so it is
+        # pinned directly by the AMEND2 typed-interval regressions instead.
+        "pi_harness_cfg1.win_config_authority._close_counted",
+        "pi_harness_cfg1.win_config_authority._close_handle",
+        "pi_harness_cfg1.win_config_authority._reopen_file",
+        "pi_harness_cfg1.win_config_authority._retained_entry",
+        "pi_harness_cfg1.win_config_authority.release_retained",
+        "pi_harness_cfg1.win_config_authority.retain_child",
+        "pi_harness_cfg1.win_config_authority.retained_identity",
+        "pi_harness_cfg1.win_config_authority.retained_interval_nonce",
+        "pi_harness_cfg1.win_config_authority.retained_kind",
+        "pi_harness_cfg1.win_config_authority.retained_kind_is_valid",
+        "pi_harness_cfg1.win_config_authority.scrub_retire_retained",
+        "pi_harness_cfg1.config_issuance.reclaim_config_issuance",
+        "pi_harness_cfg1.win_config_authority._require_typed_provenance",
+        "pi_harness_cfg1.win_config_authority.read_regular_file_once",
+        "pi_harness_cfg1.cfg1_pi_config._declared_newline_canonical",
     }, sorted(set(swept) - invoked)
 
     assert returned_intervals == [], returned_intervals
@@ -670,13 +700,13 @@ def test_fu4_5_the_genuine_generator_still_produces_one_consumable_issuance(
         )
         assert built.pi_config_dir == record.config_dir
 
-        # L24 still consumes it: the identity-bound scrub removes exactly the
-        # endpoint-bearing file it issued, and nothing else.
-        assert win.identity_bound_unlink(
-            record.models_path, expected_identity=record.models_identity
-        )
-        assert not os.path.lexists(record.models_path)
-        assert Path(record.settings_path).exists()
+        # L24 still consumes it: the handle-bound scrub (AMEND2) empties exactly
+        # the endpoint-bearing object it issued, and nothing else.
+        assert config_issuance.scrub_config_issuance(
+            token=generated.issuance_token, workspace=workspace
+        ) is True
+        assert Path(record.models_path).read_bytes() == b""
+        assert Path(record.settings_path).read_bytes() != b""
     finally:
         config_issuance.discard_config_issuance(generated.issuance_token)
 
@@ -1335,13 +1365,22 @@ def test_fu4_fu2_1_discard_config_issuance_is_the_exact_local_idempotent_retirem
     # else -- no import, no I/O call, no branch this test has not accounted
     # for. Whitespace-normalized so reformatting alone cannot break it, but
     # any ADDED statement, call, or dependency changes this string.
-    source = inspect.getsource(config_issuance.discard_config_issuance)
-    normalized = " ".join(source.split())
-    assert normalized == (
-        'def discard_config_issuance(token: str) -> None: '
-        '"""Forget one issuance record. Idempotent, no I/O.""" '
-        'if type(token) is not str: return _ISSUED.pop(token, None)'
+    #
+    # AMEND2 (Y6) amended this from "one dict pop" to "one dict pop, then the
+    # single handle-bound retirement of the record's retained authority": a
+    # pure pop would STRAND the retained handle. So the source is checked
+    # structurally -- the only calls in it are ``type``, the registry ``pop``
+    # and ``win.scrub_retire_retained`` -- which still admits no pathname,
+    # filesystem, network, subprocess or model call.
+    import ast
+    import textwrap
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(config_issuance.discard_config_issuance)))
+    called = sorted(
+        ast.unparse(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)
     )
+    assert called == ["_ISSUED.pop", "type", "win.scrub_retire_retained"]
+    assert not any(isinstance(node, (ast.Import, ast.ImportFrom)) for node in ast.walk(tree))
 
     generated_a = write_cfg1_pi_config(workspace, arm_id="Q", base_url=SYNTHETIC_BASE_URL)
     handle_b, _built_b = run_workspace.mint_cfg1_run_workspace(
@@ -1491,9 +1530,9 @@ def test_fu4_the_issuance_boundary_still_asks_only_what_it_claims_to_ask(
 
     ``verify_config_issuance`` re-proves DIGESTS, not object identity, and it
     says so. The identity binding the record carries is L24's authority
-    (Sec. 37.3.2a), exercised by :func:`identity_bound_unlink` -- so a
+    (Sec. 37.3.2a), exercised by the handle-bound scrub (AMEND2) -- so a
     byte-identical same-name replacement planted after issuance still verifies
-    at L12's boundary and is still refused at L24's. That split is the frozen
+    at L12's boundary and is never reached by L24. That split is the frozen
     design's, and this row exists so a future change to either half is a
     deliberate decision rather than an accident.
     """
@@ -1517,10 +1556,13 @@ def test_fu4_the_issuance_boundary_still_asks_only_what_it_claims_to_ask(
         )
         assert again.models_sha256 == record.models_sha256
 
-        # L24's identity-bound authority refuses it, and deletes nothing.
-        assert not win.identity_bound_unlink(
-            record.models_path, expected_identity=original_identity
-        )
-        assert Path(record.models_path).exists()
+        # L24's handle-bound authority (AMEND2) never consults the name, so the
+        # replacement is neither read nor modified nor deleted; the ISSUED
+        # object is the one scrubbed.
+        assert config_issuance.scrub_config_issuance(
+            token=generated.issuance_token, workspace=workspace
+        ) is True
+        assert Path(record.models_path).read_bytes() == original_bytes
+        assert os.stat(record.models_path).st_ino == replacement.st_ino
     finally:
         config_issuance.discard_config_issuance(generated.issuance_token)

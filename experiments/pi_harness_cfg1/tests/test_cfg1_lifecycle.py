@@ -120,8 +120,11 @@ def test_the_clean_path_closes_every_resource_and_classifies_inactive(
 # T-11 -- one injected failure per step, against Sec. 16.2's own refusal codes
 # ---------------------------------------------------------------------------
 
+# FU1 (AMEND1 AMD-1): L1 has no identity-probe port any more -- the static Pi
+# identity proof is not a port, and its three anticipated refusals (and its
+# unexpected-raise boundaries) are exercised by FU1 Tests A and G. L1's one
+# remaining port is Git resolution.
 _PRE_RESOURCE_INJECTIONS = [
-    ("L1", "resolve_runtime_identity", "OFFLINE_PREFLIGHT_FAILED"),
     ("L1", "git_executable", "OFFLINE_PREFLIGHT_FAILED"),
     ("L2", "mint_workspace", "WORKSPACE_BASELINE_FAILED"),
     ("L4", "read_connection", "CREDENTIAL_BOUNDARY_FAILED"),
@@ -407,7 +410,12 @@ def test_t11_l19_a_stream_terminal_outcome_is_recorded_and_classified(
 def test_t11_l24_precedes_l26_so_verification_never_sees_the_endpoint_on_disk(
     admission, git_executable
 ):
-    """Model-influenced code runs only after the endpoint and token are gone."""
+    """Model-influenced code runs only after the endpoint and token are scrubbed.
+
+    AMEND2 (Y6): L24 empties the exact issued object (``EndOfFile == 0``) rather
+    than deleting a name, so what verification must not see is any endpoint
+    BYTES -- the zero-length object may still be named until L27.
+    """
     seen_during_verification: list[bool] = []
     state: dict = {}
 
@@ -424,7 +432,10 @@ def test_t11_l24_precedes_l26_so_verification_never_sees_the_endpoint_on_disk(
     def _run_verification(*, workspace_root, args):
         calls["n"] += 1
         if calls["n"] > 1:  # the L26 call, not the L3 baseline
-            seen_during_verification.append(Path(state["models_path"]).exists())
+            models = Path(state["models_path"])
+            seen_during_verification.append(
+                models.exists() and models.stat().st_size > 0
+            )
         return FakeVerificationOutcome()
 
     ports, _made = build_doubled_ports(
@@ -665,6 +676,13 @@ def test_t12_a_genuine_config_cannot_be_registered_for_a_foreign_root(git_execut
         "proven",
         "settings_child",
         "models_child",
+        # FU1 (R6 Sec. 9.2b item 6): the raw digests of the bytes L9's step 9a
+        # checked -- DIGESTS, never a path.
+        "expected_settings_sha256",
+        "expected_models_sha256",
+        # AMEND2 (Y6): the retained exact-object AUTHORITY -- a mint-backed
+        # value carrying a nonce, never a path and never a raw handle.
+        "retained",
     }
     for name in ("config_dir", "settings_path", "models_path", "path", "root", "parent"):
         assert name not in signature.parameters

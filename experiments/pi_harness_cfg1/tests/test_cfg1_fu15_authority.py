@@ -991,8 +991,13 @@ def test_t152_post_creation_partial_failures_mint_no_token_and_leave_residue_ins
     # it: after the run, the root is gone.
     assert residue["existed"] is True
     assert residue["inside_root"] is True
-    if point == "before_issuance":
-        assert residue["entries"] == ["models.json", "settings.json"]
+    # FU1 AM-13 (OC-11): both injection points fail AFTER the endpoint write
+    # was attempted, so the writer's one failure-path release disposed BOTH
+    # children through their own creating handles and then closed them --
+    # which is exactly what licenses ``generated_config_scrub_verified`` above
+    # (an exact ``endpoint_material_outstanding == False``). The directory
+    # itself is still residue, left for L27 alone.
+    assert residue["entries"] == []
     assert observations["workspace_removed_verified"] is True
     handle = made.get("workspace")
     assert handle is not None and not Path(handle.experiment_root).exists()
@@ -1150,18 +1155,13 @@ def test_t154_r_window_substitution_wins_and_l9_neither_detects_nor_refuses_it(
         assert os.path.commonpath([resolved, root]) == root
         assert SYNTHETIC_BASE_URL.encode() in Path(generated.models_path).read_bytes()
 
-        # L24's scrub reaches and unlinks it, identity-bound.
-        from pi_harness_cfg1.run_executor import _verified_unlink
-
-        record = config_issuance.verify_config_issuance(
+        # L24's scrub reaches the exact issued object through the retained
+        # handle (AMEND2, Y6): a handle-bound CONTENT scrub, no pathname and no
+        # unlink. The object is left at length zero; L27 owns namespace cleanup.
+        assert config_issuance.scrub_config_issuance(
             token=generated.issuance_token, workspace=workspace
-        )
-        assert _verified_unlink(
-            record.models_path,
-            owned_root=workspace.experiment_root,
-            expected_identity=record.models_identity,
         ) is True
-        assert not Path(generated.models_path).exists()
+        assert Path(generated.models_path).read_bytes() == b""
     finally:
         config_issuance.discard_config_issuance(generated.issuance_token)
 
@@ -1216,76 +1216,64 @@ def test_t155_the_issuance_record_binds_the_config_and_both_child_identities(
         config_issuance.discard_config_issuance(generated.issuance_token)
 
 
-def test_t155_a_same_name_same_bytes_replacement_is_refused_and_never_unlinked(
+def test_t155_a_same_name_same_bytes_replacement_is_untouched_and_never_unlinked(
     workspace, filesystem_spy
 ):
     """The replacement carries IDENTICAL BYTES on purpose.
 
-    A different-content replacement would already be caught by the digest
-    re-proof, which would leave the identity check itself unexercised. With
-    identical bytes, the path matches, the digest matches, the redirect check
-    passes -- and ONLY the file-id comparison stands between L24 and deleting
-    an object it never created.
+    Under AMEND2 (Y6) L24 opens no pathname, so a same-name replacement -- even
+    a byte-identical one -- cannot be reached by L24 at all: it is neither read,
+    modified nor deleted. The ISSUED object (now unnamed, still held by the
+    retained handle) is the one scrubbed.
     """
-    from pi_harness_cfg1.run_executor import _verified_unlink
-
     generated = write_cfg1_pi_config(workspace, arm_id="Q", base_url=SYNTHETIC_BASE_URL)
-    try:
-        record = config_issuance.verify_config_issuance(
-            token=generated.issuance_token, workspace=workspace
-        )
-        original_bytes = Path(generated.models_path).read_bytes()
-        original_identity = probe.file_identity(generated.models_path)
+    original_bytes = Path(generated.models_path).read_bytes()
+    original_identity = probe.file_identity(generated.models_path)
 
-        # Replace the object, keeping the name and the bytes exactly.
-        os.unlink(generated.models_path)
-        Path(generated.models_path).write_bytes(original_bytes)
-        replacement_identity = probe.file_identity(generated.models_path)
-        assert replacement_identity != original_identity
-        assert Path(generated.models_path).read_bytes() == original_bytes
+    # Replace the object, keeping the name and the bytes exactly.
+    os.unlink(generated.models_path)
+    Path(generated.models_path).write_bytes(original_bytes)
+    replacement_identity = probe.file_identity(generated.models_path)
+    assert replacement_identity != original_identity
 
-        before_unlinks = list(filesystem_spy.unlink_calls)
-        verified = _verified_unlink(
-            record.models_path,
-            owned_root=workspace.experiment_root,
-            expected_identity=record.models_identity,
-        )
-        assert verified is False
-        # NO unlink of any kind occurs -- including no pathname unlink.
-        assert filesystem_spy.unlink_calls == before_unlinks
-        assert Path(generated.models_path).exists()
-        assert probe.file_identity(generated.models_path) == replacement_identity
-    finally:
-        config_issuance.discard_config_issuance(generated.issuance_token)
+    before_unlinks = list(filesystem_spy.unlink_calls)
+    assert config_issuance.scrub_config_issuance(
+        token=generated.issuance_token, workspace=workspace
+    ) is True
+    # NO unlink of any kind occurs -- including no pathname unlink.
+    assert filesystem_spy.unlink_calls == before_unlinks
+    assert Path(generated.models_path).read_bytes() == original_bytes  # untouched
+    assert probe.file_identity(generated.models_path) == replacement_identity
 
 
-def test_t155_an_identity_mismatched_scrub_skips_l26_and_fails_lifecycle_closure(
-    git_executable, monkeypatch
+@pytest.mark.parametrize("variant", ["foreign_replacement", "failed_scrub"])
+def test_t155_a_replacement_is_not_a_failure_but_a_failed_scrub_skips_l26(
+    variant, git_executable, monkeypatch
 ):
-    """End to end: ``generated_config_scrub_verified`` is false, L26 is
-    skipped with ``LIFECYCLE_UNPROVEN``, closure fails at L24, and the run
-    classifies ``INDETERMINATE_LIFECYCLE`` -- Sec. 18 row 9's disposition.
+    """End to end. A same-name replacement between issuance and L24 no longer
+    fails L24 (L24 never consults the name); an ACTUAL scrub failure still sets
+    ``generated_config_scrub_verified`` false, skips L26 with
+    ``LIFECYCLE_UNPROVEN``, fails closure at L24, and classifies
+    ``INDETERMINATE_LIFECYCLE`` -- Sec. 18 row 9's disposition.
     """
     from cfg1_doubles import build_doubled_ports, seam_digests_all_match
-    from pi_harness_cfg1 import run_executor
     from pi_harness_cfg1.classification import classify_cfg1_run
     from pi_harness_cfg1.lifecycle import compute_lifecycle_closure
-    from pi_harness_cfg1.run_contract import Cfg1RunAdmission
     from pi_harness_cfg1.run_executor import execute_cfg1_run
-    from pi_harness_cfg1.schedule import _schedule_arm_for, _schedule_block_position
 
     seam_digests_all_match(monkeypatch)
-
     real_write_config = cfg1_pi_config.write_cfg1_pi_config
 
     def _write_config(handle, *, arm_id, base_url):
         generated = real_write_config(handle, arm_id=arm_id, base_url=base_url)
-        # Between issuance and L24: a same-name, same-bytes replacement.
-        content = Path(generated.models_path).read_bytes()
-        os.unlink(generated.models_path)
-        Path(generated.models_path).write_bytes(content)
+        if variant == "foreign_replacement":
+            content = Path(generated.models_path).read_bytes()
+            os.unlink(generated.models_path)
+            Path(generated.models_path).write_bytes(content)
         return generated
 
+    if variant == "failed_scrub":
+        monkeypatch.setattr(win, "_truncate_handle", lambda handle: False)
     ports, made = build_doubled_ports(
         git_executable=git_executable,
         overrides={
@@ -1294,36 +1282,23 @@ def test_t155_an_identity_mismatched_scrub_skips_l26_and_fails_lifecycle_closure
             )
         },
     )
-    block, position = _schedule_block_position("S1", 1)
-    admission = Cfg1RunAdmission(
-        stage_id="S1",
-        stage_execution_id="S1-X1",
-        run_ordinal=1,
-        arm_id=_schedule_arm_for("S1", 1),
-        block=block,
-        position=position,
-        run_id="c" * 32,
-    )
+    from cfg1_fu1_support import make_admission
 
-    unlinks: list[str] = []
-    real_unlink = os.unlink
-
-    def _spy_unlink(path, *args, **kwargs):
-        unlinks.append(str(path))
-        return real_unlink(path, *args, **kwargs)
-
-    outcome = execute_cfg1_run(admission, ports=ports)
+    outcome = execute_cfg1_run(make_admission(), ports=ports)
     observations = outcome.observations
-
-    assert observations["generated_config_scrub_verified"] is False
-    assert observations["verification_attempted"] is False
-    assert observations["verification_skip_reason"] == "LIFECYCLE_UNPROVEN"
     all_closed, failure_steps = compute_lifecycle_closure(observations)
-    assert all_closed is False
-    assert "L24" in failure_steps
-    observations["lifecycle_all_closed"] = all_closed
-    assert classify_cfg1_run(observations) == "INDETERMINATE_LIFECYCLE"
-    assert run_executor is not None
+    if variant == "foreign_replacement":
+        assert observations["generated_config_scrub_verified"] is True
+        assert observations["verification_attempted"] is True
+        assert "L24" not in failure_steps
+    else:
+        assert observations["generated_config_scrub_verified"] is False
+        assert observations["verification_attempted"] is False
+        assert observations["verification_skip_reason"] == "LIFECYCLE_UNPROVEN"
+        assert all_closed is False
+        assert "L24" in failure_steps
+        observations["lifecycle_all_closed"] = all_closed
+        assert classify_cfg1_run(observations) == "INDETERMINATE_LIFECYCLE"
     assert made.get("workspace") is not None
 
 
@@ -1531,40 +1506,35 @@ def test_t150_an_authority_object_is_immutable_and_unforgeable(tmp_path):
     assert excinfo.value.reason_code == "PIN_ALREADY_RELEASED"
 
 
-def test_t155_identity_bound_unlink_refuses_a_redirect_and_a_malformed_identity(
-    tmp_path
+def test_t155_the_scrub_never_follows_a_redirect_and_refuses_malformed_authority(
+    workspace, tmp_path
 ):
     """Two shapes L24 must never act on: a reparse point standing where the
-    generated file was, and an identity the caller could not supply correctly.
-    Neither may result in a deletion of any kind.
+    generated file was, and an authority the caller could not supply correctly.
+    Neither may result in a write to, or a deletion of, anything foreign.
     """
-    directory = tmp_path / "scrub_target"
-    directory.mkdir()
-    genuine = directory / "models.json"
-    genuine.write_bytes(b"{}")
-    identity = probe.file_identity(genuine)
-
+    generated = write_cfg1_pi_config(workspace, arm_id="Q", base_url=SYNTHETIC_BASE_URL)
     victim = tmp_path / "victim_outside_the_root.json"
     victim.write_bytes(b"VICTIM")
-    link = directory / "redirected.json"
+    os.unlink(generated.models_path)
     try:
-        os.symlink(str(victim), str(link))
+        os.symlink(str(victim), generated.models_path)
     except (OSError, NotImplementedError):
+        config_issuance.discard_config_issuance(generated.issuance_token)
         pytest.skip("this platform grants no unprivileged file-symlink creation")
 
-    # A redirect at the target name is opened WITHOUT being followed, so its
-    # own identity is compared -- and it never matches.
-    assert win.identity_bound_unlink(str(link), expected_identity=identity) is False
+    # L24 never resolves the name, so the redirect is never followed: the
+    # victim is untouched and the redirect itself is never removed.
+    assert config_issuance.scrub_config_issuance(
+        token=generated.issuance_token, workspace=workspace
+    ) is True
     assert victim.exists() and victim.read_bytes() == b"VICTIM"
-    assert os.path.lexists(link)
+    assert os.path.lexists(generated.models_path)
 
-    for malformed in (None, (1,), ("a", "b"), [1, 2], (True, 2), "id"):
-        assert win.identity_bound_unlink(str(genuine), expected_identity=malformed) is False
-    assert genuine.exists()
-
-    # Positive control: the genuine identity does remove it, by handle.
-    assert win.identity_bound_unlink(str(genuine), expected_identity=identity) is True
-    assert not genuine.exists()
+    for malformed in (None, (1,), ("a", "b"), [1, 2], (True, 2), "id", 0, object()):
+        assert win.scrub_retire_retained(malformed) is False
+        assert win.release_retained(malformed) is False
+    assert victim.read_bytes() == b"VICTIM"
 
 
 def test_t143_no_refusal_message_carries_a_path_or_a_raw_win32_error(tmp_path):

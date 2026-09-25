@@ -275,7 +275,9 @@ def test_no_run_can_be_both_unexpected_tool_activity_and_a_disagreement():
 
 def test_the_payload_validator_accepts_every_classification_it_recomputes():
     """Each row, assembled as a real payload and revalidated end to end."""
-    from pi_harness_cfg1.records import _require_valid_cfg1_run_payload
+    from pi_harness_cfg1.records import (
+        _require_valid_cfg1_run_payload_v2 as _require_valid_cfg1_run_payload,
+    )
 
     for overrides, expected in (
         ({}, "INACTIVE"),

@@ -28,6 +28,14 @@ RUN_RECORD_VERSION = "pi-harness-cfg1-run.v1"
 REFUSAL_RECORD_VERSION = "pi-harness-cfg1-refusal.v1"
 STAGE_CLOSURE_RECORD_VERSION = "pi-harness-cfg1-stage-closure.v1"
 
+#: FU1 (R6 Sec. 10, decisions D-1/D-3; AMEND1 Sec. 15). The corrected executor
+#: EMITS ONLY these two versions. The v1 names above keep their v1 meaning
+#: exactly and are reachable only through validation/verification of existing
+#: bytes; an archived v1 record is never read as though v2's rules applied to
+#: it. The stage-closure record is unchanged (v1).
+RUN_RECORD_VERSION_V2 = "pi-harness-cfg1-run.v2"
+REFUSAL_RECORD_VERSION_V2 = "pi-harness-cfg1-refusal.v2"
+
 RUN_RECORD_KIND = "harness configuration diagnostic run"
 REFUSAL_RECORD_KIND = "cfg1 artifact emission refusal"
 STAGE_CLOSURE_RECORD_KIND = "cfg1 stage closure"
@@ -55,6 +63,8 @@ __all__ = [
     "PACKAGE_ID",
     "RUN_RECORD_VERSION",
     "REFUSAL_RECORD_VERSION",
+    "RUN_RECORD_VERSION_V2",
+    "REFUSAL_RECORD_VERSION_V2",
     "STAGE_CLOSURE_RECORD_VERSION",
     "RUN_RECORD_KIND",
     "REFUSAL_RECORD_KIND",

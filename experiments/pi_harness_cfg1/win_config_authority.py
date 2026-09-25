@@ -133,6 +133,14 @@ if PLATFORM_SUPPORTED:  # pragma: no branch - a platform constant
         ctypes.c_void_p,
         _wt.DWORD,
     ]
+    # AMEND2 (Y6): the three additions the retained-handle scrub needs. All
+    # are documented kernel32 entry points; nothing native, nothing from ntdll.
+    _K32.ReOpenFile.restype = _wt.HANDLE
+    _K32.ReOpenFile.argtypes = [_wt.HANDLE, _wt.DWORD, _wt.DWORD, _wt.DWORD]
+    _K32.FlushFileBuffers.restype = _wt.BOOL
+    _K32.FlushFileBuffers.argtypes = [_wt.HANDLE]
+    _K32.GetHandleInformation.restype = _wt.BOOL
+    _K32.GetHandleInformation.argtypes = [_wt.HANDLE, ctypes.POINTER(_wt.DWORD)]
 
     GENERIC_READ = 0x80000000
     GENERIC_WRITE = 0x40000000
@@ -141,6 +149,8 @@ if PLATFORM_SUPPORTED:  # pragma: no branch - a platform constant
     FILE_READ_ATTRIBUTES = 0x00000080
     FILE_SHARE_READ = 0x00000001
     FILE_SHARE_WRITE = 0x00000002
+    FILE_SHARE_DELETE = 0x00000004
+    HANDLE_FLAG_INHERIT = 0x00000001
     OPEN_EXISTING = 3
     CREATE_NEW = 1
     FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
@@ -149,7 +159,9 @@ if PLATFORM_SUPPORTED:  # pragma: no branch - a platform constant
     FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400
     _INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
 
+    _FileStandardInfo = 1
     _FileDispositionInfo = 4
+    _FileEndOfFileInfo = 6
     _FileAttributeTagInfo = 9
     _FileIdInfo = 18
     _FileIdExtdDirectoryInfo = 19
@@ -168,6 +180,15 @@ if PLATFORM_SUPPORTED:  # pragma: no branch - a platform constant
 
     class _FILE_ATTRIBUTE_TAG_INFO(ctypes.Structure):
         _fields_ = [("FileAttributes", _wt.DWORD), ("ReparseTag", _wt.DWORD)]
+
+    class _FILE_STANDARD_INFO(ctypes.Structure):
+        _fields_ = [
+            ("AllocationSize", ctypes.c_longlong),
+            ("EndOfFile", ctypes.c_longlong),
+            ("NumberOfLinks", _wt.DWORD),
+            ("DeletePending", ctypes.c_ubyte),
+            ("Directory", ctypes.c_ubyte),
+        ]
 
     class _FILE_ID_EXTD_DIR_INFO(ctypes.Structure):
         """``FILE_ID_EXTD_DIR_INFO``, with ``FileName`` as the trailing array."""
@@ -283,6 +304,23 @@ _PINS: dict[str, tuple[int, str | None]] = {}
 #: children this module created exclusively.
 _CHILDREN: dict[str, tuple[int, str, str | None]] = {}
 
+#: **AMEND2 (Y6).** nonce -> (raw zero-access HANDLE, kind, the identity proven
+#: from handles at acquisition, the minting generation-interval nonce), for the
+#: retained exact-object authorities this module minted and has not yet retired.
+#: This dict is the ONLY place a retained raw handle exists: it is never a field,
+#: attribute, ``repr`` fragment, record field, console line, exception text or
+#: return value of any public object (RA-4). Process-local, in-memory only.
+_RETAINED: dict[str, tuple[int, str, tuple[int, int], str]] = {}
+
+#: The two -- and only two -- kinds of retained authority (RA-3). There is no
+#: third kind and no generic retained-object API.
+RETAINED_KIND_CONFIG_MODELS = "config_models"
+RETAINED_KIND_EXTENSION_TOKEN = "extension_token"
+_RETAINED_KIND_INTERVAL = {
+    RETAINED_KIND_CONFIG_MODELS: "config",
+    RETAINED_KIND_EXTENSION_TOKEN: "extension",
+}
+
 #: nonce -> (config-directory identity, the EXACT child nonces proved, the
 #: minting generation-interval nonce or ``None``).
 #: Binding the child nonces is what stops a genuine proof from being paired
@@ -291,22 +329,36 @@ _CHILDREN: dict[str, tuple[int, str, str | None]] = {}
 #: as "some objects are".
 _PROVEN: dict[str, tuple[tuple[int, int], frozenset[str], str | None]] = {}
 
-#: nonce -> ``None``, for generation intervals that are currently OPEN.
+#: nonce -> interval KIND, for generation intervals that are currently OPEN.
 #:
 #: **CFG1-IMPL-FU4.** This is the provenance registry the issuance boundary
 #: consults. An entry exists only between :func:`open_generation_interval` and
-#: :func:`close_generation_interval`, and the ONLY code that can open one is
-#: the CFG1 config generator's own code object (see
+#: :func:`close_generation_interval`, and the ONLY code that can open one is a
+#: bound CFG1 generator's own code object (see
 #: :func:`bind_config_generator_authority`). Every pin, child and parentage
 #: proof records the interval that minted it -- or ``None`` when none was
 #: supplied -- and ``None``-stamped authority is deliberately USELESS at the
 #: issuance boundary however genuine its Win32 proofs are.
-_INTERVALS: dict[str, None] = {}
+#:
+#: **FU1 AM-10 -- intervals are TYPED.** Exactly two generator code objects are
+#: bound: the config generator (kind ``config``) and the L11 extension writer
+#: (kind ``extension``). Each issuance registry checks the kind, so a config
+#: interval can never produce extension issuance provenance and vice versa.
+#: There is no third binding and no generic registry of generators.
+_INTERVALS: dict[str, str] = {}
 
-#: The one code object permitted to open a production generation interval,
-#: captured from the CFG1 generator itself at that module's import. ``None``
-#: until then, and never rebindable afterwards.
+INTERVAL_KIND_CONFIG = "config"
+INTERVAL_KIND_EXTENSION = "extension"
+
+#: The one code object permitted to open a production CONFIG generation
+#: interval, captured from the CFG1 generator itself at that module's import.
+#: ``None`` until then, and never rebindable afterwards.
 _GENERATOR_CODE: object | None = None
+
+#: The one code object permitted to open a production EXTENSION generation
+#: interval (FU1 AM-10), captured from the CFG1 extension writer at that
+#: module's import. ``None`` until then, and never rebindable afterwards.
+_EXTENSION_WRITER_CODE: object | None = None
 
 #: Handles and descriptors whose CLOSE ITSELF FAILED. They are leaked, and
 #: saying so is the point: the registry entry is retired either way (a nonce
@@ -361,6 +413,21 @@ class ExclusiveChild(_MintBacked):
     __slots__ = ()
     _registry = _CHILDREN
     _unknown_code = "CHILD_NOT_HELD"
+
+
+class RetainedAuthority(_MintBacked):
+    """One private, zero-access, exact-object authority (AMEND2, RA-3).
+
+    Minted only by :func:`retain_child`. The value carries a nonce and nothing
+    else: the raw ``HANDLE`` lives in :data:`_RETAINED`, direct construction of
+    an unregistered nonce is refused, and the slot cannot be rebound. It is
+    handed only to the issuance registry that takes ownership of it (RA-5) and
+    is never rendered, serialized or copied into any public object.
+    """
+
+    __slots__ = ()
+    _registry = _RETAINED
+    _unknown_code = "RETAINED_AUTHORITY_NOT_HELD"
 
 
 class ProvenConfigChildren(_MintBacked):
@@ -430,24 +497,50 @@ def bind_config_generator_authority() -> None:
     _GENERATOR_CODE = generator.__code__
 
 
+def bind_extension_writer_authority() -> None:
+    """FU1 AM-10: bind THE one extension-writer code object. Once.
+
+    The exact counterpart of :func:`bind_config_generator_authority`, called
+    from the CFG1 extension writer module's own body at import. It takes no
+    argument and derives the code object itself, so a caller cannot nominate a
+    different one, and a second bind is refused rather than replacing the first.
+    """
+    global _EXTENSION_WRITER_CODE
+    if _EXTENSION_WRITER_CODE is not None:
+        raise Cfg1DirectoryAuthorityError("EXTENSION_WRITER_AUTHORITY_ALREADY_BOUND")
+    module = sys.modules.get(f"{__package__}.cfg1_extension")
+    writer = getattr(module, "write_cfg1_extension", None)
+    if type(writer) is not types.FunctionType:
+        raise Cfg1DirectoryAuthorityError("EXTENSION_WRITER_AUTHORITY_UNAVAILABLE")
+    _EXTENSION_WRITER_CODE = writer.__code__
+
+
 def open_generation_interval() -> GenerationInterval:
-    """Open one production generation interval. ONLY the generator may.
+    """Open one production generation interval. ONLY a bound generator may.
 
     The gate is CODE-OBJECT IDENTITY of the immediate caller's frame, not a
     module name, a function name, a leading underscore, an ``__all__`` entry
-    or a docstring. A caller that is not executing the bound generator's own
+    or a docstring. A caller that is not executing a bound generator's own
     code is refused, so there is no supported callable, and no sequence of
     supported calls, that yields one of these.
+
+    The interval's KIND is decided here, by which of the exactly two bound
+    code objects is executing -- never by an argument (FU1 AM-10).
     """
     _require_platform()
-    if _GENERATOR_CODE is None:
+    caller = sys._getframe(1).f_code
+    if _GENERATOR_CODE is not None and caller is _GENERATOR_CODE:
+        kind = INTERVAL_KIND_CONFIG
+    elif _EXTENSION_WRITER_CODE is not None and caller is _EXTENSION_WRITER_CODE:
+        kind = INTERVAL_KIND_EXTENSION
+    elif _GENERATOR_CODE is None:
         raise Cfg1DirectoryAuthorityError("GENERATOR_AUTHORITY_UNBOUND")
-    if sys._getframe(1).f_code is not _GENERATOR_CODE:
+    else:
         raise Cfg1DirectoryAuthorityError("NOT_THE_CONFIG_GENERATOR")
     nonce = secrets.token_hex(_NONCE_BYTES)
     if nonce in _INTERVALS:  # pragma: no cover - a 128-bit collision
         raise Cfg1DirectoryAuthorityError("GENERATION_INTERVAL_ALREADY_MINTED")
-    _INTERVALS[nonce] = None
+    _INTERVALS[nonce] = kind
     return GenerationInterval(nonce)
 
 
@@ -832,9 +925,26 @@ def require_production_issuance_provenance(proven: object, children: tuple) -> N
     is refused by the same rule and for the same reason: the question asked
     here is where the authority came from, never what is in the files.
     """
+    _require_typed_provenance(proven, children, kind=INTERVAL_KIND_CONFIG)
+
+
+def require_extension_issuance_provenance(proven: object, children: tuple) -> None:
+    """FU1 AM-10: the extension issuance boundary's ORIGIN check.
+
+    Identical in shape to :func:`require_production_issuance_provenance`, but
+    requires an OPEN interval of kind ``extension`` -- one only the bound L11
+    extension writer's own code object can open. A config interval, however
+    genuine, is refused here, and an extension interval is refused there.
+    """
+    _require_typed_provenance(proven, children, kind=INTERVAL_KIND_EXTENSION)
+
+
+def _require_typed_provenance(proven: object, children: tuple, *, kind: str) -> None:
     _identity, _nonces, interval_nonce = _proven_entry(proven)
     if interval_nonce is None or interval_nonce not in _INTERVALS:
         raise Cfg1DirectoryAuthorityError("NOT_GENERATION_PROVENANCE")
+    if _INTERVALS[interval_nonce] != kind:
+        raise Cfg1DirectoryAuthorityError("GENERATION_INTERVAL_KIND_MISMATCH")
     for child in children:
         if _child_entry(child)[2] != interval_nonce:
             raise Cfg1DirectoryAuthorityError("GENERATION_PROVENANCE_MISMATCH")
@@ -920,6 +1030,11 @@ def child_name(child: object) -> str:
     return _child_entry(child)[1]
 
 
+def child_interval_nonce(child: object) -> str | None:
+    """The generation interval that minted this child (``None`` if none)."""
+    return _child_entry(child)[2]
+
+
 # ---------------------------------------------------------------------------
 # Sec. 37.3.1 steps 8 and 9 -- content and finalization, through descriptors
 # ---------------------------------------------------------------------------
@@ -948,6 +1063,92 @@ def write_child_text(child: object, text: str) -> None:
         stream.close()
     except OSError as exc:
         raise Cfg1DirectoryAuthorityError("CONFIG_FILES_NOT_WRITTEN") from exc
+
+
+def write_child_bytes(child: object, data: bytes) -> None:
+    """FU1 (R6 E8): the bytes-mode sibling of :func:`write_child_text`.
+
+    Writes ``data`` VERBATIM through the child's own proven descriptor -- no
+    text wrapper, so no newline translation can alter a copied static file.
+    Every byte is written (a short write is looped, never truncated); nothing
+    is re-opened by pathname.
+    """
+    _require_platform()
+    if type(data) is not bytes:
+        raise Cfg1DirectoryAuthorityError("MALFORMED_CHILD_BYTES")
+    descriptor = _child_fd(child)
+    try:
+        view = memoryview(data)
+        while view:
+            written = os.write(descriptor, view)
+            if type(written) is not int or written <= 0:
+                raise Cfg1DirectoryAuthorityError("CHILD_BYTES_NOT_WRITTEN")
+            view = view[written:]
+    except OSError as exc:
+        raise Cfg1DirectoryAuthorityError("CHILD_BYTES_NOT_WRITTEN") from exc
+
+
+def read_regular_file_once(path: str, *, max_bytes: int) -> bytes:
+    """FU1 (R6 E-1): ONE no-follow open of one source, at most ``max_bytes + 1``.
+
+    ``FILE_FLAG_OPEN_REPARSE_POINT`` so a symlink or junction is observed as
+    itself and refused; shared for READING only, so no writer holds the object
+    open for write during the read. A directory, reparse point, device or any
+    unreadable object refuses. Returns the bytes read -- at most one byte past
+    the bound, so an oversize source is detectable by length without ever
+    reading the whole of it. Closes the handle before returning; a close
+    failure is counted and refused, never swallowed.
+    """
+    _require_platform()
+    if type(path) is not str or not path:
+        raise Cfg1DirectoryAuthorityError("MALFORMED_PATH")
+    if type(max_bytes) is not int or max_bytes < 0:
+        raise Cfg1DirectoryAuthorityError("MALFORMED_BOUND")
+    handle = _create_file(
+        path,
+        GENERIC_READ | FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ,
+        OPEN_EXISTING,
+        FILE_FLAG_OPEN_REPARSE_POINT,
+    )
+    if handle is None:
+        raise Cfg1DirectoryAuthorityError("SOURCE_NOT_OPENED")
+    try:
+        descriptor = msvcrt.open_osfhandle(handle, os.O_RDONLY)
+    except OSError:
+        if not _K32.CloseHandle(handle):
+            _CLOSE_FAILURES.append("source")
+        raise Cfg1DirectoryAuthorityError("SOURCE_NOT_OPENED") from None
+    data = None
+    failure = None
+    try:
+        attributes, reparse_tag = _handle_attributes(msvcrt.get_osfhandle(descriptor))
+        if attributes & FILE_ATTRIBUTE_REPARSE_POINT or reparse_tag != 0:
+            failure = "SOURCE_REDIRECTED"
+        elif attributes & FILE_ATTRIBUTE_DIRECTORY:
+            failure = "SOURCE_NOT_A_REGULAR_FILE"
+        else:
+            chunks: list[bytes] = []
+            total = 0
+            limit = max_bytes + 1
+            while total < limit:
+                chunk = os.read(descriptor, min(65536, limit - total))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+            data = b"".join(chunks)
+    except (OSError, Cfg1DirectoryAuthorityError):
+        failure = "SOURCE_UNREADABLE"
+    finally:
+        try:
+            os.close(descriptor)
+        except OSError:
+            _CLOSE_FAILURES.append("source")
+            failure = "SOURCE_NOT_CLOSED"
+    if failure is not None:
+        raise Cfg1DirectoryAuthorityError(failure)
+    return data
 
 
 def read_child_bytes(child: object) -> bytes:
@@ -1079,71 +1280,313 @@ def held_child_count() -> int:
 
 
 # ---------------------------------------------------------------------------
-# Sec. 37.3.2 row 9 -- L24's precise, identity-bound child authority
+# AMEND2 (Y6) -- retained exact-object authority and the handle-bound scrub
+#
+# Replaces R6 AM-12's link-count / exclusive-interval unlink. The old claim
+# depended on "share-0 denies hard-link creation", which is FALSE on the
+# supported host (Test Y-6), so nothing here depends on how many names an object
+# has, on any name at all, or on excluding alias creation. Every hard link
+# names the same file object and therefore the same default data stream, so
+# truncating that stream through a handle to the OBJECT makes every name of it
+# observe zero bytes.
+#
+# This is a CONTENT scrub of the exact AIDO-created object. It is not a delete,
+# not a secure erase and not a forensic claim: truncation deallocates clusters
+# but does not overwrite them. Names are L27's, never L24's.
 # ---------------------------------------------------------------------------
 
 
-def identity_bound_unlink(path: str, *, expected_identity: tuple[int, int]) -> bool:
-    """Remove ONE generated file, only if it is still the exact object issued.
+def _reopen_file(handle: int, access: int, share: int, flags: int):
+    """One ``ReOpenFile`` call, relative to a HELD object. Handle or ``None``.
 
-    Sec. 37.3.2a's precise child authority: L27's root-namespace teardown may
-    truthfully reach a descendant CFG1 did not itself create, but an individual
-    sensitive-file operation may not. So this opens the target WITHOUT
-    following a redirect, re-proves ``os.stat(fd)`` against the identity the
-    issuance record bound, and only then disposes of it **through that same
-    handle**. On any mismatch it deletes nothing at all -- no pathname unlink,
-    no fallback, no "the name matches so it must be ours".
+    Never a pathname and never a file id: the new handle refers to the exact
+    object ``handle`` refers to. A seam, so the offline suite can inject a
+    refusal at each reopen (RETAIN, and SCRUB-R's H_s) without touching
+    ``kernel32``. ``FILE_FLAG_OPEN_REPARSE_POINT`` is passed at every call site.
+    """
+    reopened = _K32.ReOpenFile(handle, access, share, flags)
+    if reopened is None or reopened == _INVALID_HANDLE_VALUE:
+        return None
+    return reopened
 
-    Returns ``True`` only when nothing the issuance authorized remains: either
-    the object was absent already, or it was identity-matched and disposed of.
+
+def _handle_inheritable(handle: int) -> object:
+    """``True``/``False`` from ``GetHandleInformation``; ``None`` when unreadable."""
+    flags = _wt.DWORD(0)
+    if not _K32.GetHandleInformation(handle, ctypes.byref(flags)):
+        return None
+    return bool(flags.value & HANDLE_FLAG_INHERIT)
+
+
+def _truncate_handle(handle: int) -> bool:
+    """``FileEndOfFileInfo`` with ``EndOfFile = 0`` through ``handle``. A seam."""
+    end_of_file = ctypes.c_longlong(0)
+    return bool(
+        _K32.SetFileInformationByHandle(
+            handle, _FileEndOfFileInfo, ctypes.byref(end_of_file), 8
+        )
+    )
+
+
+def _flush_handle(handle: int) -> bool:
+    """``FlushFileBuffers`` through ``handle``. A seam."""
+    return bool(_K32.FlushFileBuffers(handle))
+
+
+def _handle_end_of_file(handle: int) -> object:
+    """``FILE_STANDARD_INFO.EndOfFile`` read FROM THE HANDLE; ``None`` if unreadable.
+
+    ``NumberOfLinks``, ``DeletePending`` and ``AllocationSize`` come back in the
+    same structure and are **never decision inputs**. A seam, so the suite can
+    inject an unreadable, ``None``, ``bool`` or non-zero result.
+    """
+    info = _FILE_STANDARD_INFO()
+    ok = _K32.GetFileInformationByHandleEx(
+        handle, _FileStandardInfo, ctypes.byref(info), ctypes.sizeof(info)
+    )
+    if not ok:
+        return None
+    return int(info.EndOfFile)
+
+
+def _close_handle(handle: int, kind: str) -> bool:
+    """``CloseHandle``. A seam for close-failure injection; ``True`` iff it closed.
+
+    ``kind`` (``"retained"`` | ``"scrub_handle"``) says which handle this is, so
+    a test can fail exactly one of them without touching ``kernel32``.
+    """
+    return bool(_K32.CloseHandle(handle))
+
+
+def _close_counted(handle: object, kind: str) -> bool:
+    """Close one raw handle exactly once; a failure is COUNTED, never retried."""
+    try:
+        closed = _close_handle(handle, kind) is True
+    except Exception:  # noqa: BLE001 - any close failure is accounted, never swallowed
+        closed = False
+    if not closed:
+        _CLOSE_FAILURES.append(kind)
+    return closed
+
+
+def _end_of_file_is_exactly_zero(handle: int) -> bool:
+    """A type-exact ``int`` equal to ``0`` -- a ``bool`` is not ``0``."""
+    end_of_file = _handle_end_of_file(handle)
+    return type(end_of_file) is int and end_of_file == 0
+
+
+def _scrub_open_handle(handle: int) -> bool:
+    """Truncate -> flush -> ``EndOfFile`` exactly 0, all through ``handle``.
+
+    ``True`` iff all three succeeded. Closes nothing. Shared by SCRUB-C (the
+    writer's still-held creating handle) and SCRUB-R (the scrub handle H_s).
+    """
+    try:
+        if _truncate_handle(handle) is not True:
+            return False
+        if _flush_handle(handle) is not True:
+            return False
+        return _end_of_file_is_exactly_zero(handle)
+    except Exception:  # noqa: BLE001 - any failure inside the scrub is simply False
+        return False
+
+
+def retained_kind_is_valid(kind: object) -> bool:
+    return type(kind) is str and kind in _RETAINED_KIND_INTERVAL
+
+
+def retain_child(child: object, *, kind: str, interval: object) -> RetainedAuthority:
+    """RETAIN (RA-1, RA-2): acquire H_r from the creating handle H_c.
+
+    ``ReOpenFile(H_c, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+    FILE_FLAG_OPEN_REPARSE_POINT)`` on the genuine creating handle of the
+    sensitive child, **while H_c is still held**. No pathname is reopened and no
+    file id is looked up. Then, from handles only:
+    ``FILE_ID_INFO(H_r) == FILE_ID_INFO(H_c)`` and ``HANDLE_FLAG_INHERIT`` clear.
+    A handle that fails either is **never written through**: it is released
+    here and the closed reason code says whether that release itself failed.
+
+    Closed reason codes (the writer maps them to its two local facts):
+
+    * ``RETAINED_NOT_ACQUIRED`` -- ``ReOpenFile`` refused; nothing exists;
+    * ``RETAINED_IDENTITY_MISMATCH`` / ``RETAINED_INHERITABLE`` -- acquired,
+      not proven, released;
+    * ``RETAINED_NOT_RELEASED`` -- acquired, not proven, and its release FAILED
+      (counted as ``"retained"``).
+
+    ``kind`` must be one of exactly two, and must agree with the KIND of the
+    open generation interval that minted the child (AM-10's typing, extended
+    to this one new object).
     """
     _require_platform()
-    if type(path) is not str or not path:
-        return False
-    if (
-        type(expected_identity) is not tuple
-        or len(expected_identity) != 2
-        or type(expected_identity[0]) is not int
-        or type(expected_identity[1]) is not int
-    ):
-        return False
+    if not retained_kind_is_valid(kind):
+        raise Cfg1DirectoryAuthorityError("MALFORMED_RETAINED_KIND")
+    interval_nonce = _interval_nonce(interval)
+    if interval_nonce is None:
+        raise Cfg1DirectoryAuthorityError("NOT_AN_OPEN_GENERATION_INTERVAL")
+    if _INTERVALS[interval_nonce] != _RETAINED_KIND_INTERVAL[kind]:
+        raise Cfg1DirectoryAuthorityError("GENERATION_INTERVAL_KIND_MISMATCH")
+    descriptor, _name, child_interval = _child_entry(child)
+    if child_interval != interval_nonce:
+        raise Cfg1DirectoryAuthorityError("GENERATION_PROVENANCE_MISMATCH")
+    try:
+        creating = msvcrt.get_osfhandle(descriptor)
+    except OSError:
+        raise Cfg1DirectoryAuthorityError("RETAINED_NOT_ACQUIRED") from None
 
-    handle = _create_file(
-        path,
-        GENERIC_READ | DELETE,
+    retained_handle = _reopen_file(
+        creating,
         0,
-        OPEN_EXISTING,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
         FILE_FLAG_OPEN_REPARSE_POINT,
     )
-    if handle is None:
-        # Absent is the correct "nothing the issuance authorized remains"
-        # answer; anything else (a redirect, a sharing violation, a denial) is
-        # NOT proof of absence and must not be reported as a verified scrub.
-        return not os.path.lexists(path)
+    if retained_handle is None:
+        raise Cfg1DirectoryAuthorityError("RETAINED_NOT_ACQUIRED")
 
+    failure = None
+    identity = None
     try:
-        descriptor = msvcrt.open_osfhandle(handle, os.O_RDONLY)
-    except OSError:
-        _K32.CloseHandle(handle)
+        identity = _handle_identity(creating)
+        if _handle_identity(retained_handle) != identity:
+            failure = "RETAINED_IDENTITY_MISMATCH"
+        elif _handle_inheritable(retained_handle) is not False:
+            failure = "RETAINED_INHERITABLE"
+    except Exception:  # noqa: BLE001 - an unreadable identity is not a proven one
+        failure = "RETAINED_IDENTITY_MISMATCH"
+    if failure is not None:
+        if not _close_counted(retained_handle, "retained"):
+            failure = "RETAINED_NOT_RELEASED"
+        raise Cfg1DirectoryAuthorityError(failure)
+
+    nonce = secrets.token_hex(_NONCE_BYTES)
+    if nonce in _RETAINED:  # pragma: no cover - a 128-bit collision
+        _close_counted(retained_handle, "retained")
+        raise Cfg1DirectoryAuthorityError("RETAINED_NONCE_ALREADY_MINTED")
+    _RETAINED[nonce] = (retained_handle, kind, identity, interval_nonce)
+    return RetainedAuthority(nonce)
+
+
+def _retained_entry(retained: object) -> tuple[int, str, tuple[int, int], str]:
+    if type(retained) is not RetainedAuthority:
+        raise Cfg1DirectoryAuthorityError("NOT_A_RETAINED_AUTHORITY")
+    entry = _RETAINED.get(retained.nonce)
+    if entry is None:
+        raise Cfg1DirectoryAuthorityError("RETAINED_AUTHORITY_NOT_HELD")
+    return entry
+
+
+def retained_kind(retained: object) -> str:
+    return _retained_entry(retained)[1]
+
+
+def retained_identity(retained: object) -> tuple[int, int]:
+    """The identity proven from handles at acquisition (never a pathname)."""
+    return _retained_entry(retained)[2]
+
+
+def retained_interval_nonce(retained: object) -> str:
+    return _retained_entry(retained)[3]
+
+
+def held_retained_count() -> int:
+    """How many retained authorities are still held. A green run leaves zero (RA-9)."""
+    return len(_RETAINED)
+
+
+def scrub_child_through_creating_handle(child: object) -> bool:
+    """SCRUB-C: scrub through the writer's still-held creating handle H_c.
+
+    Writer failure paths only. Truncate -> flush -> ``EndOfFile`` type-exact 0,
+    on the descriptor's own handle. Returns ``True`` iff all three succeeded and
+    closes nothing. Reaches an alias created while H_c was held (Y-6's
+    behavior), because an alias is the same object.
+    """
+    _require_platform()
+    try:
+        handle = msvcrt.get_osfhandle(_child_fd(child))
+    except (OSError, Cfg1DirectoryAuthorityError):
         return False
+    return _scrub_open_handle(handle)
+
+
+def release_retained(retained: object) -> bool:
+    """RELEASE-R: close H_r only, writing nothing. Returns the close result.
+
+    Used when RA-2 failed (never written through) and in a writer failure path
+    after SCRUB-C already scrubbed the object through H_c. The registry entry is
+    removed FIRST (RA-7), so a second call finds nothing, does no I/O and
+    returns ``False``. A close failure is counted as ``"retained"`` and is
+    never retried through a pathname.
+    """
+    if type(retained) is not RetainedAuthority:
+        return False
+    entry = _RETAINED.pop(retained.nonce, None)
+    if entry is None:
+        return False
+    return _close_counted(entry[0], "retained")
+
+
+def scrub_retire_retained(retained: object) -> bool:
+    """SCRUB-R: scrub-retire through the retained handle (L24; writer reclaim).
+
+    ::
+
+        1  remove the private entry FIRST (single-shot, RA-7)        -> else False, no I/O
+        2  H_s := ReOpenFile(H_r, GENERIC_WRITE | FILE_READ_ATTRIBUTES, 0,
+                             FILE_FLAG_OPEN_REPARSE_POINT)            -> failure: False
+        3  FILE_ID_INFO(H_s) == issued identity; H_s not inheritable -> else False, NOTHING written
+        4  truncate EOF=0   5  FlushFileBuffers   6  EndOfFile exactly int 0
+        7  CloseHandle(H_s)                                          -> else False ("scrub_handle")
+        8  CloseHandle(H_r)                                          -> else False ("retained")
+
+    ``True`` only if 2-8 all succeeded. Every handle obtained is closed exactly
+    once whatever happened earlier; a failed close is counted, never retried,
+    never swallowed. No pathname is named, opened, renamed or deleted, and
+    ``NumberOfLinks`` is never read as a decision input.
+
+    ``True`` means exactly: the exact AIDO-issued object's default-stream
+    contents were set to ``EndOfFile == 0`` through a handle descended from its
+    creating handle, and every handle that had to be released was released. It
+    says nothing about names, aliases, copies or forensic recoverability.
+    """
+    _require_platform()
+    if type(retained) is not RetainedAuthority:
+        return False
+    entry = _RETAINED.pop(retained.nonce, None)
+    if entry is None:
+        return False
+    handle, kind, identity, _interval = entry
+    if (
+        type(handle) is not int
+        or not retained_kind_is_valid(kind)
+        or type(identity) is not tuple
+        or len(identity) != 2
+    ):
+        # A malformed entry can only be produced by tampering. Release what
+        # exists, and never write through it.
+        if type(handle) is int:
+            _close_counted(handle, "retained")
+        return False
+
+    scrubbed = False
+    scrub_handle = None
     try:
-        try:
-            stat_result = os.stat(descriptor)
-        except OSError:
-            return False
-        if (stat_result.st_dev, stat_result.st_ino) != expected_identity:
-            return False
-        disposition = ctypes.c_ubyte(1)
-        return bool(
-            _K32.SetFileInformationByHandle(
-                msvcrt.get_osfhandle(descriptor),
-                _FileDispositionInfo,
-                ctypes.byref(disposition),
-                1,
-            )
+        scrub_handle = _reopen_file(
+            handle,
+            GENERIC_WRITE | FILE_READ_ATTRIBUTES,
+            0,
+            FILE_FLAG_OPEN_REPARSE_POINT,
         )
-    finally:
-        try:
-            os.close(descriptor)
-        except OSError:  # pragma: no cover - a close failure on a read handle
-            pass
+        if scrub_handle is not None:
+            if (
+                _handle_identity(scrub_handle) == identity
+                and _handle_inheritable(scrub_handle) is False
+            ):
+                scrubbed = _scrub_open_handle(scrub_handle)
+    except Exception:  # noqa: BLE001 - any failure before the scrub completes is False
+        scrubbed = False
+    scrub_closed = True
+    if scrub_handle is not None:
+        scrub_closed = _close_counted(scrub_handle, "scrub_handle")
+    retained_closed = _close_counted(handle, "retained")
+    return scrubbed and scrub_closed and retained_closed

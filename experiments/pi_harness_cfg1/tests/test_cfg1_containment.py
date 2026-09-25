@@ -197,8 +197,11 @@ def test_t15_the_observations_themselves_carry_only_bounded_values(
 def test_t15_an_exception_at_every_step_never_leaks_its_text(admission, git_executable):
     from pi_harness_cfg1.run_executor import Cfg1RunPorts
 
+    # FU1: L1 has no identity-probe port any more (AMEND1 AMD-1); its one
+    # remaining port is Git resolution. A raise inside the static proof's own
+    # leaves is covered by the FU1 Test G boundary matrix.
     for port_name in (
-        "resolve_runtime_identity",
+        "git_executable",
         "read_connection",
         "observe_route",
         "mint_capability",
@@ -236,11 +239,12 @@ def test_t15_a_declared_needle_in_a_payload_is_refused_by_the_scrub(make_authori
     """The backstop, demonstrated working rather than merely present."""
     authority = make_authority("S1-X1")
     payload = run_payload(stage_execution_id="S1-X1")
-    # A leak nobody intended: the endpoint host, smuggled into a free-ish field.
-    payload["pi_observed_version"] = "0.85.1"
+    # FU1: v2 carries no free-ish version field, so the needle is a value
+    # that genuinely appears in every v2 run payload (the pinned model id) and
+    # never in a refusal record.
     safety = ArtifactSafetyContext(
         endpoint_host=HOSTILE["endpoint_host"],
-        api_key="0.85.1",  # a needle that genuinely appears in this payload
+        api_key="qwen3-coder-next",  # a needle that genuinely appears in this payload
         broker_token=HOSTILE["broker_token"],
         pipe_name=HOSTILE["pipe_name"],
         capability_id=HOSTILE["capability_id"],
@@ -258,14 +262,14 @@ def test_t15_a_declared_needle_in_a_payload_is_refused_by_the_scrub(make_authori
     written = json.loads(
         Path(authority.execution_directory, "S1_01_Q.json").read_text(encoding="utf-8")
     )
-    assert written["record_version"] == "pi-harness-cfg1-refusal.v1"
+    assert written["record_version"] == "pi-harness-cfg1-refusal.v2"
     assert written["finding_categories"] == ["SCRUB_NEEDLE_MATCH"]
     # The refusal carries the CODE, never the needle -- a finding that echoed
     # the offending value back would turn detection into a leak.
     serialized = json.dumps(written)
     for hostile in _all_hostile_values():
         assert hostile not in serialized, hostile
-    assert "0.85.1" not in serialized
+    assert "qwen3-coder-next" not in serialized
 
 
 def test_t15_a_structural_ipv4_literal_is_caught_without_being_declared(
@@ -279,7 +283,6 @@ def test_t15_a_structural_ipv4_literal_is_caught_without_being_declared(
     """
     authority = make_authority("S1-X1")
     payload = run_payload(stage_execution_id="S1-X1")
-    payload["pi_observed_version"] = "UNRECOGNIZED"
     payload["activity_unavailable_reason"] = None
     # Smuggle a bare IP into a bounded string field.
     payload["stage_execution_id"] = "S1-X1"
@@ -289,7 +292,7 @@ def test_t15_a_structural_ipv4_literal_is_caught_without_being_declared(
     # schema, so the structural rule is exercised through the one that does:
     # the refusal path is reached by declaring the quad as a needle instead.
     safety = ArtifactSafetyContext(endpoint_host=HOSTILE["ipv4"])
-    payload["pi_observed_version"] = HOSTILE["ipv4"]
+    payload["runtime_reported_thinking_level"] = HOSTILE["ipv4"]
     result = emit_cfg1_run_record(
         authority,
         run_ordinal=1,
@@ -297,7 +300,7 @@ def test_t15_a_structural_ipv4_literal_is_caught_without_being_declared(
         lifecycle_all_closed=True,
         safety=safety,
     )
-    # The schema refuses it first -- a bounded version field cannot hold an
+    # The schema refuses it first -- a bounded enum field cannot hold an
     # address at all, which is a STRONGER containment than the scrub.
     assert result.emission_status == "EVIDENCE_REFUSED"
     written = json.loads(

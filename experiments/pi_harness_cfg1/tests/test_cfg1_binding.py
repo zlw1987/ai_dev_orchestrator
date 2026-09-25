@@ -77,7 +77,7 @@ def test_t80_the_run_literal_branch_is_the_dispatch_positive_control(make_author
     path = _write_run_record(authority)
     parsed = json.loads(path.read_text(encoding="utf-8"))
     assert (parsed["record_version"], parsed["record_kind"]) == (
-        "pi-harness-cfg1-run.v1",
+        "pi-harness-cfg1-run.v2",
         "harness configuration diagnostic run",
     )
     assert verify_cfg1_run_artifact_binding(str(path)) is True
@@ -171,7 +171,7 @@ def test_t33_a_byte_for_byte_copy_in_another_genuine_directory_returns_false(
     shutil.copyfile(str(genuine), str(copied))
 
     # The copy's own PAYLOAD is still perfectly self-consistent...
-    records._require_valid_cfg1_run_payload(
+    records._require_valid_cfg1_run_payload_v2(
         json.loads(copied.read_text(encoding="utf-8"))
     )
     # ...and it is the LOCATION that disagrees.
@@ -185,7 +185,7 @@ def test_t34_an_in_place_rename_returns_false(make_authority):
     renamed = Path(authority.execution_directory, "S1_02_R.json")
     os.rename(str(genuine), str(renamed))
 
-    records._require_valid_cfg1_run_payload(
+    records._require_valid_cfg1_run_payload_v2(
         json.loads(renamed.read_text(encoding="utf-8"))
     )
     assert verify_cfg1_run_artifact_binding(str(renamed)) is False
@@ -429,7 +429,7 @@ def test_t54_a_genuine_str_path_to_a_valid_on_disk_record_returns_true(make_auth
     """
     authority = make_authority("S1-X1")
     path = _write_run_record(authority)
-    records._require_valid_cfg1_run_payload(
+    records._require_valid_cfg1_run_payload_v2(
         json.loads(path.read_text(encoding="utf-8"))
     )
     assert type(str(path)) is str

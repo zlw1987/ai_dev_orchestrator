@@ -207,6 +207,25 @@ def claim_cfg1_run_workspace(workspace: Cfg1RunWorkspace, *, run_id: str) -> Non
     _CLAIMED[workspace.run_workspace_nonce] = run_id
 
 
+def workspace_is_registered(workspace: object) -> bool:
+    """FU1 (R6 Sec. 8): is this EXACT workspace a live registry entry?
+
+    Registry membership only -- no path is consulted -- and the instance's
+    paths must still equal the ones registered with its nonce. This is what
+    moves the executor's workspace mint state W to ``AUTHORITY_RETURNED``;
+    it grants no deletion by itself (L27 still re-proves against the marker).
+    """
+    if type(workspace) is not Cfg1RunWorkspace:
+        return False
+    record = _MINTED.get(workspace.run_workspace_nonce)
+    if record is None:
+        return False
+    return (
+        workspace.experiment_root == record.experiment_root
+        and workspace.workspace_root == record.workspace_root
+    )
+
+
 def workspace_is_claimed_by(workspace: object, *, run_id: str) -> bool:
     """Whether this exact workspace is claimed by exactly this ``run_id``."""
     if type(workspace) is not Cfg1RunWorkspace:

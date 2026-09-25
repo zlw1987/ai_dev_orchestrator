@@ -11,6 +11,12 @@ failures that do not apply -- each enforces its own schema from first
 principles, so a future change to one cannot silently alter another's
 acceptance by accident of shared code (T-69).
 
+**FU1: v2 run and refusal records.** The corrected executor emits
+``pi-harness-cfg1-run.v2`` and ``pi-harness-cfg1-refusal.v2`` only, each with
+its own independent validator (R6 D-1/D-3, AMEND1 Sec. 15). The two v1
+validators above are unchanged and remain only so historical v1 artifacts keep
+verifying exactly as they do today.
+
 **Payload validity is COHERENCE, never PROVENANCE.** Every validator here
 proves a payload's declared fields agree with each other. None proves where
 the artifact sits on disk (that is the post-hoc binding verifier,
@@ -30,8 +36,10 @@ from . import (
     PACKAGE_ID,
     REFUSAL_RECORD_KIND,
     REFUSAL_RECORD_VERSION,
+    REFUSAL_RECORD_VERSION_V2,
     RUN_RECORD_KIND,
     RUN_RECORD_VERSION,
+    RUN_RECORD_VERSION_V2,
     STAGE_CLOSURE_RECORD_KIND,
     STAGE_CLOSURE_RECORD_VERSION,
 )
@@ -74,8 +82,13 @@ from .identity import (
 from .lifecycle import (
     LIFECYCLE_FAILURE_STEPS,
     REFUSAL_STEPS,
+    WORKSPACE_MINT_ATTEMPTED_NO_AUTHORITY,
+    WORKSPACE_MINT_NOT_ATTEMPTED,
+    WORKSPACE_MINT_STATES,
     compute_lifecycle_closure,
+    compute_lifecycle_closure_v2,
 )
+from .pi_identity import ALLOWED_SEAM_MATCH_FOR_FAILURE, PI_IDENTITY_FAILURE_CODES
 from .schedule import (
     STAGE_ARMS,
     STAGE_IDS,
@@ -934,6 +947,482 @@ def _require_valid_cfg1_refusal_payload(payload: Mapping[str, Any]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# FU1 -- pi-harness-cfg1-run.v2 and pi-harness-cfg1-refusal.v2
+# ---------------------------------------------------------------------------
+#
+# R6 Sec. 10 (D-1, D-3) as amended by AMEND1 Sec. 15. v1's key set, validator,
+# closure function and meaning above stay byte-for-byte as shipped. v2 differs
+# from v1 in exactly:
+#
+# * ``pi_observed_version`` is ABSENT (AMD-4) -- its name and v1 meaning are
+#   "Pi executed and reported this", and nothing in a v2 run executes Pi before
+#   L14. ``pi_version_probe_attempted`` never existed and is not added. No
+#   replacement version field is added (AMEND1 Sec. 7.3).
+# * ``pi_identity_failure_code``: nullable, exactly three codes.
+# * ``workspace_mint_state`` (W) and the v2 closure predicate.
+# * ``unexpected_failure_step``: nullable, ``{"L18", "L19", "L20"}``.
+# * ``UNEXPECTED_STEP_FAILURE`` joins the refusal-code domain.
+# * the invariants below -- every one a pure function of the artifact's own
+#   fields; none references an in-memory fact.
+#
+# The v2 validator is its OWN implementation, never a wrapper around v1 with
+# some checks skipped (Sec. 22.4.3).
+
+_IDENTITY_KEYS_V2: tuple[str, ...] = (
+    "model_id",
+    "provider_id",
+    "backend_gateway_class",
+    "fixture_task_id",
+    "fixture_revision",
+    "pi_seam_digests_match",
+    "pi_identity_failure_code",
+)
+
+_PRE_DISPATCH_KEYS_V2: tuple[str, ...] = _PRE_DISPATCH_KEYS + ("unexpected_failure_step",)
+
+_LIFECYCLE_KEYS_V2: tuple[str, ...] = _LIFECYCLE_KEYS + ("workspace_mint_state",)
+
+_LIFECYCLE_BOOL_KEYS_V2: tuple[str, ...] = _LIFECYCLE_BOOL_KEYS
+
+#: The complete, closed v2 run-record key set.
+CFG1_RUN_RECORD_KEYS_V2: frozenset[str] = frozenset(
+    _HEADER_KEYS
+    + _SCHEDULE_KEYS
+    + _CONFIG_VARIANT_KEYS
+    + _IDENTITY_KEYS_V2
+    + _PRE_DISPATCH_KEYS_V2
+    + _DISPATCH_KEYS
+    + _TURN_KEYS
+    + _OBS1_KEYS
+    + _PROVIDER_KEYS
+    + _BROKER_KEYS
+    + _LIFECYCLE_KEYS_V2
+    + _REPOSITORY_KEYS
+    + _VERIFICATION_KEYS
+    + _CLASSIFICATION_KEYS
+)
+
+#: The v2 fields a run executor observes -- exactly what the corrected
+#: executor produces.
+CFG1_RUN_OBSERVATION_KEYS_V2: frozenset[str] = frozenset(
+    ("pi_seam_digests_match", "pi_identity_failure_code")
+    + _PRE_DISPATCH_KEYS_V2
+    + _DISPATCH_KEYS
+    + _TURN_KEYS
+    + _OBS1_KEYS
+    + _PROVIDER_KEYS
+    + _BROKER_KEYS
+    + _LIFECYCLE_KEYS_V2
+    + _REPOSITORY_KEYS
+    + _VERIFICATION_KEYS
+)
+
+#: The two keys a v2 payload must NEVER carry (AMEND1 R-S1).
+V2_FORBIDDEN_IDENTITY_KEYS: frozenset[str] = frozenset(
+    {"pi_observed_version", "pi_version_probe_attempted"}
+)
+
+UNEXPECTED_STEP_FAILURE = "UNEXPECTED_STEP_FAILURE"
+OFFLINE_PREFLIGHT_FAILED = "OFFLINE_PREFLIGHT_FAILED"
+
+#: v1's closed refusal-code set plus the one R6 addition. The three P codes
+#: are deliberately NOT members: they live only in ``pi_identity_failure_code``.
+PRE_DISPATCH_REFUSAL_CODES_V2: frozenset[str] = PRE_DISPATCH_REFUSAL_CODES | frozenset(
+    {UNEXPECTED_STEP_FAILURE}
+)
+
+#: R6 Sec. 9.2: the closed domain of ``unexpected_failure_step`` -- the
+#: dispatch, turn-observation and projection steps, and nothing later.
+UNEXPECTED_FAILURE_STEPS: frozenset[str] = frozenset({"L18", "L19", "L20"})
+
+#: R6 Sec. 9.4's step/code table, derived from the shipped executor.
+#: ``UNEXPECTED_STEP_FAILURE`` is admissible at every refusal step.
+REFUSAL_CODES_BY_STEP: dict[str, frozenset[str]] = {
+    step: frozenset(codes) | frozenset({UNEXPECTED_STEP_FAILURE})
+    for step, codes in {
+        "L1": ("OFFLINE_PREFLIGHT_FAILED",),
+        "L2": ("WORKSPACE_BASELINE_FAILED",),
+        "L3": ("WORKSPACE_BASELINE_FAILED",),
+        "L4": ("CREDENTIAL_BOUNDARY_FAILED",),
+        "L5": ("SECRET_CONTEXT_FAILED",),
+        "L6": ("BASE_URL_COMPAT_DETECTION_TRIGGERED",),
+        "L7": ("ROUTE_UNAVAILABLE",),
+        "L8": ("CAPABILITY_MINT_FAILED",),
+        "L9": ("CONFIG_GENERATION_FAILED",),
+        "L10": ("BROKER_CONSTRUCTION_FAILED",),
+        "L11": ("EXTENSION_GENERATION_FAILED",),
+        "L12": ("CHILD_ENVIRONMENT_FAILED",),
+        "L13": ("BROKER_NOT_READY",),
+        "L14": ("RUNTIME_LAUNCH_FAILED",),
+        "L15": ("RUNTIME_CORRELATION_FAILED", "H1_MISMATCH"),
+        "L16": ("RUNTIME_CORRELATION_FAILED", "H2_MISMATCH", "CONFIG_SHAPE_MISMATCH"),
+        "L17": ("PRE_DISPATCH_BASELINE_FAILED",),
+        "L18": ("PROMPT_REFUSED_BY_RUNTIME",),
+    }.items()
+}
+
+
+def _require_pi_identity_rules_v2(
+    *, step: str | None, code: str | None, failure: str | None, seam: bool
+) -> None:
+    """AMEND1 Sec. 8.3 -- R-S1 .. R-S6, each a pure function of K, C, F, S.
+
+    Exhaustive and mutually exclusive: ``F`` non-null -> only R-S2; ``F`` null
+    at ``K == "L1"`` -> by R-S6 exactly one of R-S3 / R-S4; ``F`` null
+    anywhere else (including a record with no ``K``) -> R-S5. None of them
+    refers to an execution or probe event, and none names a hidden internal P
+    stage.
+    """
+    if failure is not None:
+        # R-S2 -- an anticipated P refusal, and only at L1.
+        if step != "L1" or code != OFFLINE_PREFLIGHT_FAILED:
+            raise _invariant("PI_IDENTITY_FAILURE_OUTSIDE_L1_PREFLIGHT_REFUSAL")
+        if seam is not ALLOWED_SEAM_MATCH_FOR_FAILURE[failure]:
+            raise _invariant("PI_IDENTITY_FAILURE_DISAGREES_WITH_SEAM_MATCH")
+        return
+    if step == "L1":
+        # R-S6
+        if code not in (OFFLINE_PREFLIGHT_FAILED, UNEXPECTED_STEP_FAILURE):
+            raise _invariant("L1_REFUSAL_CODE_OUTSIDE_DOMAIN")
+        # R-S3 -- the Git-resolution refusal, the only meaning this can have.
+        if code == OFFLINE_PREFLIGHT_FAILED and seam is not True:
+            raise _invariant("L1_PREFLIGHT_REFUSAL_WITHOUT_P_SUCCESS")
+        # R-S4 -- UNEXPECTED at L1: F null (already), S either value.
+        return
+    # R-S5 -- past L1, or no refusal at all: P's success was committed.
+    if seam is not True:
+        raise _invariant("POST_L1_RECORD_WITHOUT_P_SUCCESS")
+
+
+def _require_valid_cfg1_run_payload_v2(payload: Mapping[str, Any]) -> None:
+    """The closed ``pi-harness-cfg1-run.v2`` schema. Raises, or returns ``None``.
+
+    Never run against a v1 payload: a v1 record dispatches to v1's own
+    validator by its ``record_version``, and a v1 payload presented here is
+    refused by the literal check before any v2 rule could reinterpret it.
+    """
+    if type(payload) is not dict:
+        raise _schema("NOT_A_DICT")
+    if V2_FORBIDDEN_IDENTITY_KEYS & frozenset(payload):
+        raise _schema("V2_CARRIES_REMOVED_IDENTITY_KEY")
+    _require_exact_keys(payload, CFG1_RUN_RECORD_KEYS_V2)
+
+    # -- header: exact literals ---------------------------------------------
+    _require_literal(payload, "experiment", PACKAGE_ID)
+    _require_literal(payload, "record_version", RUN_RECORD_VERSION_V2)
+    _require_literal(payload, "record_kind", RUN_RECORD_KIND)
+    _require_literal(payload, "scoring_authority", False)
+    _require_literal(payload, "qualification_credit", False)
+    _require_literal(payload, "is_review_packet", False)
+    _require_literal(payload, "reviewer_invoked", False)
+    _require_literal(payload, "claim_scope", CLAIM_SCOPE)
+
+    # -- schedule binding ----------------------------------------------------
+    stage_id = _require_enum(payload, "stage_id", STAGE_IDS)
+    _require_stage_execution_id(payload)
+    ordinals = declared_ordinals(stage_id)
+    run_ordinal = _require_int(
+        payload, "run_ordinal", minimum=ordinals[0], maximum=ordinals[-1]
+    )
+    block = _require_int(payload, "block", minimum=1)
+    position = _require_int(payload, "position", minimum=1)
+    arm_id = _require_enum(payload, "arm_id", STAGE_ARMS[stage_id])
+    record_filename = _require_str(payload, "record_filename")
+
+    # -- config variant ------------------------------------------------------
+    declared_shape = _require_enum(payload, "declared_compat_shape", DECLARED_COMPAT_SHAPES)
+    models_digest = _require_str(payload, "models_json_redacted_sha256")
+    settings_sha = _require_str(payload, "settings_json_sha256")
+    for key, value in (
+        ("models_json_redacted_sha256", models_digest),
+        ("settings_json_sha256", settings_sha),
+    ):
+        if _SHA256_PATTERN.fullmatch(value) is None:
+            raise _schema(f"BAD_DIGEST_{key.upper()}")
+    _require_bool(payload, "derived_effective_supports_developer_role")
+    _require_bool(payload, "derived_effective_supports_reasoning_effort")
+    _require_enum(payload, "derived_system_role", DERIVED_SYSTEM_ROLES)
+    effort = _get(payload, "derived_reasoning_effort_sent")
+    if effort is not None and (
+        type(effort) is not str or effort not in DERIVED_REASONING_EFFORT_VALUES
+    ):
+        raise _schema("BAD_ENUM_DERIVED_REASONING_EFFORT_SENT")
+
+    # -- identity: pinned literals + the static P family (R-S1) --------------
+    _require_literal(payload, "model_id", CFG1_MODEL_ID)
+    _require_literal(payload, "provider_id", PROVIDER_ID)
+    _require_literal(payload, "backend_gateway_class", BACKEND_GATEWAY_CLASS)
+    _require_literal(payload, "fixture_task_id", CFG1_TASK_ID)
+    _require_literal(payload, "fixture_revision", CFG1_T1_REVISION)
+    seam = _require_bool(payload, "pi_seam_digests_match")
+    failure = _require_optional_enum(
+        payload, "pi_identity_failure_code", PI_IDENTITY_FAILURE_CODES
+    )
+
+    # -- pre-dispatch --------------------------------------------------------
+    for key in (
+        "base_url_compat_detection_clear",
+        "route_reachable",
+        "route_configured_model_served",
+        "broker_reached_ready",
+        "h1_extension_identity_matched",
+        "h2_provider_model_identity_matched",
+        "manipulation_check_agrees",
+    ):
+        _require_bool(payload, key)
+    runtime_shape = _require_enum(
+        payload, "runtime_reported_compat_shape", RUNTIME_COMPAT_SHAPES
+    )
+    runtime_reasoning = _require_enum(
+        payload, "runtime_reported_model_reasoning", RUNTIME_MODEL_REASONING_VALUES
+    )
+    runtime_thinking = _require_enum(
+        payload, "runtime_reported_thinking_level", RUNTIME_THINKING_LEVELS
+    )
+    refusal_code = _require_optional_enum(
+        payload, "pre_dispatch_refusal_code", PRE_DISPATCH_REFUSAL_CODES_V2
+    )
+    refused_at_step = _require_optional_enum(payload, "refused_at_step", REFUSAL_STEPS)
+    unexpected_step = _require_optional_enum(
+        payload, "unexpected_failure_step", UNEXPECTED_FAILURE_STEPS
+    )
+
+    # -- dispatch ------------------------------------------------------------
+    dispatch_state = _require_enum(payload, "dispatch_state", DISPATCH_STATES)
+    prompt_writes = _require_int(payload, "prompt_writes", minimum=0, maximum=1)
+    _require_literal(payload, "automatic_semantic_retry", False)
+    _require_literal(payload, "operator_continuation", False)
+
+    # -- turn ----------------------------------------------------------------
+    _require_enum(payload, "runtime_wait_outcome", RUNTIME_WAIT_OUTCOMES)
+
+    # -- OBS1 ----------------------------------------------------------------
+    activity_available = _require_bool(payload, "runtime_reported_tool_activity_available")
+    capture_basis = _require_optional_enum(
+        payload, "runtime_reported_tool_activity_capture_basis", CAPTURE_BASES
+    )
+    _require_bool(payload, "runtime_reported_unidentified_tool_call_id_seen")
+    for key in _OBS1_COUNT_KEYS:
+        _require_int(payload, key, minimum=0)
+    _require_optional_enum(
+        payload, "activity_unavailable_reason", ACTIVITY_UNAVAILABLE_REASONS
+    )
+
+    # -- provider ------------------------------------------------------------
+    _require_bool(payload, "stop_reasons_available")
+    _require_exact_int_mapping(payload, "stop_reason_counts", STOP_REASON_KEYS)
+    _require_int(payload, "auto_retry_events", minimum=0)
+    _require_int(payload, "extension_error_count", minimum=0)
+
+    # -- broker --------------------------------------------------------------
+    broker_available = _require_bool(payload, "broker_recorded_activity_available")
+    for key in _BROKER_COUNT_KEYS:
+        _require_int(payload, key, minimum=0)
+
+    # -- lifecycle -----------------------------------------------------------
+    for key in _LIFECYCLE_BOOL_KEYS_V2:
+        _require_bool(payload, key)
+    residual = _require_int(payload, "workspace_residual_file_count", minimum=0)
+    failure_steps = _require_sorted_unique_subset(
+        payload, "lifecycle_failure_steps", LIFECYCLE_FAILURE_STEPS
+    )
+    mint_state = _require_enum(payload, "workspace_mint_state", WORKSPACE_MINT_STATES)
+
+    # -- repository ----------------------------------------------------------
+    for key in ("git_observation_1_performed", "head_moved", "broker_git_cross_check_agrees",
+                "git_observation_2_performed"):
+        _require_bool(payload, key)
+    changed = _require_sorted_unique_subset(payload, "changed_tracked_paths", CFG1_T1_FILES)
+    _require_sorted_unique_subset(
+        payload, "post_verification_changed_tracked_paths", CFG1_T1_FILES
+    )
+    _require_int(payload, "untracked_path_count", minimum=0)
+    _require_int(payload, "staged_path_count", minimum=0)
+
+    # -- verification --------------------------------------------------------
+    verification_attempted = _require_bool(payload, "verification_attempted")
+    skip_reason = _require_optional_enum(
+        payload, "verification_skip_reason", VERIFICATION_SKIP_REASONS
+    )
+    for key in (
+        "verification_started",
+        "verification_completed",
+        "verification_timed_out",
+        "verification_output_limit_exceeded",
+        "verification_passed",
+    ):
+        _require_bool(payload, key)
+    _require_optional_int(payload, "verification_return_code")
+    _require_exact_int_mapping(payload, "verification_counts", VERIFICATION_COUNT_KEYS)
+
+    # -- classification ------------------------------------------------------
+    _require_enum(payload, "run_classification", RUN_CLASSIFICATIONS)
+
+    # =======================================================================
+    # Cross-field invariants -- every one over the artifact's own fields
+    # =======================================================================
+    if arm_id != _schedule_arm_for(stage_id, run_ordinal):
+        raise _invariant("ARM_DISAGREES_WITH_SCHEDULE")
+    expected_block, expected_position = _schedule_block_position(stage_id, run_ordinal)
+    if (block, position) != (expected_block, expected_position):
+        raise _invariant("BLOCK_POSITION_DISAGREE_WITH_SCHEDULE")
+    if record_filename != _run_record_filename(stage_id, run_ordinal, arm_id):
+        raise _invariant("RECORD_FILENAME_DISAGREES_WITH_DERIVATION")
+
+    if declared_shape != ARM_SHAPE[arm_id]:
+        raise _invariant("DECLARED_SHAPE_DISAGREES_WITH_ARM")
+    if models_digest != ARM_REDACTED_DIGEST[arm_id]:
+        raise _invariant("MODELS_DIGEST_DISAGREES_WITH_ARM")
+    if settings_sha != PINNED_SETTINGS_SHA256:
+        raise _invariant("SETTINGS_DIGEST_DISAGREES_WITH_PIN")
+    for key, expected_value in ARM_EFFECTIVE[arm_id].items():
+        if payload[key] != expected_value or type(payload[key]) is not type(expected_value):
+            raise _invariant("DERIVED_EFFECTIVE_DISAGREES_WITH_ARM")
+
+    # -- R6 Sec. 9.2 / 9.4: the three exact modes, checked as a whole triple.
+    # The ONLY direct iff: a refusal code is present iff a refusal step is.
+    if (refusal_code is None) != (refused_at_step is None):
+        raise _invariant("REFUSAL_CODE_AND_STEP_NOT_TOGETHER")
+    if unexpected_step is not None and refusal_code is not None:
+        raise _invariant("REFUSAL_AND_POST_DISPATCH_UNEXPECTED_TOGETHER")
+    if refused_at_step is not None and refusal_code not in REFUSAL_CODES_BY_STEP[refused_at_step]:
+        raise _invariant("REFUSAL_CODE_DISAGREES_WITH_STEP")
+    if unexpected_step is not None and dispatch_state == "NOT_ATTEMPTED":
+        raise _invariant("POST_DISPATCH_UNEXPECTED_WITHOUT_DISPATCH_ATTEMPT")
+
+    # -- AMEND1 Sec. 8.3: R-S1 .. R-S6 ---------------------------------------
+    _require_pi_identity_rules_v2(
+        step=refused_at_step, code=refusal_code, failure=failure, seam=seam
+    )
+
+    # -- R6 Sec. 8 / Sec. 10: W, bidirectionally bound to the step ----------
+    if (mint_state == WORKSPACE_MINT_NOT_ATTEMPTED) != (refused_at_step == "L1"):
+        raise _invariant("WORKSPACE_MINT_STATE_DISAGREES_WITH_L1")
+    if mint_state == WORKSPACE_MINT_NOT_ATTEMPTED:
+        if (
+            payload["workspace_authority_reproved"] is not False
+            or payload["workspace_removed_verified"] is not False
+            or residual != 0
+            or payload["runtime_created"] is not False
+            or payload["broker_resource_created"] is not False
+            or payload["git_observation_1_performed"] is not False
+            or payload["git_observation_2_performed"] is not False
+            or verification_attempted is not False
+        ):
+            raise _invariant("UNMINTED_WORKSPACE_CARRIES_RESOURCE_FACTS")
+    if mint_state == WORKSPACE_MINT_ATTEMPTED_NO_AUTHORITY:
+        if refused_at_step != "L2":
+            raise _invariant("PARTIAL_MINT_OUTSIDE_L2")
+        if (
+            payload["workspace_authority_reproved"] is not False
+            or payload["workspace_removed_verified"] is not False
+            or "L27" not in failure_steps
+        ):
+            raise _invariant("PARTIAL_MINT_CARRIES_WORKSPACE_CLOSURE")
+
+    if (prompt_writes == 0) != (dispatch_state == "NOT_ATTEMPTED"):
+        raise _invariant("PROMPT_WRITES_DISAGREE_WITH_DISPATCH_STATE")
+    if refusal_code is not None and dispatch_state not in ("NOT_ATTEMPTED", "CONFIRMED_NOT_SENT"):
+        raise _invariant("REFUSAL_DISAGREES_WITH_DISPATCH_STATE")
+    if dispatch_state == "CONFIRMED_NOT_SENT" and refusal_code != "PROMPT_REFUSED_BY_RUNTIME":
+        raise _invariant("CONFIRMED_NOT_SENT_REQUIRES_PROMPT_REFUSED_BY_RUNTIME")
+
+    expected_agrees = (
+        runtime_shape == declared_shape
+        and runtime_reasoning == "TRUE"
+        and runtime_thinking == EXPECTED_THINKING_LEVEL
+    )
+    if payload["manipulation_check_agrees"] is not expected_agrees:
+        raise _invariant("MANIPULATION_CHECK_DISAGREES_WITH_PROJECTION")
+    if dispatch_state != "NOT_ATTEMPTED" and payload["manipulation_check_agrees"] is not True:
+        raise _invariant("DISPATCH_WITHOUT_AGREEING_MANIPULATION_CHECK")
+
+    _require_activity_family_consistency(
+        payload,
+        available=activity_available,
+        capture_basis=capture_basis,
+        count_keys=_OBS1_COUNT_KEYS,
+        extra_false_bool="runtime_reported_unidentified_tool_call_id_seen",
+    )
+    if capture_basis == CAPTURE_BASIS_AGENT_SETTLED and payload["runtime_wait_outcome"] != "SETTLED":
+        raise _invariant("SETTLED_BASIS_REQUIRES_SETTLED_WAIT_OUTCOME")
+
+    if not broker_available:
+        for key in _BROKER_COUNT_KEYS:
+            if payload[key] != 0:
+                raise _invariant("UNAVAILABLE_BROKER_FAMILY_CARRIES_COUNTS")
+    if payload["broker_recorded_edited_path_count"] > payload["broker_recorded_edit_operation_count"]:
+        raise _invariant("EDITED_PATHS_EXCEED_EDIT_OPERATIONS")
+
+    computed_closed, computed_steps = compute_lifecycle_closure_v2(payload)
+    if payload["lifecycle_all_closed"] is not computed_closed:
+        raise _invariant("LIFECYCLE_ALL_CLOSED_DISAGREES_WITH_COMPONENTS")
+    if failure_steps != computed_steps:
+        raise _invariant("LIFECYCLE_FAILURE_STEPS_DISAGREE_WITH_COMPONENTS")
+
+    if verification_attempted:
+        if not (
+            payload["runtime_exit_observed"]
+            and payload["runtime_transport_eof_observed"]
+            and payload["broker_state_closed"]
+            and payload["generated_config_scrub_verified"]
+            and payload["extension_binding_scrub_verified"]
+        ):
+            raise _invariant("VERIFICATION_ATTEMPTED_WITHOUT_PROVEN_CLOSURE")
+    elif skip_reason is None:
+        raise _invariant("VERIFICATION_NOT_ATTEMPTED_WITHOUT_SKIP_REASON")
+
+    if changed and not frozenset(changed) <= CFG1_T1_FILES:  # pragma: no cover - list check
+        raise _invariant("CHANGED_PATHS_OUTSIDE_FIXTURE")
+
+    if payload["run_classification"] != classify_cfg1_run(payload):
+        raise _invariant("RUN_CLASSIFICATION_NOT_REPRODUCIBLE")
+
+
+#: The only record kind a v2 refusal record may stand in for.
+REFUSABLE_RECORD_KINDS_V2: frozenset[str] = frozenset({RUN_RECORD_VERSION_V2})
+
+
+def _require_valid_cfg1_refusal_payload_v2(payload: Mapping[str, Any]) -> None:
+    """The closed ``pi-harness-cfg1-refusal.v2`` schema (R6 decision D-3).
+
+    Identical in shape to refusal v1 except that its ``refused_record_kind``
+    names run v2. Refusal v1 is retained unchanged so a version keeps its
+    meaning; independently implemented, never a wrapper (Sec. 22.4.3).
+    """
+    if type(payload) is not dict:
+        raise _schema("NOT_A_DICT")
+    _require_exact_keys(payload, CFG1_REFUSAL_RECORD_KEYS)
+
+    _require_literal(payload, "experiment", PACKAGE_ID)
+    _require_literal(payload, "record_version", REFUSAL_RECORD_VERSION_V2)
+    _require_literal(payload, "record_kind", REFUSAL_RECORD_KIND)
+
+    stage_id = _require_enum(payload, "stage_id", STAGE_IDS)
+    _require_stage_execution_id(payload)
+    ordinals = declared_ordinals(stage_id)
+    run_ordinal = _require_int(
+        payload, "run_ordinal", minimum=ordinals[0], maximum=ordinals[-1]
+    )
+    arm_id = _require_enum(payload, "arm_id", STAGE_ARMS[stage_id])
+    record_filename = _require_str(payload, "record_filename")
+    _require_enum(payload, "refused_record_kind", REFUSABLE_RECORD_KINDS_V2)
+
+    finding_count = _require_int(payload, "finding_count", minimum=1)
+    categories = _require_sorted_unique_subset(payload, "finding_categories", FINDING_CATEGORIES)
+    _require_bool(payload, "lifecycle_all_closed")
+
+    if arm_id != _schedule_arm_for(stage_id, run_ordinal):
+        raise _invariant("ARM_DISAGREES_WITH_SCHEDULE")
+    if record_filename != _run_record_filename(stage_id, run_ordinal, arm_id):
+        raise _invariant("RECORD_FILENAME_DISAGREES_WITH_DERIVATION")
+    if not categories:
+        raise _invariant("REFUSAL_WITHOUT_FINDING_CATEGORIES")
+    if len(categories) > finding_count:
+        raise _invariant("FINDING_COUNT_BELOW_CATEGORY_COUNT")
+
+
+# ---------------------------------------------------------------------------
 # Sec. 22.4.2 -- the STAGE-CLOSURE-record validator
 # ---------------------------------------------------------------------------
 
@@ -1043,9 +1532,14 @@ def _require_valid_cfg1_stage_closure_payload(payload: Mapping[str, Any]) -> Non
 #: ``(record_version, record_kind) -> validator``. Both members of a pair must
 #: match: a mixed or contradictory pairing dispatches to NOTHING and is refused
 #: with zero validator calls (T-82).
+#: FU1: the v2 pairs are ADDED; the v1 pairs keep dispatching to v1's own,
+#: unchanged validators, so an archived v1 artifact is never routed through v2
+#: semantics and a v2 artifact is never accepted by v1's.
 _RUN_PATH_DISCRIMINATORS: dict[tuple[str, str], Any] = {
     (RUN_RECORD_VERSION, RUN_RECORD_KIND): _require_valid_cfg1_run_payload,
     (REFUSAL_RECORD_VERSION, REFUSAL_RECORD_KIND): _require_valid_cfg1_refusal_payload,
+    (RUN_RECORD_VERSION_V2, RUN_RECORD_KIND): _require_valid_cfg1_run_payload_v2,
+    (REFUSAL_RECORD_VERSION_V2, REFUSAL_RECORD_KIND): _require_valid_cfg1_refusal_payload_v2,
 }
 
 
@@ -1071,7 +1565,14 @@ def _dispatch_run_path_validator(parsed: Mapping[str, Any]):
 def build_cfg1_run_payload(
     *, stage_id: str, stage_execution_id: str, run_ordinal: int, observations: Mapping[str, Any]
 ) -> dict[str, Any]:
-    """Assemble one run record from L28's now-immutable facts.
+    """Assemble one ``pi-harness-cfg1-run.v2`` record from L28's immutable facts.
+
+    FU1: the corrected executor emits v2 ONLY. There is deliberately no v1
+    builder any more -- v1 is reachable only through validation/verification
+    of existing bytes -- and ``observations`` must carry exactly
+    :data:`CFG1_RUN_OBSERVATION_KEYS_V2`, so a ``pi_observed_version`` or
+    ``pi_version_probe_attempted`` key can never be serialized into a v2
+    record. ``PINNED_PI_VERSION`` is never read here.
 
     ``arm_id`` and ``(block, position)`` come from the SAME
     ``_schedule_arm_for`` / ``_schedule_block_position`` callables the writer,
@@ -1086,15 +1587,21 @@ def build_cfg1_run_payload(
     """
     if type(observations) is not dict:
         raise _schema("OBSERVATIONS_NOT_A_DICT")
-    if frozenset(observations) != CFG1_RUN_OBSERVATION_KEYS:
+    if frozenset(observations) != CFG1_RUN_OBSERVATION_KEYS_V2:
         raise _schema("CLOSED_KEY_SET_VIOLATION_OBSERVATIONS")
+    failure = observations["pi_identity_failure_code"]
+    if failure is not None and (
+        type(failure) is not str or failure not in PI_IDENTITY_FAILURE_CODES
+    ):
+        # AE: the builder refuses to serialize any value outside the three.
+        raise _schema("BAD_ENUM_PI_IDENTITY_FAILURE_CODE")
 
     arm_id = _schedule_arm_for(stage_id, run_ordinal)
     block, position = _schedule_block_position(stage_id, run_ordinal)
 
     payload: dict[str, Any] = {
         "experiment": PACKAGE_ID,
-        "record_version": RUN_RECORD_VERSION,
+        "record_version": RUN_RECORD_VERSION_V2,
         "record_kind": RUN_RECORD_KIND,
         "scoring_authority": False,
         "qualification_credit": False,
@@ -1142,14 +1649,14 @@ def build_cfg1_refusal_payload(
     arm_id = _schedule_arm_for(stage_id, run_ordinal)
     return {
         "experiment": PACKAGE_ID,
-        "record_version": REFUSAL_RECORD_VERSION,
+        "record_version": REFUSAL_RECORD_VERSION_V2,
         "record_kind": REFUSAL_RECORD_KIND,
         "stage_id": stage_id,
         "stage_execution_id": stage_execution_id,
         "run_ordinal": run_ordinal,
         "arm_id": arm_id,
         "record_filename": _run_record_filename(stage_id, run_ordinal, arm_id),
-        "refused_record_kind": RUN_RECORD_VERSION,
+        "refused_record_kind": RUN_RECORD_VERSION_V2,
         "finding_count": finding_count,
         "finding_categories": sorted(set(finding_categories)),
         "lifecycle_all_closed": lifecycle_all_closed,

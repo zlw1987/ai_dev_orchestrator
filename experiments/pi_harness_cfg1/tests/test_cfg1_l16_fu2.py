@@ -28,7 +28,7 @@ from ar2 import supervisor as supervisor_module
 from ar2.supervisor import PiRpcSupervisor, PiSupervisorError, RunBounds
 from cfg1_doubles import (
     FakeExtension,
-    FakeRuntimeIdentity,
+    StaticIdentityShape,
     FakeSupervisor,
     build_doubled_ports,
     probe_facts_for_arm,
@@ -45,7 +45,10 @@ from pi_harness_cfg1.arms import (
     RUNTIME_THINKING_LEVELS,
 )
 from pi_harness_cfg1.identity import CFG1_MODEL_ID, PROVIDER_ID
-from pi_harness_cfg1.records import _require_valid_cfg1_run_payload, build_cfg1_run_payload
+from pi_harness_cfg1.records import (
+    _require_valid_cfg1_run_payload_v2 as _require_valid_cfg1_run_payload,
+    build_cfg1_run_payload,
+)
 from pi_harness_cfg1.run_contract import Cfg1RunAdmission
 from pi_harness_cfg1.run_executor import (
     _PreDispatchRefusal,
@@ -426,7 +429,7 @@ def test_r40_argv_and_expectations_come_from_the_same_frozen_constants(tmp_path)
             return {"SystemRoot": "C:\\Windows"}
 
     supervisor = ports.build_supervisor(
-        identity=FakeRuntimeIdentity(),
+        identity=StaticIdentityShape(),
         extension=FakeExtension(entry_path=str(tmp_path / "index.ts"), extension_dir=str(tmp_path)),
         environment=_Environment(),
         workspace_root=str(tmp_path),

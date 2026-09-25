@@ -129,6 +129,7 @@ def _no_leaked_cfg1_registry_state():
     """
     from pi_harness_cfg1 import (
         config_issuance,
+        extension_issuance,
         run_workspace,
         stage_decision,
         stage_output,
@@ -168,11 +169,35 @@ def _no_leaked_cfg1_registry_state():
             "a handle or descriptor was LEAKED to a failed close; a test that "
             "injects one must account for it rather than leave it counted"
         )
+        # AMEND2 (RA-9): a retained exact-object handle is legitimately live
+        # while an ACTIVE issuance owns it -- several tests mint without a run
+        # to retire them, exactly as they do for the issuance registries -- but
+        # a retained handle NO issuance owns is a STRANDED one: the writer
+        # neither handed it over nor released it. That is a genuine defect, and
+        # asserting before releasing is what makes it detectable.
+        owned = {
+            record.retained.nonce
+            for record in list(config_issuance._ISSUED.values())
+            + list(extension_issuance._ISSUED_EXTENSIONS.values())
+            if record.retained is not None
+        }
+        stranded = set(win_config_authority._RETAINED) - owned
+        assert not stranded, (
+            "a retained exact-object handle survived the test with no owning "
+            "issuance: the writer neither registered nor released it"
+        )
     finally:
+        # Release stragglers for real, so a leaked retained handle can never
+        # keep a later test's tree delete-pending.
+        for retained_nonce in list(win_config_authority._RETAINED):
+            entry = win_config_authority._RETAINED.pop(retained_nonce, None)
+            if entry is not None:
+                win_config_authority._K32.CloseHandle(entry[0])
         stage_output._STAGE_OUTPUT_MINTED.clear()
         stage_decision._STAGE_DECISION_SEALED.clear()
         stage_decision._STAGE_TERMINAL_SEAL_HISTORY.clear()
         config_issuance._ISSUED.clear()
+        extension_issuance._ISSUED_EXTENSIONS.clear()
         run_workspace._MINTED.clear()
         run_workspace._CLAIMED.clear()
         for pin_nonce in list(win_config_authority._PINS):

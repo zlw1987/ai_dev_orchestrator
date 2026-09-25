@@ -351,7 +351,7 @@ def test_t160_the_record_fails_its_own_validator_and_halts_the_stage(
     """
     from pi_harness_cfg1.records import (
         Cfg1RecordValidationError,
-        _require_valid_cfg1_run_payload,
+        _require_valid_cfg1_run_payload_v2 as _require_valid_cfg1_run_payload,
     )
 
     # (2) -- the validator's own refusal, in isolation.
@@ -376,8 +376,8 @@ def test_t160_the_record_fails_its_own_validator_and_halts_the_stage(
 
     from pi_harness_cfg1 import (
         REFUSAL_RECORD_KIND,
-        REFUSAL_RECORD_VERSION,
-        RUN_RECORD_VERSION,
+        REFUSAL_RECORD_VERSION_V2 as REFUSAL_RECORD_VERSION,
+        RUN_RECORD_VERSION_V2 as RUN_RECORD_VERSION,
     )
 
     written = json.loads(

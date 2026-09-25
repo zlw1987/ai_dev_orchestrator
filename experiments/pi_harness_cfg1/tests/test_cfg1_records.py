@@ -25,7 +25,9 @@ from cfg1_builders import (
 from pi_harness_cfg1 import (
     PACKAGE_ID,
     REFUSAL_RECORD_VERSION,
+    REFUSAL_RECORD_VERSION_V2,
     RUN_RECORD_VERSION,
+    RUN_RECORD_VERSION_V2,
     STAGE_CLOSURE_RECORD_VERSION,
     arms,
     classification,
@@ -36,9 +38,17 @@ from pi_harness_cfg1 import (
 )
 from pi_harness_cfg1.records import (
     Cfg1RecordValidationError,
-    _require_valid_cfg1_refusal_payload,
-    _require_valid_cfg1_run_payload,
     _require_valid_cfg1_stage_closure_payload,
+)
+
+# FU1 (R6 D-1/D-3): the executor emits ``pi-harness-cfg1-run.v2`` and
+# ``pi-harness-cfg1-refusal.v2`` ONLY, so these payload-level regressions run
+# against the v2 validators -- the schema every newly emitted artifact must
+# satisfy. v1's own, unchanged validators are pinned separately against
+# independently built v1 payloads (FU1 Test N, test_cfg1_fu1_l1_boundary.py).
+from pi_harness_cfg1.records import (  # noqa: E402
+    _require_valid_cfg1_refusal_payload_v2 as _require_valid_cfg1_refusal_payload,
+    _require_valid_cfg1_run_payload_v2 as _require_valid_cfg1_run_payload,
 )
 
 _DESIGN_DOC = (
@@ -73,7 +83,7 @@ def test_t13_an_unrecognized_key_is_a_closed_key_set_violation():
     "key,bad_value",
     [
         ("experiment", "pi_implementer_qualification"),
-        ("record_version", "pi-harness-cfg1-run.v2"),
+        ("record_version", "pi-harness-cfg1-run.v1"),
         ("record_kind", "qualification run"),
         ("scoring_authority", True),
         ("qualification_credit", True),
@@ -453,6 +463,8 @@ def test_t90_the_halt_vocabulary_is_exactly_six_members_and_one_shared_object():
 def test_t94_the_run_record_schema_carries_no_unrecomputable_final_l30_state():
     assert "halt_triggered_by_this_run" not in records.CFG1_RUN_RECORD_KEYS
     assert "halt_reason_code" not in records.CFG1_RUN_RECORD_KEYS
+    assert "halt_triggered_by_this_run" not in records.CFG1_RUN_RECORD_KEYS_V2
+    assert "halt_reason_code" not in records.CFG1_RUN_RECORD_KEYS_V2
 
     for key, value in (
         ("halt_triggered_by_this_run", False),
@@ -595,6 +607,12 @@ def test_the_refusal_schema_accepts_only_the_one_refusable_record_kind():
     with pytest.raises(Cfg1RecordValidationError):
         _require_valid_cfg1_refusal_payload(payload)
     assert records.REFUSABLE_RECORD_KINDS == frozenset({RUN_RECORD_VERSION})
+    assert records.REFUSABLE_RECORD_KINDS_V2 == frozenset({RUN_RECORD_VERSION_V2})
+    # A v2 refusal may never stand in for a v1 run record, nor vice versa.
+    payload = refusal_payload()
+    payload["refused_record_kind"] = RUN_RECORD_VERSION
+    with pytest.raises(Cfg1RecordValidationError):
+        _require_valid_cfg1_refusal_payload(payload)
 
 
 def test_the_pinned_fixture_revision_still_matches_the_fixture_content():
@@ -610,8 +628,8 @@ def test_the_pinned_fixture_revision_still_matches_the_fixture_content():
 
 def test_every_record_header_declares_no_qualification_authority():
     for payload, version in (
-        (run_payload(), RUN_RECORD_VERSION),
-        (refusal_payload(), REFUSAL_RECORD_VERSION),
+        (run_payload(), RUN_RECORD_VERSION_V2),
+        (refusal_payload(), REFUSAL_RECORD_VERSION_V2),
         (stage_closure_payload(), STAGE_CLOSURE_RECORD_VERSION),
     ):
         assert payload["experiment"] == PACKAGE_ID

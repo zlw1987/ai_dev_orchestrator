@@ -314,7 +314,7 @@ def test_an_evidence_refusal_alone_does_not_halt_the_stage(make_authority):
             # A needle that genuinely appears in the run payload for THIS
             # ordinal only, and never in a refusal record.
             safety=(
-                ArtifactSafetyContext(api_key="0.85.1")
+                ArtifactSafetyContext(api_key="qwen3-coder-next")
                 if admission.run_ordinal == 2
                 else ArtifactSafetyContext.none_declared()
             ),

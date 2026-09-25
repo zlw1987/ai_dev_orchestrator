@@ -133,7 +133,7 @@ def run_cfg1_stage(authority: CFG1StageOutputAuthority, /) -> Cfg1StageResult:
     ``CFG1StageOutputAuthority`` has no supported way, through this function,
     to substitute a run executor, a hand-built ``Cfg1RunOutcome``, or a
     live-port set, and therefore no way to make this routine emit a genuine
-    ``pi-harness-cfg1-run.v1`` or stage-closure artifact from anything but the
+    ``pi-harness-cfg1-run.v2`` or stage-closure artifact from anything but the
     genuine L1-L28 executor (CFG1-IMPL-FU1 Finding 1). The genuine executor is
     bound HERE, mechanically, via :func:`run_executor.
     bind_genuine_cfg1_run_executor` -- never accepted as an argument.
@@ -636,10 +636,16 @@ def _run_scoped_registries_empty(outcome: Cfg1RunOutcome) -> bool:
     registries are read directly here, and the executor contributes only its
     own live-reference release fact.
     """
-    from . import config_issuance, run_workspace
+    from . import config_issuance, extension_issuance, run_workspace, win_config_authority
 
+    # FU1 (R6 AM-9): the extension issuance registry is a run-scoped registry
+    # exactly like config issuance, so a surviving entry is the same halt.
+    # AMEND2 (RA-9): so is the retained-authority registry -- a surviving
+    # retained handle is the same halt as a surviving issuance.
     return (
         run_workspace.minted_workspace_count() == 0
         and config_issuance.issued_token_count() == 0
+        and extension_issuance.issued_extension_token_count() == 0
+        and win_config_authority.held_retained_count() == 0
         and outcome.live_references_released is True
     )

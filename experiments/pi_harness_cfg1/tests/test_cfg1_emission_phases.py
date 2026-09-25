@@ -27,10 +27,11 @@ from pi_harness_cfg1.writers import emit_cfg1_refusal_record, emit_cfg1_run_reco
 
 NO_NEEDLES = ArtifactSafetyContext.none_declared()
 
-#: A needle that genuinely appears in a run payload (``pi_observed_version``)
+#: A needle that genuinely appears in a run payload (the pinned ``model_id``)
 #: and genuinely does NOT appear in a refusal record. That asymmetry is what
-#: makes an ordinary Sec. 18 row-11 scrub refusal constructible at all.
-SCRUB_TRIPPING_SAFETY = ArtifactSafetyContext(api_key="0.85.1")
+#: makes an ordinary Sec. 18 row-11 scrub refusal constructible at all. (FU1:
+#: v2 has no ``pi_observed_version``, the needle this used to be.)
+SCRUB_TRIPPING_SAFETY = ArtifactSafetyContext(api_key="qwen3-coder-next")
 
 
 def _emit_run(authority, *, ordinal=1, payload=None, safety=NO_NEEDLES, lifecycle=True):
@@ -153,7 +154,7 @@ def test_t83_pre_create_failure_gets_one_fallback_after_zero_final_path_writes(
     authority = make_authority("S1-X1")
     monkeypatch.setattr(
         writers,
-        "_require_valid_cfg1_run_payload",
+        "_require_valid_cfg1_run_payload_v2",
         _raiser(Cfg1RecordValidationError("SCHEMA_VIOLATION", "INJECTED")),
     )
     result = _emit_run(authority)
@@ -234,12 +235,12 @@ def test_t75_a_pre_create_fallback_that_also_fails_pre_create_writes_nothing(
     authority = make_authority("S1-X1")
     monkeypatch.setattr(
         writers,
-        "_require_valid_cfg1_run_payload",
+        "_require_valid_cfg1_run_payload_v2",
         _raiser(Cfg1RecordValidationError("SCHEMA_VIOLATION", "INJECTED")),
     )
     monkeypatch.setattr(
         writers,
-        "_require_valid_cfg1_refusal_payload",
+        "_require_valid_cfg1_refusal_payload_v2",
         _raiser(Cfg1RecordValidationError("SCHEMA_VIOLATION", "INJECTED")),
     )
     result = run_cfg1_stage(authority, run_executor=synthetic_run_executor())
@@ -288,7 +289,7 @@ def test_t96_a_fallback_then_failure_is_indistinguishable_from_a_direct_failure(
     with monkeypatch.context() as scoped:
         scoped.setattr(
             writers,
-            "_require_valid_cfg1_run_payload",
+            "_require_valid_cfg1_run_payload_v2",
             _raiser(Cfg1RecordValidationError("SCHEMA_VIOLATION", "INJECTED")),
         )
         scoped.setattr(writers, "_write_all", _raiser(OSError("injected")))
@@ -339,7 +340,7 @@ def test_t78_a_row_15_defect_halts_even_when_its_refusal_artifact_succeeds(
     authority = make_authority("S1-X1")
     monkeypatch.setattr(
         writers,
-        "_require_valid_cfg1_run_payload",
+        "_require_valid_cfg1_run_payload_v2",
         _raiser(Cfg1RecordValidationError("SCHEMA_VIOLATION", "INJECTED")),
     )
     result = run_cfg1_stage(authority, run_executor=synthetic_run_executor())
@@ -375,7 +376,7 @@ def test_t79_row_11_and_row_15_are_durably_distinguishable_only_at_the_closure(
     row15 = make_authority("S1-row15")
     monkeypatch.setattr(
         writers,
-        "_require_valid_cfg1_run_payload",
+        "_require_valid_cfg1_run_payload_v2",
         _raiser(Cfg1RecordValidationError("SCHEMA_VIOLATION", "INJECTED")),
     )
     row15_result = run_cfg1_stage(row15, run_executor=synthetic_run_executor())
