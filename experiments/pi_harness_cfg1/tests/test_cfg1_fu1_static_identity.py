@@ -724,7 +724,18 @@ def _junction_or_skip(link: Path, target: Path) -> None:
         pytest.skip("no directory redirect available on this platform")
 
 
-def test_j_a_junction_path_entry_is_refused_before_realpath(tmp_path, monkeypatch):
+def test_j_a_junction_path_entry_is_skipped_and_never_followed_or_realpathd(
+    tmp_path, monkeypatch
+):
+    """Post-amendment: the junction is an INADMISSIBLE namespace, so it is
+    classified (no-follow) and then SKIPPED -- it is never realpath'd, and it
+    never causes the whole search to refuse by itself. Resolution still fails
+    here, but for an UNRELATED reason: the only surviving entry, ``npm_dir``,
+    does not hold ``node.exe`` either (it holds only ``pi.cmd``) -- exactly
+    the same "no admissible entry has the candidate" failure a missing entry
+    would produce. This proves the junction is never followed and never used
+    to establish authority, not that a skipped entry itself refuses anything.
+    """
     tree = make_pi_world(tmp_path, monkeypatch)
     link = tmp_path / "linked_nodejs"
     _junction_or_skip(link, Path(tree.node_dir))
@@ -736,26 +747,55 @@ def test_j_a_junction_path_entry_is_refused_before_realpath(tmp_path, monkeypatc
         return real_realpath(path, *a, **k)
 
     monkeypatch.setattr(os.path, "realpath", _realpath)
+    recorder = LeafRecorder()
     result = prove_pi_identity(
-        {"PATH": f"{link};{tree.npm_dir}"}, leaves=genuine_pi_proof_leaves()
+        {"PATH": f"{link};{tree.npm_dir}"}, leaves=recorder.leaves()
     )
     assert result.failure_code == PI_RESOLUTION_FAILED
+    # Never followed or realpath'd, at any point.
     assert not any(str(link) in path for path in realpaths)
+    # The search demonstrably CONTINUED past the skipped junction: it reached
+    # and inspected npm_dir's node.exe candidate, which is genuinely absent.
+    assert (
+        "inspect",
+        os.path.join(tree.npm_dir, "node.exe"),
+    ) in recorder.log
 
 
-def test_j_a_repo_local_lexical_junction_resolving_outside_is_still_refused(
+def test_j_repo_local_candidates_are_refused_by_skip_or_by_containment(
     tmp_path, monkeypatch
 ):
+    """Two DIFFERENT refusal mechanisms, not one, now that an inadmissible
+    entry is skipped rather than itself a whole-search veto:
+
+    (a) a REPARSE junction inside the checkout is INADMISSIBLE topology, so
+        it is skipped exactly like ``test_j_a_junction_path_entry_is_skipped_
+        and_never_followed_or_realpathd`` above -- it contributes nothing,
+        and the failure comes from the surviving ``npm_dir`` entry lacking
+        ``node.exe``, never from a containment check on the junction itself
+        (containment is only ever checked against a candidate that a walk
+        already accepted, and this junction's namespace is never accepted);
+    (b) a PLAIN, non-reparse repo-local directory IS an admissible namespace
+        (its topology walk is safe), so it reaches the containment check
+        unchanged by this amendment -- and is refused there, on the lexical
+        form alone, even though nothing redirects and its realpath'd
+        destination is irrelevant.
+    """
     tree = make_pi_world(tmp_path, monkeypatch)
     checkout = tmp_path / "synthetic_checkout"
     checkout.mkdir()
     link = checkout / "tools_nodejs"
     _junction_or_skip(link, Path(tree.node_dir))
-    leaves = LeafRecorder().leaves(checkout_root=str(checkout))
+    recorder = LeafRecorder()
+    leaves = recorder.leaves(checkout_root=str(checkout))
     result = prove_pi_identity({"PATH": f"{link};{tree.npm_dir}"}, leaves=leaves)
     assert result.failure_code == PI_RESOLUTION_FAILED
-    # ...and a NON-reparse repo-local directory is refused on the lexical
-    # form alone, even though nothing redirects.
+    # (a) skip-and-continue, not containment: the search reached npm_dir's
+    # node.exe candidate and found it genuinely absent.
+    assert ("inspect", os.path.join(tree.npm_dir, "node.exe")) in recorder.log
+
+    # (b) a NON-reparse repo-local directory: an admissible namespace whose
+    # candidate is refused by containment, unaffected by this amendment.
     local = checkout / "plain_nodejs"
     local.mkdir()
     shutil.copy(tree.node_exe, local / "node.exe")
@@ -788,6 +828,136 @@ def test_j_reparse_or_directory_candidates_refuse_outright(shape, tmp_path, monk
     result = prove_pi_identity({"PATH": tree.path_value}, leaves=genuine_pi_proof_leaves())
     assert result.failure_code == PI_RESOLUTION_FAILED
     assert result.seam_digests_match is False
+
+
+# ---------------------------------------------------------------------------
+# AH -- P1 topology-admissibility amendment: an unrelated inadmissible PATH
+# entry is skipped, never a whole-search veto (P1_TOPOLOGY_ADMISSIBILITY_AMEND)
+# ---------------------------------------------------------------------------
+
+
+def test_ah_an_unrelated_unsafe_entry_before_valid_candidates_is_skipped(
+    tmp_path, monkeypatch
+):
+    tree = make_pi_world(tmp_path, monkeypatch)
+    unsafe = tmp_path / "unrelated_unsafe"
+    target = tmp_path / "unrelated_unsafe_target"
+    target.mkdir()
+    _junction_or_skip(unsafe, target)
+    realpaths: list[str] = []
+    real_realpath = os.path.realpath
+
+    def _realpath(path, *a, **k):
+        realpaths.append(str(path))
+        return real_realpath(path, *a, **k)
+
+    monkeypatch.setattr(os.path, "realpath", _realpath)
+
+    recorder = LeafRecorder()
+    path_value = f"{unsafe};{tree.path_value}"
+    result = prove_pi_identity({"PATH": path_value}, leaves=recorder.leaves())
+
+    assert result.failure_code is None
+    assert result.seam_digests_match is True
+    identity = result.identity
+    assert identity.node_executable == tree.node_exe
+    assert identity.pi_package_root == tree.package_root
+    # The complete 20-file seam proof still ran, over the GENUINE later entries.
+    assert len(recorder.digests()) == 20
+    # The unsafe entry is classified (topology-inspected) exactly TWICE, once
+    # per independent PATH walk -- _resolve_node and _resolve_package_root
+    # each walk `entries` from scratch (Test J's "first candidate only"
+    # discipline, unaffected) -- and never again beyond that: nothing beneath
+    # it -- no realpath, no digest, no further inspect -- is ever reached, so
+    # it never establishes anything.
+    inspect_paths = [path for kind, path in recorder.log if kind == "inspect"]
+    assert inspect_paths.count(str(unsafe)) == 2
+    assert not any(
+        path.lower().startswith(str(unsafe).lower() + os.sep) for _kind, path in recorder.log
+    )
+    assert not any(str(unsafe) in path for path in realpaths)
+
+
+@pytest.mark.parametrize(
+    "layout",
+    ["before_node_only", "before_pi_only", "before_both_separately"],
+)
+def test_ah_unsafe_entries_before_node_only_pi_only_or_both_are_all_skipped(
+    layout, tmp_path, monkeypatch
+):
+    tree = make_pi_world(tmp_path, monkeypatch)
+    unsafe1 = tmp_path / "unsafe_one"
+    target1 = tmp_path / "unsafe_one_target"
+    target1.mkdir()
+    _junction_or_skip(unsafe1, target1)
+    if layout == "before_node_only":
+        path_value = f"{unsafe1};{tree.node_dir};{tree.npm_dir}"
+    elif layout == "before_pi_only":
+        path_value = f"{tree.node_dir};{unsafe1};{tree.npm_dir}"
+    else:
+        unsafe2 = tmp_path / "unsafe_two"
+        target2 = tmp_path / "unsafe_two_target"
+        target2.mkdir()
+        _junction_or_skip(unsafe2, target2)
+        path_value = f"{unsafe1};{tree.node_dir};{unsafe2};{tree.npm_dir}"
+
+    result = prove_pi_identity({"PATH": path_value}, leaves=genuine_pi_proof_leaves())
+    assert result.failure_code is None
+    assert result.identity.node_executable == tree.node_exe
+    assert result.identity.pi_package_root == tree.package_root
+
+
+def test_ah_an_invalid_node_candidate_refuses_outright_even_with_a_later_valid_one(
+    tmp_path, monkeypatch
+):
+    tree = make_pi_world(tmp_path, monkeypatch)
+    second = build_synthetic_pi_tree(str(tmp_path / "second_valid_ah"))
+    os.unlink(tree.node_exe)
+    os.mkdir(tree.node_exe)  # an admissible entry, but an invalid (directory) candidate
+    recorder = LeafRecorder()
+    path_value = f"{tree.node_dir};{second.node_dir};{tree.npm_dir}"
+    result = prove_pi_identity({"PATH": path_value}, leaves=recorder.leaves())
+    assert result.failure_code == PI_RESOLUTION_FAILED
+    assert result.seam_digests_match is False
+    # The later, otherwise-valid Node directory was never searched.
+    assert not any(str(second.base) in path for _kind, path in recorder.log)
+
+
+def test_ah_an_invalid_pi_cmd_candidate_refuses_outright_even_with_a_later_valid_one(
+    tmp_path, monkeypatch
+):
+    tree = make_pi_world(tmp_path, monkeypatch)
+    second = build_synthetic_pi_tree(str(tmp_path / "second_valid_ah_pi"))
+    os.unlink(tree.pi_cmd)
+    os.mkdir(tree.pi_cmd)  # an admissible entry, but an invalid (directory) candidate
+    recorder = LeafRecorder()
+    path_value = f"{tree.node_dir};{tree.npm_dir};{second.npm_dir}"
+    result = prove_pi_identity({"PATH": path_value}, leaves=recorder.leaves())
+    assert result.failure_code == PI_RESOLUTION_FAILED
+    assert result.seam_digests_match is False
+    # The later, otherwise-valid Pi directory was never searched.
+    assert not any(str(second.base) in path for _kind, path in recorder.log)
+
+
+def test_ah_the_gate_and_l1_both_pass_with_a_leading_unsafe_path_entry(
+    tmp_path, monkeypatch, git_executable
+):
+    tree = make_pi_world(tmp_path, monkeypatch)
+    unsafe = tmp_path / "unsafe_leading"
+    target = tmp_path / "unsafe_leading_target"
+    target.mkdir()
+    _junction_or_skip(unsafe, target)
+    path_value = f"{unsafe};{tree.path_value}"
+
+    assert pre_consumption_pi_identity_gate({"PATH": path_value}) == PI_IDENTITY_GATE_PASSED
+
+    ports, _made = fu1_ports(
+        git_executable, tree, ambient={"SystemRoot": "C:\\Windows", "PATH": path_value}
+    )
+    outcome = execute_cfg1_run(make_admission(), ports=ports)
+    assert outcome.observations["dispatch_state"] == "CONFIRMED_SENT"
+    assert outcome.observations["pi_identity_failure_code"] is None
+    assert outcome.observations["pi_seam_digests_match"] is True
 
 
 # ---------------------------------------------------------------------------

@@ -1,12 +1,16 @@
 """The ONE canonical, static Pi identity proof P -- and its three consumers.
 
 Design ``PHASE_5F3B_HARNESS_CFG1_L1_BOUNDARY_FU1_DESIGN.md`` (R6) Sec. 5/7,
-as amended by ``..._OC3_AMEND1_DESIGN.md`` (AMD-1 .. AMD-8). The effective
-proof is::
+as amended by ``..._OC3_AMEND1_DESIGN.md`` (AMD-1 .. AMD-8), and further by
+``..._P1_TOPOLOGY_ADMISSIBILITY_AMEND_DESIGN.md`` (the P1 candidate-namespace
+admissibility correction: see :func:`_first_candidate`). The effective proof
+is::
 
     P0   read exactly one ambient name, PATH, by name
-    P1   resolve node.exe and the Pi package root (R6 Sec. 5 P1, unchanged);
-         capture I_n (node.exe) and I_r (package root) -- Sec. 7.2 identities
+    P1   resolve node.exe and the Pi package root over the ADMISSIBLE PATH
+         entries only (R6 Sec. 5 P1, as narrowly amended -- see
+         _first_candidate); capture I_n (node.exe) and I_r (package root) --
+         Sec. 7.2 identities
     P2   the COMPLETE 20-file frozen seam proof, never a subset
     P2R  re-prove I_r and then I_n; no second seam walk
     ->   one typed PiProofResult
@@ -434,19 +438,27 @@ def _path_entries(path_value: str) -> list[str]:
 def _first_candidate(
     leaves: PiProofLeaves, entries: list[str], name: str
 ) -> tuple[str, str, tuple[int, int]] | None:
-    """The FIRST ``PATH`` entry holding exactly ``name``, as a regular file.
+    """The FIRST ADMISSIBLE ``PATH`` entry holding exactly ``name``, as a
+    regular file.
 
-    Returns ``(entry, candidate, identity)``, or ``None`` for a refusal. An
-    unsafe entry met before the name is found refuses the whole pass; a
-    candidate that is not a regular file refuses; a candidate is never
-    retried against a later entry. There is no ``PATHEXT`` expansion.
+    Returns ``(entry, candidate, identity)``, or ``None`` for a refusal.
+
+    **P1 topology-admissibility amendment.** A ``PATH`` entry whose directory
+    topology cannot be proven safe by the no-follow walk (a reparse point,
+    junction, or non-directory anywhere in its lexical chain) is
+    INADMISSIBLE as a candidate namespace: it is never followed, never
+    resolved through, never used to derive an identity, and it is skipped —
+    the search continues at the next entry, exactly as a missing entry is
+    already skipped. This does not widen what may be selected: once an
+    entry's topology IS admissible and it holds a candidate at ``name``, that
+    candidate is authoritative and is never bypassed in favor of a later
+    entry — a candidate that is not a regular file refuses the WHOLE search
+    outright, with no fallthrough. There is no ``PATHEXT`` expansion.
     """
     for entry in entries:
         status, _identity = _walk_directories(leaves, entry)
-        if status == _WALK_MISSING:
+        if status in (_WALK_MISSING, _WALK_UNSAFE):
             continue
-        if status == _WALK_UNSAFE:
-            return None
         candidate = ntpath.join(entry, name)
         observation = _observe(leaves, candidate)
         if observation.classification == CLASSIFICATION_MISSING:
