@@ -17,8 +17,18 @@ candidate artifacts.
 **What discovery never does.** It starts no process; runs no Node, Pi, npm or
 ``pi --version``; imports or evaluates no Pi JavaScript; opens no socket;
 reads no credential, endpoint or other environment name; invokes no model;
-loads no policy (PE-2b does not exist, so the floor is recorded as
-``NOT_COMPUTED``); and never compares a version with anything.
+selects no policy; and never compares a version with anything.
+
+**The floor (PE-2b, B-15).** After the P2R re-proof, the candidate's
+mechanical floor is computed by the ACCEPTED PE-2a ``classify_floor`` (by
+identity) over the PE-2b loader-owned ``head_reference_view()`` -- a fresh
+reference view rebuilt from the committed policy chain the loader validated at
+its own import, from its own ``__file__``-derived directory. Discovery passes
+no path, snapshot, view or classifier anywhere and reads no policy itself. If
+the committed reference view cannot be obtained, or the classifier refuses or
+returns anything outside the closed floor vocabulary, discovery REFUSES and
+stages nothing: there is no ``NOT_COMPUTED`` fallback and no default view.
+The floor is classification only; the candidate stays NON-AUTHORITY.
 
 **The staging boundary is fixed and NON-AUTHORITY.** Its only filesystem
 mutation is inside ``<CFG1 package dir>\\pi_profile_candidates``, derived from
@@ -74,8 +84,10 @@ from .pi_payload import (
     observe_payload,
 )
 from .pi_profile_floor import (
-    FLOOR_NOT_COMPUTED,
+    FLOOR_CLASSES,
     ProfileFacts,
+    ReferenceView,
+    classify_floor,
     compute_profile_facts,
     policy_file_bytes,
 )
@@ -84,7 +96,7 @@ from .pi_profile_floor import (
 # Literals
 # ---------------------------------------------------------------------------
 
-DISCOVERY_TOOL_REVISION = "PE-2a"
+DISCOVERY_TOOL_REVISION = "PE-2b"
 CANDIDATE_RECORD_KIND = "aido-pi-profile-candidate.v1"
 CANDIDATE_AUTHORITY = "NON_AUTHORITY_CANDIDATE"
 APPROVABILITY_FLOOR_MET = "APPROVABILITY_FLOOR_MET"
@@ -126,6 +138,8 @@ DISCOVERY_REFUSED_STAGING_TOPOLOGY = "DISCOVERY_REFUSED_STAGING_TOPOLOGY"
 DISCOVERY_REFUSED_STAGING_TARGET_OCCUPIED = "DISCOVERY_REFUSED_STAGING_TARGET_OCCUPIED"
 DISCOVERY_STAGING_WRITE_FAILED_RESIDUE_LEFT = "DISCOVERY_STAGING_WRITE_FAILED_RESIDUE_LEFT"
 DISCOVERY_REFUSED_UNEXPECTED_FAILURE = "DISCOVERY_REFUSED_UNEXPECTED_FAILURE"
+DISCOVERY_REFUSED_POLICY_REFERENCE_UNAVAILABLE = "DISCOVERY_REFUSED_POLICY_REFERENCE_UNAVAILABLE"
+DISCOVERY_REFUSED_FLOOR_UNCLASSIFIABLE = "DISCOVERY_REFUSED_FLOOR_UNCLASSIFIABLE"
 
 
 class Cfg1DiscoveryError(Exception):
@@ -179,10 +193,17 @@ class _Refused(Exception):
 # ---------------------------------------------------------------------------
 
 
-def build_candidate_record(facts: ProfileFacts, exposure_absence: object) -> dict:
-    """The non-authority candidate record for one set of profile facts."""
+def build_candidate_record(facts: ProfileFacts, exposure_absence: object, *, floor: str) -> dict:
+    """The non-authority candidate record for one set of profile facts.
+
+    ``floor`` is the mechanical floor :func:`_classify_against_committed_policy`
+    computed; it must be one of the closed floor classes (never
+    ``NOT_COMPUTED``). It is classification only and grants nothing.
+    """
     if type(facts) is not ProfileFacts:
         raise Cfg1DiscoveryError("MALFORMED_FACTS")
+    if type(floor) is not str or floor not in FLOOR_CLASSES:
+        raise Cfg1DiscoveryError("MALFORMED_FLOOR")
     if exposure_absence is None:
         absence_status, absence_exposure = EXPOSURE_ABSENCE_NOT_OBSERVED, None
     else:
@@ -193,7 +214,7 @@ def build_candidate_record(facts: ProfileFacts, exposure_absence: object) -> dic
         "payload_contract": PAYLOAD_CONTRACT,
         "payload_fingerprint": facts.payload_fingerprint,
         "profile_id": facts.profile_id,
-        "floor": FLOOR_NOT_COMPUTED,
+        "floor": floor,
         "approvability": {
             "status": APPROVABILITY_FLOOR_MET
             if facts.c5_reason is None
@@ -381,6 +402,38 @@ def _console(code: str, *detail: str) -> tuple[str, ...]:
     )
 
 
+def _classify_against_committed_policy(facts: ProfileFacts) -> str:
+    """PE-1 Sec. 26.2 B-15: the floor of ONE candidate against the committed head.
+
+    The reference view comes ONLY from the PE-2b loader's zero-argument
+    ``head_reference_view()``, rebuilt from the chain that module validated at
+    its own import from its own ``__file__``-derived policy directory; the
+    classifier is the ACCEPTED PE-2a :func:`classify_floor`, by identity.
+    Nothing here takes a path, a snapshot, a view or a classifier, and nothing
+    reads the staging namespace. A loader that cannot import (malformed or
+    missing committed policy), a view that cannot be built or is not an exact
+    ``ReferenceView``, a classifier that raises, or a result outside the
+    closed floor vocabulary REFUSES -- never ``NOT_COMPUTED``, never a default.
+    """
+    try:
+        # The loader validates the committed policy tree when it is imported;
+        # a refused chain makes this import fail, which refuses here.
+        from . import pi_profile_policy_loader
+
+        reference = pi_profile_policy_loader.head_reference_view()
+    except Exception:  # noqa: BLE001 - one closed code; no policy text escapes
+        raise _Refused(DISCOVERY_REFUSED_POLICY_REFERENCE_UNAVAILABLE) from None
+    if type(reference) is not ReferenceView:
+        raise _Refused(DISCOVERY_REFUSED_POLICY_REFERENCE_UNAVAILABLE)
+    try:
+        floor = classify_floor(facts, reference)
+    except Exception:  # noqa: BLE001 - one closed code
+        raise _Refused(DISCOVERY_REFUSED_FLOOR_UNCLASSIFIABLE) from None
+    if type(floor) is not str or floor not in FLOOR_CLASSES:
+        raise _Refused(DISCOVERY_REFUSED_FLOOR_UNCLASSIFIABLE)
+    return floor
+
+
 def _discover(
     ambient_environ: Mapping[str, str],
     *,
@@ -444,11 +497,14 @@ def _discover(
         ):
             raise _Refused(DISCOVERY_REFUSED_IDENTITY_DRIFTED)
 
+        # -- B-15: the mechanical floor against the COMMITTED policy head ----
+        floor = _classify_against_committed_policy(facts)
+
         # -- artifacts: written only if all three fit their frozen bounds ----
         artifacts = {
             INVENTORY_SUFFIX: policy_file_bytes(inventory.to_record()),
             MANIFEST_BUNDLE_SUFFIX: policy_file_bytes(bundle.to_record()),
-            CANDIDATE_SUFFIX: policy_file_bytes(build_candidate_record(facts, absence)),
+            CANDIDATE_SUFFIX: policy_file_bytes(build_candidate_record(facts, absence, floor=floor)),
         }
         if len(artifacts[INVENTORY_SUFFIX]) > pi_profile_floor.MAX_INVENTORY_FILE_BYTES:
             raise _Refused(DISCOVERY_REFUSED_ARTIFACT_BOUND_EXCEEDED, "INVENTORY_FILE_BOUND_EXCEEDED")
@@ -477,7 +533,7 @@ def _discover(
     detail = [
         "payload_fingerprint " + fingerprint,
         "profile_id " + (facts.profile_id if facts.profile_id is not None else "NOT_DERIVABLE"),
-        "floor " + FLOOR_NOT_COMPUTED,
+        "floor " + floor,
         "approvability "
         + (APPROVABILITY_FLOOR_MET if facts.c5_reason is None else APPROVABILITY_C5_UNDER_HPP1),
     ]

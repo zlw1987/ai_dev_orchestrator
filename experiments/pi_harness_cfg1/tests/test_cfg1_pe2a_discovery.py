@@ -143,7 +143,9 @@ def test_discovery_stages_exactly_three_canonical_non_authority_artifacts(world,
     assert bundle.payload_fingerprint == fingerprint
     candidate = json.loads((staging / names[2]).read_bytes())
     assert candidate["authority"] == "NON_AUTHORITY_CANDIDATE"
-    assert candidate["floor"] == "NOT_COMPUTED"
+    # B-15: classified against the committed genesis head (no eligible
+    # profile; a synthetic seam table never equals the pinned genesis one).
+    assert candidate["floor"] == "C3_SEAM_CHANGED"
     assert candidate["approvability"] == {"status": "APPROVABILITY_FLOOR_MET", "reason": None, "manifest_path": None}
     assert candidate["payload_fingerprint"] == fingerprint
     assert candidate["profile_id"] == compute_profile_id(fingerprint, [])
@@ -172,11 +174,11 @@ def test_discovery_stages_a_c5_candidate_with_its_reason(tmp_path, staging):
     candidate = json.loads((staging / (outcome.payload_fingerprint + ".candidate.json")).read_bytes())
     assert candidate["approvability"]["status"] == "C5_UNDER_HPP1"
     assert candidate["approvability"]["reason"] == "DECLARED_PACKAGE_NAME_MISMATCH"
-    assert candidate["floor"] == "NOT_COMPUTED"
+    assert candidate["floor"] == "C5"
 
 
 # ---------------------------------------------------------------------------
-# A-15 -- double walk, no process, only PATH, floor NOT_COMPUTED
+# A-15 -- double walk, no process, only PATH (the floor: B-15, PE-2b)
 # ---------------------------------------------------------------------------
 
 
@@ -340,11 +342,37 @@ def test_a15_static_audit_only_main_touches_the_process_environment():
         assert "environ" not in (_PACKAGE_DIR / f"{module_name}.py").read_text(encoding="utf-8")
 
 
-def test_a15_the_floor_is_not_computed_and_no_policy_is_loaded():
+def test_a15_b15_the_floor_is_classified_only_through_the_committed_reference_view():
+    """Post-PE-2b frozen state (PE-1 Sec. 26.0 / B-15). Replaces the PE-2a
+    pre-PE-2b assertion that the floor was ``NOT_COMPUTED``: discovery now
+    calls the accepted ``classify_floor`` by identity over the loader-owned,
+    zero-argument ``head_reference_view()`` -- and selects, parses, builds or
+    loads no policy itself, and has no ``NOT_COMPUTED`` fallback."""
+    from pi_harness_cfg1 import pi_profile_floor
+
     source = (_PACKAGE_DIR / "pi_profile_discovery.py").read_text(encoding="utf-8")
-    for name in ("classify_floor", "ReferenceView", "pi_profile_policy", "c2_relation", "compute_pmd_deltas"):
+    assert pi_profile_discovery.classify_floor is pi_profile_floor.classify_floor
+    assert source.count("pi_profile_policy_loader.head_reference_view()") == 1
+    assert source.count("classify_floor(facts, reference)") == 1
+    for name in (
+        "FLOOR_NOT_COMPUTED",
+        '"NOT_COMPUTED"',
+        "_load_policy_directory",
+        "_POLICY_DIR",
+        "_GENUINE_POLICY_LOAD",
+        "SEALED_POLICY_SNAPSHOT",
+        "_reference_view_from_material",
+        "ReferenceView(",
+        "c2_relation",
+        "compute_pmd_deltas",
+        "pi_profile_policy\\",
+        "aps_head",
+    ):
         assert name not in source, name
-    assert "FLOOR_NOT_COMPUTED" in source
+    tree = ast.parse(source)
+    imports = [node for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.level == 1]
+    loader_imports = [node for node in imports if any(a.name == "pi_profile_policy_loader" for a in node.names)]
+    assert len(loader_imports) == 1 and loader_imports[0].module is None
 
 
 # ---------------------------------------------------------------------------
