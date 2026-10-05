@@ -556,11 +556,11 @@ def test_finding4_a_malformed_route_reachable_fact_refuses_pre_dispatch(
     """A truthy-but-non-bool ``route.reachable`` must never admit the run."""
     from dataclasses import dataclass
 
-    from cfg1_doubles import seam_digests_all_match
+    from cfg1_doubles import session_pi_profile_approved
 
     from pi_harness_cfg1.run_executor import execute_cfg1_run
 
-    seam_digests_all_match(monkeypatch)
+    session_pi_profile_approved(monkeypatch)
 
     @dataclass
     class _MalformedRoute:
@@ -576,6 +576,7 @@ def test_finding4_a_malformed_route_reachable_fact_refuses_pre_dispatch(
         block=block,
         position=position,
         run_id="f" * 32,
+        stage_pi_profile_id=None,
     )
     ports, _made = build_doubled_ports(
         git_executable=git_executable,
@@ -591,11 +592,11 @@ def test_finding4_a_malformed_h1_matched_fact_refuses_pre_dispatch(
 ):
     from dataclasses import dataclass
 
-    from cfg1_doubles import seam_digests_all_match
+    from cfg1_doubles import session_pi_profile_approved
 
     from pi_harness_cfg1.run_executor import execute_cfg1_run
 
-    seam_digests_all_match(monkeypatch)
+    session_pi_profile_approved(monkeypatch)
 
     @dataclass
     class _MalformedHandshake:
@@ -610,6 +611,7 @@ def test_finding4_a_malformed_h1_matched_fact_refuses_pre_dispatch(
         block=block,
         position=position,
         run_id="e" * 32,
+        stage_pi_profile_id=None,
     )
     ports, _made = build_doubled_ports(
         git_executable=git_executable,
@@ -636,11 +638,11 @@ def test_finding4_a_malformed_broker_lifecycle_dict_fails_closed_end_to_end(
     truthy lifecycle facts must never let ``broker_worker_terminated_or_absent``
     or ``broker_pending_unreaped_zero`` read as proven-closed.
     """
-    from cfg1_doubles import FakeBroker, seam_digests_all_match
+    from cfg1_doubles import FakeBroker, session_pi_profile_approved
 
     from pi_harness_cfg1.run_executor import execute_cfg1_run
 
-    seam_digests_all_match(monkeypatch)
+    session_pi_profile_approved(monkeypatch)
 
     class _MalformedBroker(FakeBroker):
         def __init__(self):
@@ -660,6 +662,7 @@ def test_finding4_a_malformed_broker_lifecycle_dict_fails_closed_end_to_end(
         block=block,
         position=position,
         run_id="d" * 32,
+        stage_pi_profile_id=None,
     )
     ports, _made = build_doubled_ports(
         git_executable=git_executable,

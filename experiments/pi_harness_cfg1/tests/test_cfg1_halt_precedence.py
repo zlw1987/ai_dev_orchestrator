@@ -122,20 +122,32 @@ def test_t113_a_lifecycle_failure_outranks_a_non_empty_registry():
 
 
 def test_t114_one_shared_precedence_callable_and_no_reimplementation():
-    assert stage_runner._resolve_halt_reason_code is _resolve_halt_reason_code
+    # PE-2c: the profile-aware runner calls the ONE shared v3 precedence; the
+    # frozen six-step function is unchanged in halt.py and no longer reached
+    # by the runner (v1 stage closures are never emitted again).
+    from pi_harness_cfg1.halt import _resolve_halt_reason_code_v3
 
-    # The stage-closure validator contains NO independent reconstruction of
-    # steps 3-6 -- it cannot, because those four codes depend on facts no
-    # durable payload carries (T-115 proves that scope directly).
-    validator_source = inspect.getsource(records._require_valid_cfg1_stage_closure_payload)
-    for fact in (
-        "halt_triggered_by_this_run",
-        "lifecycle_all_closed",
-        "run_classification",
-        "registries_empty",
+    assert stage_runner._resolve_halt_reason_code_v3 is _resolve_halt_reason_code_v3
+    assert not hasattr(stage_runner, "_resolve_halt_reason_code")
+    assert halt._resolve_halt_reason_code is _resolve_halt_reason_code
+
+    # Neither stage-closure validator contains an independent reconstruction
+    # of the non-mechanical steps -- they cannot, because those codes depend on
+    # facts no durable payload carries (T-115 proves that scope directly).
+    for validator in (
+        records._require_valid_cfg1_stage_closure_payload,
+        records._require_valid_cfg1_stage_closure_payload_v3,
     ):
-        assert fact not in validator_source
-    assert "_resolve_halt_reason_code" not in validator_source
+        validator_source = inspect.getsource(validator)
+        for fact in (
+            "halt_triggered_by_this_run",
+            "lifecycle_all_closed",
+            "run_classification",
+            "registries_empty",
+            "item_1a",
+        ):
+            assert fact not in validator_source
+        assert "_resolve_halt_reason_code" not in validator_source
 
     # And the writer contains none either.
     from pi_harness_cfg1 import writers

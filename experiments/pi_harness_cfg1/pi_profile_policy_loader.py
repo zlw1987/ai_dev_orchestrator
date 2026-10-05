@@ -1027,9 +1027,20 @@ class _HeadReferenceMaterial(_Sealed):
 
 class _PolicyLoad(_Sealed):
     """The private result of one load: the snapshot, the head reference
-    material and every revision's ``(revision, sha256, eligible set)``."""
+    material and every revision's ``(revision, sha256, eligible set)``.
 
-    __slots__ = ("snapshot", "head_reference", "revisions")
+    ``profile_declared_versions`` (PE-2c, additive, verifier-only): one
+    ``(profile_id, declared package_version)`` pair for EVERY profile the
+    committed chain contains -- retired ones included -- each recomputed by
+    this load from committed, hash-bound manifest bytes. It exists solely so
+    the read-only post-hoc profile binding verifier (PE-1 Sec. 21) can check a
+    v3 artifact's declared version against the profile at an EARLIER head
+    whose eligible set no longer appears in the sealed snapshot. It is not
+    policy authority, decides no eligibility, and is never read by P, the
+    gate, L1, L14 or L21A.
+    """
+
+    __slots__ = ("snapshot", "head_reference", "revisions", "profile_declared_versions")
 
     def __init__(
         self,
@@ -1038,12 +1049,14 @@ class _PolicyLoad(_Sealed):
         snapshot: Cfg1PolicySnapshot,
         head_reference: _HeadReferenceMaterial,
         revisions: tuple[tuple[int, str, frozenset[str]], ...],
+        profile_declared_versions: tuple[tuple[str, str], ...] = (),
     ) -> None:
         if key is not _SEAL_KEY:
             raise Cfg1PolicyError("POLICY_LOAD_NOT_CONSTRUCTED_BY_LOADER")
         object.__setattr__(self, "snapshot", snapshot)
         object.__setattr__(self, "head_reference", head_reference)
         object.__setattr__(self, "revisions", revisions)
+        object.__setattr__(self, "profile_declared_versions", profile_declared_versions)
 
 
 def _profile_view(profile_id: str, facts: ProfileFacts) -> Cfg1EligibleProfileView:
@@ -1354,8 +1367,18 @@ def _load_policy_directory(
         present_ineligible_profile_ids=frozenset(state.profiles) - state.eligible,
         seam_fingerprints=frozenset(evidence["seam_fingerprint"] for evidence in state.seam_evidence.values()),
     )
+    profile_declared_versions = []
+    for profile_id in sorted(state.profiles):
+        declared_version = state.profiles[profile_id].declared_dict()["package_version"]
+        if type(declared_version) is not str:
+            raise Cfg1PolicyError("POLICY_DECLARED_MALFORMED")
+        profile_declared_versions.append((profile_id, declared_version))
     return _PolicyLoad(
-        _SEAL_KEY, snapshot=snapshot, head_reference=head_reference, revisions=tuple(revision_summaries)
+        _SEAL_KEY,
+        snapshot=snapshot,
+        head_reference=head_reference,
+        revisions=tuple(revision_summaries),
+        profile_declared_versions=tuple(profile_declared_versions),
     )
 
 

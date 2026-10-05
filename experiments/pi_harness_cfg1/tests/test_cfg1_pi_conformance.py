@@ -96,9 +96,16 @@ _EXTRA_CONTROL_COMPAT = {
 
 
 def _installed_pi_root() -> Path:
+    """The installed Pi package root -- PROFILE-BOUND (PE-1 Sec. 26.3, C-17).
+
+    PE-0 Sec. 11.2 / PE-1: every installed-Pi conformance check runs only
+    against a payload that is an ELIGIBLE HPP-1 profile of the module-level
+    sealed snapshot. An unapproved (or unlocatable, or unobservable) payload
+    FAILS LOUDLY -- it is never skipped, and no version is read or compared.
+    """
     shim = shutil.which("pi")
     if not shim:
-        pytest.skip("the installed Pi CLI shim is not on PATH")
+        pytest.fail("PI_RESOLUTION_FAILED: the installed Pi CLI shim is not on PATH")
     npm_bin = Path(os.path.realpath(shim)).parent
     for candidate in (
         npm_bin / "node_modules" / "@earendil-works" / "pi-coding-agent",
@@ -106,8 +113,37 @@ def _installed_pi_root() -> Path:
     ):
         resolved = Path(os.path.realpath(candidate))
         if (resolved / "package.json").is_file():
+            _require_installed_profile_approved(resolved)
             return resolved
-    pytest.skip("the installed Pi package root could not be located")
+    pytest.fail("PI_RESOLUTION_FAILED: the installed Pi package root could not be located")
+
+
+def _require_installed_profile_approved(pi_root: Path) -> str:
+    """The installed payload's fingerprint must be an eligible profile's, exactly.
+
+    One complete, no-follow PI-PC1 walk through the genuine leaves; exact
+    membership in the genuine sealed snapshot's eligible runtime profiles.
+    Fails loudly as unapproved otherwise -- the remedy is HPP-1 profile
+    onboarding, never a downgrade or a version comparison.
+    """
+    from pi_harness_cfg1.pi_identity import sealed_policy_snapshot
+    from pi_harness_cfg1.pi_payload import genuine_payload_leaves, observe_payload
+
+    observation = observe_payload(str(pi_root), leaves=genuine_payload_leaves())
+    if observation.complete is not True:
+        pytest.fail(f"PI_PAYLOAD_UNPROVEN: the installed Pi payload is not completely observable ({observation.refusal_code})")
+    snapshot = sealed_policy_snapshot()
+    matches = [
+        view.profile_id
+        for view in snapshot.eligible_profiles
+        if view.payload_fingerprint == observation.payload_fingerprint
+    ]
+    if len(matches) != 1:
+        pytest.fail(
+            "PI_PROFILE_UNAPPROVED: the installed Pi is not eligible under the sealed APS head "
+            f"{snapshot.aps_head_sha256}; route it to profile onboarding / diagnosis"
+        )
+    return matches[0]
 
 
 def _minimal_node_environment() -> dict[str, str]:
@@ -549,34 +585,22 @@ def test_t3_no_real_credential_or_endpoint_was_used_anywhere(conformance_report)
 # ---------------------------------------------------------------------------
 
 
-def test_the_pinned_seam_digests_match_the_installed_package_exactly():
-    """Sec. 14.2's pinned set, INCLUDING the two this phase was to add.
+def test_the_installed_pi_payload_is_an_approved_hpp1_profile():
+    """PE-2c (PE-1 Sec. 26.3 C-17): the identity check is PROFILE-BOUND.
 
-    A mismatch means the derivation this experiment rests on must be
-    re-reviewed -- never that Pi is incompatible, and never that a run may
-    proceed with a warning.
+    The historical 20-entry table is no longer the installed Pi's identity
+    authority (PE-1 S-2): it is the genesis ``PI-SC1`` seam evidence. This
+    check proves the installed payload's fingerprint is EXACTLY one eligible
+    runtime profile of the sealed snapshot, and fails loudly as unapproved
+    otherwise. It never skips for an unapproved Pi and never compares a
+    version. (Reads the installed Pi: separately authorized machine-state
+    check, never part of an offline PE-2c run.)
     """
-    import hashlib
-
-    from pi_harness_cfg1.preflight import (
-        PINNED_PI_SEAM_DIGESTS,
-        verify_pi_seam_digests,
-    )
+    from pi_harness_cfg1.pi_identity import sealed_policy_snapshot
 
     pi_root = _installed_pi_root()
-    all_match, mismatched = verify_pi_seam_digests(str(pi_root))
-    assert mismatched == (), mismatched
-    assert all_match is True
-
-    # And the two the design explicitly deferred to CFG1-IMPL are present and
-    # genuinely computed from the installed files, not copied from elsewhere.
-    for relative in (
-        "dist/modes/rpc/jsonl.js",
-        "node_modules/@earendil-works/pi-agent-core/dist/agent-loop.js",
-    ):
-        absolute = pi_root.joinpath(*relative.split("/"))
-        actual = hashlib.sha256(absolute.read_bytes()).hexdigest()
-        assert actual == PINNED_PI_SEAM_DIGESTS[relative], relative
+    profile_id = _require_installed_profile_approved(pi_root)
+    assert profile_id in sealed_policy_snapshot().eligible_profile_ids
 
 
 def test_the_installed_get_state_shape_matches_the_frozen_derivation():

@@ -472,9 +472,14 @@ def test_b15_a_c1_floor_grants_no_eligibility_and_writes_no_policy(tmp_path, mon
     assert sorted(p.relative_to(genuine).as_posix() for p in genuine.rglob("*")) == ["aps", "aps/aps.r0001.json"]
 
 
-def test_b15_no_runtime_module_is_wired_to_the_policy_loader():
-    """No PE-2c integration: only discovery (classification) and the offline
-    verifier (grammar) reference the loader."""
+def test_b15_the_policy_loader_is_wired_exactly_where_pe1_places_it():
+    """At PE-2b no runtime module referenced the loader. PE-2c (PE-1 Sec. 11.4,
+    Sec. 20.3, Sec. 21) then wires it in EXACTLY these places: P / gate / L1 /
+    L14 / L21A read the module-level ``SEALED_POLICY_SNAPSHOT`` (``pi_identity``);
+    the v3 record builders cite its frozen literals (``records``); and the
+    read-only post-hoc binding verifier reads the private load summary. Only
+    discovery ever reads ``head_reference_view`` (B-15), and no runtime module
+    reads the private load object."""
     users = set()
     for path in sorted(_PACKAGE_DIR.glob("*.py")):
         source = path.read_text(encoding="utf-8")
@@ -483,6 +488,19 @@ def test_b15_no_runtime_module_is_wired_to_the_policy_loader():
             for needle in ("pi_profile_policy_loader", "head_reference_view", "SEALED_POLICY_SNAPSHOT")
         ):
             users.add(path.name)
-    assert users == {"pi_profile_discovery.py", "pi_profile_evidence_verifier.py", "pi_profile_policy_loader.py"}
+    assert users == {
+        "pi_profile_discovery.py",
+        "pi_profile_evidence_verifier.py",
+        "pi_profile_policy_loader.py",
+        "pi_identity.py",
+        "records.py",
+        "pi_profile_binding_verifier.py",
+    }
+    for name in sorted(users - {"pi_profile_policy_loader.py", "pi_profile_discovery.py"}):
+        source = (_PACKAGE_DIR / name).read_text(encoding="utf-8")
+        assert "head_reference_view" not in source, name
+    for name in ("pi_identity.py", "records.py"):
+        source = (_PACKAGE_DIR / name).read_text(encoding="utf-8")
+        assert "_GENUINE_POLICY_LOAD" not in source and "_load_policy_directory" not in source, name
     verifier_source = (_PACKAGE_DIR / "pi_profile_evidence_verifier.py").read_text(encoding="utf-8")
     assert "head_reference_view" not in verifier_source and "SEALED_POLICY_SNAPSHOT" not in verifier_source

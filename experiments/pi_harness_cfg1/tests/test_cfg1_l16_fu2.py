@@ -32,7 +32,7 @@ from cfg1_doubles import (
     FakeSupervisor,
     build_doubled_ports,
     probe_facts_for_arm,
-    seam_digests_all_match,
+    session_pi_profile_approved,
 )
 from cfg1_fu2_support import cfg1_state_frame, cfg1_supervisor, support
 
@@ -46,7 +46,7 @@ from pi_harness_cfg1.arms import (
 )
 from pi_harness_cfg1.identity import CFG1_MODEL_ID, PROVIDER_ID
 from pi_harness_cfg1.records import (
-    _require_valid_cfg1_run_payload_v2 as _require_valid_cfg1_run_payload,
+    _require_valid_cfg1_run_payload_v3 as _require_valid_cfg1_run_payload,
     build_cfg1_run_payload,
 )
 from pi_harness_cfg1.run_contract import Cfg1RunAdmission
@@ -64,7 +64,7 @@ UNOBSERVED = (False, "NOT_OBSERVED", "NOT_OBSERVED", "NOT_OBSERVED")
 
 @pytest.fixture(autouse=True)
 def _seam_digests(monkeypatch):
-    seam_digests_all_match(monkeypatch)
+    session_pi_profile_approved(monkeypatch)
 
 
 @pytest.fixture()
@@ -80,6 +80,7 @@ def admission():
         block=block,
         position=position,
         run_id="feedface" * 4,
+        stage_pi_profile_id=None,
     )
 
 

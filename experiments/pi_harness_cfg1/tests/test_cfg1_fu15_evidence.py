@@ -31,7 +31,7 @@ from pathlib import Path
 import pytest
 
 from cfg1_builders import happy_observations, run_payload, synthetic_run_executor
-from cfg1_doubles import build_doubled_ports, seam_digests_all_match
+from cfg1_doubles import build_doubled_ports, session_pi_profile_approved
 from pi_harness_cfg1 import classification, obs1, run_executor
 from pi_harness_cfg1.run_contract import Cfg1RunAdmission
 from pi_harness_cfg1.run_executor import execute_cfg1_run
@@ -89,12 +89,13 @@ def _admission(run_id: str) -> Cfg1RunAdmission:
         block=block,
         position=position,
         run_id=run_id,
+        stage_pi_profile_id=None,
     )
 
 
 def _run_with_snapshot(git_executable, monkeypatch, snapshot, *, run_id="d" * 32):
     """One full run whose repository observations return ``snapshot``."""
-    seam_digests_all_match(monkeypatch)
+    session_pi_profile_approved(monkeypatch)
     ports, _made = build_doubled_ports(
         git_executable=git_executable,
         overrides={"observe_repository": lambda *, workspace_root: snapshot},
@@ -235,7 +236,7 @@ def test_t159_an_observed_exact_zero_still_records_as_performed(
     """
     from pi_harness_cfg1 import run_workspace
 
-    seam_digests_all_match(monkeypatch)
+    session_pi_profile_approved(monkeypatch)
     made: dict[str, object] = {}
 
     def _observe(*, workspace_root):
@@ -319,7 +320,7 @@ def test_t160_a_malformed_verification_count_becomes_the_sentinel_never_a_number
     non-content-bearing sentinel -- never a manufactured integer -- and (5) no
     ``verification_passed: true`` survives.
     """
-    seam_digests_all_match(monkeypatch)
+    session_pi_profile_approved(monkeypatch)
 
     counts = {"passed": 1, "failed": 0, "error": 0}
     if malformed == "<missing>":
@@ -363,7 +364,7 @@ def test_t160_the_record_fails_its_own_validator_and_halts_the_stage(
     """
     from pi_harness_cfg1.records import (
         Cfg1RecordValidationError,
-        _require_valid_cfg1_run_payload_v2 as _require_valid_cfg1_run_payload,
+        _require_valid_cfg1_run_payload_v3 as _require_valid_cfg1_run_payload,
     )
 
     # (2) -- the validator's own refusal, in isolation.
@@ -388,8 +389,8 @@ def test_t160_the_record_fails_its_own_validator_and_halts_the_stage(
 
     from pi_harness_cfg1 import (
         REFUSAL_RECORD_KIND,
-        REFUSAL_RECORD_VERSION_V2 as REFUSAL_RECORD_VERSION,
-        RUN_RECORD_VERSION_V2 as RUN_RECORD_VERSION,
+        REFUSAL_RECORD_VERSION_V3 as REFUSAL_RECORD_VERSION,
+        RUN_RECORD_VERSION_V3 as RUN_RECORD_VERSION,
     )
 
     written = json.loads(
@@ -433,7 +434,7 @@ def test_t161_the_malformed_verification_value_reaches_no_console_or_artifact(
     the payload, so neither the console nor any durable byte can carry the
     value's own text.
     """
-    seam_digests_all_match(monkeypatch)
+    session_pi_profile_approved(monkeypatch)
 
     @dataclass
     class _NeedleVerification:

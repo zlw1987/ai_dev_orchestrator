@@ -13,13 +13,22 @@ opening a socket, reading a credential, or contacting a model.
 separately-authorized live phase; importing THIS module does not import them.
 
 **FU1 -- the first Node/Pi/JavaScript execution is L14.** L1 runs the ONE
-canonical static Pi identity proof (:func:`pi_identity.prove_pi_identity`,
-the same function object the pre-consumption gate calls), from scratch. It
-starts no process: there is no ``--version`` probe and no port whose genuine
-binding executes Node or Pi before L14. L14 re-walks all 20 seams and
-re-proves the package-root and ``node.exe`` identities immediately before
-``launch()``, with nothing that reads the Pi tree between that proof and
-``Popen``.
+canonical static Pi proof (:func:`pi_identity.prove_pi_identity`, the same
+function object the pre-consumption gate calls), from scratch. It starts no
+process: there is no ``--version`` probe and no port whose genuine binding
+executes Node or Pi before L14.
+
+**PE-2c -- HPP-1 profile-aware.** P is the profile-aware proof of PE-1
+Sec. 11 (complete PI-PC1 walk, exact membership in the module-level sealed
+snapshot, exposure absence, identity re-proof). L1 first validates the
+admission's ``stage_pi_profile_id`` narrowing constraint, then commits P's
+profile family atomically and refuses a different approved profile on a
+later ordinal as ``PI_PROFILE_CHANGED_WITHIN_STAGE`` -- all before any
+credential read (L4). L14 re-proves L1's EXACT matched profile (never a fresh
+membership choice) immediately before ``launch()``, with nothing that reads
+the Pi tree between that proof and ``Popen``. L21A re-observes the payload
+after L24 and before L25 (PE-1 Sec. 15.2, Sec. 18); it is an observation,
+never a closure predicate.
 
 **Attribution is the executor's own (FU1, R6 Sec. 9).** One monotonic step
 cursor is advanced at each step's entry, before its first side effect, and
@@ -78,14 +87,22 @@ from .lifecycle import (
     WORKSPACE_MINT_NOT_ATTEMPTED,
 )
 from .pi_identity import (
+    PI_PROFILE_CHANGED_WITHIN_STAGE,
+    PI_PROFILE_REOBSERVATION_NOT_APPLICABLE,
+    PI_PROFILE_REOBSERVATION_PROCEDURE_VALUES,
+    PI_PROFILE_REOBSERVATION_UNPROVEN,
     PiProofLeaves,
+    declared_package_version_for_profile,
     genuine_pi_proof_leaves,
     prove_pi_identity,
+    reobserve_pi_profile_after_runtime,
     reprove_pi_identity_for_launch,
     require_pi_proof_result_shape,
 )
+from .pi_payload import is_lowercase_hex64
 from .preflight import base_url_compat_detection_clear
 from .run_contract import Cfg1RunAdmission, Cfg1RunOutcome
+from .schedule import declared_ordinals
 
 _STOP_REASON_KEYS = ("stop", "length", "toolUse", "error", "aborted", "other")
 _VERIFICATION_COUNT_KEYS = ("passed", "failed", "error")
@@ -221,8 +238,10 @@ class Cfg1RunPorts:
     to ``ar2.launch.resolve_runtime_identity``, which ran ``node cli.js
     --version`` with the inherited environment) is removed, not replaced.
     ``pi_proof_leaves`` supplies ONLY the static proof's leaf effects -- the
-    Sec. 7.2 no-follow inspection primitive and a one-handle digest reader --
-    and has no field through which a process-creating leaf could be passed.
+    Sec. 7.2 no-follow inspection primitive, a one-handle payload-file reader
+    and the no-follow directory enumerator (PE-1 X-1) -- and has no field
+    through which a process-creating leaf could be passed. It carries no
+    policy: P, L14 and L21A read the module-level sealed snapshot themselves.
 
     **The adapter surface each port must provide**, so the eventual LIVE
     binding has a contract rather than an inference:
@@ -299,17 +318,23 @@ class Cfg1RunPorts:
 
 
 def _initial_observations() -> dict[str, Any]:
-    """The "nothing has happened yet" v2 observation set. Every field fail-closed.
+    """The "nothing has happened yet" v3 observation set. Every field fail-closed.
 
     A run that refuses at L1 emits exactly this, with P's family and one
     refusal code and step filled in -- never a partially-optimistic record
-    that implies observations nobody made. There is no ``pi_observed_version``
-    and no ``pi_version_probe_attempted``: nothing before L14 executes Pi
-    (AMEND1 AMD-4), and no replacement version field exists.
+    that implies observations nobody made. There is no ``pi_observed_version``,
+    no ``pi_version_probe_attempted`` and no ``pi_seam_digests_match``: nothing
+    before L14 executes Pi (AMEND1 AMD-4), and the profile-aware P makes no
+    claim about the historical seam table. ``pi_profile_declared_package_version``
+    is DECLARED provenance copied from the sealed policy, never observed.
+    L21A starts ``NOT_APPLICABLE`` and is always rewritten by the L21A step.
     """
     observations: dict[str, Any] = {
-        "pi_seam_digests_match": False,
         "pi_identity_failure_code": None,
+        "pi_payload_observation_complete": False,
+        "pi_profile_id": None,
+        "pi_profile_declared_package_version": None,
+        "pi_profile_post_runtime_reobservation": PI_PROFILE_REOBSERVATION_NOT_APPLICABLE,
         "base_url_compat_detection_clear": False,
         "route_reachable": False,
         "route_configured_model_served": False,
@@ -574,6 +599,37 @@ def execute_cfg1_run(admission: Cfg1RunAdmission, *, ports: Cfg1RunPorts) -> Cfg
     )
 
 
+class _MalformedAdmissionProfile(Exception):
+    """L1 step 1 refused the admission's stage-profile constraint.
+
+    Carries nothing at all. It exists only to reach ``execute_cfg1_run``'s
+    catch-all -- ``UNEXPECTED_STEP_FAILURE`` at the cursor ``L1`` -- before P
+    runs, so nothing of P's family is committed.
+    """
+
+
+def _require_admission_stage_profile(admission: Cfg1RunAdmission) -> str | None:
+    """PE-1 Sec. 14.2 step 1: the narrowing constraint's exact shape.
+
+    The stage execution's first ordinal carries exactly ``None``; every later
+    ordinal carries an exact 64-lowercase-hex ``str``. Exact types only: a
+    ``bool`` ordinal, a ``str`` subclass, an uppercase or short id, or ``None``
+    on a later ordinal all raise. The value only NARROWS what L1 accepts; it
+    never selects, supplies or substitutes a profile.
+    """
+    ordinal = admission.run_ordinal
+    value = admission.stage_pi_profile_id
+    if type(ordinal) is not int:
+        raise _MalformedAdmissionProfile
+    if ordinal == declared_ordinals(admission.stage_id)[0]:
+        if value is not None:
+            raise _MalformedAdmissionProfile
+        return None
+    if not is_lowercase_hex64(value):
+        raise _MalformedAdmissionProfile
+    return value
+
+
 def _resolve_git_for_l1(ports: Cfg1RunPorts) -> str:
     """L1's Git resolution, after P's success commit. Unchanged in kind (OC-7).
 
@@ -614,25 +670,56 @@ def _dispatch_phase(
     state.cursor = "L1"
     from qualification.safety import ArtifactSafetyContext
 
-    # ---------------- L1 OFFLINE PREFLIGHT: the static Pi identity proof ----
-    # The SAME function object the pre-consumption gate calls, run FROM
-    # SCRATCH: nothing the gate observed can reach this call. It starts no
+    # ---------------- L1 OFFLINE PREFLIGHT: the static profile-aware proof --
+    # PE-1 Sec. 14.2, in its frozen order.
+    #
+    # (1) The admission's stage-profile narrowing constraint, validated BEFORE
+    # P: a malformed value raises into the catch-all (UNEXPECTED_STEP_FAILURE
+    # at L1) with NOTHING of P's family committed.
+    stage_pi_profile_id = _require_admission_stage_profile(admission)
+    # (2) P, the SAME function object the pre-consumption gate calls, run FROM
+    # SCRATCH with the same genuine leaves and the same module-level sealed
+    # snapshot: nothing the gate observed can reach this call. It starts no
     # process and executes no Node, Pi or JavaScript (AMEND1 AMD-1). An
     # anticipated refusal is RETURNED; anything else raises into the catch-all
     # with nothing of P's family committed.
+    # (3) The exact result shape.
     result = require_pi_proof_result_shape(
         prove_pi_identity(ports.ambient_environ, leaves=ports.pi_proof_leaves)
     )
-    # P's family, committed atomically: plain assignments of already-validated
-    # values in which nothing can raise.
+    # (4) The whole family as plain, already-validated values. The declared
+    # version is the matched profile's LOADER-BOUND provenance, copied from
+    # the sealed snapshot -- never observed, never compared.
     identity = result.identity
-    failure_code = result.failure_code
-    observations["pi_seam_digests_match"] = result.seam_digests_match
+    if result.failure_code is not None:
+        family = (result.failure_code, result.payload_observation_complete, None, None)
+    elif (
+        stage_pi_profile_id is not None
+        and identity.matched_profile_id != stage_pi_profile_id
+    ):
+        # A DIFFERENT, independently approved profile on a later ordinal: not
+        # a membership failure and not a version mismatch -- a stage-level
+        # consistency refusal (PE-1 Sec. 12.3).
+        family = (PI_PROFILE_CHANGED_WITHIN_STAGE, True, None, None)
+    else:
+        family = (
+            None,
+            True,
+            identity.matched_profile_id,
+            declared_package_version_for_profile(identity.matched_profile_id),
+        )
+    failure_code, observation_complete, profile_id, declared_version = family
+    # (5) Commit atomically: plain assignments in which nothing can raise.
     observations["pi_identity_failure_code"] = failure_code
+    observations["pi_payload_observation_complete"] = observation_complete
+    observations["pi_profile_id"] = profile_id
+    observations["pi_profile_declared_package_version"] = declared_version
     if failure_code is not None:
+        # (6) Refuse -- before any credential or endpoint read (L4).
         observations["pre_dispatch_refusal_code"] = "OFFLINE_PREFLIGHT_FAILED"
         observations["refused_at_step"] = "L1"
         raise _PreDispatchRefusal("OFFLINE_PREFLIGHT_FAILED", "L1")
+    # (7) Retain the identity in executor state (in memory only).
     state.pi_identity = identity
 
     git_executable = _resolve_git_for_l1(ports)
@@ -869,9 +956,11 @@ def _dispatch_phase(
         )
     except Exception:  # noqa: BLE001
         raise _PreDispatchRefusal("RUNTIME_LAUNCH_FAILED", "L14") from None
-    # (2) The sole pre-first-execution proof, in its fixed order: all 20 seams,
-    # then the package root vs I_r, then node.exe vs I_n. Any failure -> no
-    # launch() call, no process, runtime_created stays false.
+    # (2) The sole pre-first-execution proof, in its fixed order (PE-1 Sec.
+    # 15.1): the complete uncached payload walk, EQUALITY with L1's exact
+    # matched profile's fingerprint (never re-membership), that profile's
+    # exposures absent, then the package root vs I_r, then node.exe vs I_n.
+    # Any failure -> no launch() call, no process, runtime_created stays false.
     try:
         reproved = reprove_pi_identity_for_launch(
             state.pi_identity, leaves=ports.pi_proof_leaves
@@ -1293,6 +1382,46 @@ def _closure_l24_scrubs(state: _RunState, observations: dict[str, Any]) -> None:
         observations["extension_binding_scrub_verified"] = _scrub_extension_binding(state)
 
 
+def _closure_l21a_pi_profile_reobservation(
+    ports: Cfg1RunPorts, observations: dict[str, Any], state: _RunState
+) -> None:
+    """L21A: the mandatory post-runtime payload re-observation (PE-1 Sec. 15.2).
+
+    Positioned after L24 and before L25 (Sec. 18): resource shutdown and the
+    sensitive-material scrub keep priority over the potentially expensive
+    payload walk, and the walk precedes any repository-controlled code (L26).
+    Applicability is read HERE, after L21 has made its OC-4 D-3 decision:
+    ``runtime_created`` not exactly ``True`` -> ``NOT_APPLICABLE`` and no walk
+    at all; ``True`` -> the procedure is attempted EXACTLY ONCE. A contained
+    L21-L24 failure reaches this step only through its own condition
+    (``runtime_exit_observed`` not exactly ``True`` -> at best ``UNPROVEN``).
+
+    Total by step-local containment: a raise, or any value outside
+    ``{CHANGED, UNPROVEN, PROVEN_UNCHANGED}``, is ``UNPROVEN``. It never
+    touches ``lifecycle_all_closed``, ``lifecycle_failure_steps`` or any
+    lifecycle fact -- it is an observation, not a closure predicate -- and it
+    never retries. A contained failure here never suppresses L25-L27.
+    """
+    if observations["runtime_created"] is not True:
+        observations["pi_profile_post_runtime_reobservation"] = (
+            PI_PROFILE_REOBSERVATION_NOT_APPLICABLE
+        )
+        return
+
+    reobservation = PI_PROFILE_REOBSERVATION_UNPROVEN
+    try:
+        value = reobserve_pi_profile_after_runtime(
+            state.pi_identity,
+            leaves=ports.pi_proof_leaves,
+            runtime_exit_observed=observations["runtime_exit_observed"],
+        )
+        if type(value) is str and value in PI_PROFILE_REOBSERVATION_PROCEDURE_VALUES:
+            reobservation = value
+    except Exception:  # noqa: BLE001 - an unproven re-observation is UNPROVEN
+        reobservation = PI_PROFILE_REOBSERVATION_UNPROVEN
+    observations["pi_profile_post_runtime_reobservation"] = reobservation
+
+
 def _closure_l25_git_observation_1(
     ports: Cfg1RunPorts, observations: dict[str, Any], state: _RunState
 ) -> None:
@@ -1544,8 +1673,10 @@ def _closure_l27_workspace(observations: dict[str, Any], state: _RunState) -> No
 def _closure_phase(
     *, ports: Cfg1RunPorts, observations: dict[str, Any], state: _RunState
 ) -> None:
-    """L21-L27, in the fixed order, skipping only never-created resources.
+    """L21-L27 with L21A, in the fixed order, skipping only never-created resources.
 
+    PE-1 Sec. 18's frozen execution order:
+    ``L21 -> L22 -> L23 -> L24 -> L21A -> L25 -> L26 -> L27``.
     A pure sequencer over executor-owned values (OC-4 I-1..I-3, I-8): each step
     is total by its OWN step-local containment, so no step is skipped because an
     earlier one failed, and there is deliberately no ``try`` here. A raise that
@@ -1556,6 +1687,7 @@ def _closure_phase(
     _closure_l22_broker_counts(state, observations)
     _closure_l23_broker_shutdown(state, observations)
     _closure_l24_scrubs(state, observations)
+    _closure_l21a_pi_profile_reobservation(ports, observations, state)
     _closure_l25_git_observation_1(ports, observations, state)
     _closure_l26_verification(ports, observations, state)
     _closure_l27_workspace(observations, state)

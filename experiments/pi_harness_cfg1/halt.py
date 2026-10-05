@@ -11,6 +11,12 @@ clauses, giving exactly six members. No seventh code, no alias, and no code
 inferred from a novel failure mode may be added without a separate design
 amendment.
 
+**PE-1 is that amendment, for v3 stage closures only.** It adds admission item
+1A and exactly one code, ``PI_PROFILE_ATTRIBUTION_UNPROVEN``, in the separate
+seven-member ``HALT_REASON_CODES_V3`` with its own seven-step precedence (see
+the PE-2c section below). The six-member set and six-step function keep their
+identity, members and behavior for v1 stage closures.
+
 **Console-only codes are a SEPARATE vocabulary.** Four stage-ending cases
 write no confirmed stage-closure record at all, so there is no durable field
 in which a code for them could truthfully live. They are reported exclusively
@@ -325,3 +331,128 @@ def _admission_conditions_hold(
     if registries_empty is not True:  # item 4
         return False
     return True
+
+
+# ---------------------------------------------------------------------------
+# PE-2c (PE-1 Sec. 17, X-3) -- admission item 1A and the v3 halt vocabulary
+# ---------------------------------------------------------------------------
+#
+# PE-1 is the separately authorized design amendment CFG1 Sec. 19.5 requires
+# for a seventh code, for v3 stage closures ONLY. The six-member
+# ``HALT_REASON_CODES`` object and the six-step ``_resolve_halt_reason_code``
+# above are UNCHANGED, keep governing v1 stage-closure validation, and are not
+# called by the profile-aware runner. No eighth v3 code, alias or inferred code
+# may be added without a further authorized amendment (Sec. 17.4).
+
+#: Item 1A failed: an applicable L21A did not yield ``PROVEN_UNCHANGED``.
+HALT_PI_PROFILE_ATTRIBUTION_UNPROVEN = "PI_PROFILE_ATTRIBUTION_UNPROVEN"
+
+#: Exactly SEVEN members: the six frozen codes plus the one PE-1 code. THE one
+#: object the v3 stage-closure validator and the runner's L30 both cite.
+HALT_REASON_CODES_V3: frozenset[str] = HALT_REASON_CODES | frozenset(
+    {HALT_PI_PROFILE_ATTRIBUTION_UNPROVEN}
+)
+
+#: Documentation of the v3 order only; the function below is the authority.
+HALT_REASON_PRECEDENCE_V3: tuple[str, ...] = (
+    HALT_RUN_RECORD_EMISSION_COLLISION,
+    HALT_RUN_RECORD_EMISSION_FAILED,
+    HALT_RUN_RECORD_SELF_VALIDATION_FAILED,
+    HALT_LIFECYCLE_CLOSURE_UNPROVEN,
+    HALT_PRE_DISPATCH_REFUSAL,
+    HALT_PI_PROFILE_ATTRIBUTION_UNPROVEN,
+    HALT_RUN_SCOPED_REGISTRY_NOT_EMPTY,
+)
+
+#: The L21A values item 1A admits, by applicability.
+_L21A_NOT_APPLICABLE = "NOT_APPLICABLE"
+_L21A_PROVEN_UNCHANGED = "PROVEN_UNCHANGED"
+
+
+def _pi_profile_item_1a_holds(*, runtime_created: object, pi_profile_reobservation: object) -> bool:
+    """PE-1 Sec. 17.1 item 1A, over EXACT types. Total; never raises.
+
+    ``(type(runtime_created) is bool) and ((runtime_created is False and
+    L21A == "NOT_APPLICABLE") or (runtime_created is True and L21A ==
+    "PROVEN_UNCHANGED"))`` with ``L21A`` compared as an exact ``str``. Anything
+    else -- ``CHANGED``, ``UNPROVEN``, a ``str`` subclass, ``1`` for ``True``,
+    ``None``, any malformed value -- fails closed. The caller passes the
+    runner-local profile ledger's in-memory facts for the ordinal, never a
+    value read from a durable record.
+    """
+    if type(runtime_created) is not bool or type(pi_profile_reobservation) is not str:
+        return False
+    if runtime_created is False:
+        return pi_profile_reobservation == _L21A_NOT_APPLICABLE
+    return pi_profile_reobservation == _L21A_PROVEN_UNCHANGED
+
+
+def _resolve_halt_reason_code_v3(
+    *,
+    emission_status: str,
+    halt_triggered_by_this_run: bool,
+    lifecycle_all_closed: bool,
+    run_classification: str,
+    pi_profile_item_1a_holds: bool,
+    registries_empty: bool,
+) -> str | None:
+    """PE-1 Sec. 17.3's seven-step v3 precedence. First match wins.
+
+    Step 5A sits where the classification row sits relative to lifecycle and
+    pre-dispatch refusal. One code per halted ordinal cannot carry two causes,
+    so the stage closure's INDEPENDENT ``pi_profile_attribution_halt`` field
+    records item 1A's failure whichever code wins here. THE one shared v3
+    callable; the v3 validator cites ``HALT_REASON_CODES_V3`` and reimplements
+    none of it.
+    """
+    from .classification import CLASSIFICATION_REFUSED_PRE_DISPATCH
+
+    if emission_status == EMISSION_COLLISION:
+        return HALT_RUN_RECORD_EMISSION_COLLISION
+    if emission_status == EMISSION_FAILED:
+        return HALT_RUN_RECORD_EMISSION_FAILED
+    if halt_triggered_by_this_run is True:
+        return HALT_RUN_RECORD_SELF_VALIDATION_FAILED
+    if lifecycle_all_closed is False:
+        return HALT_LIFECYCLE_CLOSURE_UNPROVEN
+    if run_classification == CLASSIFICATION_REFUSED_PRE_DISPATCH:
+        return HALT_PRE_DISPATCH_REFUSAL
+    if pi_profile_item_1a_holds is not True:
+        return HALT_PI_PROFILE_ATTRIBUTION_UNPROVEN
+    if registries_empty is False:
+        return HALT_RUN_SCOPED_REGISTRY_NOT_EMPTY
+    return None
+
+
+# ---------------------------------------------------------------------------
+# PE-2c (PE-1 Sec. 20.2) -- the stage-closure ordinal profile binding
+# ---------------------------------------------------------------------------
+
+#: The ordinal ran, produced a confirmed run record, and its in-memory L1
+#: profile fact is exactly the stage profile.
+ORDINAL_PI_PROFILE_STAGE_PROFILE = "STAGE_PROFILE"
+#: The ordinal produced a confirmed run record but does NOT bind the stage
+#: profile (an L1 refusal, or any malformed fact).
+ORDINAL_PI_PROFILE_NO_PROFILE = "NO_PROFILE"
+#: The ordinal ran but no confirmed run record exists for it: whatever its
+#: in-memory profile fact was, it contributes NO per-ordinal profile claim.
+ORDINAL_PI_PROFILE_NO_RUN_EVIDENCE = "NO_RUN_EVIDENCE"
+#: The ordinal never ran.
+ORDINAL_PI_PROFILE_NOT_EXECUTED = "NOT_EXECUTED"
+
+ORDINAL_PI_PROFILE_BINDING_VALUES: frozenset[str] = frozenset(
+    {
+        ORDINAL_PI_PROFILE_STAGE_PROFILE,
+        ORDINAL_PI_PROFILE_NO_PROFILE,
+        ORDINAL_PI_PROFILE_NO_RUN_EVIDENCE,
+        ORDINAL_PI_PROFILE_NOT_EXECUTED,
+    }
+)
+
+#: The emission outcomes that leave an executed ordinal without a confirmed
+#: run record: such an ordinal is ``NO_RUN_EVIDENCE`` whatever its in-memory
+#: profile fact was. The binding itself is computed ONLY by the nested
+#: terminal sealer, lexically inside the one stage-runner routine.
+NO_RUN_EVIDENCE_ORDINAL_STATUSES: frozenset[str] = frozenset(
+    {EMISSION_EVIDENCE_REFUSED, EMISSION_COLLISION, EMISSION_FAILED}
+)

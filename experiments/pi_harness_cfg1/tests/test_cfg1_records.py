@@ -19,6 +19,7 @@ from cfg1_builders import (
     refusal_payload,
     run_payload,
     stage_closure_payload,
+    stage_closure_payload_v3,
     unavailable_activity_overrides,
 )
 
@@ -26,9 +27,12 @@ from pi_harness_cfg1 import (
     PACKAGE_ID,
     REFUSAL_RECORD_VERSION,
     REFUSAL_RECORD_VERSION_V2,
+    REFUSAL_RECORD_VERSION_V3,
     RUN_RECORD_VERSION,
     RUN_RECORD_VERSION_V2,
+    RUN_RECORD_VERSION_V3,
     STAGE_CLOSURE_RECORD_VERSION,
+    STAGE_CLOSURE_RECORD_VERSION_V3,
     arms,
     classification,
     fixture,
@@ -39,16 +43,20 @@ from pi_harness_cfg1 import (
 from pi_harness_cfg1.records import (
     Cfg1RecordValidationError,
     _require_valid_cfg1_stage_closure_payload,
+    _require_valid_cfg1_stage_closure_payload_v3,
 )
 
-# FU1 (R6 D-1/D-3): the executor emits ``pi-harness-cfg1-run.v2`` and
-# ``pi-harness-cfg1-refusal.v2`` ONLY, so these payload-level regressions run
-# against the v2 validators -- the schema every newly emitted artifact must
-# satisfy. v1's own, unchanged validators are pinned separately against
-# independently built v1 payloads (FU1 Test N, test_cfg1_fu1_l1_boundary.py).
+# PE-2c: the profile-aware executor emits ``pi-harness-cfg1-run.v3`` and
+# ``pi-harness-cfg1-refusal.v3`` ONLY (FU1 emitted v2), so these payload-level
+# regressions run against the v3 validators -- the schema every newly emitted
+# artifact must satisfy. v1's and v2's own, unchanged validators are pinned
+# separately against independently built v1/v2 payloads
+# (test_cfg1_fu1_records_v2.py). The v1 stage-closure invariants below stay
+# pinned against v1's own validator; the v3 stage-closure schema has its own
+# regressions (test_cfg1_pe2c_records.py).
 from pi_harness_cfg1.records import (  # noqa: E402
-    _require_valid_cfg1_refusal_payload_v2 as _require_valid_cfg1_refusal_payload,
-    _require_valid_cfg1_run_payload_v2 as _require_valid_cfg1_run_payload,
+    _require_valid_cfg1_refusal_payload_v3 as _require_valid_cfg1_refusal_payload,
+    _require_valid_cfg1_run_payload_v3 as _require_valid_cfg1_run_payload,
 )
 
 _DESIGN_DOC = (
@@ -246,12 +254,12 @@ def test_t69_each_validator_accepts_only_its_own_exact_schema():
     genuine = {
         "run": run_payload(),
         "refusal": refusal_payload(),
-        "stage_closure": stage_closure_payload(),
+        "stage_closure": stage_closure_payload_v3(),
     }
     validators = {
         "run": _require_valid_cfg1_run_payload,
         "refusal": _require_valid_cfg1_refusal_payload,
-        "stage_closure": _require_valid_cfg1_stage_closure_payload,
+        "stage_closure": _require_valid_cfg1_stage_closure_payload_v3,
     }
     for kind, payload in genuine.items():
         validators[kind](payload)  # its own validator accepts it
@@ -453,7 +461,12 @@ def test_t90_the_halt_vocabulary_is_exactly_six_members_and_one_shared_object():
     from pi_harness_cfg1 import stage_runner
 
     assert records.HALT_REASON_CODES is halt.HALT_REASON_CODES
-    assert stage_runner.HALT_REASON_CODES is halt.HALT_REASON_CODES
+    # PE-2c: the profile-aware runner and the v3 validator share the ONE
+    # seven-member v3 object; the six-member object above is unchanged and
+    # keeps governing v1 stage-closure validation.
+    assert records.HALT_REASON_CODES_V3 is halt.HALT_REASON_CODES_V3
+    assert stage_runner.HALT_REASON_CODES_V3 is halt.HALT_REASON_CODES_V3
+    assert not hasattr(stage_runner, "HALT_REASON_CODES")
 
     # And the RUN-record validator has no halt_reason_code domain to audit,
     # because the field does not exist there at all.
@@ -465,6 +478,8 @@ def test_t94_the_run_record_schema_carries_no_unrecomputable_final_l30_state():
     assert "halt_reason_code" not in records.CFG1_RUN_RECORD_KEYS
     assert "halt_triggered_by_this_run" not in records.CFG1_RUN_RECORD_KEYS_V2
     assert "halt_reason_code" not in records.CFG1_RUN_RECORD_KEYS_V2
+    assert "halt_triggered_by_this_run" not in records.CFG1_RUN_RECORD_KEYS_V3
+    assert "halt_reason_code" not in records.CFG1_RUN_RECORD_KEYS_V3
 
     for key, value in (
         ("halt_triggered_by_this_run", False),
@@ -486,7 +501,7 @@ def test_t94_run_classification_stays_payload_only_recomputable():
     assert inactive["run_classification"] == "INACTIVE"
     assert active["run_classification"] == "ACTIVE"
     for payload in (inactive, active):
-        assert classification.classify_cfg1_run(payload) == payload["run_classification"]
+        assert classification.classify_cfg1_run_v3(payload) == payload["run_classification"]
         _require_valid_cfg1_run_payload(payload)
 
 
@@ -608,11 +623,13 @@ def test_the_refusal_schema_accepts_only_the_one_refusable_record_kind():
         _require_valid_cfg1_refusal_payload(payload)
     assert records.REFUSABLE_RECORD_KINDS == frozenset({RUN_RECORD_VERSION})
     assert records.REFUSABLE_RECORD_KINDS_V2 == frozenset({RUN_RECORD_VERSION_V2})
-    # A v2 refusal may never stand in for a v1 run record, nor vice versa.
-    payload = refusal_payload()
-    payload["refused_record_kind"] = RUN_RECORD_VERSION
-    with pytest.raises(Cfg1RecordValidationError):
-        _require_valid_cfg1_refusal_payload(payload)
+    assert records.REFUSABLE_RECORD_KINDS_V3 == frozenset({RUN_RECORD_VERSION_V3})
+    # A v3 refusal may never stand in for a v1 or v2 run record.
+    for historical in (RUN_RECORD_VERSION, RUN_RECORD_VERSION_V2):
+        payload = refusal_payload()
+        payload["refused_record_kind"] = historical
+        with pytest.raises(Cfg1RecordValidationError):
+            _require_valid_cfg1_refusal_payload(payload)
 
 
 def test_the_pinned_fixture_revision_still_matches_the_fixture_content():
@@ -628,9 +645,10 @@ def test_the_pinned_fixture_revision_still_matches_the_fixture_content():
 
 def test_every_record_header_declares_no_qualification_authority():
     for payload, version in (
-        (run_payload(), RUN_RECORD_VERSION_V2),
-        (refusal_payload(), REFUSAL_RECORD_VERSION_V2),
+        (run_payload(), RUN_RECORD_VERSION_V3),
+        (refusal_payload(), REFUSAL_RECORD_VERSION_V3),
         (stage_closure_payload(), STAGE_CLOSURE_RECORD_VERSION),
+        (stage_closure_payload_v3(), STAGE_CLOSURE_RECORD_VERSION_V3),
     ):
         assert payload["experiment"] == PACKAGE_ID
         assert payload["record_version"] == version

@@ -33,7 +33,7 @@ from cfg1_doubles import (
     FakeVerificationOutcome,
     build_doubled_ports,
     probe_facts_for_arm,
-    seam_digests_all_match,
+    session_pi_profile_approved,
 )
 from qualification.safety import ArtifactSafetyContext
 
@@ -65,7 +65,7 @@ HOSTILE = {
 
 @pytest.fixture(autouse=True)
 def _seam_digests(monkeypatch):
-    seam_digests_all_match(monkeypatch)
+    session_pi_profile_approved(monkeypatch)
 
 
 @pytest.fixture()
@@ -81,6 +81,7 @@ def admission():
         block=block,
         position=position,
         run_id="deadbeef" * 4,
+        stage_pi_profile_id=None,
     )
 
 
@@ -262,7 +263,7 @@ def test_t15_a_declared_needle_in_a_payload_is_refused_by_the_scrub(make_authori
     written = json.loads(
         Path(authority.execution_directory, "S1_01_Q.json").read_text(encoding="utf-8")
     )
-    assert written["record_version"] == "pi-harness-cfg1-refusal.v2"
+    assert written["record_version"] == "pi-harness-cfg1-refusal.v3"
     assert written["finding_categories"] == ["SCRUB_NEEDLE_MATCH"]
     # The refusal carries the CODE, never the needle -- a finding that echoed
     # the offending value back would turn detection into a leak.

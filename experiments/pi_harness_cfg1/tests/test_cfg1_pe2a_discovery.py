@@ -105,7 +105,12 @@ def _run(world: DiscoveryWorld, **overrides):
 
 def _proof_leaves_with(inspect) -> PiProofLeaves:
     genuine = genuine_pi_proof_leaves()
-    return PiProofLeaves(inspect=inspect, read_digest=genuine.read_digest, checkout_root=genuine.checkout_root)
+    return PiProofLeaves(
+        inspect=inspect,
+        read_digest=genuine.read_digest,
+        enumerate_directory=genuine.enumerate_directory,
+        checkout_root=genuine.checkout_root,
+    )
 
 
 def _inspect_overriding(overrides: dict[str, str]):
@@ -868,13 +873,14 @@ def test_discovery_refuses_a_nested_reparse_point_with_nothing_written(world, st
 
 
 def test_discovery_does_not_alter_the_canonical_proof(world, staging, monkeypatch):
-    """Discovery reuses P1's functions; P itself is untouched and still refuses
-    a synthetic tree whose seams do not match the historical pin table."""
-    from pi_harness_cfg1.pi_identity import PI_SEAM_UNPROVEN, prove_pi_identity
+    """Discovery reuses P1's functions and grants nothing: a staged candidate
+    never becomes eligible, so the profile-aware P (PE-2c) refuses the very tree
+    discovery just staged, against the genuine committed (genesis) policy."""
+    from pi_harness_cfg1.pi_identity import PI_PROFILE_UNAPPROVED, prove_pi_identity
 
     _run(world)
     result = prove_pi_identity({"PATH": world.path_value}, leaves=genuine_pi_proof_leaves())
-    assert result.failure_code == PI_SEAM_UNPROVEN
+    assert result.failure_code == PI_PROFILE_UNAPPROVED
 
 
 # ---------------------------------------------------------------------------

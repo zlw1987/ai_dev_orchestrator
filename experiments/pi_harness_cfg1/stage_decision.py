@@ -51,7 +51,15 @@ class Cfg1StageDecisionError(Exception):
 
 @dataclass(frozen=True)
 class _DecisionMintRecord:
-    """Every bound field, recorded at seal time and re-compared at consumption."""
+    """Every bound field, recorded at seal time and re-compared at consumption.
+
+    PE-2c (PE-1 Sec. 20.3, B11) appends exactly three fields after
+    ``halt_reason_code`` -- the stage profile the runner actually enforced,
+    the per-ordinal profile binding and the profile-attribution halt flag --
+    all computed by the nested terminal sealer from the runner-local ledgers
+    and L30's own values. There is no second record type and no second
+    registry.
+    """
 
     authority_mint_nonce: str = field(repr=False)
     stage_id: str
@@ -59,6 +67,9 @@ class _DecisionMintRecord:
     ordinal_status: tuple[tuple[int, str], ...]
     halted_after_ordinal: int | None
     halt_reason_code: str | None
+    stage_pi_profile_id: str | None
+    ordinal_pi_profile_binding: tuple[tuple[int, str], ...]
+    pi_profile_attribution_halt: bool
 
     def __repr__(self) -> str:  # noqa: D105 - the authority nonce is never rendered
         return f"{type(self).__name__}(<bound>)"
@@ -97,6 +108,12 @@ class CFG1StageClosureDecision:
     sorted by ordinal. The durable JSON object's decimal-string keys are that
     same data in JSON's own required key form -- rendered by the writer, never
     stored twice.
+
+    PE-2c (PE-1 Sec. 20.3, B11): the same three profile fields as
+    :class:`_DecisionMintRecord`, in the same order. This remains the ONE
+    decision type for both terminal outcomes.
+    ``ordinal_pi_profile_binding`` is a tuple of ``(ordinal, binding)`` pairs
+    sorted by ordinal, one per declared ordinal.
     """
 
     decision_nonce: str = field(repr=False)
@@ -106,6 +123,9 @@ class CFG1StageClosureDecision:
     ordinal_status: tuple[tuple[int, str], ...]
     halted_after_ordinal: int | None
     halt_reason_code: str | None
+    stage_pi_profile_id: str | None
+    ordinal_pi_profile_binding: tuple[tuple[int, str], ...]
+    pi_profile_attribution_halt: bool
 
     def __post_init__(self) -> None:
         if type(self.decision_nonce) is not str or not self.decision_nonce:
@@ -113,7 +133,7 @@ class CFG1StageClosureDecision:
         record = _STAGE_DECISION_SEALED.get(self.decision_nonce)
         if record is None:
             raise Cfg1StageDecisionError("UNKNOWN_DECISION_NONCE")
-        if _bound_fields(self) != _bound_fields(record):
+        if not _bound_fields_equal(_bound_fields(self), _bound_fields(record)):
             raise Cfg1StageDecisionError("DECISION_FIELD_MISMATCH")
 
     def __repr__(self) -> str:  # noqa: D105 - nonces are never rendered
@@ -126,7 +146,11 @@ class CFG1StageClosureDecision:
 
 
 def _bound_fields(value) -> tuple:
-    """The exact tuple both the object and its registry record must agree on."""
+    """The exact tuple both the object and its registry record must agree on.
+
+    The frozen six fields FOLLOWED BY exactly the three PE-2c profile fields
+    (PE-1 Sec. 20.3 item 3).
+    """
     return (
         value.authority_mint_nonce,
         value.stage_id,
@@ -134,7 +158,32 @@ def _bound_fields(value) -> tuple:
         value.ordinal_status,
         value.halted_after_ordinal,
         value.halt_reason_code,
+        value.stage_pi_profile_id,
+        value.ordinal_pi_profile_binding,
+        value.pi_profile_attribution_halt,
     )
+
+
+def _type_exact_equal(left: object, right: object) -> bool:
+    """``type(a) is type(b) and a == b``, recursively for tuples.
+
+    PE-1 Sec. 20.3 item 3: ``True`` never stands in for ``1``, ``1`` never for
+    ``True``, ``False`` never for ``0``, and a ``str``/``tuple`` subclass never
+    for the exact type -- at ANY depth of a bound field. ``==`` is reached only
+    after both sides are known to be the same exact type.
+    """
+    if type(left) is not type(right):
+        return False
+    if type(left) is tuple:
+        if len(left) != len(right):
+            return False
+        return all(_type_exact_equal(a, b) for a, b in zip(left, right))
+    return left == right
+
+
+def _bound_fields_equal(left: tuple, right: tuple) -> bool:
+    """The ONE object/record comparison: element-wise, type-exact."""
+    return _type_exact_equal(left, right)
 
 
 def _verify_sealed_decision(decision: CFG1StageClosureDecision, authority) -> None:
@@ -151,7 +200,7 @@ def _verify_sealed_decision(decision: CFG1StageClosureDecision, authority) -> No
     record = _STAGE_DECISION_SEALED.get(decision.decision_nonce)
     if record is None:
         raise Cfg1StageDecisionError("UNKNOWN_DECISION_NONCE")
-    if _bound_fields(decision) != _bound_fields(record):
+    if not _bound_fields_equal(_bound_fields(decision), _bound_fields(record)):
         raise Cfg1StageDecisionError("DECISION_FIELD_MISMATCH")
     if decision.authority_mint_nonce != authority.mint_nonce:
         raise Cfg1StageDecisionError("DECISION_AUTHORITY_MISMATCH")

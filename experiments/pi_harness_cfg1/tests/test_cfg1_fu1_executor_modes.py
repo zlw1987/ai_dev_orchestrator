@@ -30,21 +30,21 @@ from cfg1_doubles import (
     FakeVerificationOutcome,
     FakeRouteObservation,
     build_doubled_ports,
-    seam_digests_all_match,
+    session_pi_profile_approved,
 )
 from cfg1_fu1_support import make_admission
 
 from pi_harness_cfg1 import obs1, run_executor, run_workspace
 from pi_harness_cfg1 import win_config_authority as win
 from pi_harness_cfg1.halt import _resolve_halt_reason_code
-from pi_harness_cfg1.records import _require_valid_cfg1_run_payload_v2, build_cfg1_run_payload
+from pi_harness_cfg1.records import _require_valid_cfg1_run_payload_v3, build_cfg1_run_payload
 from pi_harness_cfg1.run_executor import execute_cfg1_run
 
 NEEDLE = "9d3e-unexpected-needle"
 
 
 def _run(monkeypatch, git_executable, overrides=None):
-    seam_digests_all_match(monkeypatch)
+    session_pi_profile_approved(monkeypatch)
     ports, made = build_doubled_ports(git_executable=git_executable, overrides=overrides or {})
     return execute_cfg1_run(make_admission(), ports=ports), made
 
@@ -54,7 +54,7 @@ def _payload(outcome) -> dict:
         stage_id="S1", stage_execution_id="S1-X1", run_ordinal=1,
         observations=outcome.observations,
     )
-    _require_valid_cfg1_run_payload_v2(payload)  # on the serialized record ALONE
+    _require_valid_cfg1_run_payload_v3(payload)  # on the serialized record ALONE
     assert NEEDLE not in json.dumps(payload)
     assert NEEDLE not in json.dumps(list(outcome.console_codes))
     return payload
@@ -336,7 +336,7 @@ def test_t_every_executor_outcome_falls_into_exactly_one_mode(name, monkeypatch,
     # break the refusal iff, and each must be refused.
     def _refuses(mutated):
         with pytest.raises(Exception):
-            _require_valid_cfg1_run_payload_v2(mutated)
+            _require_valid_cfg1_run_payload_v3(mutated)
 
     if mode == "REFUSAL":
         mixed = dict(payload)

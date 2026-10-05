@@ -822,14 +822,14 @@ def test_t151_a_leaked_pin_degrades_the_durable_lifecycle_evidence_end_to_end(
     false``, it classifies ``INDETERMINATE_LIFECYCLE``, and the L27 failure is
     reported rather than suppressed.
     """
-    from cfg1_doubles import build_doubled_ports, seam_digests_all_match
+    from cfg1_doubles import build_doubled_ports, session_pi_profile_approved
     from pi_harness_cfg1.classification import classify_cfg1_run
     from pi_harness_cfg1.lifecycle import compute_lifecycle_closure
     from pi_harness_cfg1.run_contract import Cfg1RunAdmission
     from pi_harness_cfg1.run_executor import execute_cfg1_run
     from pi_harness_cfg1.schedule import _schedule_arm_for, _schedule_block_position
 
-    seam_digests_all_match(monkeypatch)
+    session_pi_profile_approved(monkeypatch)
 
     leaked: list[object] = []
     real_config = win.acquire_config_pin
@@ -857,6 +857,7 @@ def test_t151_a_leaked_pin_degrades_the_durable_lifecycle_evidence_end_to_end(
         block=block,
         position=position,
         run_id="a" * 32,
+        stage_pi_profile_id=None,
     )
     ports, made = build_doubled_ports(git_executable=git_executable)
     outcome = execute_cfg1_run(admission, ports=ports)
@@ -895,12 +896,12 @@ def test_t152_post_creation_partial_failures_mint_no_token_and_leave_residue_ins
     disk, models content not -- and that is what ``between_writes`` injects.
     ``before_issuance`` is row 8 verbatim.
     """
-    from cfg1_doubles import build_doubled_ports, seam_digests_all_match
+    from cfg1_doubles import build_doubled_ports, session_pi_profile_approved
     from pi_harness_cfg1.run_contract import Cfg1RunAdmission
     from pi_harness_cfg1.run_executor import execute_cfg1_run
     from pi_harness_cfg1.schedule import _schedule_arm_for, _schedule_block_position
 
-    seam_digests_all_match(monkeypatch)
+    session_pi_profile_approved(monkeypatch)
 
     if point == "between_writes":
         real_write = win.write_child_text
@@ -932,6 +933,7 @@ def test_t152_post_creation_partial_failures_mint_no_token_and_leave_residue_ins
         block=block,
         position=position,
         run_id="b" * 32,
+        stage_pi_profile_id=None,
     )
     ports, made = build_doubled_ports(git_executable=git_executable)
 
@@ -1257,12 +1259,12 @@ def test_t155_a_replacement_is_not_a_failure_but_a_failed_scrub_skips_l26(
     ``LIFECYCLE_UNPROVEN``, fails closure at L24, and classifies
     ``INDETERMINATE_LIFECYCLE`` -- Sec. 18 row 9's disposition.
     """
-    from cfg1_doubles import build_doubled_ports, seam_digests_all_match
+    from cfg1_doubles import build_doubled_ports, session_pi_profile_approved
     from pi_harness_cfg1.classification import classify_cfg1_run
     from pi_harness_cfg1.lifecycle import compute_lifecycle_closure
     from pi_harness_cfg1.run_executor import execute_cfg1_run
 
-    seam_digests_all_match(monkeypatch)
+    session_pi_profile_approved(monkeypatch)
     real_write_config = cfg1_pi_config.write_cfg1_pi_config
 
     def _write_config(handle, *, arm_id, base_url):

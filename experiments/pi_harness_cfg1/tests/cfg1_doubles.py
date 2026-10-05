@@ -22,31 +22,30 @@ SYNTHETIC_CREDENTIAL = "cfg1-synthetic-key"
 
 
 # ---------------------------------------------------------------------------
-# FU1 (AMEND1 AMD-1): the static Pi identity proof runs its GENUINE leaves over
-# a SYNTHETIC on-disk Pi tree with a TEST-OWNED pin table. Nothing here is Node
-# or Pi: ``node.exe`` is an inert byte string that is never executed, ``pi.cmd``
-# is never read, and the 20 "seam" files are synthetic bytes whose digests the
-# test itself pins (Test AC's "test-owned pin table").
+# PE-2c: the static profile-aware proof runs its GENUINE leaves over a
+# SYNTHETIC on-disk Pi tree whose payload is approved by a SYNTHETIC sealed
+# HPP-1 snapshot (a genuine PE-2b load of a synthetic committed chain). Nothing
+# here is Node or Pi: ``node.exe`` is an inert byte string that is never
+# executed, ``pi.cmd`` is never read, and every payload file is synthetic. The
+# historical 20-entry pin table is never consulted by P.
 # ---------------------------------------------------------------------------
 
-import hashlib
 import os
 import tempfile
 
-from pi_harness_cfg1.preflight import PINNED_PI_SEAM_DIGESTS as _REAL_PINNED_TABLE
+from pe2a_support import synthetic_payload_files, write_tree
 
 SYNTHETIC_NODE_BYTES = b"synthetic node image -- never executed by the CFG1 suite\n"
 SYNTHETIC_PI_CMD_BYTES = b"@rem synthetic anchor -- never read, never executed\r\n"
 
 
-def synthetic_seam_bytes(relative: str) -> bytes:
-    """Deterministic synthetic bytes for one pinned seam key."""
-    return b"synthetic cfg1 seam file: " + relative.encode("ascii") + b"\n"
-
-
 @dataclass
 class SyntheticPiTree:
-    """One synthetic Pi installation on disk. Paths are real, bytes are not Pi."""
+    """One synthetic Pi installation on disk. Paths are real, bytes are not Pi.
+
+    ``payload`` is the PE-2b synthetic payload (PE-2a facts + committed policy
+    file bytes) of EXACTLY the tree written under ``package_root``.
+    """
 
     base: str
     node_dir: str
@@ -54,18 +53,41 @@ class SyntheticPiTree:
     node_exe: str
     pi_cmd: str
     package_root: str
-    pin_table: dict
+    files: dict
+    empty_dirs: tuple
+    payload: Any
 
     @property
     def path_value(self) -> str:
         return f"{self.node_dir};{self.npm_dir}"
 
+    @property
+    def profile_id(self) -> str:
+        return self.payload.profile_id
+
+    @property
+    def payload_fingerprint(self) -> str:
+        return self.payload.fingerprint
+
+    @property
+    def declared_package_version(self) -> str:
+        return self.payload.facts.declared_dict()["package_version"]
+
     def seam_path(self, relative: str) -> str:
         return os.path.join(self.package_root, *relative.split("/"))
 
 
-def build_synthetic_pi_tree(base: str) -> SyntheticPiTree:
-    """Create the synthetic tree under ``base`` (which must already exist)."""
+def build_synthetic_pi_tree(base: str, files: dict | None = None, empty_dirs=None) -> SyntheticPiTree:
+    """Create the synthetic tree under ``base`` (which must already exist).
+
+    Defaults to the PE-2a synthetic, approvable, exposure-free payload.
+    """
+    from pe2c_support import payload_for
+
+    if files is None:
+        files, default_dirs = synthetic_payload_files()
+        empty_dirs = default_dirs if empty_dirs is None else empty_dirs
+    empty_dirs = tuple(empty_dirs or ())
     node_dir = os.path.join(base, "nodejs")
     npm_dir = os.path.join(base, "npm")
     package_root = os.path.join(npm_dir, "node_modules", "@earendil-works", "pi-coding-agent")
@@ -77,14 +99,7 @@ def build_synthetic_pi_tree(base: str) -> SyntheticPiTree:
         handle.write(SYNTHETIC_NODE_BYTES)
     with open(pi_cmd, "wb") as handle:
         handle.write(SYNTHETIC_PI_CMD_BYTES)
-    table = {}
-    for relative in sorted(_REAL_PINNED_TABLE):
-        target = os.path.join(package_root, *relative.split("/"))
-        os.makedirs(os.path.dirname(target), exist_ok=True)
-        data = synthetic_seam_bytes(relative)
-        with open(target, "wb") as handle:
-            handle.write(data)
-        table[relative] = hashlib.sha256(data).hexdigest()
+    write_tree(Path(package_root), files, empty_dirs)
     return SyntheticPiTree(
         base=base,
         node_dir=node_dir,
@@ -92,7 +107,9 @@ def build_synthetic_pi_tree(base: str) -> SyntheticPiTree:
         node_exe=node_exe,
         pi_cmd=pi_cmd,
         package_root=package_root,
-        pin_table=table,
+        files=dict(files),
+        empty_dirs=empty_dirs,
+        payload=payload_for(files, empty_dirs),
     )
 
 
@@ -111,18 +128,22 @@ def session_synthetic_pi_tree() -> SyntheticPiTree:
         import atexit
         import shutil
 
-        base = tempfile.mkdtemp(prefix="cfg1_fu1_synthetic_pi_")
+        base = tempfile.mkdtemp(prefix="cfg1_pe2c_synthetic_pi_")
         atexit.register(shutil.rmtree, base, True)
         _SESSION_TREE = build_synthetic_pi_tree(base)
     return _SESSION_TREE
 
 
-def use_test_owned_pin_table(monkeypatch, table: dict) -> None:
-    """Point the static proof at a TEST-OWNED 20-entry pin table."""
-    from pi_harness_cfg1 import pi_identity
+def session_profile_id() -> str:
+    """The session synthetic tree's profile id (computed from its file map)."""
+    return session_synthetic_pi_tree().profile_id
 
-    assert len(table) == 20 and set(table) == set(_REAL_PINNED_TABLE)
-    monkeypatch.setattr(pi_identity, "PINNED_PI_SEAM_DIGESTS", dict(table))
+
+def approve_profiles(monkeypatch, *trees: SyntheticPiTree, retire=()) -> object:
+    """Install a synthetic sealed snapshot whose eligible set is ``trees``."""
+    from pe2c_support import install_synthetic_policy
+
+    return install_synthetic_policy(monkeypatch, *(tree.payload for tree in trees), retire=retire)
 
 
 @dataclass
@@ -406,18 +427,19 @@ def build_doubled_ports(
     return Cfg1RunPorts(**defaults), made
 
 
-def seam_digests_all_match(monkeypatch) -> None:
-    """Make the static seam proof pass for the doubled ports' synthetic tree.
+def session_pi_profile_approved(monkeypatch) -> None:
+    """Make the static profile-aware proof pass for the doubled ports' tree.
 
-    FU1: the proof itself is the GENUINE static P (and the genuine L14
-    re-proof); only its pin TABLE is test-owned, matching the synthetic tree's
-    synthetic bytes. Nothing executes: the tree's ``node.exe`` is never run.
+    PE-2c: the proof itself is the GENUINE profile-aware P (and the genuine
+    L14 re-proof and L21A procedure); only the sealed POLICY is synthetic --
+    a genuine PE-2b load of a synthetic chain approving exactly the session
+    tree's payload. Nothing executes: the tree's ``node.exe`` is never run.
     """
-    use_test_owned_pin_table(monkeypatch, session_synthetic_pi_tree().pin_table)
+    approve_profiles(monkeypatch, session_synthetic_pi_tree())
 
 
 class StaticIdentityShape:
-    """A TEST-ONLY object with exactly the five AMEND1 Sec. 10 attributes.
+    """A TEST-ONLY object with the six ``Cfg1PiIdentity`` attribute names.
 
     The genuine :class:`pi_harness_cfg1.pi_identity.Cfg1PiIdentity` can be
     produced only by a passing P; tests that exercise a port which merely
@@ -432,6 +454,7 @@ class StaticIdentityShape:
         "pi_package_root",
         "node_identity",
         "package_root_identity",
+        "matched_profile_id",
     )
 
     def __init__(
@@ -442,9 +465,11 @@ class StaticIdentityShape:
         pi_package_root: str = r"C:\cfg1-synthetic\pi",
         node_identity: tuple = (1, 2),
         package_root_identity: tuple = (1, 3),
+        matched_profile_id: str = "e" * 64,
     ) -> None:
         self.node_executable = node_executable
         self.pi_cli_js = pi_cli_js
         self.pi_package_root = pi_package_root
         self.node_identity = node_identity
         self.package_root_identity = package_root_identity
+        self.matched_profile_id = matched_profile_id

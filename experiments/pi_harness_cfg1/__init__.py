@@ -36,6 +36,22 @@ STAGE_CLOSURE_RECORD_VERSION = "pi-harness-cfg1-stage-closure.v1"
 RUN_RECORD_VERSION_V2 = "pi-harness-cfg1-run.v2"
 REFUSAL_RECORD_VERSION_V2 = "pi-harness-cfg1-refusal.v2"
 
+#: PE-2c (PE-1 Sec. 3, Sec. 19, Sec. 20): the HPP-1 profile-aware record
+#: family. The profile-aware runtime EMITS ONLY these three versions. The v1
+#: and v2 names above keep their historical meanings exactly and are reachable
+#: only through validation/verification of existing bytes. There is no
+#: ``pi-harness-cfg1-stage-closure.v2``: the stage-closure family skips from v1
+#: to v3 so that one suffix uniformly denotes "HPP-1 profile-aware".
+RUN_RECORD_VERSION_V3 = "pi-harness-cfg1-run.v3"
+REFUSAL_RECORD_VERSION_V3 = "pi-harness-cfg1-refusal.v3"
+STAGE_CLOSURE_RECORD_VERSION_V3 = "pi-harness-cfg1-stage-closure.v3"
+
+#: PE-1 Sec. 3 / Sec. 4.7 (B7): what the PROFILE-COVERED FACT covers, and the
+#: external runtime residual it does NOT identify. Exact string literals in
+#: EVERY v3 record -- successful ones included -- and never a boolean.
+PI_PROFILE_AUTHORITY_SCOPE = "PI_PACKAGE_PAYLOAD_AND_DECLARED_RESOLUTION_BOUNDARY"
+PI_EXTERNAL_RUNTIME_RESIDUAL = "NOT_IDENTIFIED_BY_PROFILE"
+
 RUN_RECORD_KIND = "harness configuration diagnostic run"
 REFUSAL_RECORD_KIND = "cfg1 artifact emission refusal"
 STAGE_CLOSURE_RECORD_KIND = "cfg1 stage closure"
@@ -65,7 +81,12 @@ __all__ = [
     "REFUSAL_RECORD_VERSION",
     "RUN_RECORD_VERSION_V2",
     "REFUSAL_RECORD_VERSION_V2",
+    "RUN_RECORD_VERSION_V3",
+    "REFUSAL_RECORD_VERSION_V3",
     "STAGE_CLOSURE_RECORD_VERSION",
+    "STAGE_CLOSURE_RECORD_VERSION_V3",
+    "PI_PROFILE_AUTHORITY_SCOPE",
+    "PI_EXTERNAL_RUNTIME_RESIDUAL",
     "RUN_RECORD_KIND",
     "REFUSAL_RECORD_KIND",
     "STAGE_CLOSURE_RECORD_KIND",

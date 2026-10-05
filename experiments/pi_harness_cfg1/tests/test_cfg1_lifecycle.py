@@ -25,7 +25,7 @@ from cfg1_doubles import (
     FakeVerificationOutcome,
     build_doubled_ports,
     probe_facts_for_arm,
-    seam_digests_all_match,
+    session_pi_profile_approved,
 )
 
 from pi_harness_cfg1 import run_workspace
@@ -45,12 +45,13 @@ def admission():
         block=block,
         position=position,
         run_id="a" * 32,
+        stage_pi_profile_id=None,
     )
 
 
 @pytest.fixture(autouse=True)
 def _seam_digests(monkeypatch):
-    seam_digests_all_match(monkeypatch)
+    session_pi_profile_approved(monkeypatch)
 
 
 def _run(admission, git_exe, **overrides):

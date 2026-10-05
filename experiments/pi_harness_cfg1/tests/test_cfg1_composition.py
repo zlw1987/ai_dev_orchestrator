@@ -488,9 +488,12 @@ def test_cfg1_emits_no_obs1_companion_artifact():
     from pi_harness_cfg1 import (
         REFUSAL_RECORD_VERSION,
         REFUSAL_RECORD_VERSION_V2,
+        REFUSAL_RECORD_VERSION_V3,
         RUN_RECORD_VERSION,
         RUN_RECORD_VERSION_V2,
+        RUN_RECORD_VERSION_V3,
         STAGE_CLOSURE_RECORD_VERSION,
+        STAGE_CLOSURE_RECORD_VERSION_V3,
     )
 
     for source_path in sorted(_PACKAGE_DIR.glob("*.py")):
@@ -506,6 +509,9 @@ def test_cfg1_emits_no_obs1_companion_artifact():
         RUN_RECORD_VERSION_V2,
         REFUSAL_RECORD_VERSION_V2,
         STAGE_CLOSURE_RECORD_VERSION,
+        RUN_RECORD_VERSION_V3,
+        REFUSAL_RECORD_VERSION_V3,
+        STAGE_CLOSURE_RECORD_VERSION_V3,
     }
     version_pattern = re.compile(r'"(pi-[a-z0-9-]+\.v\d+)"')
     for source_path in sorted(_PACKAGE_DIR.glob("*.py")):
@@ -699,7 +705,17 @@ def test_the_base_url_compat_classification_is_pure_and_never_retains_the_url():
 
 
 def test_the_pinned_pi_seam_digest_table_covers_both_deferred_files():
-    """The two pins the design deferred to the implementation phase."""
+    """The two pins the design deferred to the implementation phase.
+
+    PE-2c (PE-0 Sec. 11.2 / PE-1 C-17): the table is no longer runtime
+    identity authority. It is exactly the ``PI-SC1`` selector's path set and,
+    byte-for-byte, the genesis revision's one seam evidence record -- and P
+    never matches it.
+    """
+    from pi_harness_cfg1 import pi_identity
+    from pi_harness_cfg1 import pi_profile_policy_loader as loader
+    from pi_harness_cfg1.pi_payload import PI_SC1_ENTRY_COUNT, PI_SC1_PATHS
+
     assert "dist/modes/rpc/jsonl.js" in preflight.PINNED_PI_SEAM_DIGESTS
     assert (
         "node_modules/@earendil-works/pi-agent-core/dist/agent-loop.js"
@@ -709,6 +725,21 @@ def test_the_pinned_pi_seam_digest_table_covers_both_deferred_files():
     for relative, digest in preflight.PINNED_PI_SEAM_DIGESTS.items():
         assert re.fullmatch(r"[0-9a-f]{64}", digest), relative
         assert "\\" not in relative, relative
+    # PI-SC1 path-set equality ...
+    assert set(PI_SC1_PATHS) == set(preflight.PINNED_PI_SEAM_DIGESTS)
+    assert len(PI_SC1_PATHS) == PI_SC1_ENTRY_COUNT == 20
+    # ... genesis equality (the committed r0001, as loaded by the genuine
+    # loader at import) ...
+    genesis = (_PACKAGE_DIR / "pi_profile_policy" / "aps" / "aps.r0001.json").read_bytes()
+    record = json.loads(genesis)
+    assert record["revision"] == 1 and record["profiles"] == [] and record["approvals"] == []
+    assert [evidence["seam_digests"] for evidence in record["seam_evidence"]] == [
+        dict(preflight.PINNED_PI_SEAM_DIGESTS)
+    ]
+    assert loader._GENUINE_POLICY_LOAD.revisions[0][2] == frozenset()
+    # ... and the runtime proof never consults the table.
+    source = Path(pi_identity.__file__).read_text(encoding="utf-8")
+    assert "PINNED_PI_SEAM_DIGESTS" not in source
 
 
 def test_importing_the_cfg1_package_pulls_in_no_live_runtime_module():

@@ -56,12 +56,13 @@ from .records import (
     FINDING_SCRUB_NEEDLE_MATCH,
     FINDING_SIZE_BOUND_EXCEEDED,
     Cfg1RecordValidationError,
-    _require_valid_cfg1_refusal_payload_v2,
-    _require_valid_cfg1_run_payload_v2,
-    _require_valid_cfg1_stage_closure_payload,
+    _require_valid_cfg1_refusal_payload_v3,
+    _require_valid_cfg1_run_payload_v3,
+    _require_valid_cfg1_stage_closure_payload_v3,
     _run_record_filename,
     _stage_closure_record_filename,
     build_cfg1_refusal_payload,
+    build_cfg1_stage_closure_payload_v3,
 )
 from .schedule import ScheduleError, _schedule_arm_for, declared_ordinals
 from .stage_output import (
@@ -376,7 +377,7 @@ def emit_cfg1_run_record(
     try:
         canonical = _canonicalize(payload)  # step 4 -- the ONE walk
         # Step 5 -- `payload` is never read again from this line on.
-        _require_valid_cfg1_run_payload_v2(canonical)  # step 6 -- FU1: v2 only
+        _require_valid_cfg1_run_payload_v3(canonical)  # step 6 -- PE-2c: v3 only
         _bind_run_identity(canonical, authority, ordinal, arm_id)  # step 7
         _scrub(canonical, safety)  # step 8a
         artifact_bytes = _serialize_artifact(canonical)  # step 8b -- ONCE
@@ -521,7 +522,7 @@ def emit_cfg1_refusal_record(
 
     try:
         canonical = _canonicalize(refusal_payload)
-        _require_valid_cfg1_refusal_payload_v2(canonical)  # FU1: v2 only
+        _require_valid_cfg1_refusal_payload_v3(canonical)  # PE-2c: v3 only
         _bind_refusal_identity(canonical, authority, ordinal, arm_id)
         _scrub(canonical, safety)
         artifact_bytes = _serialize_artifact(canonical)
@@ -586,7 +587,12 @@ def emit_cfg1_stage_closure(
     ``halted_after_ordinal``, no ``halt_reason_code``, no ``record_filename``,
     no ``stage_id`` and no ``stage_execution_id`` -- internal self-consistency
     of a caller-supplied payload is not provenance that the payload equals the
-    decision L30 actually reached.
+    decision L30 actually reached. PE-2c (PE-1 Sec. 20.3, B11) adds NO
+    parameter either: no ``profile_id``, ``ordinal_profile_binding``,
+    ``profile_attribution_halt``, ``aps_head``, ``declared_version`` and no
+    ``**kwargs``. The three stage profile facts come only from the
+    re-verified sealed decision; the contract literals, head, B7 literals and
+    the stage declared version only from the module-level sealed snapshot.
 
     The scrub runs against an explicit "nothing to declare" safety context: a
     stage-closure record carries only closed literals, schedule-sized ordinal
@@ -626,25 +632,16 @@ def emit_cfg1_stage_closure(
     _revoke_decision_consumability(decision)
 
     try:
-        # Step 5 -- built internally from `authority` and the immutable,
-        # already-re-verified `decision`. Nothing untrusted was ever accepted,
-        # so there is no analogue of steps 3-4's canonicalization here.
-        canonical = {
-            "experiment": _stage_closure_header()[0],
-            "record_version": _stage_closure_header()[1],
-            "record_kind": _stage_closure_header()[2],
-            "stage_id": authority.stage_id,
-            "stage_execution_id": authority.stage_execution_id,
-            "record_filename": _stage_closure_record_filename(authority.stage_id),
-            "ordinal_status": {
-                str(ordinal): status for ordinal, status in decision.ordinal_status
-            },
-            "halted_after_ordinal": decision.halted_after_ordinal,
-            "halt_reason_code": decision.halt_reason_code,
-        }
-        # Step 6 -- the same dispatched validator, unchanged, for the same
-        # reason every writer runs one: a final, independent structural check.
-        _require_valid_cfg1_stage_closure_payload(canonical)
+        # Step 5 -- the canonical v3 payload, built internally AFTER steps
+        # 1-4a, from `authority`, the immutable, already-re-verified
+        # `decision` (stage-dependent fields) and frozen literals plus the
+        # module-level sealed HPP-1 snapshot (policy-derived fields, including
+        # the design-B stage declared version). Nothing untrusted was ever
+        # accepted, so there is no analogue of steps 3-4's canonicalization.
+        canonical = _build_stage_closure_payload(authority, decision)
+        # Step 6 -- the v3 validator, for the same reason every writer runs
+        # one: a final, independent structural check.
+        _require_valid_cfg1_stage_closure_payload_v3(canonical)
         # Step 7 holds by construction (canonical was built FROM authority);
         # re-asserted defensively, exactly as every other writer does.
         if (
@@ -681,14 +678,16 @@ def emit_cfg1_stage_closure(
     )
 
 
-def _stage_closure_header() -> tuple[str, str, str]:
-    from . import (
-        PACKAGE_ID,
-        STAGE_CLOSURE_RECORD_KIND,
-        STAGE_CLOSURE_RECORD_VERSION,
-    )
+def _build_stage_closure_payload(authority: CFG1StageOutputAuthority, decision) -> dict:
+    """Step 5's ONE construction seam (named, so an ordering regression can spy).
 
-    return PACKAGE_ID, STAGE_CLOSURE_RECORD_VERSION, STAGE_CLOSURE_RECORD_KIND
+    Reached only from :func:`emit_cfg1_stage_closure` after authority
+    re-proof, the exact decision type gate, ``_verify_sealed_decision`` and
+    consumability revocation. Takes no profile, head, binding, flag or
+    version from anywhere but the re-verified decision and the sealed
+    snapshot.
+    """
+    return build_cfg1_stage_closure_payload_v3(authority=authority, decision=decision)
 
 
 __all__ = [

@@ -27,6 +27,16 @@ class Cfg1RunAdmission:
     ``run_id`` is a fresh 128-bit nonce, minted per run and never persisted,
     never recorded, and never rendered -- it correlates in-memory ownership
     claims, and is on Sec. 21.2's forbidden-everywhere list for every sink.
+
+    ``stage_pi_profile_id`` (PE-1 Sec. 14.1, PE-2c) is exactly ``None`` for
+    the stage execution's first ordinal and, for every later ordinal, the
+    exact 64-hex profile id the runner-local profile ledger fixed from ordinal
+    1's in-memory L1 outcome. It is a NARROWING CONSTRAINT, never an authority:
+    L1 still runs P from scratch against the sealed snapshot and refuses a
+    different profile. It carries the stage profile TO the executor and never
+    back -- nothing reads it to fill any ledger or record. Its shape is NOT
+    validated here: L1 validates it first and refuses a malformed value as
+    ``UNEXPECTED_STEP_FAILURE`` with nothing of P's family committed.
     """
 
     stage_id: str
@@ -36,6 +46,7 @@ class Cfg1RunAdmission:
     block: int
     position: int
     run_id: str = field(repr=False)
+    stage_pi_profile_id: str | None = field(repr=False)
 
     def __repr__(self) -> str:  # noqa: D105 - run_id is never rendered
         return (
@@ -49,7 +60,7 @@ class Cfg1RunAdmission:
 class Cfg1RunOutcome:
     """One run's L28-finalized facts, as immutable plain data.
 
-    ``observations`` carries exactly ``records.CFG1_RUN_OBSERVATION_KEYS_V2`` --
+    ``observations`` carries exactly ``records.CFG1_RUN_OBSERVATION_KEYS_V3`` --
     no live object of any kind (no supervisor, activity, broker, ``RunState``,
     ``Popen``, handle, ``Path`` or authority), because the record is sealed
     only after every lifecycle outcome is known and must never hold a reference

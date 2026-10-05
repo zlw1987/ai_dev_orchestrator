@@ -892,12 +892,21 @@ def test_the_genuine_enumerator_lists_through_one_handle_and_honours_its_budget(
 
 
 def test_the_historical_p_leaves_are_unchanged_objects():
-    """X-1 adds functions; P's two leaves keep their exact result types."""
+    """X-1 adds functions; the historical leaves keep their exact result types.
+
+    PE-2c (PE-1 Sec. 11.2) then rebinds P's ``read_digest`` slot to the
+    one-handle PAYLOAD reader (classification, exact byte count, SHA-256,
+    within-bound, size stability) and adds the ``enumerate_directory`` slot.
+    The historical seam reader and its result type remain unchanged objects
+    in ``pi_fs_leaves``; P no longer consumes them.
+    """
     from pi_harness_cfg1.pi_identity import genuine_pi_proof_leaves
 
     leaves = genuine_pi_proof_leaves()
     assert leaves.inspect is pi_fs_leaves.inspect_no_follow
-    assert leaves.read_digest is pi_fs_leaves.read_bounded_digest
+    assert leaves.read_digest is pi_fs_leaves.read_payload_file_digest
+    assert leaves.enumerate_directory is pi_fs_leaves.enumerate_directory_no_follow
+    assert callable(pi_fs_leaves.read_bounded_digest)
     assert pi_fs_leaves.BoundedSeamRead.__slots__ == ("classification", "within_bound", "sha256")
 
 

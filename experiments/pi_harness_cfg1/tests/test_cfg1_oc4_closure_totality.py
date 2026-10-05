@@ -31,7 +31,7 @@ from cfg1_doubles import (
     FakeSupervisor,
     FakeVerificationOutcome,
     build_doubled_ports,
-    seam_digests_all_match,
+    session_pi_profile_approved,
 )
 from cfg1_fu1_support import make_admission
 
@@ -43,7 +43,7 @@ from pi_harness_cfg1 import (
     stage_runner,
 )
 from pi_harness_cfg1.lifecycle import compute_lifecycle_closure_v2
-from pi_harness_cfg1.records import _require_valid_cfg1_run_payload_v2, build_cfg1_run_payload
+from pi_harness_cfg1.records import _require_valid_cfg1_run_payload_v3, build_cfg1_run_payload
 from pi_harness_cfg1.run_contract import Cfg1RunOutcome
 from pi_harness_cfg1.run_executor import execute_cfg1_run
 
@@ -312,7 +312,7 @@ def drive(
     ``("after", None)`` -> call the real function, then raise; any other value
     is returned in place of the real function's result.
     """
-    seam_digests_all_match(monkeypatch)
+    session_pi_profile_approved(monkeypatch)
     calls: list[str] = []
     sup_script = dict(sup or {})
     broker_script = dict(broker or {})
@@ -450,7 +450,7 @@ def payload_of(run: Run) -> dict:
     payload = build_cfg1_run_payload(
         stage_id="S1", stage_execution_id="S1-X1", run_ordinal=1, observations=run.obs
     )
-    _require_valid_cfg1_run_payload_v2(payload)
+    _require_valid_cfg1_run_payload_v3(payload)
     assert MARKER not in json.dumps(payload)
     return payload
 
@@ -954,7 +954,7 @@ def test_l24_a_token_accessor_that_raises_is_an_unproven_scrub_not_an_escape(
         def issuance_token(self):
             raise RuntimeError(MARKER)
 
-    seam_digests_all_match(monkeypatch)
+    session_pi_profile_approved(monkeypatch)
     calls: list[str] = []
     state = run_executor._RunState()
     ports, made = build_doubled_ports(git_executable=git_executable)
@@ -991,7 +991,7 @@ def test_l24_a_hostile_token_accessor_in_the_full_ladder_leaves_every_later_step
         def __getattr__(self, name):
             return getattr(self._real, name)
 
-    seam_digests_all_match(monkeypatch)
+    session_pi_profile_approved(monkeypatch)
 
     original = run_executor._closure_l24_scrubs
 
@@ -1498,6 +1498,7 @@ _CLOSURE_STEP_NAMES = (
     "_closure_l24_scrubs",
     "_scrub_generated_config",
     "_scrub_extension_binding",
+    "_closure_l21a_pi_profile_reobservation",
     "_closure_l25_git_observation_1",
     "_closure_l26_project_verification",
     "_closure_l26_verification",
@@ -1565,11 +1566,13 @@ def test_x3_the_closure_phase_is_an_unguarded_pure_sequencer_and_is_not_laundere
         for node in ast.walk(closure_phase)
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
     ]
+    # PE-1 Sec. 18: L21A sits after L24 and before L25.
     assert called == [
         "_closure_l21_runtime",
         "_closure_l22_broker_counts",
         "_closure_l23_broker_shutdown",
         "_closure_l24_scrubs",
+        "_closure_l21a_pi_profile_reobservation",
         "_closure_l25_git_observation_1",
         "_closure_l26_verification",
         "_closure_l27_workspace",
@@ -1720,13 +1723,26 @@ def test_x3_a_closure_step_reads_no_process_outside_the_one_helper():
 
 
 def test_x3_the_durable_schema_did_not_grow():
-    """[8] No new observation key, record version, record kind or halt code."""
+    """[8] OC-4 added no observation key, record version, record kind or halt code.
+
+    PE-2c then grew the schema ONLY by the PE-1-authorized v3 profile family
+    (Sec. 19) and the one v3 halt code (Sec. 17.3): the executor's observation
+    set is exactly the v3 set, which is the v2 set minus the seam bool plus the
+    four profile observations, and still carries nothing OC-4 forbade.
+    """
     from pi_harness_cfg1 import halt, records
 
-    keys = set(records.CFG1_RUN_OBSERVATION_KEYS_V2)
+    keys = set(records.CFG1_RUN_OBSERVATION_KEYS_V3)
     assert set(run_executor._initial_observations()) == keys
+    assert keys == (set(records.CFG1_RUN_OBSERVATION_KEYS_V2) - {"pi_seam_digests_match"}) | {
+        "pi_payload_observation_complete",
+        "pi_profile_id",
+        "pi_profile_declared_package_version",
+        "pi_profile_post_runtime_reobservation",
+    }
     assert not any("launch" in key or "closure" in key or "cleanup_error" in key for key in keys)
     assert len(halt.HALT_REASON_CODES) == 6
+    assert len(halt.HALT_REASON_CODES_V3) == 7
 
 
 # ---------------------------------------------------------------------------
@@ -1755,7 +1771,7 @@ def test_stage_1_an_in_domain_closure_fault_ends_in_an_emitted_record_and_a_life
     git_executable, monkeypatch, make_authority
 ):
     """[32]"""
-    seam_digests_all_match(monkeypatch)
+    session_pi_profile_approved(monkeypatch)
     authority = make_authority("S1-X1")
     executor, made, calls = _stage_executor(git_executable, sup={"shutdown": None})
     result = stage_runner._run_cfg1_stage_with_injected_executor(authority, run_executor=executor)
@@ -1776,7 +1792,7 @@ def test_stage_2_a_surviving_registry_entry_is_not_admitted_past_the_ordinal(
     git_executable, monkeypatch, make_authority
 ):
     """[33]"""
-    seam_digests_all_match(monkeypatch)
+    session_pi_profile_approved(monkeypatch)
     authority = make_authority("S1-X1")
     executor, made, calls = _stage_executor(git_executable)
 
@@ -1812,7 +1828,7 @@ def test_stage_3_a_base_exception_from_a_closure_port_is_not_converted_into_an_o
     class Interrupt(KeyboardInterrupt):
         pass
 
-    seam_digests_all_match(monkeypatch)
+    session_pi_profile_approved(monkeypatch)
     authority = make_authority("S1-X1")
 
     class InterruptingSupervisor(RecSupervisor):
@@ -1838,7 +1854,7 @@ def test_stage_4_an_implementation_defect_outside_every_region_still_surfaces_as
     git_executable, monkeypatch, make_authority
 ):
     """I-8: nothing launders an out-of-domain raise into ordinary evidence."""
-    seam_digests_all_match(monkeypatch)
+    session_pi_profile_approved(monkeypatch)
     authority = make_authority("S1-X1")
     executor, made, calls = _stage_executor(git_executable)
 

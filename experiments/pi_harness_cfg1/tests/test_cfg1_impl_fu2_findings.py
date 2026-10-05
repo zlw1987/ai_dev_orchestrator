@@ -125,6 +125,7 @@ def test_f1_genuine_token_plus_genuine_original_callable_positive_control(monkey
         block=block,
         position=position,
         run_id="a" * 32,
+        stage_pi_profile_id=None,
     )
     outcome = genuine.invoke(admission)
     assert outcome.observations["lifecycle_all_closed"] is True
@@ -278,7 +279,7 @@ def test_f2_l24_scrub_ignores_a_substituted_models_path_and_never_touches_it(
     from pi_harness_cfg1.cfg1_pi_config import write_cfg1_pi_config
     from pi_harness_cfg1.run_executor import execute_cfg1_run
 
-    from cfg1_doubles import seam_digests_all_match
+    from cfg1_doubles import session_pi_profile_approved
 
     foreign_target = tmp_path / "innocent_bystander.json"
     foreign_target.write_text('{"do": "not delete me"}', encoding="utf-8")
@@ -295,7 +296,7 @@ def test_f2_l24_scrub_ignores_a_substituted_models_path_and_never_touches_it(
         overrides={"write_config": _write_config_then_forge},
     )
 
-    seam_digests_all_match(monkeypatch)
+    session_pi_profile_approved(monkeypatch)
     block, position = _schedule_block_position("S1", 1)
     admission = Cfg1RunAdmission(
         stage_id="S1",
@@ -305,6 +306,7 @@ def test_f2_l24_scrub_ignores_a_substituted_models_path_and_never_touches_it(
         block=block,
         position=position,
         run_id="b" * 32,
+        stage_pi_profile_id=None,
     )
     outcome = execute_cfg1_run(admission, ports=ports)
 
@@ -348,10 +350,10 @@ def test_f3_malformed_pending_unreaped_never_reads_as_proven_zero_end_to_end(
     let ``broker_pending_unreaped_zero`` read True -- exactly mirroring the
     RAW value the fixed adapter now passes through unlaundered.
     """
-    from cfg1_doubles import seam_digests_all_match
+    from cfg1_doubles import session_pi_profile_approved
     from pi_harness_cfg1.run_executor import execute_cfg1_run
 
-    seam_digests_all_match(monkeypatch)
+    session_pi_profile_approved(monkeypatch)
 
     class _MalformedPendingBroker(FakeBroker):
         def __init__(self):
@@ -367,6 +369,7 @@ def test_f3_malformed_pending_unreaped_never_reads_as_proven_zero_end_to_end(
         block=block,
         position=position,
         run_id="c" * 32,
+        stage_pi_profile_id=None,
     )
     ports, _made = build_doubled_ports(
         git_executable=git_executable,
@@ -387,10 +390,10 @@ def test_f3_malformed_broker_activity_count_forces_activity_unavailable(
     ``broker_recorded_activity_available`` False -- the manufactured-zero
     laundering this finding targets would otherwise leave it True.
     """
-    from cfg1_doubles import seam_digests_all_match
+    from cfg1_doubles import session_pi_profile_approved
     from pi_harness_cfg1.run_executor import execute_cfg1_run
 
-    seam_digests_all_match(monkeypatch)
+    session_pi_profile_approved(monkeypatch)
 
     class _MalformedActivityBroker(FakeBroker):
         def diagnostics_counts(self) -> dict:
@@ -407,6 +410,7 @@ def test_f3_malformed_broker_activity_count_forces_activity_unavailable(
         block=block,
         position=position,
         run_id="e" * 32,
+        stage_pi_profile_id=None,
     )
     ports, _made = build_doubled_ports(
         git_executable=git_executable,
@@ -447,10 +451,10 @@ def test_f3_malformed_workspace_residual_count_never_allows_lifecycle_closure(
     (with ``removed=True``, the otherwise-fully-closing case) must never let
     L27 -- and therefore ``lifecycle_all_closed`` -- read as proven closed.
     """
-    from cfg1_doubles import seam_digests_all_match
+    from cfg1_doubles import session_pi_profile_approved
     from pi_harness_cfg1.run_executor import execute_cfg1_run
 
-    seam_digests_all_match(monkeypatch)
+    session_pi_profile_approved(monkeypatch)
 
     real_remove = run_workspace.remove_cfg1_run_workspace
 
@@ -469,6 +473,7 @@ def test_f3_malformed_workspace_residual_count_never_allows_lifecycle_closure(
         block=block,
         position=position,
         run_id="f" * 32,
+        stage_pi_profile_id=None,
     )
     ports, _made = build_doubled_ports(git_executable=git_executable)
     outcome = execute_cfg1_run(admission, ports=ports)
@@ -479,10 +484,10 @@ def test_f3_malformed_workspace_residual_count_never_allows_lifecycle_closure(
 
 def test_f3_genuine_zero_residual_and_removed_true_still_closes_l27(git_executable, monkeypatch):
     """Positive control: an ACTUAL exact ``0`` with ``removed=True`` still closes."""
-    from cfg1_doubles import seam_digests_all_match
+    from cfg1_doubles import session_pi_profile_approved
     from pi_harness_cfg1.run_executor import execute_cfg1_run
 
-    seam_digests_all_match(monkeypatch)
+    session_pi_profile_approved(monkeypatch)
 
     block, position = _schedule_block_position("S1", 1)
     admission = Cfg1RunAdmission(
@@ -493,6 +498,7 @@ def test_f3_genuine_zero_residual_and_removed_true_still_closes_l27(git_executab
         block=block,
         position=position,
         run_id="1" * 32,
+        stage_pi_profile_id=None,
     )
     ports, _made = build_doubled_ports(git_executable=git_executable)
     outcome = execute_cfg1_run(admission, ports=ports)
@@ -508,10 +514,10 @@ def test_f3_malformed_auto_retry_count_cannot_be_laundered_to_zero(
     ``INDETERMINATE_PROVIDER`` -- never let it silently read as "0 retries"
     and fall through to a determinate classification.
     """
-    from cfg1_doubles import FakeSupervisor, seam_digests_all_match
+    from cfg1_doubles import FakeSupervisor, session_pi_profile_approved
     from pi_harness_cfg1.run_executor import execute_cfg1_run
 
-    seam_digests_all_match(monkeypatch)
+    session_pi_profile_approved(monkeypatch)
 
     def _build_supervisor(**_kwargs):
         supervisor = FakeSupervisor()
@@ -527,6 +533,7 @@ def test_f3_malformed_auto_retry_count_cannot_be_laundered_to_zero(
         block=block,
         position=position,
         run_id="2" * 32,
+        stage_pi_profile_id=None,
     )
     ports, _made = build_doubled_ports(
         git_executable=git_executable,
@@ -550,10 +557,10 @@ def test_f3_malformed_verification_counts_never_strengthen_a_passing_claim(
     """
     from dataclasses import dataclass, field as _field
 
-    from cfg1_doubles import seam_digests_all_match
+    from cfg1_doubles import session_pi_profile_approved
     from pi_harness_cfg1.run_executor import execute_cfg1_run
 
-    seam_digests_all_match(monkeypatch)
+    session_pi_profile_approved(monkeypatch)
 
     @dataclass
     class _SeededFailureBaseline:
@@ -599,6 +606,7 @@ def test_f3_malformed_verification_counts_never_strengthen_a_passing_claim(
         block=block,
         position=position,
         run_id="3" * 32,
+        stage_pi_profile_id=None,
     )
     ports, _made = build_doubled_ports(
         git_executable=git_executable,
@@ -617,10 +625,10 @@ def test_f3_genuine_passing_verification_with_exact_counts_still_passes(
     """
     from dataclasses import dataclass, field as _field
 
-    from cfg1_doubles import seam_digests_all_match
+    from cfg1_doubles import session_pi_profile_approved
     from pi_harness_cfg1.run_executor import execute_cfg1_run
 
-    seam_digests_all_match(monkeypatch)
+    session_pi_profile_approved(monkeypatch)
 
     @dataclass
     class _SeededFailureBaseline:
@@ -659,6 +667,7 @@ def test_f3_genuine_passing_verification_with_exact_counts_still_passes(
         block=block,
         position=position,
         run_id="4" * 32,
+        stage_pi_profile_id=None,
     )
     ports, _made = build_doubled_ports(
         git_executable=git_executable,

@@ -153,6 +153,9 @@ def test_t103_direct_construction_with_an_unregistered_nonce_is_refused(
             ordinal_status=tuple((k, "RECORD_EMITTED") for k in range(1, 10)),
             halted_after_ordinal=None,
             halt_reason_code=None,
+            stage_pi_profile_id="a" * 64,
+            ordinal_pi_profile_binding=tuple((k, "STAGE_PROFILE") for k in range(1, 10)),
+            pi_profile_attribution_halt=False,
         )
     assert excinfo.value.reason_code == "UNKNOWN_DECISION_NONCE"
     assert filesystem_spy.total_mutations == baseline
@@ -388,6 +391,9 @@ def test_t110_no_avenue_yields_an_alternate_fact_closure_record(
                 ordinal_status=alternate_status,
                 halted_after_ordinal=4,
                 halt_reason_code="PRE_DISPATCH_REFUSAL",
+                stage_pi_profile_id=decision.stage_pi_profile_id,
+                ordinal_pi_profile_binding=decision.ordinal_pi_profile_binding,
+                pi_profile_attribution_halt=False,
             )
         attempts.append("direct_construction")
 
@@ -693,14 +699,14 @@ def test_t127_and_t128_the_final_ordinal_succeeding_seals_success_and_issues_no_
     assert decision.halted_after_ordinal is None
     assert decision.halt_reason_code is None
     # (3) the closure was emitted exactly once and is schema-valid on disk.
-    from pi_harness_cfg1.records import _require_valid_cfg1_stage_closure_payload
+    from pi_harness_cfg1.records import _require_valid_cfg1_stage_closure_payload_v3
 
     written = json.loads(
         Path(authority.execution_directory, f"{stage_id}_stage_closure.json").read_text(
             encoding="utf-8"
         )
     )
-    _require_valid_cfg1_stage_closure_payload(written)
+    _require_valid_cfg1_stage_closure_payload_v3(written)
     # (4) retirement happened AFTER that emission was confirmed.
     assert result.stage_closure_confirmed is True
     assert stage_output_authority_is_active(authority) is False

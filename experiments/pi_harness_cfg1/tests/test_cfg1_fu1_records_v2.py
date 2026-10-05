@@ -15,12 +15,21 @@ import json
 from pathlib import Path
 
 import pytest
-from cfg1_builders import a3_shaped_v1_payload, happy_observations, refusal_payload, v1_run_payload
+from cfg1_builders import (
+    a3_shaped_v1_payload,
+    happy_observations,
+    happy_observations_v2,
+    v1_run_payload,
+    v2_refusal_payload,
+    v2_run_payload,
+)
 
 from pi_harness_cfg1 import binding, lifecycle, records, writers
 from pi_harness_cfg1.arms import ARM_SHAPE
 from pi_harness_cfg1.lifecycle import compute_lifecycle_closure, compute_lifecycle_closure_v2
-from pi_harness_cfg1.pi_identity import PI_IDENTITY_FAILURE_CODES
+# PE-2c: the v2 HISTORICAL three-code vocabulary now lives beside the v2
+# validator that consumes it (the profile-aware P has its own five codes).
+from pi_harness_cfg1.records import PI_IDENTITY_FAILURE_CODES
 from pi_harness_cfg1.records import (
     Cfg1RecordValidationError,
     _require_valid_cfg1_refusal_payload,
@@ -42,15 +51,13 @@ DELETED_R6_CODES = (
 
 
 def _v2(**overrides) -> dict:
-    """A v2 payload from happy observations plus overrides, lifecycle recomputed."""
-    observations = happy_observations(runtime_reported_compat_shape=ARM_SHAPE["Q"])
+    """An archived-shape v2 payload (built by hand: production emits v3 only)."""
+    observations = happy_observations_v2(runtime_reported_compat_shape=ARM_SHAPE["Q"])
     observations.update(overrides)
     closed, steps = compute_lifecycle_closure_v2(observations)
     observations["lifecycle_all_closed"] = closed
     observations["lifecycle_failure_steps"] = list(steps)
-    return build_cfg1_run_payload(
-        stage_id="S1", stage_execution_id="S1-X1", run_ordinal=1, observations=observations
-    )
+    return v2_run_payload(observations=observations)
 
 
 #: Everything an L1 refusal leaves at its fail-closed initial value.
@@ -136,7 +143,7 @@ def _refuses(payload, reason: str | None = None) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_the_builder_emits_exactly_v2_and_every_mode_validates():
+def test_an_archived_v2_shape_still_validates_in_every_mode():
     clean = _v2()
     assert clean["record_version"] == "pi-harness-cfg1-run.v2"
     assert "pi_observed_version" not in clean
@@ -158,7 +165,7 @@ def test_the_builder_emits_exactly_v2_and_every_mode_validates():
 
 
 def test_the_v2_refusal_record_names_run_v2_and_refusal_v1_is_unchanged():
-    payload = refusal_payload()
+    payload = v2_refusal_payload()
     assert payload["record_version"] == "pi-harness-cfg1-refusal.v2"
     assert payload["refused_record_kind"] == "pi-harness-cfg1-run.v2"
     _require_valid_cfg1_refusal_payload_v2(payload)

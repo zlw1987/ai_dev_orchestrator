@@ -278,6 +278,9 @@ def test_t139_no_code_path_can_construct_a_decision_for_the_orphaned_entry(
             ordinal_status=record.ordinal_status,
             halted_after_ordinal=record.halted_after_ordinal,
             halt_reason_code=record.halt_reason_code,
+            stage_pi_profile_id=record.stage_pi_profile_id,
+            ordinal_pi_profile_binding=record.ordinal_pi_profile_binding,
+            pi_profile_attribution_halt=record.pi_profile_attribution_halt,
         )
     assert excinfo.value.reason_code == "UNKNOWN_DECISION_NONCE"
 

@@ -15,9 +15,9 @@ from pathlib import Path
 
 from cfg1_doubles import (
     SyntheticPiTree,
+    approve_profiles,
     build_doubled_ports,
     build_synthetic_pi_tree,
-    use_test_owned_pin_table,
 )
 
 from pi_harness_cfg1 import pi_fs_leaves
@@ -26,8 +26,22 @@ from pi_harness_cfg1.pi_identity import PiProofLeaves, genuine_pi_proof_leaves
 from pi_harness_cfg1.run_contract import Cfg1RunAdmission
 from pi_harness_cfg1.schedule import _schedule_arm_for, _schedule_block_position
 
+_UNSET = object()
 
-def make_admission(run_ordinal: int = 1, *, run_id: str = "f" * 32) -> Cfg1RunAdmission:
+
+def make_admission(
+    run_ordinal: int = 1, *, run_id: str = "f" * 32, stage_pi_profile_id=_UNSET
+) -> Cfg1RunAdmission:
+    """An admission shaped exactly as the runner builds one.
+
+    ``stage_pi_profile_id`` defaults to ``None`` for ordinal 1 and, for a later
+    ordinal, to the session synthetic tree's profile id (where the runner's
+    profile ledger would carry ordinal 1's fixed stage profile).
+    """
+    from cfg1_doubles import session_profile_id
+
+    if stage_pi_profile_id is _UNSET:
+        stage_pi_profile_id = None if run_ordinal == 1 else session_profile_id()
     block, position = _schedule_block_position("S1", run_ordinal)
     return Cfg1RunAdmission(
         stage_id="S1",
@@ -37,13 +51,20 @@ def make_admission(run_ordinal: int = 1, *, run_id: str = "f" * 32) -> Cfg1RunAd
         block=block,
         position=position,
         run_id=run_id,
+        stage_pi_profile_id=stage_pi_profile_id,
     )
 
 
-def make_pi_world(tmp_path: Path, monkeypatch, name: str = "pi_world") -> SyntheticPiTree:
-    """A fresh synthetic Pi tree under ``tmp_path`` with its OWN pin table."""
-    tree = build_synthetic_pi_tree(str(tmp_path / name))
-    use_test_owned_pin_table(monkeypatch, tree.pin_table)
+def make_pi_world(
+    tmp_path: Path, monkeypatch, name: str = "pi_world", *, files=None, empty_dirs=None
+) -> SyntheticPiTree:
+    """A fresh synthetic Pi tree under ``tmp_path`` whose payload is APPROVED.
+
+    The sealed snapshot is a genuine PE-2b load of a synthetic chain whose
+    ONLY eligible profile is this tree's payload.
+    """
+    tree = build_synthetic_pi_tree(str(tmp_path / name), files, empty_dirs)
+    approve_profiles(monkeypatch, tree)
     return tree
 
 
@@ -134,8 +155,10 @@ AMBIENT_DECOYS = {
 class LeafRecorder:
     """Wraps the GENUINE leaves, recording every call in one ordered log.
 
-    ``hook`` (optional) is called as ``hook(kind, path, log)`` BEFORE the
-    genuine leaf runs; it may mutate the filesystem or raise.
+    Kinds: ``inspect`` (no-follow inspection), ``digest`` (the one-handle
+    payload-file reader) and ``enumerate`` (the no-follow directory
+    enumerator). ``hook`` (optional) is called as ``hook(kind, path, log)``
+    BEFORE the genuine leaf runs; it may mutate the filesystem or raise.
     """
 
     def __init__(self, *, hook=None, log: list | None = None) -> None:
@@ -152,28 +175,40 @@ class LeafRecorder:
         if self.hook is not None:
             self.hook("digest", path, self.log)
         self.log.append(("digest", path))
-        return pi_fs_leaves.read_bounded_digest(path, max_bytes)
+        return pi_fs_leaves.read_payload_file_digest(path, max_bytes)
+
+    def _enumerate(self, path, max_entries):
+        if self.hook is not None:
+            self.hook("enumerate", path, self.log)
+        self.log.append(("enumerate", path))
+        return pi_fs_leaves.enumerate_directory_no_follow(path, max_entries)
 
     def leaves(self, checkout_root: str | None = None) -> PiProofLeaves:
         genuine = genuine_pi_proof_leaves()
         return PiProofLeaves(
             inspect=self._inspect,
             read_digest=self._digest,
+            enumerate_directory=self._enumerate,
             checkout_root=checkout_root or genuine.checkout_root,
         )
 
     def digests(self) -> list[str]:
         return [path for kind, path in self.log if kind == "digest"]
 
+    def walk_calls(self) -> list[tuple[str, str]]:
+        """Every payload-walk leaf call (enumerations and file reads)."""
+        return [(kind, path) for kind, path in self.log if kind in ("digest", "enumerate")]
+
 
 def install_recording_genuine_leaves(monkeypatch, recorder: LeafRecorder) -> None:
     """Make ``genuine_pi_proof_leaves()`` itself return recording wrappers.
 
     Used for the GATE, which accepts no leaf parameter: the genuine binding
-    looks its two effects up on :mod:`pi_fs_leaves` at call time.
+    looks its three effects up on :mod:`pi_fs_leaves` at call time.
     """
     real_inspect = pi_fs_leaves.inspect_no_follow
-    real_digest = pi_fs_leaves.read_bounded_digest
+    real_digest = pi_fs_leaves.read_payload_file_digest
+    real_enumerate = pi_fs_leaves.enumerate_directory_no_follow
 
     def _inspect(path):
         if recorder.hook is not None:
@@ -187,8 +222,15 @@ def install_recording_genuine_leaves(monkeypatch, recorder: LeafRecorder) -> Non
         recorder.log.append(("digest", path))
         return real_digest(path, max_bytes)
 
+    def _enumerate(path, max_entries):
+        if recorder.hook is not None:
+            recorder.hook("enumerate", path, recorder.log)
+        recorder.log.append(("enumerate", path))
+        return real_enumerate(path, max_entries)
+
     monkeypatch.setattr(pi_fs_leaves, "inspect_no_follow", _inspect)
-    monkeypatch.setattr(pi_fs_leaves, "read_bounded_digest", _digest)
+    monkeypatch.setattr(pi_fs_leaves, "read_payload_file_digest", _digest)
+    monkeypatch.setattr(pi_fs_leaves, "enumerate_directory_no_follow", _enumerate)
 
 
 # ---------------------------------------------------------------------------

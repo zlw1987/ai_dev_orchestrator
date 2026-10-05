@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 from cfg1_issuance_cleanup import discard_config_for_test, discard_extension_for_test
-from cfg1_doubles import FakeSupervisor, build_doubled_ports, seam_digests_all_match
+from cfg1_doubles import FakeSupervisor, build_doubled_ports, session_pi_profile_approved
 from cfg1_fu1_support import HandleLog as _HandleLog
 from cfg1_fu1_support import make_admission
 
@@ -48,7 +48,7 @@ from pi_harness_cfg1.cfg1_pi_config import (
     serialize_config_document,
     write_cfg1_pi_config,
 )
-from pi_harness_cfg1.records import _require_valid_cfg1_run_payload_v2, build_cfg1_run_payload
+from pi_harness_cfg1.records import _require_valid_cfg1_run_payload_v3, build_cfg1_run_payload
 from pi_harness_cfg1.run_executor import execute_cfg1_run
 
 SYNTHETIC_BASE_URL = "https://cfg1-fu1-sensitive.invalid/v1"
@@ -319,7 +319,7 @@ class _LoggingObservations(dict):
 
 
 def _run_with_l9(monkeypatch, git_executable, write_config, *, log=None):
-    seam_digests_all_match(monkeypatch)
+    session_pi_profile_approved(monkeypatch)
     if log is not None:
         real_initial = run_executor._initial_observations
         monkeypatch.setattr(
@@ -377,7 +377,7 @@ def test_q_anything_but_an_exact_false_leaves_the_fact_false_and_l27_never_upgra
     payload = build_cfg1_run_payload(
         stage_id="S1", stage_execution_id="S1-X1", run_ordinal=1, observations=observations
     )
-    _require_valid_cfg1_run_payload_v2(payload)
+    _require_valid_cfg1_run_payload_v3(payload)
     assert payload["run_classification"] == "INDETERMINATE_LIFECYCLE"
 
 
@@ -661,7 +661,7 @@ def test_r_an_unanticipated_raise_is_released_but_never_credited(workspace, monk
 
     # ...but through the executor the fact STAYS False: an untyped raise is
     # assumed to leave token material.
-    seam_digests_all_match(monkeypatch)
+    session_pi_profile_approved(monkeypatch)
     ports, _made = build_doubled_ports(
         git_executable=git_executable,
         overrides={
@@ -679,7 +679,7 @@ def test_r_an_unanticipated_raise_is_released_but_never_credited(workspace, monk
 
 @pytest.mark.parametrize("outstanding", [False, True, "False", None])
 def test_r_the_executor_credits_only_an_exact_false(outstanding, monkeypatch, git_executable):
-    seam_digests_all_match(monkeypatch)
+    session_pi_profile_approved(monkeypatch)
     raised = Cfg1ExtensionError("INJECTED", outstanding)
     ports, _made = build_doubled_ports(
         git_executable=git_executable,
@@ -696,7 +696,7 @@ def test_r_the_executor_credits_only_an_exact_false(outstanding, monkeypatch, gi
 
 
 def _run_with_l21_hook(monkeypatch, git_executable, hook, *, at_removal=None):
-    seam_digests_all_match(monkeypatch)
+    session_pi_profile_approved(monkeypatch)
     made_holder: dict = {}
 
     class _HookedSupervisor(FakeSupervisor):
@@ -795,7 +795,7 @@ def test_x_l24_never_touches_a_foreign_same_name_object(swap, monkeypatch, git_e
     payload = build_cfg1_run_payload(
         stage_id="S1", stage_execution_id="S1-X1", run_ordinal=1, observations=observations
     )
-    _require_valid_cfg1_run_payload_v2(payload)
+    _require_valid_cfg1_run_payload_v3(payload)
 
 
 # ---------------------------------------------------------------------------

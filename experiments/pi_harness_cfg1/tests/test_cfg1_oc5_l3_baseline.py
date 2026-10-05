@@ -15,7 +15,7 @@ import pytest
 from cfg1_doubles import (
     FakeVerificationOutcome,
     build_doubled_ports,
-    seam_digests_all_match,
+    session_pi_profile_approved,
 )
 
 from pi_harness_cfg1 import run_executor
@@ -37,12 +37,13 @@ def admission():
         block=block,
         position=position,
         run_id="a" * 32,
+        stage_pi_profile_id=None,
     )
 
 
 @pytest.fixture(autouse=True)
 def _seam_digests(monkeypatch):
-    seam_digests_all_match(monkeypatch)
+    session_pi_profile_approved(monkeypatch)
 
 
 class _Hostile:

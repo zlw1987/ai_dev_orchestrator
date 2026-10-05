@@ -42,7 +42,7 @@ from ai_dev_orchestrator.workspace.canonical import _is_symlink_or_reparse_point
 from . import MAX_CFG1_ARTIFACT_BYTES
 from .records import (
     _dispatch_run_path_validator,
-    _require_valid_cfg1_stage_closure_payload,
+    _dispatch_stage_closure_validator,
     _run_record_filename,
     _stage_closure_record_filename,
 )
@@ -199,9 +199,13 @@ def verify_cfg1_run_artifact_binding(actual_path: str) -> bool:
 def verify_cfg1_stage_closure_binding(actual_path: str) -> bool:
     """Is the artifact currently at this STAGE-CLOSURE path valid and located?
 
-    No dispatch: a stage-closure path never legitimately holds any kind other
-    than ``pi-harness-cfg1-stage-closure.v1``, so a run or refusal record found
-    there is simply malformed for that validator, with no branch to take.
+    Exact-pair dispatch over the TWO stage-closure versions that exist: the
+    historical ``pi-harness-cfg1-stage-closure.v1`` (to its own, unchanged
+    validator) and the PE-2c profile-aware ``pi-harness-cfg1-stage-closure.v3``
+    (to its own). Anything else -- a run or refusal record, a never-issued
+    ``.v2`` stage-closure literal, a mixed pair -- dispatches to nothing and is
+    ``False`` with zero validator calls. A v1 artifact is never read under v3
+    rules, and the reverse.
 
     A ``True`` here proves the current bytes are a valid, correctly-bound CFG1
     artifact. It does NOT reconstruct the original, now-gone
@@ -218,8 +222,11 @@ def verify_cfg1_stage_closure_binding(actual_path: str) -> bool:
     if parsed is None:
         return False
 
+    validator = _dispatch_stage_closure_validator(parsed)
+    if validator is None:
+        return False
     try:
-        _require_valid_cfg1_stage_closure_payload(parsed)
+        validator(parsed)
     except Exception:  # noqa: BLE001
         return False
 

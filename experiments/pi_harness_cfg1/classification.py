@@ -216,6 +216,55 @@ def classify_cfg1_run(facts: Mapping[str, object]) -> str:
     return CLASSIFICATION_INACTIVE
 
 
+# ---------------------------------------------------------------------------
+# PE-2c (PE-1 Sec. 16, X-2) -- the v3 classifier: ONE inserted row
+# ---------------------------------------------------------------------------
+#
+# The v2 classifier above, its twelve-value ``RUN_CLASSIFICATIONS`` domain and
+# the v2 validator are UNCHANGED; the v2 domain never contains
+# ``INDETERMINATE_PI_PROFILE``. The v3 classifier is the frozen table with
+# exactly one row inserted after row 2. It can only move a run from a
+# determinate to an indeterminate classification.
+
+CLASSIFICATION_INDETERMINATE_PI_PROFILE = "INDETERMINATE_PI_PROFILE"
+
+#: The two L21A values that make a run's profile attribution unprovable.
+_PI_PROFILE_ATTRIBUTION_UNPROVEN_VALUES: tuple[str, str] = ("CHANGED", "UNPROVEN")
+
+#: The closed v3 domain, in its own evaluation order: v2's twelve with row 2A
+#: inserted after ``REFUSED_PRE_DISPATCH``.
+RUN_CLASSIFICATIONS_V3: tuple[str, ...] = (
+    CLASSIFICATION_INDETERMINATE_LIFECYCLE,
+    CLASSIFICATION_REFUSED_PRE_DISPATCH,
+    CLASSIFICATION_INDETERMINATE_PI_PROFILE,
+) + RUN_CLASSIFICATIONS[2:]
+
+
+def classify_cfg1_run_v3(facts: Mapping[str, object]) -> str:
+    """PE-1 Sec. 16: rows 1, 2, 2A, then v2's rows 3..12 unchanged. First match wins.
+
+    Row 2A is ``INDETERMINATE_PI_PROFILE`` iff
+    ``pi_profile_post_runtime_reobservation`` is exactly ``CHANGED`` or
+    ``UNPROVEN``. Because every non-refused v3 run launched Pi (R3-S10) and so
+    carries an applicable L21A value, ``ACTIVE``/``INACTIVE`` are reachable
+    only with ``PROVEN_UNCHANGED``. A refused-pre-dispatch run keeps
+    ``REFUSED_PRE_DISPATCH`` whatever its L21A value. Rows 3..12 are the v2
+    function itself, so their order and meaning cannot drift from v2's.
+    """
+    # 1
+    if facts["lifecycle_all_closed"] is False:
+        return CLASSIFICATION_INDETERMINATE_LIFECYCLE
+    # 2
+    if facts["pre_dispatch_refusal_code"] is not None:
+        return CLASSIFICATION_REFUSED_PRE_DISPATCH
+    # 2A
+    reobservation = facts["pi_profile_post_runtime_reobservation"]
+    if type(reobservation) is str and reobservation in _PI_PROFILE_ATTRIBUTION_UNPROVEN_VALUES:
+        return CLASSIFICATION_INDETERMINATE_PI_PROFILE
+    # 3..12 -- exactly v2's rows (rows 1 and 2 above already did not match).
+    return classify_cfg1_run(facts)
+
+
 def run_is_length_terminated(facts: Mapping[str, object]) -> bool:
     """Sec. 12.1's ``INACTIVE`` annotation. A provider-reported fact, not a cap.
 

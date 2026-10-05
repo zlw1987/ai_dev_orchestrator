@@ -82,11 +82,28 @@ def results_root(cfg1_package_dir):
 
 
 @pytest.fixture()
-def make_authority(cfg1_package_dir):
+def session_synthetic_policy(monkeypatch):
+    """PE-2c: the module-level sealed snapshot approves the session synthetic tree.
+
+    A genuine PE-2b load of a SYNTHETIC committed chain (never the genuine
+    policy directory), installed by rebinding the loader's two module globals
+    -- the same accepted test-harness seam the PE-2b suite uses. Any stage run
+    that can emit a v3 stage closure needs its stage profile to be an eligible
+    runtime profile of the sealed snapshot (the writer's design-B derivation).
+    A test needing a different policy installs its own afterwards.
+    """
+    from cfg1_doubles import session_pi_profile_approved
+
+    session_pi_profile_approved(monkeypatch)
+
+
+@pytest.fixture()
+def make_authority(cfg1_package_dir, session_synthetic_policy):
     """Factory: mint a genuine, ACTIVE stage-output authority.
 
     Every authority it mints is retired when the test ends, so a leaked ACTIVE
-    mint can never make a later test pass for the wrong reason.
+    mint can never make a later test pass for the wrong reason. Requesting it
+    also installs the session synthetic sealed policy (PE-2c).
     """
     from pi_harness_cfg1.stage_output import (
         _retire_stage_output_authority,

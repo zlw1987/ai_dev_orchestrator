@@ -1,13 +1,16 @@
-"""FU1 (R6 + AMEND1): the static Pi identity proof, the gate, L1 and L14.
+"""FU1 (R6 + AMEND1), migrated to PE-2c: the static proof, the gate, L1, L14.
 
 Tests A, D, F, G (inside P), H, I, J, L, P, S, U, V and AA-AD, AF, AG of
 ``PHASE_5F3B_HARNESS_CFG1_L1_BOUNDARY_FU1_DESIGN.md`` Sec. 11 as reconciled by
-``..._OC3_AMEND1_DESIGN.md`` Sec. 16.
+``..._OC3_AMEND1_DESIGN.md`` Sec. 16 -- each re-stated for the HPP-1
+profile-aware P of ``PHASE_5F3B_PI_HARNESS_PROFILE_EVOLUTION_PE1_AMENDMENT.md``
+Sec. 11 (PE-1 Sec. 26.3 C-17: test migration).
 
-Every Pi tree here is SYNTHETIC, under ``tmp_path``, with a TEST-OWNED pin
-table: its ``node.exe`` is inert bytes that nothing executes, its ``pi.cmd``
-is never read, and its 20 "seam" files are synthetic. The proof runs its
-GENUINE leaves over that tree. No real Node or Pi, no socket, no credential.
+Every Pi tree here is SYNTHETIC, under ``tmp_path``, and is approved by a
+SYNTHETIC sealed snapshot (a genuine PE-2b load of a synthetic chain): its
+``node.exe`` is inert bytes that nothing executes, its ``pi.cmd`` is never read,
+and its payload files are synthetic. The proof runs its GENUINE leaves over
+that tree. No real Node or Pi, no socket, no credential.
 """
 
 from __future__ import annotations
@@ -20,7 +23,7 @@ import shutil
 from pathlib import Path
 
 import pytest
-from cfg1_doubles import FakeSupervisor, build_synthetic_pi_tree, use_test_owned_pin_table
+from cfg1_doubles import FakeSupervisor, approve_profiles, build_synthetic_pi_tree
 from cfg1_fu1_support import (
     AMBIENT_DECOYS,
     LeafRecorder,
@@ -45,10 +48,12 @@ from pi_harness_cfg1 import (
     stage_output,
 )
 from pi_harness_cfg1.pi_identity import (
+    PI_EXTERNAL_RESOLUTION_EXPOSED,
     PI_IDENTITY_DRIFTED_DURING_PROOF,
     PI_IDENTITY_GATE_PASSED,
+    PI_PAYLOAD_UNPROVEN,
+    PI_PROFILE_UNAPPROVED,
     PI_RESOLUTION_FAILED,
-    PI_SEAM_UNPROVEN,
     Cfg1PiIdentity,
     Cfg1PiIdentityError,
     PiProofLeaves,
@@ -59,7 +64,7 @@ from pi_harness_cfg1.pi_identity import (
     reprove_pi_identity_for_launch,
 )
 from pi_harness_cfg1.records import (
-    _require_valid_cfg1_run_payload_v2,
+    _require_valid_cfg1_run_payload_v3,
     build_cfg1_run_payload,
 )
 from pi_harness_cfg1.run_executor import execute_cfg1_run
@@ -68,7 +73,7 @@ _PACKAGE_DIR = Path(__file__).resolve().parents[1]
 
 
 def _record(outcome) -> dict:
-    """Build the v2 record, round-trip it through JSON, and validate it ALONE."""
+    """Build the v3 record, round-trip it through JSON, and validate it ALONE."""
     payload = build_cfg1_run_payload(
         stage_id="S1",
         stage_execution_id="S1-X1",
@@ -76,7 +81,7 @@ def _record(outcome) -> dict:
         observations=outcome.observations,
     )
     parsed = json.loads(json.dumps(payload))
-    _require_valid_cfg1_run_payload_v2(parsed)
+    _require_valid_cfg1_run_payload_v3(parsed)
     return parsed
 
 
@@ -95,7 +100,7 @@ def _counting(overrides: dict, name: str, counter: list, *, then=None):
 # ---------------------------------------------------------------------------
 
 
-def test_ac_a_passing_static_proof_reads_every_seam_once_and_carries_no_version(
+def test_ac_a_passing_static_proof_reads_every_payload_file_once_and_carries_no_version(
     tmp_path, monkeypatch
 ):
     tree = make_pi_world(tmp_path, monkeypatch)
@@ -107,24 +112,27 @@ def test_ac_a_passing_static_proof_reads_every_seam_once_and_carries_no_version(
     result = prove_pi_identity({"PATH": tree.path_value}, leaves=recorder.leaves())
 
     assert type(result) is PiProofResult
-    assert result.seam_digests_match is True
+    assert result.payload_observation_complete is True
     assert result.failure_code is None
     identity = result.identity
     assert type(identity) is Cfg1PiIdentity
-    # Every one of the 20 keys, including package.json, read ONCE each.
+    assert identity.matched_profile_id == tree.profile_id
+    # EVERY payload file -- every extension, package.json included -- read ONCE.
     digested = recorder.digests()
-    assert sorted(digested) == sorted(tree.seam_path(key) for key in tree.pin_table)
-    assert len(digested) == len(set(digested)) == 20
+    assert sorted(digested) == sorted(tree.seam_path(key) for key in tree.files)
+    assert len(digested) == len(set(digested)) == len(tree.files)
     assert tree.seam_path("package.json") in digested
     # No JSON parse of package.json (nor of anything) happens in P.
     assert json_calls == []
-    # Exactly AMEND1 Sec. 10's five attributes, and no version-shaped name.
+    # AMEND1 Sec. 10's five attributes plus exactly PE-1's matched_profile_id,
+    # and no version-shaped name.
     assert set(Cfg1PiIdentity.__slots__) == {
         "node_executable",
         "pi_cli_js",
         "pi_package_root",
         "node_identity",
         "package_root_identity",
+        "matched_profile_id",
     }
     for name in Cfg1PiIdentity.__slots__ + PiProofResult.__slots__:
         assert "version" not in name and "reported" not in name, name
@@ -148,9 +156,10 @@ def test_ac_the_identity_and_result_objects_are_p_only_and_immutable(tmp_path, m
             pi_package_root=tree.package_root,
             node_identity=identity.node_identity,
             package_root_identity=identity.package_root_identity,
+            matched_profile_id=identity.matched_profile_id,
         )
     with pytest.raises(Cfg1PiIdentityError):
-        PiProofResult(object(), seam_digests_match=True, failure_code=None, identity=identity)
+        PiProofResult(object(), failure_code=None, payload_observation_complete=True, identity=identity)
     with pytest.raises(Cfg1PiIdentityError):
         identity.node_executable = "C:\\elsewhere\\node.exe"
     with pytest.raises(Cfg1PiIdentityError):
@@ -178,14 +187,19 @@ def test_l_the_gate_and_l1_reach_the_same_proof_object_and_leaf_binding():
     ports = run_executor.default_cfg1_run_ports(ambient_environ={})
     genuine = genuine_pi_proof_leaves()
     assert ports.pi_proof_leaves.inspect is genuine.inspect is pi_fs_leaves.inspect_no_follow
-    assert ports.pi_proof_leaves.read_digest is genuine.read_digest
+    assert ports.pi_proof_leaves.read_digest is genuine.read_digest is pi_fs_leaves.read_payload_file_digest
+    assert (
+        ports.pi_proof_leaves.enumerate_directory
+        is genuine.enumerate_directory
+        is pi_fs_leaves.enumerate_directory_no_follow
+    )
     assert ports.pi_proof_leaves.checkout_root == genuine.checkout_root
     assert genuine.checkout_root == str(_PACKAGE_DIR.parents[1])
 
 
 def test_l_ps_leaf_surface_has_no_process_or_environment_leaf():
     # AMEND1 Sec. 16.3: asserted STRUCTURALLY.
-    assert PiProofLeaves.__slots__ == ("inspect", "read_digest", "checkout_root")
+    assert PiProofLeaves.__slots__ == ("inspect", "read_digest", "enumerate_directory", "checkout_root")
     for name in PiProofLeaves.__slots__:
         for forbidden in ("run", "process", "spawn", "exec", "env", "probe", "launch"):
             assert forbidden not in name
@@ -205,7 +219,7 @@ def test_l_the_order_lives_in_p_and_gate_and_l1_walk_the_same_sequence(
     assert pre_consumption_pi_identity_gate({"PATH": tree.path_value}) == PI_IDENTITY_GATE_PASSED
     gate_sequence = list(gate_recorder.log)
     monkeypatch.undo()
-    use_test_owned_pin_table(monkeypatch, tree.pin_table)
+    approve_profiles(monkeypatch, tree)
 
     l1_recorder = LeafRecorder()
     ports, _made = fu1_ports(
@@ -218,13 +232,19 @@ def test_l_the_order_lives_in_p_and_gate_and_l1_walk_the_same_sequence(
     assert outcome.observations["refused_at_step"] == "L1"
     # L1 re-invoked every leaf, from scratch, in exactly the gate's order.
     assert l1_recorder.log == gate_sequence
-    # Fixed stage order: resolution inspections, then 20 digests, then P2R
-    # (root identity, then node.exe identity) and nothing after.
+    # Fixed stage order: resolution inspections, then the complete payload
+    # walk (enumerations and one read per file), then -- this payload has no
+    # exposure to observe -- P2R (root identity, then node.exe identity) and
+    # nothing after.
     kinds = [kind for kind, _ in gate_sequence]
-    first_digest = kinds.index("digest")
-    last_digest = len(kinds) - 1 - kinds[::-1].index("digest")
-    assert kinds[first_digest : last_digest + 1].count("digest") == 20
-    assert gate_sequence[-2:] == [("inspect", tree.package_root), ("inspect", tree.node_exe)]
+    first_walk = min(kinds.index("digest"), kinds.index("enumerate"))
+    last_walk = max(
+        len(kinds) - 1 - kinds[::-1].index("digest"),
+        len(kinds) - 1 - kinds[::-1].index("enumerate"),
+    )
+    assert "inspect" not in kinds[first_walk : last_walk + 1]
+    assert kinds[first_walk : last_walk + 1].count("digest") == len(tree.files)
+    assert gate_sequence[last_walk + 1 :] == [("inspect", tree.package_root), ("inspect", tree.node_exe)]
 
 
 # ---------------------------------------------------------------------------
@@ -258,7 +278,7 @@ def test_f_an_absent_or_malformed_path_is_a_resolution_refusal(tmp_path, monkeyp
     leaves = genuine_pi_proof_leaves()
     for ambient in ({}, {"PATH": 7}, {"PATH": b"C:\\x"}):
         result = prove_pi_identity(ambient, leaves=leaves)
-        assert (result.failure_code, result.seam_digests_match) == (PI_RESOLUTION_FAILED, False)
+        assert (result.failure_code, result.payload_observation_complete) == (PI_RESOLUTION_FAILED, False)
 
 
 # ---------------------------------------------------------------------------
@@ -267,12 +287,14 @@ def test_f_an_absent_or_malformed_path_is_a_resolution_refusal(tmp_path, monkeyp
 
 
 def _l1_refusal_case(case, tree, monkeypatch):
-    """Return ``(ambient_path, leaves, overrides, expected_failure, expected_seam)``."""
+    """Return ``(ambient_path, leaves, overrides, expected_failure, expected_complete)``."""
     if case == "resolution":
         return tree.npm_dir, None, {}, PI_RESOLUTION_FAILED, False
     if case == "seam":
+        # One changed payload byte: a different payload fingerprint, so no
+        # approved profile matches it.
         Path(tree.seam_path("dist/cli.js")).write_bytes(b"tampered cli")
-        return tree.path_value, None, {}, PI_SEAM_UNPROVEN, False
+        return tree.path_value, None, {}, PI_PROFILE_UNAPPROVED, True
     if case == "drift":
         fired: list[int] = []
 
@@ -297,7 +319,7 @@ def test_a_and_ab_an_l1_refusal_closes_everything_and_starts_no_process(
     case, tmp_path, monkeypatch, git_executable
 ):
     tree = make_pi_world(tmp_path, monkeypatch)
-    path_value, leaves, overrides, expected_failure, expected_seam = _l1_refusal_case(
+    path_value, leaves, overrides, expected_failure, expected_complete = _l1_refusal_case(
         case, tree, monkeypatch
     )
     reached: list[str] = []
@@ -320,7 +342,9 @@ def test_a_and_ab_an_l1_refusal_closes_everything_and_starts_no_process(
     assert observations["refused_at_step"] == "L1"
     assert observations["pre_dispatch_refusal_code"] == "OFFLINE_PREFLIGHT_FAILED"
     assert observations["pi_identity_failure_code"] == expected_failure
-    assert observations["pi_seam_digests_match"] is expected_seam
+    assert observations["pi_payload_observation_complete"] is expected_complete
+    expected_profile = None if expected_failure is not None else tree.profile_id
+    assert observations["pi_profile_id"] == expected_profile
     assert observations["unexpected_failure_step"] is None
     assert observations["workspace_mint_state"] == "NOT_ATTEMPTED"
     assert observations["lifecycle_failure_steps"] == []
@@ -330,10 +354,11 @@ def test_a_and_ab_an_l1_refusal_closes_everything_and_starts_no_process(
     assert config_issuance.issued_token_count() == 0
     assert extension_issuance.issued_extension_token_count() == 0
     record = _record(outcome)
-    assert record["record_version"] == "pi-harness-cfg1-run.v2"
+    assert record["record_version"] == "pi-harness-cfg1-run.v3"
     assert record["run_classification"] == "REFUSED_PRE_DISPATCH"
-    assert "pi_observed_version" not in record
-    assert "pi_version_probe_attempted" not in record
+    assert record["pi_profile_post_runtime_reobservation"] == "NOT_APPLICABLE"
+    for removed in ("pi_observed_version", "pi_version_probe_attempted", "pi_seam_digests_match"):
+        assert removed not in record
 
 
 @pytest.mark.parametrize("case", ["resolution", "seam", "drift", "git"])
@@ -379,13 +404,22 @@ def _make_seam_component_a_junction(tree, tmp_path):
     make_directory_redirect(Path(dist), Path(real))
 
 
-@pytest.mark.parametrize(
-    "perturbation",
-    ["mismatch", "missing", "reparse_component", "non_regular", "oversize", "other_release"],
-)
-def test_d_every_seam_failure_refuses_at_l1_before_any_credential(
+_PAYLOAD_PERTURBATION_CODES = {
+    "mismatch": (PI_PROFILE_UNAPPROVED, True),
+    "missing": (PI_PROFILE_UNAPPROVED, True),
+    "reparse_component": (PI_PAYLOAD_UNPROVEN, False),
+    "non_regular": (PI_PROFILE_UNAPPROVED, True),
+    "oversize": (PI_PAYLOAD_UNPROVEN, False),
+    "other_release": (PI_PROFILE_UNAPPROVED, True),
+}
+
+
+@pytest.mark.parametrize("perturbation", sorted(_PAYLOAD_PERTURBATION_CODES))
+def test_d_every_payload_failure_refuses_at_l1_before_any_credential(
     perturbation, tmp_path, monkeypatch, git_executable
 ):
+    from pi_harness_cfg1 import pi_payload
+
     tree = make_pi_world(tmp_path, monkeypatch)
     if perturbation == "mismatch":
         Path(tree.seam_path("dist/main.js")).write_bytes(b"one byte changed")
@@ -401,11 +435,12 @@ def test_d_every_seam_failure_refuses_at_l1_before_any_credential(
         os.unlink(target)
         os.mkdir(target)
     elif perturbation == "oversize":
-        monkeypatch.setattr(pi_identity, "MAX_SEAM_FILE_BYTES", 8)
+        # A bound breach refuses (never truncates): the payload is unproven.
+        monkeypatch.setattr(pi_payload, "MAX_PAYLOAD_FILE_BYTES", 8)
     else:
         # A different Pi release's package.json -- the D1 class. Its bytes
-        # differ from the reviewed ones, so this is a SEAM failure; nothing
-        # reads, parses or reports a version.
+        # differ from the approved ones, so no approved profile matches;
+        # nothing reads, parses, compares or reports a version.
         Path(tree.seam_path("package.json")).write_bytes(
             b'{"name":"@earendil-works/pi-coding-agent","version":"0.87.0"}\n'
         )
@@ -420,10 +455,13 @@ def test_d_every_seam_failure_refuses_at_l1_before_any_credential(
     monkeypatch.undo()
 
     observations = outcome.observations
+    expected_code, expected_complete = _PAYLOAD_PERTURBATION_CODES[perturbation]
     assert events == 0
     assert reached == []
-    assert observations["pi_seam_digests_match"] is False
-    assert observations["pi_identity_failure_code"] == PI_SEAM_UNPROVEN
+    assert observations["pi_payload_observation_complete"] is expected_complete
+    assert observations["pi_identity_failure_code"] == expected_code
+    assert observations["pi_profile_id"] is None
+    assert observations["pi_profile_declared_package_version"] is None
     assert observations["pre_dispatch_refusal_code"] == "OFFLINE_PREFLIGHT_FAILED"
     record = _record(outcome)
     assert "pi_observed_version" not in record
@@ -447,9 +485,9 @@ def _raise_on(kind: str, index: int):
     return _hook
 
 
-def _raise_after_twentieth_digest():
+def _raise_after_the_payload_walk(file_count: int):
     def _hook(kind, path, log):
-        if kind == "inspect" and sum(1 for k, _ in log if k == "digest") == 20:
+        if kind == "inspect" and sum(1 for k, _ in log if k == "digest") == file_count:
             raise RuntimeError("an injected P2R raise 4c2e")
 
     return _hook
@@ -476,7 +514,7 @@ def test_g_an_unexpected_raise_inside_l1_is_unexpected_step_failure(
     elif boundary == "after_p1_before_p2_completes":
         leaves = LeafRecorder(hook=_raise_on("digest", 1)).leaves()
     elif boundary == "after_p2_before_p2r_completes":
-        leaves = LeafRecorder(hook=_raise_after_twentieth_digest()).leaves()
+        leaves = LeafRecorder(hook=_raise_after_the_payload_walk(len(tree.files))).leaves()
     elif boundary == "during_result_construction":
         def _broken_identity(*_a, **_k):
             raise RuntimeError("an injected construction raise 4c2e")
@@ -499,15 +537,17 @@ def test_g_an_unexpected_raise_inside_l1_is_unexpected_step_failure(
     outcome = execute_cfg1_run(make_admission(), ports=ports)
     events = tripwire.count
     monkeypatch.undo()
-    use_test_owned_pin_table(monkeypatch, tree.pin_table)
+    approve_profiles(monkeypatch, tree)
 
     observations = outcome.observations
     assert events == 0
     assert observations["refused_at_step"] == "L1"
     assert observations["pre_dispatch_refusal_code"] == "UNEXPECTED_STEP_FAILURE"
     assert observations["pi_identity_failure_code"] is None
-    expected_seam = boundary == "after_commit_git_resolution"
-    assert observations["pi_seam_digests_match"] is expected_seam
+    # R3-S4: before P's commit nothing of the family exists; after it, all.
+    committed = boundary == "after_commit_git_resolution"
+    assert observations["pi_payload_observation_complete"] is committed
+    assert observations["pi_profile_id"] == (tree.profile_id if committed else None)
     assert observations["unexpected_failure_step"] is None
     assert "RUN_STEP_RAISED_UNEXPECTEDLY" in outcome.console_codes
     record = _record(outcome)  # the v2 validator, on the serialized record ALONE
@@ -531,10 +571,10 @@ def test_h_and_aa_the_gate_returns_one_code_consumes_nothing_and_starts_nothing(
     expected = PI_IDENTITY_GATE_PASSED
     if variant == "seam_drift":
         Path(tree.seam_path("dist/core/agent-session.js")).write_bytes(b"drift")
-        expected = PI_SEAM_UNPROVEN
+        expected = PI_PROFILE_UNAPPROVED
     elif variant == "other_release":
         Path(tree.seam_path("package.json")).write_bytes(b'{"version":"0.87.0"}\n')
-        expected = PI_SEAM_UNPROVEN
+        expected = PI_PROFILE_UNAPPROVED
     elif variant == "identity_drift":
         fired: list[int] = []
 
@@ -580,7 +620,9 @@ def test_aa_the_gate_is_total_and_never_returns_anything_reusable(monkeypatch):
         "PI_IDENTITY_PROVEN",
         "PI_IDENTITY_GATE_UNEXPECTED_FAILURE",
         PI_RESOLUTION_FAILED,
-        PI_SEAM_UNPROVEN,
+        PI_PAYLOAD_UNPROVEN,
+        PI_PROFILE_UNAPPROVED,
+        PI_EXTERNAL_RESOLUTION_EXPOSED,
         PI_IDENTITY_DRIFTED_DURING_PROOF,
     }
     import inspect as _inspect
@@ -594,7 +636,7 @@ _PROCESS_NAME = re.compile(r"CreateProcess|ShellExecute|WinExec")
 _OS_PROCESS_ATTRS = re.compile(r"^(system|startfile|spawn\w*|exec[lv]\w*|popen|fork\w*)$")
 
 
-@pytest.mark.parametrize("module_name", ["pi_identity", "pi_fs_leaves", "preflight"])
+@pytest.mark.parametrize("module_name", ["pi_identity", "pi_fs_leaves", "pi_payload", "preflight"])
 def test_aa_static_audit_p_the_gate_and_the_leaves_cannot_create_a_process(module_name):
     source = (_PACKAGE_DIR / f"{module_name}.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
@@ -646,7 +688,7 @@ def test_i_a_drift_after_the_gate_is_caught_by_l1s_own_fresh_proof(
     outcome = execute_cfg1_run(make_admission(), ports=ports)
     observations = outcome.observations
     assert observations["refused_at_step"] == "L1"
-    assert observations["pi_identity_failure_code"] == PI_SEAM_UNPROVEN
+    assert observations["pi_identity_failure_code"] == PI_PROFILE_UNAPPROVED
     # L1 invoked its OWN leaves (the gate's observations cannot reach it).
     assert recorder.digests() and recorder.log[0][0] == "inspect"
     assert "gate" not in " ".join(run_executor.execute_cfg1_run.__code__.co_varnames)
@@ -690,11 +732,13 @@ def test_j_cmd_shims_empty_and_relative_entries_are_never_selected(tmp_path, mon
 def test_j_a_later_valid_pi_root_is_never_searched_when_the_first_fails(tmp_path, monkeypatch):
     first = make_pi_world(tmp_path, monkeypatch, name="first")
     second = build_synthetic_pi_tree(str(tmp_path / "second"))
+    # The later root is byte-identical to the approved payload: it WOULD
+    # match. P never searches onward for a matching installation.
     Path(first.seam_path("dist/cli.js")).write_bytes(b"first root is broken")
     recorder = LeafRecorder()
     path_value = f"{first.node_dir};{first.npm_dir};{second.npm_dir}"
     result = prove_pi_identity({"PATH": path_value}, leaves=recorder.leaves())
-    assert result.failure_code == PI_SEAM_UNPROVEN
+    assert result.failure_code == PI_PROFILE_UNAPPROVED
     assert not any(str(second.base) in path for _kind, path in recorder.log)
 
 
@@ -827,7 +871,7 @@ def test_j_reparse_or_directory_candidates_refuse_outright(shape, tmp_path, monk
         _junction_or_skip(Path(modules), Path(real))
     result = prove_pi_identity({"PATH": tree.path_value}, leaves=genuine_pi_proof_leaves())
     assert result.failure_code == PI_RESOLUTION_FAILED
-    assert result.seam_digests_match is False
+    assert result.payload_observation_complete is False
 
 
 # ---------------------------------------------------------------------------
@@ -858,18 +902,18 @@ def test_ah_an_unrelated_unsafe_entry_before_valid_candidates_is_skipped(
     result = prove_pi_identity({"PATH": path_value}, leaves=recorder.leaves())
 
     assert result.failure_code is None
-    assert result.seam_digests_match is True
+    assert result.payload_observation_complete is True
     identity = result.identity
     assert identity.node_executable == tree.node_exe
     assert identity.pi_package_root == tree.package_root
-    # The complete 20-file seam proof still ran, over the GENUINE later entries.
-    assert len(recorder.digests()) == 20
+    # The complete payload walk still ran, over the GENUINE later entries.
+    assert len(recorder.digests()) == len(tree.files)
     # The unsafe entry is classified (topology-inspected) exactly TWICE, once
     # per independent PATH walk -- _resolve_node and _resolve_package_root
     # each walk `entries` from scratch (Test J's "first candidate only"
     # discipline, unaffected) -- and never again beyond that: nothing beneath
-    # it -- no realpath, no digest, no further inspect -- is ever reached, so
-    # it never establishes anything.
+    # it -- no realpath, no digest, no enumeration, no further inspect -- is
+    # ever reached, so it never establishes anything.
     inspect_paths = [path for kind, path in recorder.log if kind == "inspect"]
     assert inspect_paths.count(str(unsafe)) == 2
     assert not any(
@@ -918,7 +962,7 @@ def test_ah_an_invalid_node_candidate_refuses_outright_even_with_a_later_valid_o
     path_value = f"{tree.node_dir};{second.node_dir};{tree.npm_dir}"
     result = prove_pi_identity({"PATH": path_value}, leaves=recorder.leaves())
     assert result.failure_code == PI_RESOLUTION_FAILED
-    assert result.seam_digests_match is False
+    assert result.payload_observation_complete is False
     # The later, otherwise-valid Node directory was never searched.
     assert not any(str(second.base) in path for _kind, path in recorder.log)
 
@@ -934,7 +978,7 @@ def test_ah_an_invalid_pi_cmd_candidate_refuses_outright_even_with_a_later_valid
     path_value = f"{tree.node_dir};{tree.npm_dir};{second.npm_dir}"
     result = prove_pi_identity({"PATH": path_value}, leaves=recorder.leaves())
     assert result.failure_code == PI_RESOLUTION_FAILED
-    assert result.seam_digests_match is False
+    assert result.payload_observation_complete is False
     # The later, otherwise-valid Pi directory was never searched.
     assert not any(str(second.base) in path for _kind, path in recorder.log)
 
@@ -957,7 +1001,8 @@ def test_ah_the_gate_and_l1_both_pass_with_a_leading_unsafe_path_entry(
     outcome = execute_cfg1_run(make_admission(), ports=ports)
     assert outcome.observations["dispatch_state"] == "CONFIRMED_SENT"
     assert outcome.observations["pi_identity_failure_code"] is None
-    assert outcome.observations["pi_seam_digests_match"] is True
+    assert outcome.observations["pi_payload_observation_complete"] is True
+    assert outcome.observations["pi_profile_id"] == tree.profile_id
 
 
 # ---------------------------------------------------------------------------
@@ -979,7 +1024,7 @@ def test_u_a_mid_proof_identity_swap_is_refused_by_p2r(
             if swap == "node_exe":
                 replace_same_bytes(tree.node_exe)
             else:
-                # Byte-identical copies of all 20 pinned files under a NEW
+                # A byte-identical copy of the whole payload under a NEW
                 # directory object at the same lexical path.
                 replace_directory_with_identical_copy(tree.package_root)
 
@@ -999,7 +1044,8 @@ def test_u_a_mid_proof_identity_swap_is_refused_by_p2r(
     assert events == 0
     observations = outcome.observations
     assert observations["pi_identity_failure_code"] == PI_IDENTITY_DRIFTED_DURING_PROOF
-    assert observations["pi_seam_digests_match"] is True
+    assert observations["pi_payload_observation_complete"] is True
+    assert observations["pi_profile_id"] is None
     assert observations["refused_at_step"] == "L1"
     _record(outcome)
 
@@ -1048,7 +1094,7 @@ def _l14_run(git_executable, tree, *, mutate=None, recorder=None):
     return outcome, supervisor, log, reads
 
 
-def test_p_the_l14_reproof_order_is_seams_then_root_then_node_then_launch(
+def test_p_the_l14_reproof_order_is_walk_then_root_then_node_then_launch(
     tmp_path, monkeypatch, git_executable
 ):
     tree = make_pi_world(tmp_path, monkeypatch)
@@ -1056,20 +1102,22 @@ def test_p_the_l14_reproof_order_is_seams_then_root_then_node_then_launch(
     assert outcome.observations["dispatch_state"] == "CONFIRMED_SENT"
     launch_at = log.index(("launch", ""))
     before = log[:launch_at]
-    # Before launch(): all 20 seams (with their directory components inspected
-    # no-follow), then the root, then node.exe -- and NOTHING between
-    # node.exe's re-proof and launch().
+    files = len(tree.files)
+    # Before launch(): the complete payload walk (every file read through one
+    # handle, every directory enumerated through its own handle), then the
+    # root, then node.exe -- and NOTHING between node.exe's re-proof and
+    # launch().
     assert before[-1] == ("inspect", tree.node_exe)
     assert before[-2] == ("inspect", tree.package_root)
     digest_positions = [index for index, (kind, _) in enumerate(before) if kind == "digest"]
-    l14_digests = [before[index][1] for index in digest_positions[-20:]]
-    assert sorted(l14_digests) == sorted(tree.seam_path(key) for key in tree.pin_table)
+    l14_digests = [before[index][1] for index in digest_positions[-files:]]
+    assert sorted(l14_digests) == sorted(tree.seam_path(key) for key in tree.files)
     assert digest_positions[-1] < len(before) - 2
-    for _kind, path in before[digest_positions[-20] : len(before) - 2]:
+    for _kind, path in before[digest_positions[-files] : len(before) - 2]:
         assert path.startswith(tree.package_root)
-    # The L14 walk is uncached: every seam was digested TWICE in the run
-    # (L1's P2 and L14's (a)).
-    assert sum(1 for kind, _ in before if kind == "digest") == 40
+    # The L14 walk is uncached: every payload file was read TWICE in the run
+    # (L1's P2 and L14's walk).
+    assert sum(1 for kind, _ in before if kind == "digest") == 2 * files
     assert supervisor.launch_calls == 1
 
 
@@ -1105,7 +1153,8 @@ def test_s_v_and_p_a_change_after_l1_refuses_at_l14_with_no_launch(
     assert observations["pre_dispatch_refusal_code"] == "RUNTIME_LAUNCH_FAILED"
     assert observations["runtime_created"] is False
     assert observations["pi_identity_failure_code"] is None
-    assert observations["pi_seam_digests_match"] is True
+    assert observations["pi_profile_id"] == tree.profile_id
+    assert observations["pi_profile_post_runtime_reobservation"] == "NOT_APPLICABLE"
     assert observations["dispatch_state"] == "NOT_ATTEMPTED"
     # Full closure of what exists: both sensitive files scrubbed by identity,
     # the broker closed, the workspace removed.
@@ -1280,6 +1329,7 @@ class _RecordingIdentityShape:
         "pi_package_root",
         "node_identity",
         "package_root_identity",
+        "matched_profile_id",
         "_reads",
     )
 
@@ -1290,6 +1340,7 @@ class _RecordingIdentityShape:
         object.__setattr__(self, "pi_package_root", "C:\\syn\\pi")
         object.__setattr__(self, "node_identity", (1, 2))
         object.__setattr__(self, "package_root_identity", (1, 3))
+        object.__setattr__(self, "matched_profile_id", "e" * 64)
 
     def __getattribute__(self, name):
         if name != "_reads":

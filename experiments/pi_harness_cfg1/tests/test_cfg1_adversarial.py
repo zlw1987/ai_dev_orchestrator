@@ -649,14 +649,14 @@ def test_a_workspace_claimed_by_another_run_is_refused_before_any_live_resource(
     L8's own ``workspace_is_claimed_by`` re-verification is the defence in depth
     behind it, exercised directly in the next test.
     """
-    from cfg1_doubles import build_doubled_ports, seam_digests_all_match
+    from cfg1_doubles import build_doubled_ports, session_pi_profile_approved
 
     from pi_harness_cfg1 import run_workspace
     from pi_harness_cfg1.run_contract import Cfg1RunAdmission
     from pi_harness_cfg1.run_executor import execute_cfg1_run
     from pi_harness_cfg1.schedule import _schedule_arm_for, _schedule_block_position
 
-    seam_digests_all_match(monkeypatch)
+    session_pi_profile_approved(monkeypatch)
     block, position = _schedule_block_position("S1", 1)
     admission = Cfg1RunAdmission(
         stage_id="S1",
@@ -666,6 +666,7 @@ def test_a_workspace_claimed_by_another_run_is_refused_before_any_live_resource(
         block=block,
         position=position,
         run_id="b" * 32,
+        stage_pi_profile_id=None,
     )
 
     def _mint_pre_claimed(*, git_executable):
@@ -774,13 +775,13 @@ def test_generated_material_lands_beside_the_repository_never_inside_it(
     the endpoint somewhere the model's own tools can see. The frozen I2
     generator writes beside the repo for exactly this reason.
     """
-    from cfg1_doubles import build_doubled_ports, seam_digests_all_match
+    from cfg1_doubles import build_doubled_ports, session_pi_profile_approved
 
     from pi_harness_cfg1.run_contract import Cfg1RunAdmission
     from pi_harness_cfg1.run_executor import execute_cfg1_run
     from pi_harness_cfg1.schedule import _schedule_arm_for, _schedule_block_position
 
-    seam_digests_all_match(monkeypatch)
+    session_pi_profile_approved(monkeypatch)
     block, position = _schedule_block_position("S1", 1)
     admission = Cfg1RunAdmission(
         stage_id="S1",
@@ -790,6 +791,7 @@ def test_generated_material_lands_beside_the_repository_never_inside_it(
         block=block,
         position=position,
         run_id="c" * 32,
+        stage_pi_profile_id=None,
     )
 
     observed: dict[str, str] = {}
@@ -872,7 +874,7 @@ def test_the_token_bearing_extension_file_is_scrubbed_only_through_its_issuance(
     a handle-bound content scrub through the extension issuance's retained handle
     (AMEND2, which superseded AM-12's ``identity_bound_unlink``).
     """
-    from cfg1_doubles import build_doubled_ports, seam_digests_all_match
+    from cfg1_doubles import build_doubled_ports, session_pi_profile_approved
 
     from pi_harness_cfg1 import extension_issuance
     from pi_harness_cfg1.run_contract import Cfg1RunAdmission
@@ -883,7 +885,7 @@ def test_the_token_bearing_extension_file_is_scrubbed_only_through_its_issuance(
     )
     from pi_harness_cfg1.schedule import _schedule_arm_for, _schedule_block_position
 
-    seam_digests_all_match(monkeypatch)
+    session_pi_profile_approved(monkeypatch)
     block, position = _schedule_block_position("S1", 1)
     admission = Cfg1RunAdmission(
         stage_id="S1",
@@ -893,6 +895,7 @@ def test_the_token_bearing_extension_file_is_scrubbed_only_through_its_issuance(
         block=block,
         position=position,
         run_id="d" * 32,
+        stage_pi_profile_id=None,
     )
 
     frozen_calls: list[str] = []

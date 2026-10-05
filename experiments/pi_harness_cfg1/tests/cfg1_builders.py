@@ -15,21 +15,44 @@ from pi_harness_cfg1 import obs1
 from pi_harness_cfg1.records import (
     CFG1_RUN_OBSERVATION_KEYS,
     CFG1_RUN_OBSERVATION_KEYS_V2,
+    CFG1_RUN_OBSERVATION_KEYS_V3,
     build_cfg1_run_payload,
 )
 
 _STOP_REASON_KEYS = ("stop", "length", "toolUse", "error", "aborted", "other")
 
+#: The v3-only profile observation keys, and the one v2-only identity key.
+_V3_PROFILE_OBSERVATION_KEYS = (
+    "pi_payload_observation_complete",
+    "pi_profile_id",
+    "pi_profile_declared_package_version",
+    "pi_profile_post_runtime_reobservation",
+)
+
+
+def _session_profile() -> tuple[str, str]:
+    from cfg1_doubles import session_synthetic_pi_tree
+
+    tree = session_synthetic_pi_tree()
+    return tree.profile_id, tree.declared_package_version
+
 
 def happy_observations(**overrides: Any) -> dict[str, Any]:
-    """An L28 observation set for a clean, fully-closed, INACTIVE run.
+    """A v3 L28 observation set for a clean, fully-closed, INACTIVE run.
 
     INACTIVE, not ACTIVE, is the default because it is the shape Q1/Q2/Q3
-    actually produced and the one CFG1 exists to contrast against.
+    actually produced and the one CFG1 exists to contrast against. The profile
+    family is the session synthetic tree's (the profile the ``make_authority``
+    fixture's synthetic sealed snapshot approves), and L21A is
+    ``PROVEN_UNCHANGED`` -- the only value under which INACTIVE is reachable.
     """
+    profile_id, declared_version = _session_profile()
     observations: dict[str, Any] = {
-        "pi_seam_digests_match": True,
         "pi_identity_failure_code": None,
+        "pi_payload_observation_complete": True,
+        "pi_profile_id": profile_id,
+        "pi_profile_declared_package_version": declared_version,
+        "pi_profile_post_runtime_reobservation": "PROVEN_UNCHANGED",
         "base_url_compat_detection_clear": True,
         "route_reachable": True,
         "route_configured_model_served": True,
@@ -108,11 +131,100 @@ def happy_observations(**overrides: Any) -> dict[str, Any]:
         "verification_counts": {"passed": 0, "failed": 1, "error": 0},
     }
     observations.update(overrides)
-    assert frozenset(observations) == CFG1_RUN_OBSERVATION_KEYS_V2, (
-        "the builder and the closed v2 observation key set have drifted apart: "
-        f"{frozenset(observations) ^ CFG1_RUN_OBSERVATION_KEYS_V2}"
+    assert frozenset(observations) == CFG1_RUN_OBSERVATION_KEYS_V3, (
+        "the builder and the closed v3 observation key set have drifted apart: "
+        f"{frozenset(observations) ^ CFG1_RUN_OBSERVATION_KEYS_V3}"
     )
     return observations
+
+
+def happy_observations_v2(**overrides: Any) -> dict[str, Any]:
+    """An archived-shape v2 observation set, built INDEPENDENTLY of v3.
+
+    PE-2c: production emits v3 only, so v2 observations are assembled here
+    from v2's own field set -- ``pi_seam_digests_match`` restored, the v3
+    profile family absent -- exactly as an archived v2 artifact carried them.
+    """
+    observations = happy_observations()
+    for key in _V3_PROFILE_OBSERVATION_KEYS:
+        observations.pop(key)
+    observations["pi_seam_digests_match"] = True
+    observations.update(overrides)
+    assert frozenset(observations) == CFG1_RUN_OBSERVATION_KEYS_V2
+    return observations
+
+
+def v2_run_payload(
+    *,
+    stage_id: str = "S1",
+    stage_execution_id: str = "S1-X1",
+    run_ordinal: int = 1,
+    observations: dict[str, Any],
+) -> dict[str, Any]:
+    """An archived-shape ``pi-harness-cfg1-run.v2`` payload, built by hand.
+
+    The production builder emits v3 only; v2 payloads are assembled here from
+    v2's own field set (as :func:`v1_run_payload` does for v1) and handed to
+    v2's own, unchanged validator and closure function.
+    """
+    from pi_harness_cfg1 import CLAIM_SCOPE, PACKAGE_ID, RUN_RECORD_KIND
+    from pi_harness_cfg1.arms import ARM_EFFECTIVE, ARM_REDACTED_DIGEST, ARM_SHAPE, PINNED_SETTINGS_SHA256
+    from pi_harness_cfg1.classification import classify_cfg1_run
+    from pi_harness_cfg1.fixture import CFG1_T1_REVISION, CFG1_TASK_ID
+    from pi_harness_cfg1.identity import BACKEND_GATEWAY_CLASS, CFG1_MODEL_ID, PROVIDER_ID
+    from pi_harness_cfg1.schedule import _schedule_arm_for, _schedule_block_position
+
+    assert frozenset(observations) == CFG1_RUN_OBSERVATION_KEYS_V2
+    arm_id = _schedule_arm_for(stage_id, run_ordinal)
+    block, position = _schedule_block_position(stage_id, run_ordinal)
+    payload: dict[str, Any] = {
+        "experiment": PACKAGE_ID,
+        "record_version": "pi-harness-cfg1-run.v2",
+        "record_kind": RUN_RECORD_KIND,
+        "scoring_authority": False,
+        "qualification_credit": False,
+        "is_review_packet": False,
+        "reviewer_invoked": False,
+        "claim_scope": CLAIM_SCOPE,
+        "stage_id": stage_id,
+        "stage_execution_id": stage_execution_id,
+        "run_ordinal": run_ordinal,
+        "block": block,
+        "position": position,
+        "arm_id": arm_id,
+        "record_filename": f"{stage_id}_{run_ordinal:02d}_{arm_id}.json",
+        "declared_compat_shape": ARM_SHAPE[arm_id],
+        "models_json_redacted_sha256": ARM_REDACTED_DIGEST[arm_id],
+        "settings_json_sha256": PINNED_SETTINGS_SHA256,
+        "model_id": CFG1_MODEL_ID,
+        "provider_id": PROVIDER_ID,
+        "backend_gateway_class": BACKEND_GATEWAY_CLASS,
+        "fixture_task_id": CFG1_TASK_ID,
+        "fixture_revision": CFG1_T1_REVISION,
+    }
+    payload.update(ARM_EFFECTIVE[arm_id])
+    payload.update(dict(observations))
+    payload["run_classification"] = classify_cfg1_run(payload)
+    return payload
+
+
+def v2_refusal_payload(**field_overrides: Any) -> dict[str, Any]:
+    """An archived-shape ``pi-harness-cfg1-refusal.v2`` payload, built by hand."""
+    payload = refusal_payload()
+    for key in (
+        "pi_payload_contract",
+        "pi_seam_contract",
+        "pi_consumer_contract",
+        "pi_profile_policy_revision",
+        "pi_profile_set_head_sha256",
+        "pi_profile_authority_scope",
+        "pi_external_runtime_residual",
+    ):
+        payload.pop(key)
+    payload["record_version"] = "pi-harness-cfg1-refusal.v2"
+    payload["refused_record_kind"] = "pi-harness-cfg1-run.v2"
+    payload.update(field_overrides)
+    return payload
 
 
 def v1_run_payload(**field_overrides: Any) -> dict[str, Any]:
@@ -134,7 +246,7 @@ def v1_run_payload(**field_overrides: Any) -> dict[str, Any]:
     stage_id, ordinal = "S1", 1
     arm_id = _schedule_arm_for(stage_id, ordinal)
     block, position = _schedule_block_position(stage_id, ordinal)
-    observations = happy_observations(runtime_reported_compat_shape=ARM_SHAPE[arm_id])
+    observations = happy_observations_v2(runtime_reported_compat_shape=ARM_SHAPE[arm_id])
     # v1's observation set: no v2 field, and the v1-only version projection.
     for key in ("pi_identity_failure_code", "unexpected_failure_step", "workspace_mint_state"):
         observations.pop(key)
@@ -354,6 +466,72 @@ def stage_closure_payload(
         "ordinal_status": ordinal_status,
         "halted_after_ordinal": halted_after_ordinal,
         "halt_reason_code": halt_reason_code,
+    }
+
+
+def stage_closure_payload_v3(
+    *,
+    stage_id: str = "S1",
+    stage_execution_id: str = "S1-X1",
+    ordinal_status: dict[str, str] | None = None,
+    halted_after_ordinal: int | None = None,
+    halt_reason_code: str | None = None,
+    stage_pi_profile_id: str | None = "a" * 64,
+    stage_pi_profile_declared_package_version: str | None = "1.0.0",
+    ordinal_pi_profile_binding: dict[str, str] | None = None,
+    pi_profile_attribution_halt: bool = False,
+    head: str = "b" * 64,
+) -> dict[str, Any]:
+    """A v3 stage-closure PAYLOAD, for validator-level tests only.
+
+    The writer never accepts one: it builds its own from a genuine sealed
+    decision and the sealed snapshot. Coherence is checkable here; provenance
+    is not (CFG1 Sec. 22.4.2).
+    """
+    from pi_harness_cfg1 import (
+        PACKAGE_ID,
+        PI_EXTERNAL_RUNTIME_RESIDUAL,
+        PI_PROFILE_AUTHORITY_SCOPE,
+        STAGE_CLOSURE_RECORD_KIND,
+        STAGE_CLOSURE_RECORD_VERSION_V3,
+    )
+    from pi_harness_cfg1.records import _stage_closure_record_filename
+    from pi_harness_cfg1.schedule import declared_ordinals
+
+    ordinals = declared_ordinals(stage_id)
+    if ordinal_status is None:
+        ordinal_status = {str(ordinal): "RECORD_EMITTED" for ordinal in ordinals}
+    if ordinal_pi_profile_binding is None:
+        binding = {}
+        for key, status in ordinal_status.items():
+            if status == "NOT_EXECUTED":
+                binding[key] = "NOT_EXECUTED"
+            elif status == "RECORD_EMITTED":
+                binding[key] = "STAGE_PROFILE"
+            else:
+                binding[key] = "NO_RUN_EVIDENCE"
+        ordinal_pi_profile_binding = binding
+    return {
+        "experiment": PACKAGE_ID,
+        "record_version": STAGE_CLOSURE_RECORD_VERSION_V3,
+        "record_kind": STAGE_CLOSURE_RECORD_KIND,
+        "stage_id": stage_id,
+        "stage_execution_id": stage_execution_id,
+        "record_filename": _stage_closure_record_filename(stage_id),
+        "ordinal_status": ordinal_status,
+        "halted_after_ordinal": halted_after_ordinal,
+        "halt_reason_code": halt_reason_code,
+        "pi_payload_contract": "PI-PC1",
+        "pi_seam_contract": "PI-SC1",
+        "pi_consumer_contract": "CFG1-CC1",
+        "pi_profile_policy_revision": "HPP-1",
+        "pi_profile_set_head_sha256": head,
+        "stage_pi_profile_id": stage_pi_profile_id,
+        "stage_pi_profile_declared_package_version": stage_pi_profile_declared_package_version,
+        "ordinal_pi_profile_binding": ordinal_pi_profile_binding,
+        "pi_profile_attribution_halt": pi_profile_attribution_halt,
+        "pi_profile_authority_scope": PI_PROFILE_AUTHORITY_SCOPE,
+        "pi_external_runtime_residual": PI_EXTERNAL_RUNTIME_RESIDUAL,
     }
 
 

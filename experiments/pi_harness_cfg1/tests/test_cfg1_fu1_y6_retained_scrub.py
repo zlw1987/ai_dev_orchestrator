@@ -34,7 +34,7 @@ from types import SimpleNamespace
 
 import pytest
 from cfg1_issuance_cleanup import discard_config_for_test, discard_extension_for_test
-from cfg1_doubles import FakeSupervisor, build_doubled_ports, seam_digests_all_match
+from cfg1_doubles import FakeSupervisor, build_doubled_ports, session_pi_profile_approved
 from cfg1_fu1_support import HandleLog, make_admission
 
 from pi_harness_cfg1 import (
@@ -54,7 +54,7 @@ from pi_harness_cfg1.cfg1_pi_config import (
     write_cfg1_pi_config,
 )
 from pi_harness_cfg1.halt import _resolve_halt_reason_code
-from pi_harness_cfg1.records import _require_valid_cfg1_run_payload_v2, build_cfg1_run_payload
+from pi_harness_cfg1.records import _require_valid_cfg1_run_payload_v3, build_cfg1_run_payload
 from pi_harness_cfg1.run_executor import execute_cfg1_run
 
 SYNTHETIC_BASE_URL = "https://cfg1-fu1-y6.invalid/v1"
@@ -219,7 +219,7 @@ def _alias_on_write(monkeypatch, target: _Target, alias: Path) -> None:
 
 
 def _run_l21_hook(monkeypatch, git_executable, hook, *, at_removal=None):
-    seam_digests_all_match(monkeypatch)
+    session_pi_profile_approved(monkeypatch)
     holder: dict = {}
 
     class _Hooked(FakeSupervisor):
@@ -255,7 +255,7 @@ def _assert_lifecycle_unproven(outcome) -> None:
     payload = build_cfg1_run_payload(
         stage_id="S1", stage_execution_id="S1-X1", run_ordinal=1, observations=observations
     )
-    _require_valid_cfg1_run_payload_v2(payload)
+    _require_valid_cfg1_run_payload_v3(payload)
     assert payload["run_classification"] == "INDETERMINATE_LIFECYCLE"
     assert _resolve_halt_reason_code(
         emission_status="RECORD_EMITTED",
@@ -819,7 +819,7 @@ def test_y11_a_retain_failure_scrubs_through_h_c_registers_nothing_and_is_proven
     where, monkeypatch, git_executable
 ):
     _fail_reopen_on_call(monkeypatch, 1 if where == "config" else 2)
-    seam_digests_all_match(monkeypatch)
+    session_pi_profile_approved(monkeypatch)
     ports, _made = build_doubled_ports(git_executable=git_executable)
     outcome = execute_cfg1_run(make_admission(), ports=ports)
     observations = outcome.observations
@@ -1045,7 +1045,7 @@ def test_y19_the_executor_retires_each_issuance_exactly_once(monkeypatch, git_ex
     monkeypatch.setattr(
         win, "scrub_retire_retained", lambda retained: (retired.append(1), real(retained))[1]
     )
-    seam_digests_all_match(monkeypatch)
+    session_pi_profile_approved(monkeypatch)
     ports, _made = build_doubled_ports(git_executable=git_executable)
     outcome = execute_cfg1_run(make_admission(), ports=ports)
     assert outcome.observations["generated_config_scrub_verified"] is True
@@ -1102,7 +1102,7 @@ def test_y21_no_public_object_or_output_carries_the_retained_handle(target, monk
 
 
 def test_y21_records_and_console_never_carry_a_retained_handle(monkeypatch, git_executable):
-    seam_digests_all_match(monkeypatch)
+    session_pi_profile_approved(monkeypatch)
     raw_handles: list[int] = []
     real = win.retain_child
 

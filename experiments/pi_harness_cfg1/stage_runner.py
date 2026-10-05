@@ -30,6 +30,18 @@ is no boundary for an invented ``(ordinal, status)`` pair to arrive through.
 stage reaches it up to nine times. Sealing happens only at an evaluation that
 selects branch A or branch C; branch B -- the ordinary non-final-ordinal case
 -- issues a token and touches neither decision registry.
+
+**PE-2c: the runner-local profile ledger** (PE-1 Sec. 14.3, R1/B11). Beside
+the stage-progress ledger, the same routine holds a second plain local,
+``_profile_ledger``, with the same confinement: never a module global, never
+returned, never a parameter, never persisted, never filled from an artifact
+on disk and never filled from ``Cfg1RunAdmission``. Each ordinal's L1 profile
+fact and ``(runtime_created, L21A)`` pair are captured by local assignment
+from the IN-MEMORY ``Cfg1RunOutcome`` the moment the executor returns, BEFORE
+L29 emission. Ordinal 1 fixes the stage profile exactly once; later
+admissions carry it to L1 as a narrowing constraint; L30 evaluates item 1A
+from it; and the nested sealer binds the stage profile, the per-ordinal
+binding and the attribution-halt flag into the one sealed decision.
 """
 
 from __future__ import annotations
@@ -47,11 +59,19 @@ from .halt import (
     DISPOSITION_STAGE_DECISION_MINT_FAILED,
     DISPOSITION_STAGE_HALTED,
     DISPOSITION_STAGE_OUTPUT_AUTHORITY_HARD_STOP,
-    HALT_REASON_CODES,
+    HALT_REASON_CODES_V3,
+    NO_RUN_EVIDENCE_ORDINAL_STATUSES,
     ORDINAL_NOT_EXECUTED,
+    ORDINAL_PI_PROFILE_NO_PROFILE,
+    ORDINAL_PI_PROFILE_NO_RUN_EVIDENCE,
+    ORDINAL_PI_PROFILE_NOT_EXECUTED,
+    ORDINAL_PI_PROFILE_STAGE_PROFILE,
+    ORDINAL_STATUS_VALUES,
     _admission_conditions_hold,
-    _resolve_halt_reason_code,
+    _pi_profile_item_1a_holds,
+    _resolve_halt_reason_code_v3,
 )
+from .pi_payload import is_lowercase_hex64
 from .records import build_cfg1_run_payload
 from .run_contract import Cfg1RunAdmission, Cfg1RunOutcome
 from .schedule import (
@@ -133,7 +153,7 @@ def run_cfg1_stage(authority: CFG1StageOutputAuthority, /) -> Cfg1StageResult:
     ``CFG1StageOutputAuthority`` has no supported way, through this function,
     to substitute a run executor, a hand-built ``Cfg1RunOutcome``, or a
     live-port set, and therefore no way to make this routine emit a genuine
-    ``pi-harness-cfg1-run.v2`` or stage-closure artifact from anything but the
+    ``pi-harness-cfg1-run.v3`` or stage-closure artifact from anything but the
     genuine L1-L28 executor (CFG1-IMPL-FU1 Finding 1). The genuine executor is
     bound HERE, mechanically, via :func:`run_executor.
     bind_genuine_cfg1_run_executor` -- never accepted as an argument.
@@ -239,6 +259,21 @@ def _run_cfg1_stage_with_injected_executor(
     # sealing become part of the immutable, registered decision.
     _ordinal_ledger: dict[int, str] = {}
 
+    # --- PE-1 Sec. 14.3: the runner-local PROFILE ledger ---------------------
+    # A second plain local of THIS call frame, with exactly the same
+    # confinement as ``_ordinal_ledger``. Its only writers are the local
+    # assignments right after the executor returns (below); its only readers
+    # are this routine's own admission construction, L30's item 1A and the
+    # nested terminal sealer. ``profile_fact[k]`` is an exact 64-hex ``str`` or
+    # the sentinel ``_PROFILE_FACT_NONE``; ``runtime_closure[k]`` is the raw
+    # ``(runtime_created, pi_profile_post_runtime_reobservation)`` pair, read
+    # with exact types only by item 1A.
+    _profile_ledger: dict[str, object] = {
+        "stage_pi_profile_id": None,
+        "profile_fact": {},
+        "runtime_closure": {},
+    }
+
     console_codes: list[str] = []
     current_ordinal: int | None = None
 
@@ -265,15 +300,20 @@ def _run_cfg1_stage_with_injected_executor(
         _ordinal_ledger[run_ordinal] = ordinal_status
 
     def _seal_terminal_decision(
-        *, halted_after_ordinal: int | None, halt_reason_code: str | None
+        *,
+        halted_after_ordinal: int | None,
+        halt_reason_code: str | None,
+        pi_profile_attribution_halt: bool,
     ) -> CFG1StageClosureDecision:
         """Requirement 6's five-step mint sequence, in the frozen order.
 
         Reads ``stage_id``/``stage_execution_id`` from the closed-over
-        ``authority`` and ``ordinal_status`` from the closed-over ledger --
-        never from a parameter. The only two values that DO arrive as
-        arguments are the ones L30 itself just computed: the halted ordinal and
-        the output of Sec. 19.5's one shared precedence function.
+        ``authority``, ``ordinal_status`` from the closed-over stage-progress
+        ledger, and the stage profile and per-ordinal profile facts from the
+        closed-over PROFILE ledger -- never from a parameter. The only three
+        values that DO arrive as arguments are the ones L30 itself just
+        computed in this same routine: the halted ordinal, the output of the
+        one shared v3 precedence function, and the item-1A attribution flag.
         """
         # Step 1 -- authority/state conditions already frozen elsewhere.
         verify_stage_output_authority(authority)
@@ -285,6 +325,13 @@ def _run_cfg1_stage_with_injected_executor(
         # writer step 4a clears exactly the entry such a proof would need.
         if _terminal_seal_recorded(authority.mint_nonce):
             raise Cfg1StageDecisionError("SECOND_TERMINAL_SEAL_REFUSED")
+
+        # PE-1 Sec. 20.3 item 4 -- refuse BEFORE step 3: the flag is an exact
+        # bool, and it can be True only on a halt (branch A).
+        if type(pi_profile_attribution_halt) is not bool:
+            raise Cfg1StageDecisionError("MALFORMED_PI_PROFILE_ATTRIBUTION_HALT")
+        if pi_profile_attribution_halt is True and halted_after_ordinal is None:
+            raise Cfg1StageDecisionError("PI_PROFILE_ATTRIBUTION_HALT_WITHOUT_HALT")
 
         _fire("mint:before_history")
 
@@ -300,6 +347,32 @@ def _run_cfg1_stage_with_injected_executor(
             (ordinal, _ordinal_ledger.get(ordinal, ORDINAL_NOT_EXECUTED))
             for ordinal in ordinals
         )
+        # PE-1 Sec. 20.2, computed HERE from the two ledgers only -- never
+        # from a run, refusal or stage-closure artifact. ``NO_RUN_EVIDENCE`` is
+        # decided by the emission outcome ALONE, before any profile fact is
+        # consulted, so an ordinal without a confirmed run record (e.g.
+        # EVIDENCE_REFUSED) can never be made to carry a profile claim.
+        stage_pi_profile_id = _profile_ledger["stage_pi_profile_id"]
+        profile_facts = _profile_ledger["profile_fact"]
+        bindings = []
+        for ordinal, status in ordinal_status:
+            if type(status) is not str or status not in ORDINAL_STATUS_VALUES:
+                raise Cfg1StageDecisionError("MALFORMED_ORDINAL_STATUS")
+            fact = profile_facts.get(ordinal, _PROFILE_FACT_NONE)
+            if status == ORDINAL_NOT_EXECUTED:
+                value = ORDINAL_PI_PROFILE_NOT_EXECUTED
+            elif status in NO_RUN_EVIDENCE_ORDINAL_STATUSES:
+                value = ORDINAL_PI_PROFILE_NO_RUN_EVIDENCE
+            elif (
+                type(fact) is str
+                and type(stage_pi_profile_id) is str
+                and fact == stage_pi_profile_id
+            ):
+                value = ORDINAL_PI_PROFILE_STAGE_PROFILE
+            else:
+                value = ORDINAL_PI_PROFILE_NO_PROFILE
+            bindings.append((ordinal, value))
+        ordinal_pi_profile_binding = tuple(bindings)
         decision_nonce = secrets.token_hex(16)
 
         # Step 4 -- register authenticity.
@@ -310,6 +383,9 @@ def _run_cfg1_stage_with_injected_executor(
             ordinal_status=ordinal_status,
             halted_after_ordinal=halted_after_ordinal,
             halt_reason_code=halt_reason_code,
+            stage_pi_profile_id=stage_pi_profile_id,
+            ordinal_pi_profile_binding=ordinal_pi_profile_binding,
+            pi_profile_attribution_halt=pi_profile_attribution_halt,
         )
 
         _fire("mint:after_registration")
@@ -324,6 +400,9 @@ def _run_cfg1_stage_with_injected_executor(
             ordinal_status=ordinal_status,
             halted_after_ordinal=halted_after_ordinal,
             halt_reason_code=halt_reason_code,
+            stage_pi_profile_id=stage_pi_profile_id,
+            ordinal_pi_profile_binding=ordinal_pi_profile_binding,
+            pi_profile_attribution_halt=pi_profile_attribution_halt,
         )
 
     def _force_second_seal_reach() -> dict:
@@ -360,7 +439,11 @@ def _run_cfg1_stage_with_injected_executor(
         before = len(_STAGE_DECISION_SEALED)
         refused_by = "not_refused"
         try:
-            _seal_terminal_decision(halted_after_ordinal=None, halt_reason_code=None)
+            _seal_terminal_decision(
+                halted_after_ordinal=None,
+                halt_reason_code=None,
+                pi_profile_attribution_halt=False,
+            )
         except StageOutputAuthorityError:
             refused_by = "authority_reproof"
         except Cfg1StageDecisionError as exc:
@@ -404,13 +487,17 @@ def _run_cfg1_stage_with_injected_executor(
         )
 
     def _terminate(
-        *, halted_after_ordinal: int | None, halt_reason_code: str | None
+        *,
+        halted_after_ordinal: int | None,
+        halt_reason_code: str | None,
+        pi_profile_attribution_halt: bool,
     ) -> Cfg1StageResult:
         """Branches A and C: seal, emit the closure, then retire."""
         try:
             decision = _seal_terminal_decision(
                 halted_after_ordinal=halted_after_ordinal,
                 halt_reason_code=halt_reason_code,
+                pi_profile_attribution_halt=pi_profile_attribution_halt,
             )
         except StageOutputAuthorityError as exc:
             # The sealing step's own step-1 authority re-proof failing is a
@@ -512,6 +599,9 @@ def _run_cfg1_stage_with_injected_executor(
                     DISPOSITION_OUTPUT_NAMESPACE_PREOCCUPIED,
                 )
 
+            # PE-1 Sec. 14.1: the narrowing constraint, derived ONLY from this
+            # routine's own profile ledger -- ``None`` for the first ordinal,
+            # the ledger's fixed stage profile afterwards.
             admission = Cfg1RunAdmission(
                 stage_id=stage_id,
                 stage_execution_id=authority.stage_execution_id,
@@ -520,6 +610,11 @@ def _run_cfg1_stage_with_injected_executor(
                 block=block,
                 position=position,
                 run_id=secrets.token_hex(_RUN_ID_BYTES),
+                stage_pi_profile_id=(
+                    None
+                    if run_ordinal == ordinals[0]
+                    else _profile_ledger["stage_pi_profile_id"]
+                ),
             )
 
             # ================= L1 - L28 =================
@@ -531,6 +626,23 @@ def _run_cfg1_stage_with_injected_executor(
             if type(outcome) is not Cfg1RunOutcome:
                 _retire_stage_output_authority(authority)
                 raise Cfg1StageRunnerError("RUN_EXECUTOR_RETURNED_FOREIGN_OUTCOME")
+
+            # ---- PE-1 Sec. 14.3: profile-ledger capture, BEFORE L29 ----------
+            # Local assignments from the IN-MEMORY outcome only, independent of
+            # how L29 will resolve. A malformed profile value is never repaired
+            # into a profile: it becomes the NONE sentinel.
+            profile_fact, runtime_created, pi_profile_reobservation = (
+                _capture_profile_facts(outcome)
+            )
+            _profile_ledger["profile_fact"][run_ordinal] = profile_fact
+            _profile_ledger["runtime_closure"][run_ordinal] = (
+                runtime_created,
+                pi_profile_reobservation,
+            )
+            if run_ordinal == ordinals[0] and type(profile_fact) is str:
+                # Fixed exactly once, from ordinal 1; never changed afterwards.
+                _profile_ledger["stage_pi_profile_id"] = profile_fact
+
             console_codes.extend(outcome.console_codes)
 
             # ================= L29 RUN-RECORD EMISSION =================
@@ -573,30 +685,48 @@ def _run_cfg1_stage_with_injected_executor(
 
             registries_empty = _run_scoped_registries_empty(outcome)
             halt_triggered_by_this_run = emission.self_validation_defect
+            # PE-1 Sec. 17.1 item 1A, from the profile ledger's in-memory
+            # facts for THIS ordinal -- never from the emitted record.
+            ledger_runtime_created, ledger_reobservation = (
+                _profile_ledger["runtime_closure"][run_ordinal]
+            )
+            item_1a_holds = _pi_profile_item_1a_holds(
+                runtime_created=ledger_runtime_created,
+                pi_profile_reobservation=ledger_reobservation,
+            )
+            # Items 1-4 (which also refuse an unresolved emission status),
+            # AND item 1A: branch C requires all five.
             admissible = _admission_conditions_hold(
                 emission_status=emission.emission_status,
                 lifecycle_all_closed=lifecycle_all_closed,
                 run_classification=payload["run_classification"],
                 halt_triggered_by_this_run=halt_triggered_by_this_run,
                 registries_empty=registries_empty,
-            )
+            ) and item_1a_holds is True
 
             if not admissible:
-                # Branch A -- halt.
-                halt_reason_code = _resolve_halt_reason_code(
+                # Branch A -- halt. CHANGED/UNPROVEN finishes this ordinal's
+                # closure and evidence (already done) and halts: no retry, no
+                # re-run, no next ordinal.
+                halt_reason_code = _resolve_halt_reason_code_v3(
                     emission_status=emission.emission_status,
                     halt_triggered_by_this_run=halt_triggered_by_this_run,
                     lifecycle_all_closed=lifecycle_all_closed,
                     run_classification=payload["run_classification"],
+                    pi_profile_item_1a_holds=item_1a_holds,
                     registries_empty=registries_empty,
                 )
-                # The SAME closed set object the stage-closure validator cites
-                # -- checked here rather than asserted, so ``-O`` cannot strip
-                # the one place L30 proves it never invents a seventh code.
-                if halt_reason_code not in HALT_REASON_CODES:  # pragma: no cover
+                # The SAME closed set object the v3 stage-closure validator
+                # cites -- checked here rather than asserted, so ``-O`` cannot
+                # strip the one place L30 proves it never invents an eighth code.
+                if halt_reason_code not in HALT_REASON_CODES_V3:  # pragma: no cover
                     raise Cfg1StageRunnerError("HALT_REASON_CODE_OUTSIDE_CLOSED_SET")
                 return _terminate(
-                    halted_after_ordinal=run_ordinal, halt_reason_code=halt_reason_code
+                    halted_after_ordinal=run_ordinal,
+                    halt_reason_code=halt_reason_code,
+                    # Independent of which code won: True iff branch A AND
+                    # item 1A failed for this ordinal (PE-1 Sec. 17.3).
+                    pi_profile_attribution_halt=item_1a_holds is not True,
                 )
 
             if run_ordinal != last_ordinal:
@@ -610,7 +740,11 @@ def _run_cfg1_stage_with_injected_executor(
             # LAST_ORDINAL + 1 for one to name, and inventing one would
             # misrepresent the frozen schedule. This is ordinary successful
             # completion, not a halt and not a hard stop.
-            return _terminate(halted_after_ordinal=None, halt_reason_code=None)
+            return _terminate(
+                halted_after_ordinal=None,
+                halt_reason_code=None,
+                pi_profile_attribution_halt=False,
+            )
 
         raise Cfg1StageRunnerError("SCHEDULE_EXHAUSTED_WITHOUT_TERMINAL_BRANCH")
 
@@ -627,6 +761,44 @@ def _run_cfg1_stage_with_injected_executor(
         except Exception:  # noqa: BLE001 - a probe defect never changes cleanup
             pass
         _discard_stage_decision_state(authority)
+
+
+class _ProfileFactNone:
+    """The profile ledger's NONE sentinel (PE-1 Sec. 14.3). Not a ``str``."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # noqa: D105
+        return "NONE"
+
+
+#: Recorded for an ordinal whose in-memory ``pi_profile_id`` is not exactly a
+#: 64-lowercase-hex ``str``. Deliberately not a ``str``: it can never fix the
+#: stage profile and never equals one.
+_PROFILE_FACT_NONE = _ProfileFactNone()
+
+
+def _capture_profile_facts(outcome: Cfg1RunOutcome) -> tuple[object, object, object]:
+    """Read ONE ordinal's profile-ledger facts from its in-memory outcome.
+
+    Returns ``(profile_fact, runtime_created, pi_profile_reobservation)``.
+    Total: an outcome whose observations are not an exact ``dict`` yields the
+    NONE sentinel and two ``None`` values (item 1A then fails closed). Only
+    an exact 64-lowercase-hex ``str`` becomes a profile fact -- nothing is
+    repaired, coerced or defaulted into one. The other two values are passed
+    through RAW for item 1A's own exact-type test. Never reads an artifact,
+    the admission, or anything but this one in-memory outcome.
+    """
+    observations = outcome.observations
+    if type(observations) is not dict:
+        return _PROFILE_FACT_NONE, None, None
+    raw_profile = observations.get("pi_profile_id")
+    profile_fact = raw_profile if is_lowercase_hex64(raw_profile) else _PROFILE_FACT_NONE
+    return (
+        profile_fact,
+        observations.get("runtime_created"),
+        observations.get("pi_profile_post_runtime_reobservation"),
+    )
 
 
 def _run_scoped_registries_empty(outcome: Cfg1RunOutcome) -> bool:
