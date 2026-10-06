@@ -1,16 +1,27 @@
 /**
  * CFG1 T-3 -- offline Pi request-shape conformance, under total interception.
  *
- * Runs the INSTALLED Pi 0.85.1 request builder against each arm and reports
- * the exact request payload it produces. Nothing here launches a Pi model
- * session, contacts a provider, or reads a real credential or endpoint.
+ * Runs the INSTALLED Pi request builder against each arm and reports the exact
+ * request payload it produces. Nothing here launches a Pi model session,
+ * contacts a provider, or reads a real credential or endpoint. It never imports
+ * the CLI, the main entry, RPC mode or extension loading: the only installed
+ * modules it loads are the four named by the config (the model-config loader,
+ * the provider composer, the transcript normalizer and the openai-completions
+ * request builder).
  *
  * ORDERING IS THE WHOLE POINT. Every network and DNS entry point is replaced
  * with a refusing stub BEFORE the first `await import()` of any installed Pi
- * module. ESM `import` statements hoist, so the Pi modules are loaded
- * dynamically, strictly after interception is installed. Any attempted real
- * network or DNS operation is recorded and reported as a failure -- never
+ * module; the harness ABORTS if any of those replacements could not be verified
+ * (the assigned function read back by identity); and the Node engine
+ * prerequisite is checked after that and BEFORE any installed import too. ESM
+ * `import` statements hoist, so the Pi modules are loaded dynamically, strictly
+ * after interception is installed and the engine is validated. Any attempted
+ * real network or DNS operation is recorded and reported as a failure -- never
  * swallowed.
+ *
+ * The harness carries NO identity claim about the installed Pi: which payload
+ * this ran against is established by the Python caller's own observations, not
+ * by anything reported here.
  *
  * Reads one JSON config path from argv[2]; writes one JSON report to stdout.
  */
@@ -40,12 +51,15 @@ function refuse(name) {
 
 function install(holder, key, label) {
   try {
-    holder[key] = refuse(label);
-    if (holder[key].name !== undefined) {
+    const refusing = refuse(label);
+    holder[key] = refusing;
+    // Read the property BACK and require the very function assigned: a setter that
+    // swallows the write, or a property that keeps its old value, is a failure.
+    if (holder[key] === refusing) {
       installed.push(label);
       return;
     }
-    installed.push(label);
+    failedToInstall.push(label);
   } catch (error) {
     failedToInstall.push(label);
   }
@@ -66,6 +80,65 @@ if (dns.promises) {
   for (const key of Object.keys(dns.promises)) {
     if (key.startsWith("resolve")) install(dns.promises, key, `dns.promises.${key}`);
   }
+}
+
+// ---------------------------------------------------------------------------
+// 1b. Interception must have FULLY succeeded -- or nothing installed ever loads
+// ---------------------------------------------------------------------------
+//
+// This abort runs after EVERY interception attempt above and before the Node
+// version check, before the config is consumed, and before the first installed
+// Pi import. A failed or unverified interception therefore makes installed-Pi
+// execution unreachable; it is never merely recorded for a caller to notice later.
+
+if (
+  failedToInstall.length > 0 ||
+  !installed.includes("globalThis.fetch") ||
+  !installed.includes("net.connect") ||
+  !installed.includes("net.createConnection") ||
+  !installed.includes("tls.connect") ||
+  !installed.includes("http.request") ||
+  !installed.includes("https.request") ||
+  !installed.includes("dns.lookup") ||
+  !installed.some((label) => label.startsWith("dns.resolve"))
+) {
+  throw new Error(
+    `CFG1-T3 refused: network/DNS interception was not fully installed (failed: ${failedToInstall.join(", ")})`,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 1c. Node engine prerequisite, checked BEFORE any installed Pi module loads
+// ---------------------------------------------------------------------------
+//
+// The candidate manifest declares `engines.node >= 22.19.0`. This is checked
+// here, inside the one authorized Node process, from the version Node reports
+// about itself -- not by a pre-launch `--version` probe. The text must FIRST be
+// exactly three non-empty ASCII-decimal components; only then are the components
+// parsed and compared, as an integer tuple, against 22.19.0. Anything else fails
+// closed, including a missing, extra, empty or non-numeric component.
+
+const nodeVersion = process.versions.node;
+const nodeVersionParts = typeof nodeVersion === "string" ? nodeVersion.split(".") : [];
+const nodeVersionIsExact =
+  nodeVersionParts.length === 3 &&
+  nodeVersionParts.every((part) => part.length > 0 && [...part].every((char) => "0123456789".includes(char)));
+if (!nodeVersionIsExact) {
+  throw new Error("CFG1-T3 refused: the reported Node version is not exactly major.minor.patch decimal digits");
+}
+const nodeTuple = nodeVersionParts.map(Number);
+const nodeFloor = [22, 19, 0];
+let nodeBelowFloor = false;
+for (let position = 0; position < 3; position += 1) {
+  if (nodeTuple[position] !== nodeFloor[position]) {
+    nodeBelowFloor = nodeTuple[position] < nodeFloor[position];
+    break;
+  }
+}
+if (nodeBelowFloor) {
+  throw new Error(
+    `CFG1-T3 refused: Node 22.19.0 or later is required before any installed Pi import (found ${nodeVersion})`,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -104,12 +177,20 @@ const { composeModelProvider } = await import(
 const { streamSimple } = await import(
   pathToFileURL(config.openaiCompletionsModule).href
 );
+const { normalizeContext } = await import(
+  pathToFileURL(config.transcriptModule).href
+);
 
-const context = {
+// The installed request builder consumes a TRANSCRIPT, not the raw
+// `{systemPrompt, messages, tools}` shape: `normalizeContext` is the installed
+// package's own public entry point that folds the system prompt and tools into
+// the leading system message, exactly as its own `streamSimple` wrapper does
+// before handing a context to a provider. Nothing is hand-assembled here.
+const context = normalizeContext({
   systemPrompt: config.systemPrompt,
-  messages: [{ role: "user", content: [{ type: "text", text: config.userPrompt }] }],
+  messages: [{ role: "user", content: [{ type: "text", text: config.userPrompt }], timestamp: 0 }],
   tools: config.tools,
-};
+});
 
 const report = { arms: {}, violations, installed, failedToInstall, fetchCalls: [] };
 

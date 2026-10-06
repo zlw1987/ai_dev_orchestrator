@@ -146,7 +146,7 @@ def _require_installed_profile_approved(pi_root: Path) -> str:
     return matches[0]
 
 
-def _minimal_node_environment() -> dict[str, str]:
+def _minimal_node_environment(node_executable: str) -> dict[str, str]:
     """An explicit, minimal child environment -- never the parent's.
 
     Asserted by the caller before Node is launched: no ``AIDO_*``, no
@@ -156,10 +156,7 @@ def _minimal_node_environment() -> dict[str, str]:
     for name in ("SystemRoot", "SystemDrive", "windir", "ComSpec", "PATHEXT", "TEMP", "TMP"):
         if name in os.environ:
             environment[name] = os.environ[name]
-    node = shutil.which("node")
-    if not node:
-        pytest.skip("node is not available")
-    environment["PATH"] = str(Path(os.path.realpath(node)).parent)
+    environment["PATH"] = str(Path(node_executable).parent)
     return environment
 
 
@@ -194,15 +191,24 @@ class _T3Run(NamedTuple):
     workdir: Path
 
 
-@pytest.fixture(scope="module")
-def _t3_run(tmp_path_factory):
-    """Run the harness ONCE; keep the report AND the work directory Python made."""
-    if not shutil.which("node"):  # pragma: no cover - environment dependent
-        pytest.skip("node is not available")
+class _PreparedHarness(NamedTuple):
+    """Everything needed to start the harness's ONE Node process -- and nothing else.
 
-    pi_root = _installed_pi_root()
+    Built by :func:`_prepare_t3_harness`, which starts no process. It holds no
+    authority: WHICH installed Pi may be run is decided by the caller's own gate
+    before it hands this to :func:`_execute_t3_harness` (the ordinary path: the
+    sealed-APS gate in :func:`_installed_pi_root`; the PE-4B path: the exact
+    committed-candidate binding in ``test_cfg1_pe4b_candidate_qualification.py``).
+    """
+
+    argv: list
+    environment: dict
+    workdir: Path
+
+
+def _prepare_t3_harness(pi_root: Path, workdir: Path, *, node_executable: str) -> _PreparedHarness:
+    """Write the arms and the harness config; return the launch plan. Starts nothing."""
     pi_ai = pi_root / "node_modules" / "@earendil-works" / "pi-ai"
-    workdir = tmp_path_factory.mktemp("cfg1_t3")
 
     arms = []
     for arm_id in ("Q", "R", "E", "H"):
@@ -240,22 +246,32 @@ def _t3_run(tmp_path_factory):
         "openaiCompletionsModule": str(
             pi_ai / "dist" / "api" / "openai-completions.js"
         ),
+        # The installed package's own public transcript normalizer (see the harness).
+        "transcriptModule": str(pi_ai / "dist" / "utils" / "transcript.js"),
     }
     config_path = workdir / "harness_config.json"
     config_path.write_text(json.dumps(harness_config), encoding="utf-8")
 
-    environment = _minimal_node_environment()
+    environment = _minimal_node_environment(node_executable)
     # Rule 1, asserted in PYTHON, BEFORE Node is launched.
     for name in environment:
         upper = name.upper()
         assert not any(
             fragment in upper for fragment in _FORBIDDEN_ENVIRONMENT_FRAGMENTS
         ), name
+    return _PreparedHarness(
+        argv=[node_executable, str(_HARNESS), str(config_path)],
+        environment=environment,
+        workdir=workdir,
+    )
 
+
+def _execute_t3_harness(prepared: _PreparedHarness) -> dict:
+    """Start the harness's ONE Node process and return its parsed report."""
     completed = subprocess.run(  # noqa: S603 - pinned argv, shell=False
-        [os.path.realpath(shutil.which("node")), str(_HARNESS), str(config_path)],
-        cwd=str(workdir),
-        env=environment,
+        prepared.argv,
+        cwd=str(prepared.workdir),
+        env=prepared.environment,
         stdin=subprocess.DEVNULL,
         capture_output=True,
         timeout=180,
@@ -269,7 +285,25 @@ def _t3_run(tmp_path_factory):
     assert report["violations"] == [], report["violations"]
     assert report["failedToInstall"] == [], report["failedToInstall"]
     # Rule 5: the captured payload stays test-local.
-    assert str(workdir) not in str(_HARNESS)
+    assert str(prepared.workdir) not in str(_HARNESS)
+    return report
+
+
+@pytest.fixture(scope="module")
+def _t3_run(tmp_path_factory):
+    """Run the harness ONCE; keep the report AND the work directory Python made."""
+    if not shutil.which("node"):  # pragma: no cover - environment dependent
+        pytest.skip("node is not available")
+
+    # The ORDINARY authority gate -- unchanged: the installed payload must be an
+    # eligible profile of the sealed APS head, or this fails loudly (no candidate
+    # exception exists on this path).
+    pi_root = _installed_pi_root()
+    workdir = tmp_path_factory.mktemp("cfg1_t3")
+    node_executable = os.path.realpath(shutil.which("node"))
+    report = _execute_t3_harness(
+        _prepare_t3_harness(pi_root, workdir, node_executable=node_executable)
+    )
     return _T3Run(report=report, workdir=workdir)
 
 
@@ -553,8 +587,8 @@ def test_t3_err1_p08_the_report_carries_a_path_only(conformance_report):
 # ---------------------------------------------------------------------------
 
 
-def test_t3_the_shared_payload_shape_matches_the_source_derivation(conformance_report):
-    q = _params(conformance_report, "Q")
+def _assert_shared_payload_common(q: dict) -> None:
+    """The profile-independent part of the Sec. 3.4 shared payload (arm Q)."""
     assert q["model"] == CFG1_MODEL_ID
     assert q["stream"] is True
     assert q["stream_options"] == {"include_usage": True}
@@ -563,12 +597,21 @@ def test_t3_the_shared_payload_shape_matches_the_source_derivation(conformance_r
         "aido_read",
         "aido_edit",
     ]
-    assert all(tool["function"]["strict"] is False for tool in q["tools"])
     assert isinstance(q["max_completion_tokens"], int)
     # Explicitly NOT sent, per Sec. 3.4.
     for absent in ("tool_choice", "temperature", "prompt_cache_key", "priority",
                    "chat_template_kwargs", "max_tokens"):
         assert q.get(absent) is None, absent
+
+
+def test_t3_the_shared_payload_shape_matches_the_source_derivation(conformance_report):
+    q = _params(conformance_report, "Q")
+    _assert_shared_payload_common(q)
+    # The ordinary contract's `strict` expectation is the GENESIS derivation's
+    # (CFG1 Sec. 2.2/3.4) and is deliberately NOT relaxed to accept either shape:
+    # a profile whose reviewed declaration shape differs needs its own profile-
+    # specific expectation at its own approval, never a widened generic line.
+    assert all(tool["function"]["strict"] is False for tool in q["tools"])
 
 
 def test_t3_no_real_credential_or_endpoint_was_used_anywhere(conformance_report):
@@ -1444,6 +1487,72 @@ _JS_DYNAMIC_IMPORTS = (
     "const { ModelConfig } = await import(pathToFileURL(config.modelConfigModule).href);",
     "const { composeModelProvider } = await import(pathToFileURL(config.providerComposerModule).href);",
     "const { streamSimple } = await import(pathToFileURL(config.openaiCompletionsModule).href);",
+    "const { normalizeContext } = await import(pathToFileURL(config.transcriptModule).href);",
+)
+
+#: PE-4B FU2: the interception-install function and the abort that follows every attempt. The install
+#: reads the property BACK and requires the very function it assigned (``=== refusing``); the abort
+#: refuses to continue past a single failed or unverified interception.
+_JS_FAILED_DECL = "const failedToInstall = [];"
+_JS_INSTALLED_DECL = "const installed = [];"
+_JS_INSTALL_FUNCTION = (
+    "function install(holder, key, label) { try { const refusing = refuse(label); "
+    "holder[key] = refusing; if (holder[key] === refusing) { installed.push(label); return; } "
+    "failedToInstall.push(label); } catch (error) { failedToInstall.push(label); } }"
+)
+_JS_INTERCEPTION_ABORT = (
+    "if ( failedToInstall.length > 0 || !installed.includes(\"globalThis.fetch\") || "
+    "!installed.includes(\"net.connect\") || !installed.includes(\"net.createConnection\") || "
+    "!installed.includes(\"tls.connect\") || !installed.includes(\"http.request\") || "
+    "!installed.includes(\"https.request\") || !installed.includes(\"dns.lookup\") || "
+    "!installed.some((label) => label.startsWith(\"dns.resolve\")) ) { throw new Error( "
+    "`CFG1-T3 refused: network/DNS interception was not fully installed "
+    "(failed: ${failedToInstall.join(\", \")})`, ); }"
+)
+#: Every interception call site the abort must follow (the required seven; the resolve loops are checked
+#: structurally as ``install`` call sites).
+_JS_REQUIRED_INSTALL_CALLS = (
+    'install(globalThis, "fetch", "globalThis.fetch");',
+    'install(net, "connect", "net.connect");',
+    'install(net, "createConnection", "net.createConnection");',
+    'install(tls, "connect", "tls.connect");',
+    'install(http, "request", "http.request");',
+    'install(https, "request", "https.request");',
+    'install(dns, "lookup", "dns.lookup");',
+)
+
+#: PE-4B FU2: the Node engine prerequisite, read from the version Node reports about itself -- the
+#: THIRD and last authorized ``process`` expression (the other two are the config read and the
+#: report write). The text must FIRST pass the exact grammar (three non-empty ASCII-decimal
+#: components); only then is it parsed and compared, as an integer tuple, against 22.19.0.
+_JS_NODE_VERSION = "const nodeVersion = process.versions.node;"
+_JS_NODE_VERSION_PARTS = (
+    'const nodeVersionParts = typeof nodeVersion === "string" ? nodeVersion.split(".") : [];'
+)
+_JS_NODE_GRAMMAR = (
+    "const nodeVersionIsExact = nodeVersionParts.length === 3 && nodeVersionParts.every("
+    '(part) => part.length > 0 && [...part].every((char) => "0123456789".includes(char)));'
+)
+_JS_NODE_GRAMMAR_REFUSAL = (
+    'if (!nodeVersionIsExact) { throw new Error("CFG1-T3 refused: the reported Node version is not '
+    'exactly major.minor.patch decimal digits"); }'
+)
+_JS_NODE_PARSE = "const nodeTuple = nodeVersionParts.map(Number);"
+_JS_NODE_FLOOR = "const nodeFloor = [22, 19, 0];"
+_JS_NODE_COMPARE = (
+    "let nodeBelowFloor = false; for (let position = 0; position < 3; position += 1) { "
+    "if (nodeTuple[position] !== nodeFloor[position]) { "
+    "nodeBelowFloor = nodeTuple[position] < nodeFloor[position]; break; } }"
+)
+_JS_NODE_FLOOR_REFUSAL = (
+    "if (nodeBelowFloor) { throw new Error( "
+    "`CFG1-T3 refused: Node 22.19.0 or later is required before any installed Pi import "
+    "(found ${nodeVersion})`, ); }"
+)
+#: The gate's statements, in the order the harness must run them.
+_JS_NODE_GATE = (
+    _JS_NODE_VERSION, _JS_NODE_VERSION_PARTS, _JS_NODE_GRAMMAR, _JS_NODE_GRAMMAR_REFUSAL,
+    _JS_NODE_PARSE, _JS_NODE_FLOOR, _JS_NODE_COMPARE, _JS_NODE_FLOOR_REFUSAL,
 )
 
 #: P-03(c): everything that can carry model-derived content, and where it may be used.
@@ -1482,7 +1591,19 @@ _JS_MODEL_FAMILY_USES: dict[str, tuple[tuple[str, int], ...]] = {
 #: token beyond what those two statements hold. The WRITE side (``writeFileSync``: its import
 #: plus the ONE sidecar write) is frozen by the same kind of entry in the model-family table above.
 _JS_PROCESS_USES: dict[str, tuple[tuple[str, int], ...]] = {
-    "process": ((_JS_READ_CONFIG, 1), (_JS_WRITE_REPORT, 1)),
+    "process": ((_JS_READ_CONFIG, 1), (_JS_WRITE_REPORT, 1), (_JS_NODE_VERSION, 1)),
+    "nodeVersion": ((_JS_NODE_VERSION, 1), (_JS_NODE_VERSION_PARTS, 1), (_JS_NODE_FLOOR_REFUSAL, 1)),
+    "nodeVersionParts": ((_JS_NODE_VERSION_PARTS, 1), (_JS_NODE_GRAMMAR, 1), (_JS_NODE_PARSE, 1)),
+    "nodeVersionIsExact": ((_JS_NODE_GRAMMAR, 1), (_JS_NODE_GRAMMAR_REFUSAL, 1)),
+    "nodeTuple": ((_JS_NODE_PARSE, 1), (_JS_NODE_COMPARE, 1)),
+    "nodeFloor": ((_JS_NODE_FLOOR, 1), (_JS_NODE_COMPARE, 1)),
+    "nodeBelowFloor": ((_JS_NODE_COMPARE, 1), (_JS_NODE_FLOOR_REFUSAL, 1)),
+    "failedToInstall": (
+        (_JS_FAILED_DECL, 1), (_JS_INSTALL_FUNCTION, 1), (_JS_INTERCEPTION_ABORT, 1), (_JS_REPORT_DECL, 1),
+    ),
+    "installed": (
+        (_JS_INSTALLED_DECL, 1), (_JS_INSTALL_FUNCTION, 1), (_JS_INTERCEPTION_ABORT, 1), (_JS_REPORT_DECL, 1),
+    ),
     "globalThis": (('install(globalThis, "fetch", "globalThis.fetch");', 1),),
     "import": tuple((text, 1) for text in _JS_IMPORTS + _JS_DYNAMIC_IMPORTS),
     "readFileSync": (('import { readFileSync, writeFileSync } from "node:fs";', 1), (_JS_READ_CONFIG, 1)),
@@ -1498,12 +1619,13 @@ _JS_FORBIDDEN_IDENTIFIERS = (
 def _check_harness_source(source: str) -> None:
     """ERR1 P-03(c) and P-05: the token-level source proof over ``cfg1_t3_conformance.mjs``."""
     tokens = _js_tokens(source)
-    # P-05: EXACTLY the two authorized process expressions and no other ``process`` token, in any
-    # form -- bracket access, aliasing, destructuring, ``Reflect.get``, a string, a module name.
+    # P-05: EXACTLY the three authorized process expressions (config read, report write, and the
+    # PE-4B engine-version read) and no other ``process`` token, in any form -- bracket access,
+    # aliasing, destructuring, ``Reflect.get``, a string, a module name.
     _require(
-        sum(token.count("process") for token in tokens) == 2,
+        sum(token.count("process") for token in tokens) == 3,
         "P-05",
-        "a `process` token exists beyond the two authorized expressions",
+        "a `process` token exists beyond the three authorized expressions",
     )
     _js_check_uses(tokens, _JS_PROCESS_USES, "P-05")
     for name in _JS_FORBIDDEN_IDENTIFIERS:
@@ -2061,7 +2183,7 @@ def _mutate_harness(old: str, new: str) -> str:
     return source.replace(old, new, 1)
 
 
-_HARNESS_CONTEXT = "const context = {"
+_HARNESS_CONTEXT = "const context = normalizeContext({"
 _HARNESS_STREAM_ERROR = "      streamError: String(error && error.message ? error.message : error),\n"
 _HARNESS_PARAMS_FIELD = "    params: capturedParams,\n"
 _HARNESS_FETCH_FIELD = "    fetchCallsForThisArm: fetchCalls.length - before,\n"
@@ -2076,11 +2198,12 @@ def _inserted_before_context(statement: str) -> tuple[str, str]:
 def test_err1_p05_the_real_harness_source_passes_every_source_check():
     _check_harness_source(_harness_source())
     tokens = _js_tokens(_harness_source())
-    # EXACTLY the two authorized process expressions, and no other `process` token in any form
-    assert sum(token.count("process") for token in tokens) == 2
-    assert tokens.count("process") == 2
+    # EXACTLY the three authorized process expressions, and no other `process` token in any form
+    assert sum(token.count("process") for token in tokens) == 3
+    assert tokens.count("process") == 3
     assert _js_occurrences(tokens, _js_tokens(_JS_READ_CONFIG)) == 1
     assert _js_occurrences(tokens, _js_tokens(_JS_WRITE_REPORT)) == 1
+    assert _js_occurrences(tokens, _js_tokens(_JS_NODE_VERSION)) == 1
 
 
 def test_err1_p05_the_token_lexer_drops_comments_keeps_strings_opaque_and_refuses_regex_literals():
@@ -2380,6 +2503,391 @@ def test_err1_p05_a_second_sidecar_write_is_still_rejected_beside_the_read_entry
     old, new = _inserted_before_context('writeFileSync("C:/x.txt", "y", "utf-8");\n')
     with pytest.raises(AssertionError, match=r"P-0[35]"):
         _check_harness_source(_mutate_harness(old, new))
+
+
+# ---------------------------------------------------------------------------
+# PE-4B -- harness ORDER and reach, proved over the same token stream (static; runs no Node)
+# ---------------------------------------------------------------------------
+#
+# Facts the request-builder qualification depends on, none of which the exact-statement
+# tables above can express because they are about POSITION, not content:
+#   1. every network/DNS interception call is VERIFIED (the assigned function read back by identity);
+#   2. the harness ABORTS if any interception failed -- after the last attempt, before anything else;
+#   3. the Node version gate (exact grammar, THEN parse, THEN tuple floor) follows that abort;
+#   4. the config read and the FIRST installed-module import (every dynamic ``import(``) follow the gate;
+#   5. every static import is a Node built-in, so nothing installed can load before 1.-3.
+# And one about reach: the harness names no process-spawning API and no CLI/main/RPC entry.
+
+_JS_REACH_FORBIDDEN_SUBSTRINGS = (
+    "child_process", "spawn", "execSync", "execFile", "fork", "Worker", "cli.js", "main.js", "rpc",
+)
+
+
+def _js_first_index(tokens: list[str], snippet_text: str, label: str) -> int:
+    snippet = _js_tokens(snippet_text)
+    for start in range(len(tokens) - len(snippet) + 1):
+        if tokens[start : start + len(snippet)] == snippet:
+            return start
+    raise AssertionError(f"PE4B-ORDER: the harness has no {label}")
+
+
+def _js_exactly_once(tokens: list[str], snippet_text: str, label: str) -> int:
+    found = _js_occurrences(tokens, _js_tokens(snippet_text))
+    _require(found == 1, "PE4B-ORDER", f"{label} occurs {found} time(s), not exactly once")
+    return _js_first_index(tokens, snippet_text, label)
+
+
+def _install_call_indexes(tokens: list[str]) -> list[int]:
+    return [
+        index
+        for index in range(1, len(tokens) - 1)
+        if tokens[index] == "install" and tokens[index + 1] == "(" and tokens[index - 1] != "function"
+    ]
+
+
+def _check_harness_ordering(source: str) -> None:
+    tokens = _js_tokens(source)
+    installs = _install_call_indexes(tokens)
+    _require(len(installs) >= 7, "PE4B-ORDER", "the harness installs fewer than the seven required interceptions")
+    # (1) the install verifies the very function it assigned, by identity, and the failure list exists
+    _js_exactly_once(tokens, _JS_INSTALL_FUNCTION, "identity-verifying interception install")
+    _js_exactly_once(tokens, _JS_FAILED_DECL, "failedToInstall declaration")
+    required_calls = [
+        _js_exactly_once(tokens, call, f"required interception {call}") for call in _JS_REQUIRED_INSTALL_CALLS
+    ]
+    # (2) the abort, after EVERY install call site (the required seven and both resolve loops)
+    abort = _js_exactly_once(tokens, _JS_INTERCEPTION_ABORT, "interception-failure abort")
+    _require(
+        max(installs) < abort and max(required_calls) < abort,
+        "PE4B-INTERCEPT",
+        "an interception attempt follows the interception-failure abort",
+    )
+    # (3) the version gate: each statement exactly once, in order, after the abort
+    gate = [
+        _js_exactly_once(tokens, statement, f"engine gate statement {number}")
+        for number, statement in enumerate(_JS_NODE_GATE)
+    ]
+    _require(
+        abort < gate[0] and gate == sorted(gate) and len(set(gate)) == len(gate),
+        "PE4B-ORDER",
+        "the engine gate must follow the interception abort and run grammar, then parse, then tuple floor, in order",
+    )
+    _require(
+        [int(token) for token in _js_tokens(_JS_NODE_FLOOR) if token.isdigit()] == [22, 19, 0],
+        "PE4B-ORDER",
+        "the engine floor is not exactly 22.19.0",
+    )
+    # (4) config consumption and every installed-module import follow the whole gate
+    config_read = _js_exactly_once(tokens, _JS_READ_CONFIG, "config read")
+    dynamic = [
+        index for index in range(len(tokens) - 1) if tokens[index] == "import" and tokens[index + 1] == "("
+    ]
+    _require(len(dynamic) == 4, "PE4B-ORDER", "the harness must load exactly four installed modules")
+    _require(
+        max(installs) < abort < gate[0] < gate[-1] < config_read < min(dynamic),
+        "PE4B-ORDER",
+        "interception, its abort, then the engine gate, then the config read, must each precede the first "
+        "installed-module import",
+    )
+    # (5) nothing installed is loaded statically
+    for index in range(len(tokens) - 1):
+        if tokens[index] == "import" and tokens[index + 1] != "(":
+            specifier = tokens[tokens.index("from", index) + 1]
+            _require(
+                specifier.startswith(('"node:', "'node:")),
+                "PE4B-ORDER",
+                f"a static import of a non-built-in module hoists above interception: {specifier}",
+            )
+    for token in tokens:
+        for forbidden in _JS_REACH_FORBIDDEN_SUBSTRINGS:
+            _require(
+                forbidden not in token,
+                "PE4B-REACH",
+                f"the harness names {forbidden!r}: it must not spawn or reach a CLI, main or RPC entry",
+            )
+
+
+def _check_all_harness_proofs(source: str) -> None:
+    _check_harness_source(source)
+    _check_harness_ordering(source)
+
+
+_PE4B_PROOF_FAILURE = r"P-05|P-03|PE4B-ORDER|PE4B-INTERCEPT|PE4B-REACH"
+
+
+def test_pe4b_the_real_harness_orders_interception_abort_engine_gate_then_installed_imports():
+    _check_all_harness_proofs(_harness_source())
+
+
+def test_pe4b_the_engine_floor_is_exactly_the_22_19_0_tuple_and_all_three_components_are_validated_and_parsed():
+    source_tokens = _js_tokens(_harness_source())
+    floor = _js_tokens(_JS_NODE_FLOOR)
+    assert [token for token in floor if token.isdigit()] == ["22", "19", "0"]
+    # all THREE components are validated: the length is exactly 3 (never >= / <=), each part non-empty,
+    # each character one of the ten ASCII digits
+    grammar = _js_tokens(_JS_NODE_GRAMMAR)
+    assert _js_occurrences(grammar, ["nodeVersionParts", ".", "length", "===", "3"]) == 1
+    assert _js_occurrences(grammar, ["part", ".", "length", ">", "0"]) == 1
+    assert '"0123456789"' in grammar
+    # all THREE are parsed, as integers, from the validated parts and nothing else
+    assert _js_tokens(_JS_NODE_PARSE) == [
+        "const", "nodeTuple", "=", "nodeVersionParts", ".", "map", "(", "Number", ")", ";",
+    ]
+    # the comparison walks all three positions of the tuple
+    assert _js_occurrences(_js_tokens(_JS_NODE_COMPARE), ["position", "<", "3"]) == 1
+    # there is no major-only fast path anywhere: no ``> 22`` / ``>= 23`` comparison exists in the harness
+    for forbidden in (["nodeMajor"], ["nodeMinor"], [">", "22"], [">=", "23"]):
+        assert _js_occurrences(source_tokens, forbidden) == 0, forbidden
+    # and the grammar is established strictly BEFORE anything is parsed or compared
+    _check_harness_ordering(_harness_source())
+
+
+@pytest.mark.parametrize(
+    "label, old, new",
+    [
+        pytest.param(
+            "engine-version read replaced by a constant",
+            "const nodeVersion = process.versions.node;",
+            "const nodeVersion = \"0.0.0\";",
+            id="read-removed",
+        ),
+        pytest.param("floor weakened (minor)", "[22, 19, 0]", "[22, 18, 0]", id="floor-weakened-minor"),
+        pytest.param("floor weakened (major)", "[22, 19, 0]", "[21, 19, 0]", id="floor-weakened-major"),
+        pytest.param("floor changed (patch)", "[22, 19, 0]", "[22, 19, 5]", id="floor-changed-patch"),
+        pytest.param(
+            "floor refusal neutered",
+            "throw new Error(\n    `CFG1-T3 refused: Node",
+            "console.log(\n    `CFG1-T3 refused: Node",
+            id="floor-refusal-neutered",
+        ),
+        pytest.param(
+            "grammar refusal neutered",
+            'throw new Error("CFG1-T3 refused: the reported Node version',
+            'console.log("CFG1-T3 refused: the reported Node version',
+            id="grammar-refusal-neutered",
+        ),
+        pytest.param(
+            "extra components accepted (length >= 3)",
+            "nodeVersionParts.length === 3",
+            "nodeVersionParts.length >= 3",
+            id="extra-components-accepted",
+        ),
+        pytest.param(
+            "missing components accepted (length >= 2)",
+            "nodeVersionParts.length === 3",
+            "nodeVersionParts.length >= 2",
+            id="missing-components-accepted",
+        ),
+        pytest.param("empty component accepted", "part.length > 0 && ", "", id="empty-component-accepted"),
+        pytest.param(
+            "non-digit characters accepted",
+            '[...part].every((char) => "0123456789".includes(char))',
+            "true",
+            id="non-digits-accepted",
+        ),
+        pytest.param(
+            "validation drops the type guard",
+            'typeof nodeVersion === "string" ? nodeVersion.split(".") : []',
+            'nodeVersion.split(".")',
+            id="no-type-guard",
+        ),
+        pytest.param(
+            "components parsed from the unvalidated text",
+            "nodeVersionParts.map(Number)",
+            'nodeVersion.split(".").map(Number)',
+            id="parse-from-raw-text",
+        ),
+        pytest.param(
+            "a major-only fast path",
+            "if (nodeBelowFloor) {",
+            "if (nodeTuple[0] < 23 && nodeBelowFloor) {",
+            id="major-fast-path",
+        ),
+    ],
+)
+def test_pe4b_a_weakened_or_removed_engine_check_is_rejected(label, old, new):
+    mutated = _mutate_harness(old, new)
+    with pytest.raises(AssertionError, match=_PE4B_PROOF_FAILURE):
+        _check_all_harness_proofs(mutated)
+
+
+def _move_block(source: str, start_marker: str, end_marker: str, before: str) -> str:
+    start = source.index(start_marker)
+    end = source.index(end_marker, start)
+    block = source[start:end]
+    moved = source.replace(block, "", 1).replace(before, block + before, 1)
+    assert moved != source
+    return moved
+
+
+def test_pe4b_an_engine_gate_moved_below_the_first_installed_import_is_rejected():
+    moved = _move_block(
+        _harness_source(),
+        "const nodeVersion = process.versions.node;",
+        "// ----",
+        "const { normalizeContext } = await import(",
+    )
+    with pytest.raises(AssertionError, match=r"PE4B-ORDER"):
+        _check_harness_ordering(moved)
+
+
+def test_pe4b_the_grammar_check_moved_below_the_parse_is_rejected():
+    """Parse-before-grammar is the way malformed text would reach the numeric comparison."""
+    source = _harness_source()
+    grammar_start = source.index("const nodeVersionIsExact =")
+    grammar_end = source.index("const nodeTuple =")
+    block = source[grammar_start:grammar_end]
+    moved = source.replace(block, "", 1).replace(
+        "let nodeBelowFloor = false;", block + "let nodeBelowFloor = false;", 1
+    )
+    assert moved != source
+    with pytest.raises(AssertionError, match=r"PE4B-ORDER"):
+        _check_harness_ordering(moved)
+
+
+def test_pe4b_the_interception_abort_exists_and_is_exactly_the_stated_statement():
+    tokens = _js_tokens(_harness_source())
+    assert _js_occurrences(tokens, _js_tokens(_JS_INTERCEPTION_ABORT)) == 1
+    assert _js_occurrences(tokens, _js_tokens(_JS_INSTALL_FUNCTION)) == 1
+    # every one of the seven required interception call sites is present exactly once
+    for call in _JS_REQUIRED_INSTALL_CALLS:
+        assert _js_occurrences(tokens, _js_tokens(call)) == 1, call
+    # and the abort's refusal is a throw, not a log
+    assert _js_occurrences(_js_tokens(_JS_INTERCEPTION_ABORT), ["throw", "new", "Error", "("]) == 1
+
+
+@pytest.mark.parametrize(
+    "label, old, new",
+    [
+        pytest.param(
+            "the failed list is not consulted",
+            "failedToInstall.length > 0 ||",
+            "false ||",
+            id="failed-list-not-consulted",
+        ),
+        pytest.param(
+            "abort neutered to a log",
+            "throw new Error(\n    `CFG1-T3 refused: network/DNS",
+            "console.log(\n    `CFG1-T3 refused: network/DNS",
+            id="abort-is-a-log",
+        ),
+        pytest.param(
+            "a required label no longer required",
+            '  !installed.includes("tls.connect") ||\n',
+            "",
+            id="required-label-dropped",
+        ),
+        pytest.param(
+            "install keeps a non-identity check",
+            "if (holder[key] === refusing) {",
+            "if (holder[key] !== undefined) {",
+            id="install-not-identity",
+        ),
+        pytest.param(
+            "install trusts the assignment without reading it back",
+            "if (holder[key] === refusing) {",
+            "if (true) {",
+            id="install-no-readback",
+        ),
+        pytest.param(
+            "install records success from the assignment alone",
+            "    failedToInstall.push(label);\n  } catch (error) {",
+            "    installed.push(label);\n  } catch (error) {",
+            id="install-unverified-success",
+        ),
+    ],
+)
+def test_pe4b_a_weakened_interception_install_or_abort_is_rejected(label, old, new):
+    mutated = _mutate_harness(old, new)
+    with pytest.raises(AssertionError, match=_PE4B_PROOF_FAILURE):
+        _check_all_harness_proofs(mutated)
+
+
+def test_pe4b_the_interception_abort_removed_entirely_is_rejected():
+    source = _harness_source()
+    start = source.index("if (\n  failedToInstall.length > 0 ||")
+    end = source.index("// ----", start)
+    removed = source.replace(source[start:end], "", 1)
+    assert removed != source
+    with pytest.raises(AssertionError, match=_PE4B_PROOF_FAILURE):
+        _check_all_harness_proofs(removed)
+
+
+def test_pe4b_the_interception_abort_moved_below_the_first_installed_import_is_rejected():
+    moved = _move_block(
+        _harness_source(),
+        "if (\n  failedToInstall.length > 0 ||",
+        "// ----",
+        "const { normalizeContext } = await import(",
+    )
+    with pytest.raises(AssertionError, match=r"PE4B-ORDER|PE4B-INTERCEPT"):
+        _check_harness_ordering(moved)
+
+
+def test_pe4b_the_interception_abort_moved_below_the_engine_gate_or_the_config_read_is_rejected():
+    for anchor in (
+        "const nodeTuple = nodeVersionParts.map(Number);",
+        'const config = JSON.parse(readFileSync(process.argv[2], "utf-8"));',
+    ):
+        moved = _move_block(_harness_source(), "if (\n  failedToInstall.length > 0 ||", "// ----", anchor)
+        with pytest.raises(AssertionError, match=r"PE4B-ORDER|PE4B-INTERCEPT"):
+            _check_harness_ordering(moved)
+
+
+def test_pe4b_an_interception_attempt_added_after_the_abort_is_rejected():
+    late = _mutate_harness(
+        "const nodeVersion = process.versions.node;",
+        'install(dns, "late", "dns.late");\nconst nodeVersion = process.versions.node;',
+    )
+    with pytest.raises(AssertionError, match=r"PE4B-INTERCEPT"):
+        _check_harness_ordering(late)
+
+
+def test_pe4b_every_required_interception_call_precedes_the_abort_and_the_abort_precedes_every_import():
+    tokens = _js_tokens(_harness_source())
+    abort = _js_first_index(tokens, _JS_INTERCEPTION_ABORT, "abort")
+    for call in _JS_REQUIRED_INSTALL_CALLS:
+        assert _js_first_index(tokens, call, call) < abort, call
+    installs = _install_call_indexes(tokens)
+    assert installs and max(installs) < abort
+    first_import = min(
+        index for index in range(len(tokens) - 1) if tokens[index] == "import" and tokens[index + 1] == "("
+    )
+    assert abort < _js_first_index(tokens, _JS_NODE_VERSION, "version read") < first_import
+    assert abort < _js_first_index(tokens, _JS_READ_CONFIG, "config read") < first_import
+
+
+def test_pe4b_an_installed_import_hoisted_above_interception_or_added_statically_is_rejected():
+    for old, new in (
+        ('import dns from "node:dns";', 'import dns from "node:dns";\nimport pi from "./pi-ai.js";'),
+        ('import dns from "node:dns";', 'import dns from "node:dns";\nimport "../pi.js";'),
+    ):
+        with pytest.raises(AssertionError, match=_PE4B_PROOF_FAILURE):
+            _check_all_harness_proofs(_mutate_harness(old, new))
+    early = _mutate_harness(
+        "install(globalThis, \"fetch\", \"globalThis.fetch\");",
+        "const early = await import(pathToFileURL(config.modelConfigModule).href);\n"
+        "install(globalThis, \"fetch\", \"globalThis.fetch\");",
+    )
+    with pytest.raises(AssertionError, match=_PE4B_PROOF_FAILURE):
+        _check_all_harness_proofs(early)
+
+
+@pytest.mark.parametrize(
+    "injected",
+    [
+        pytest.param('const cp = await import("node:child_process");\n', id="child-process"),
+        pytest.param('const entry = "dist/main.js";\n', id="main-entry"),
+        pytest.param('const entry = "dist/cli.js";\n', id="cli-entry"),
+        pytest.param('const entry = "dist/modes/rpc/rpc-mode.js";\n', id="rpc-entry"),
+    ],
+)
+def test_pe4b_a_harness_that_names_a_spawn_api_or_a_cli_main_rpc_entry_is_rejected(injected):
+    old, new = _inserted_before_context(injected)
+    with pytest.raises(AssertionError, match=r"PE4B-REACH|PE4B-ORDER|P-05"):
+        mutated = _mutate_harness(old, new)
+        _check_harness_ordering(mutated)
+        _check_harness_source(mutated)
 
 
 # ---------------------------------------------------------------------------

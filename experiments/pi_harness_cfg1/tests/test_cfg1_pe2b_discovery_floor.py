@@ -20,6 +20,7 @@ from __future__ import annotations
 import ast
 import inspect
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -72,12 +73,39 @@ _REAL_STAGING = _PACKAGE_DIR / "pi_profile_candidates"
 _SUFFIXES = (".inventory.json", ".manifest_bundle.json", ".candidate.json")
 
 
+def _real_staging_metadata() -> dict[str, tuple[int, int]] | None:
+    """``name -> (size, mtime_ns)`` of the genuine staging directory's entries, or None if it is absent.
+
+    Metadata only: it never opens a file, so no test here consumes or depends on a candidate's contents.
+    """
+    if not _REAL_STAGING.is_dir():
+        return None
+    entries = {}
+    for entry in os.scandir(_REAL_STAGING):
+        status = entry.stat(follow_symlinks=False)
+        entries[entry.name] = (status.st_size, status.st_mtime_ns)
+    return entries
+
+
 @pytest.fixture(autouse=True)
-def _the_real_staging_directory_is_never_touched():
-    existed = _REAL_STAGING.exists()
+def _the_genuine_staging_namespace_is_neither_consumed_nor_mutated(tmp_path, monkeypatch):
+    """PE-3 legitimately committed a candidate into the genuine NON-AUTHORITY staging directory, so it
+    may exist. PE-2b's tests are synthetic: they must neither mutate it nor derive policy, reference or
+    candidate state from it.
+
+    * the production staging location is redirected for EVERY test to an isolated, still-absent
+      synthetic directory (the ``staging`` fixture below redirects it elsewhere again), so a test that
+      forgot to isolate itself cannot read or write the genuine one;
+    * the genuine directory's names, sizes and modification times are the same after the test as before
+      (a metadata snapshot; the contents are never read).
+    """
+    before = _real_staging_metadata()
+    guard_package = tmp_path / "isolated_guard_package"
+    guard_package.mkdir()
+    isolated = str(guard_package / "pi_profile_candidates")
+    monkeypatch.setattr(pi_profile_discovery, "_STAGING_DIRECTORY", isolated)
     yield
-    assert _REAL_STAGING.exists() is existed
-    assert not existed
+    assert _real_staging_metadata() == before, "a PE-2b test changed the genuine staging namespace"
 
 
 @pytest.fixture()
@@ -504,3 +532,30 @@ def test_b15_the_policy_loader_is_wired_exactly_where_pe1_places_it():
         assert "_GENUINE_POLICY_LOAD" not in source and "_load_policy_directory" not in source, name
     verifier_source = (_PACKAGE_DIR / "pi_profile_evidence_verifier.py").read_text(encoding="utf-8")
     assert "head_reference_view" not in verifier_source and "SEALED_POLICY_SNAPSHOT" not in verifier_source
+
+
+# ---------------------------------------------------------------------------
+# The genuine (PE-3) staging namespace: it may exist, and PE-2b never depends on it
+# ---------------------------------------------------------------------------
+
+
+def test_the_production_staging_location_is_redirected_away_from_the_genuine_namespace_for_every_test():
+    """No ``staging`` fixture here: the autouse isolation alone keeps the genuine directory unreachable."""
+    redirected = Path(pi_profile_discovery._STAGING_DIRECTORY)
+    assert redirected != _REAL_STAGING
+    assert _REAL_STAGING not in redirected.parents
+    assert not redirected.exists()
+
+
+def test_a_synthetic_discovery_neither_reads_nor_changes_nor_lists_the_genuine_staging_namespace(
+    tmp_path, staging
+):
+    before = _real_staging_metadata()
+    outcome = _run(_world(tmp_path, "independent"))
+    assert outcome.code == DISCOVERY_CANDIDATE_STAGED
+    assert Path(pi_profile_discovery._STAGING_DIRECTORY) == staging != _REAL_STAGING
+    assert len(staging_listing(staging)) == 3
+    assert _real_staging_metadata() == before
+    # whatever the genuine namespace holds, none of it became part of this synthetic outcome
+    if before is not None:
+        assert not set(before) & set(staging_listing(staging))
