@@ -18,6 +18,7 @@ nothing here runs Pi, Node or npm or reads a credential.
 from __future__ import annotations
 
 import ast
+import hashlib
 import inspect
 import json
 import os
@@ -227,13 +228,80 @@ def test_b15_discovery_floor_matrix_against_a_committed_synthetic_aps(
     assert sorted(p.name for p in (tmp_path / "committed_policy" / "pi_profile_policy").iterdir())[0] == "aps"
 
 
-def test_b15_the_genuine_genesis_head_classifies_and_never_falls_back(tmp_path, staging):
-    """No rebinding: the real committed genesis r0001 (zero eligible)."""
-    assert loader.SEALED_POLICY_SNAPSHOT.eligible_profile_ids == frozenset()
+_GENESIS_HEAD_SHA256 = "69922eb557e783b9a4bb6e504092a5de4c82812fa477a8bd59b28bf30a53c373"
+
+
+def _load_exact_genesis(tmp_path) -> object:
+    """The EXACT committed r0001 bytes, alone in an isolated tree, through the real loader."""
+    data = (_PACKAGE_DIR / "pi_profile_policy" / "aps" / "aps.r0001.json").read_bytes()
+    assert hashlib.sha256(data).hexdigest() == _GENESIS_HEAD_SHA256
+    aps = tmp_path / "exact_genesis" / "pi_profile_policy" / "aps"
+    aps.mkdir(parents=True)
+    (aps / "aps.r0001.json").write_bytes(data)
+    return loader._load_policy_directory(str(aps.parent))
+
+
+def _genuine_policy_state() -> list[tuple[str, bytes | None]]:
+    """Every path under the genuine policy directory, with each file's exact bytes."""
+    genuine = _PACKAGE_DIR / "pi_profile_policy"
+    return sorted(
+        (path.relative_to(genuine).as_posix(), path.read_bytes() if path.is_file() else None)
+        for path in genuine.rglob("*")
+    )
+
+
+def test_b15_the_exact_genesis_r0001_head_classifies_and_never_falls_back(tmp_path, monkeypatch, staging):
+    """History: the EXACT committed r0001 (zero eligible), installed as the committed head."""
+    load = _load_exact_genesis(tmp_path)
+    assert load.snapshot.eligible_profile_ids == frozenset() and load.snapshot.aps_revision == 1
+    monkeypatch.setattr(loader, "_GENUINE_POLICY_LOAD", load)
     outcome = _run(_world(tmp_path, "world"))
     candidate = _candidate(staging, outcome)
     assert candidate["floor"] == FLOOR_C3_SEAM_CHANGED == _console_floor(outcome)
     assert "NOT_COMPUTED" not in json.dumps(candidate) and "NOT_COMPUTED" not in "\n".join(outcome.console_lines)
+
+
+def test_b15_the_current_genuine_head_classifies_and_never_falls_back(tmp_path, monkeypatch, staging):
+    """No rebinding of the policy: the real committed head, whatever it currently admits.
+
+    The expected floor is NOT hard-coded: it is an independent application of the accepted
+    classifier (by identity) to independently recomputed facts and the loader's own fresh view.
+    """
+    assert loader.SEALED_POLICY_SNAPSHOT is loader._GENUINE_POLICY_LOAD.snapshot
+    assert loader.SEALED_POLICY_SNAPSHOT.policy_directory == loader._POLICY_DIR
+    assert pi_profile_discovery.classify_floor is pi_profile_floor.classify_floor
+    seen: list = []
+    real_classify = pi_profile_discovery.classify_floor
+
+    def _recording_classify(facts, reference):  # a spy only: it changes no policy and no result
+        seen.append(reference)
+        return real_classify(facts, reference)
+
+    monkeypatch.setattr(pi_profile_discovery, "classify_floor", _recording_classify)
+    outcome = _run(_world(tmp_path, "world"))
+    assert outcome.code == DISCOVERY_CANDIDATE_STAGED
+    candidate = _candidate(staging, outcome)
+    from pe2a_support import facts_for
+
+    files, empty_dirs = synthetic_payload_files()
+    facts = facts_for(files, empty_dirs)
+    assert facts.payload_fingerprint == outcome.payload_fingerprint
+    reference = loader.head_reference_view()
+    expected = pi_profile_floor.classify_floor(facts, reference)
+    assert expected in FLOOR_CLASSES
+    assert candidate["floor"] == expected == _console_floor(outcome)
+    assert "NOT_COMPUTED" not in json.dumps(candidate) and "NOT_COMPUTED" not in "\n".join(outcome.console_lines)
+    # The genuine committed policy was consulted -- exactly once, with the committed head's view
+    # (its eligible set is the genuine snapshot's), never a default or empty fallback view.
+    (used,) = seen
+    assert {item.profile_id for item in used.eligible} == loader.SEALED_POLICY_SNAPSHOT.eligible_profile_ids
+    assert {item.profile_id for item in reference.eligible} == loader.SEALED_POLICY_SNAPSHOT.eligible_profile_ids
+    assert used.present_ineligible_profile_ids == reference.present_ineligible_profile_ids
+    assert used.seam_fingerprints == reference.seam_fingerprints
+    assert candidate["authority"] == "NON_AUTHORITY_CANDIDATE"
+    assert outcome.payload_fingerprint not in {
+        view.payload_fingerprint for view in loader.SEALED_POLICY_SNAPSHOT.eligible_profiles
+    }
 
 
 def test_b15_the_public_entry_point_uses_the_committed_view(tmp_path, monkeypatch, staging):
@@ -319,7 +387,7 @@ def test_b15_environment_and_cwd_cannot_select_a_policy(tmp_path, monkeypatch, s
     world = _world(tmp_path, "world")
     monkeypatch.setenv("PATH", world.path_value)
     assert pi_profile_discovery.main([]) == 0
-    # The genuine committed genesis decided, not the hostile tree (which would say C1).
+    # The genuine committed policy HEAD decided, not the hostile env/CWD-selected policy (which would say C1).
     assert _candidate(staging, type("O", (), {"payload_fingerprint": base_payload().fingerprint})())["floor"] == (
         FLOOR_C3_SEAM_CHANGED
     )
@@ -485,6 +553,7 @@ def test_b15_the_floor_value_never_changes_the_staging_boundary(tmp_path, monkey
 
 
 def test_b15_a_c1_floor_grants_no_eligibility_and_writes_no_policy(tmp_path, monkeypatch, staging):
+    genuine_before = _genuine_policy_state()
     load = _install_policy(tmp_path, monkeypatch, _a_eligible_chain())
     policy_dir = tmp_path / "committed_policy" / "pi_profile_policy"
     before = sorted((p.relative_to(policy_dir).as_posix(), p.read_bytes()) for p in policy_dir.rglob("*") if p.is_file())
@@ -496,8 +565,8 @@ def test_b15_a_c1_floor_grants_no_eligibility_and_writes_no_policy(tmp_path, mon
     assert outcome.payload_fingerprint not in {view.payload_fingerprint for view in snapshot.eligible_profiles}
     after = sorted((p.relative_to(policy_dir).as_posix(), p.read_bytes()) for p in policy_dir.rglob("*") if p.is_file())
     assert after == before
-    genuine = _PACKAGE_DIR / "pi_profile_policy"
-    assert sorted(p.relative_to(genuine).as_posix() for p in genuine.rglob("*")) == ["aps", "aps/aps.r0001.json"]
+    # The genuine committed policy tree keeps exactly the same paths and bytes.
+    assert _genuine_policy_state() == genuine_before
 
 
 def test_b15_the_policy_loader_is_wired_exactly_where_pe1_places_it():

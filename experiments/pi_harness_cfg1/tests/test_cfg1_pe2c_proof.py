@@ -201,11 +201,16 @@ def test_c1_resolution_failure_precedes_everything(tmp_path, monkeypatch):
     assert recorder.walk_calls() == []
 
 
-def test_c1_the_unapproved_payload_under_the_genuine_genesis_policy(tmp_path):
-    """No synthetic policy: the genuine committed genesis snapshot has an EMPTY
-    eligible set, so every payload is PI_PROFILE_UNAPPROVED (PE-0 F-14)."""
-    assert loader.SEALED_POLICY_SNAPSHOT.eligible_profile_ids == frozenset()
-    tree = build_synthetic_pi_tree(str(tmp_path / "genesis_world"))
+def test_c1_an_unapproved_payload_under_the_genuine_committed_policy(tmp_path):
+    """No synthetic policy: under the genuine committed snapshot -- whatever else it
+    admits -- a payload whose profile is not in its eligible set is
+    PI_PROFILE_UNAPPROVED (PE-0 F-14). Another eligible profile admits nothing else."""
+    snapshot = loader.SEALED_POLICY_SNAPSHOT
+    assert snapshot is loader._GENUINE_POLICY_LOAD.snapshot
+    assert snapshot.policy_directory == loader._POLICY_DIR
+    tree = build_synthetic_pi_tree(str(tmp_path / "unapproved_world"))
+    assert tree.profile_id not in snapshot.eligible_profile_ids
+    assert tree.payload_fingerprint not in {view.payload_fingerprint for view in snapshot.eligible_profiles}
     result = prove_pi_identity({"PATH": tree.path_value}, leaves=genuine_pi_proof_leaves())
     assert result.failure_code == PI_PROFILE_UNAPPROVED
 

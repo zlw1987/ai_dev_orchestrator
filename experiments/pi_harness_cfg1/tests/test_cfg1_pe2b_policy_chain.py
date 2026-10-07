@@ -5,7 +5,8 @@ chain, complete recomputation, policy bounds, the committed genesis, the
 Acceptance rows B-1, B-2, B-3, B-4, B-12, B-13 and B-14 of
 ``docs/PHASE_5F3B_PI_HARNESS_PROFILE_EVOLUTION_PE1_AMENDMENT.md`` Sec. 26.2.
 Every chain is SYNTHETIC under ``tmp_path`` except B-4, which loads the REAL
-committed genesis through the real loader (pytest, no Git). Reparse points are
+committed genesis bytes through the real loader -- alone, in an isolated tree, as
+history -- and, separately, the REAL current committed chain (pytest, no Git). Reparse points are
 leaf doubles, never real links. Nothing here runs Pi, Node or npm.
 """
 
@@ -823,7 +824,8 @@ def test_b3_a_non_canonical_inventory_or_bundle_file_refuses(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# B-4 -- the REAL committed genesis r0001 (pytest, no Git)
+# B-4 -- the REAL committed genesis r0001 (exact bytes, isolated) and the REAL
+# current committed chain it heads (pytest, no Git)
 # ---------------------------------------------------------------------------
 
 _GENESIS_EVIDENCE = (
@@ -841,20 +843,80 @@ _GENESIS_EVIDENCE = (
     ),
 )
 _GENESIS_HEAD_SHA256 = "69922eb557e783b9a4bb6e504092a5de4c82812fa477a8bd59b28bf30a53c373"
+#: PE-5 appended r0002 (HPP-1 approval of the PE-3 candidate). Genesis r0001 is
+#: HISTORY from then on: its own properties are proved against its exact bytes in
+#: an isolated tree, never by assuming the genuine head IS genesis.
+_PE5_PROFILE_ID = "56651d0b2b6995e05b6de3aa012f5a82f276b2ac817dcce00844d1db2a9ffd67"
+_PE5_PAYLOAD_FINGERPRINT = "66cf8a815d91aeaf3eb920763c6a4f3b98c17625dbaa93c540fb424c451664dc"
 
 
-def test_b4_the_committed_genesis_loads_through_the_real_loader():
+def _load_exact_genesis(tmp_path) -> object:
+    """The EXACT committed r0001 bytes, alone in an isolated tree, through the real loader."""
+    data = (_PACKAGE_DIR / "pi_profile_policy" / "aps" / "aps.r0001.json").read_bytes()
+    assert hashlib.sha256(data).hexdigest() == _GENESIS_HEAD_SHA256
+    aps = tmp_path / "exact_genesis" / "pi_profile_policy" / "aps"
+    aps.mkdir(parents=True)
+    (aps / "aps.r0001.json").write_bytes(data)
+    return loader._load_policy_directory(str(aps.parent))
+
+
+def test_b4_the_exact_historical_genesis_r0001_loads_through_the_real_loader(tmp_path):
+    load = _load_exact_genesis(tmp_path)
+    snapshot = load.snapshot
+    assert snapshot.aps_revision == 1
+    assert snapshot.eligible_profile_ids == frozenset()
+    assert snapshot.eligible_profiles == ()
+    assert snapshot.aps_head_sha256 == _GENESIS_HEAD_SHA256
+    assert snapshot.policy_directory == str(tmp_path / "exact_genesis" / "pi_profile_policy")
+    assert (snapshot.policy_revision, snapshot.payload_contract, snapshot.seam_contract, snapshot.consumer_contract) == (
+        "HPP-1",
+        "PI-PC1",
+        "PI-SC1",
+        "CFG1-CC1",
+    )
+    assert load.revisions == ((1, _GENESIS_HEAD_SHA256, frozenset()),)
+    # zero profiles of any status (retired ones included), so zero approvals and retirements took effect
+    assert load.profile_declared_versions == ()
+    assert load.head_reference.eligible_payloads == ()
+    assert load.head_reference.present_ineligible_profile_ids == frozenset()
+    assert load.head_reference.seam_fingerprints == frozenset(
+        {pi_payload.compute_seam_fingerprint(dict(PINNED_PI_SEAM_DIGESTS))}
+    )
+    record = loader._parse_policy_bytes(
+        (tmp_path / "exact_genesis" / "pi_profile_policy" / "aps" / "aps.r0001.json").read_bytes()
+    )
+    assert record["profiles"] == [] and record["approvals"] == [] and record["retirements"] == []
+    assert [evidence["evidence_id"] for evidence in record["seam_evidence"]] == [
+        "37ba281569b1ca52b497a1e1a504e57f53be4c39ce39796033ccfd406ea4cd08"
+    ]
+
+
+def test_b4_the_current_genuine_chain_appends_r0002_to_the_unchanged_genesis():
     genuine = _PACKAGE_DIR / "pi_profile_policy"
+    fingerprint_file = _PE5_PAYLOAD_FINGERPRINT + ".json"
     assert sorted(path.relative_to(genuine).as_posix() for path in genuine.rglob("*")) == [
         "aps",
         "aps/aps.r0001.json",
+        "aps/aps.r0002.json",
+        "inventories",
+        "inventories/" + fingerprint_file,
+        "manifest_bundles",
+        "manifest_bundles/" + fingerprint_file,
     ]
+    r0001 = (genuine / "aps" / "aps.r0001.json").read_bytes()
+    r0002 = (genuine / "aps" / "aps.r0002.json").read_bytes()
+    assert hashlib.sha256(r0001).hexdigest() == _GENESIS_HEAD_SHA256
+    head = hashlib.sha256(r0002).hexdigest()
+    record = loader._parse_policy_bytes(r0002)
+    assert record["revision"] == 2 and record["previous_revision_sha256"] == _GENESIS_HEAD_SHA256
     fresh = loader._load_policy_directory(loader._POLICY_DIR)
     for snapshot in (fresh.snapshot, loader.SEALED_POLICY_SNAPSHOT):
-        assert snapshot.aps_revision == 1
-        assert snapshot.eligible_profile_ids == frozenset()
-        assert snapshot.eligible_profiles == ()
-        assert snapshot.aps_head_sha256 == _GENESIS_HEAD_SHA256
+        assert snapshot.aps_revision == 2
+        assert snapshot.aps_head_sha256 == head
+        assert snapshot.eligible_profile_ids == frozenset({_PE5_PROFILE_ID})
+        (view,) = snapshot.eligible_profiles
+        assert view.profile_id == _PE5_PROFILE_ID
+        assert view.payload_fingerprint == _PE5_PAYLOAD_FINGERPRINT
         assert snapshot.policy_directory == str(genuine)
         assert (snapshot.policy_revision, snapshot.payload_contract, snapshot.seam_contract, snapshot.consumer_contract) == (
             "HPP-1",
@@ -862,7 +924,12 @@ def test_b4_the_committed_genesis_loads_through_the_real_loader():
             "PI-SC1",
             "CFG1-CC1",
         )
-    assert fresh.revisions == ((1, _GENESIS_HEAD_SHA256, frozenset()),)
+    # r0001 stays historical revision 1 with an EMPTY eligible set; r0002 is revision 2.
+    assert fresh.revisions == (
+        (1, _GENESIS_HEAD_SHA256, frozenset()),
+        (2, head, frozenset({_PE5_PROFILE_ID})),
+    )
+    assert loader._GENUINE_POLICY_LOAD.revisions == fresh.revisions
 
 
 def test_b4_genesis_holds_exactly_one_historical_seam_evidence_and_nothing_else():
@@ -888,10 +955,29 @@ def test_b4_genesis_evidence_digests_name_the_committed_lf_bytes_of_the_cited_do
         assert hashlib.sha256(data).hexdigest() == digest, repo_path
 
 
-def test_b4_the_genesis_head_reference_view_admits_no_profile():
-    view = loader.head_reference_view()
+def test_b4_the_exact_genesis_r0001_reference_view_admits_no_profile(tmp_path):
+    view = loader._reference_view_from_material(_load_exact_genesis(tmp_path).head_reference)
     assert view.eligible == ()
     assert view.present_ineligible_profile_ids == frozenset()
+    assert view.seam_fingerprints == frozenset(
+        {pi_payload.compute_seam_fingerprint(dict(PINNED_PI_SEAM_DIGESTS))}
+    )
+
+
+def test_b4_the_current_genuine_head_reference_view_reflects_the_adopted_profile():
+    """Derived by the real loader from the committed r0002 chain; never hand-built."""
+    view = loader.head_reference_view()
+    (facts,) = view.eligible
+    assert facts.profile_id == _PE5_PROFILE_ID
+    assert facts.payload_fingerprint == _PE5_PAYLOAD_FINGERPRINT
+    assert facts.c5_reason is None
+    (profile,) = loader._parse_policy_bytes(
+        (_PACKAGE_DIR / "pi_profile_policy" / "aps" / "aps.r0002.json").read_bytes()
+    )["profiles"]
+    assert facts.seam_fingerprint == profile["seam_fingerprint"]
+    assert facts.seam_digests_dict() == profile["seam_digests"]
+    assert view.present_ineligible_profile_ids == frozenset()
+    # r0002 added no seam evidence: S is still exactly the genesis seam fingerprint.
     assert view.seam_fingerprints == frozenset(
         {pi_payload.compute_seam_fingerprint(dict(PINNED_PI_SEAM_DIGESTS))}
     )

@@ -1,11 +1,17 @@
 """PE-4B: the exact-candidate qualification path for the E4 request-builder run.
 
-PE-4 qualification happens BEFORE PE-5 approval, so the installed Pi 1.0.3 candidate
-cannot satisfy the ordinary T-3 gate (exact membership in the sealed APS eligible set),
-and that gate is deliberately left exactly as it is (it is digest-pinned below). This
-module is the SEPARATE authority path: it is bound, mechanically, to ONE immutable fact
--- the PE-3 candidate committed at ``_SOURCE_COMMIT`` -- and to nothing a caller can
-choose.
+PE-4 qualification happened BEFORE PE-5 approval. In the frozen PE-4B execution source
+state the committed APS head was genesis ``r0001``, which admits no profile, so the
+installed Pi 1.0.3 candidate could not satisfy the ordinary T-3 gate (exact membership in
+the sealed APS eligible set) -- that gate is deliberately left exactly as it is (it is
+digest-pinned below). A SEPARATE candidate-qualification authority was therefore required,
+and this module is it: it is bound, mechanically, to ONE immutable fact -- the PE-3
+candidate committed at ``_SOURCE_COMMIT`` -- and to nothing a caller can choose.
+
+That pre-approval fact is HISTORY, proved below against the exact ``r0001`` bytes. It does
+not imply the profile stays unapproved after a later, independently accepted APS revision,
+and the qualification path never consults the current APS: candidate staging is never
+approval, and approval is only ever a committed APS revision.
 
 What the authority is made of
 -----------------------------
@@ -42,14 +48,17 @@ Residuals, stated and not closed
   lives on the main startup path (PE-4A F-5) is therefore not reachable from here.
   That finding still blocks E5 / any full Pi launch / PE-6.
 
-Nothing in this module executes Node or the installed Pi, in any session, under any switch
+No ordinary execution surface exists; E4 was executed once, historically, externally
 -----------------------------------------------------------------------------------------
-``_run_candidate_e4`` is PREPARED and has NO caller: no test, fixture, import-time statement,
-environment variable, pytest option, marker or node-id reaches it (proved statically and by a
-tripwire below). Executing E4 needs a separate, explicitly authorized, commit-bound one-shot entry
-point that does not exist yet. An ambient switch (environment variable, option, marker, mode
-argument) is never an acceptable authority for running an unapproved Pi candidate. Everything in
-this module is static or offline Python and starts no Node.
+There is no ordinary pytest, import-time, environment-variable, marker or option execution
+surface for E4: no test, fixture, import-time statement, environment variable, pytest option,
+marker or node-id reaches ``_run_candidate_e4`` (proved statically and by a tripwire below), and
+``_run_candidate_e4`` still has no in-repository ordinary caller. PE-4B E4 was historically
+executed exactly once, through the separately authorized, external, commit-bound one-shot. That
+historical execution did not create a persistent or ambient execution authority: an ambient switch
+(environment variable, option, marker, mode argument) is never an acceptable authority for running a
+Pi candidate, and any further E4 execution would again need its own separate, explicit
+authorization. The ordinary tests in this module remain offline Python and start no Node.
 """
 
 from __future__ import annotations
@@ -70,6 +79,7 @@ import pytest
 import test_cfg1_pi_conformance as ordinary
 from cfg1_doubles import approve_profiles, build_synthetic_pi_tree
 from pi_harness_cfg1 import pi_fs_leaves, pi_identity
+from pi_harness_cfg1 import pi_profile_policy_loader as policy_loader
 from pi_harness_cfg1.identity import CFG1_MODEL_ID
 from pi_harness_cfg1.pi_manifest import (
     EXPOSURES_PROVEN_ABSENT,
@@ -774,7 +784,7 @@ def test_pe4b_a_candidate_object_cannot_be_constructed_without_the_loader_key():
 
 
 # ---------------------------------------------------------------------------
-# 8. Offline: the ordinary APS gate is unchanged, and the candidate cannot satisfy it
+# 8. Offline: the ordinary APS gate is unchanged, and (before PE-5) the candidate could not satisfy it
 # ---------------------------------------------------------------------------
 
 #: SHA-256 of each ordinary gate function's exact source, as it stood at the source commit's
@@ -855,16 +865,32 @@ def test_pe4b_the_ordinary_t3_fixture_still_calls_the_aps_gate_first_and_nothing
     assert "_E4_GATE" not in _ordinary_text() and "E4_EXECUTION" not in _ordinary_text()
 
 
-def test_pe4b_the_candidate_is_not_eligible_in_the_genuine_sealed_aps_so_the_ordinary_gate_refuses_it():
-    snapshot = pi_identity.sealed_policy_snapshot()
+#: SHA-256 of the exact genesis ``aps.r0001.json`` -- the APS head of the PE-4B source state.
+_PRE_PE5_APS_HEAD_SHA256 = "69922eb557e783b9a4bb6e504092a5de4c82812fa477a8bd59b28bf30a53c373"
+
+
+def test_pe4b_before_pe5_the_candidate_was_not_eligible_in_the_exact_r0001_aps_so_the_ordinary_gate_refused_it(
+    tmp_path,
+):
+    """History, proved mechanically: the PE-4B source state's APS head (exact ``r0001`` bytes,
+    alone in an isolated tree, through the real loader) admitted no profile and named neither
+    the candidate's profile id nor its fingerprint -- while the candidate already existed in
+    staging. Staging was not approval. (The CURRENT APS is deliberately not asserted here.)"""
+    data = (_PACKAGE_DIR / "pi_profile_policy" / "aps" / "aps.r0001.json").read_bytes()
+    assert hashlib.sha256(data).hexdigest() == _PRE_PE5_APS_HEAD_SHA256
+    aps = tmp_path / "pre_pe5" / "pi_profile_policy" / "aps"
+    aps.mkdir(parents=True)
+    (aps / "aps.r0001.json").write_bytes(data)
+    load = policy_loader._load_policy_directory(str(aps.parent))
+    snapshot = load.snapshot
+    assert snapshot.aps_revision == 1 and snapshot.aps_head_sha256 == _PRE_PE5_APS_HEAD_SHA256
     assert _PROFILE_ID not in snapshot.eligible_profile_ids
     assert _PAYLOAD_FINGERPRINT not in {view.payload_fingerprint for view in snapshot.eligible_profiles}
-    # and nothing in the committed policy directory names it: staging is not adoption
-    policy_directory = Path(__file__).resolve().parents[1] / "pi_profile_policy"
-    for path in policy_directory.rglob("*"):
-        if path.is_file():
-            assert _PAYLOAD_FINGERPRINT.encode() not in path.read_bytes(), path.name
-            assert _PROFILE_ID.encode() not in path.read_bytes(), path.name
+    assert load.profile_declared_versions == ()  # not even present-but-ineligible
+    assert _PAYLOAD_FINGERPRINT.encode() not in data and _PROFILE_ID.encode() not in data
+    # ... yet the candidate was staged, as a NON-authority record: staging != approval
+    candidate = _load_committed_candidate()  # refuses unless the record says NON_AUTHORITY_CANDIDATE
+    assert candidate.profile_id == _PROFILE_ID and candidate.payload_fingerprint == _PAYLOAD_FINGERPRINT
 
 
 def test_pe4b_the_ordinary_gate_accepts_exactly_an_aps_eligible_tree_and_refuses_the_same_tree_changed(
@@ -872,7 +898,9 @@ def test_pe4b_the_ordinary_gate_accepts_exactly_an_aps_eligible_tree_and_refuses
 ):
     """Positive control: the ordinary gate is still the APS membership gate and nothing weaker."""
     tree = build_synthetic_pi_tree(str(tmp_path / "approved"))
-    with pytest.raises(pytest.fail.Exception, match="PI_PROFILE_UNAPPROVED"):  # genuine APS: zero profiles
+    # the synthetic profile is not eligible in the genuine APS, so the genuine gate refuses it
+    assert tree.profile_id not in pi_identity.sealed_policy_snapshot().eligible_profile_ids
+    with pytest.raises(pytest.fail.Exception, match="PI_PROFILE_UNAPPROVED"):
         ordinary._require_installed_profile_approved(Path(tree.package_root))
     approve_profiles(monkeypatch, tree)
     assert ordinary._require_installed_profile_approved(Path(tree.package_root)) == tree.profile_id
