@@ -1259,11 +1259,793 @@
       "cases_recorded": 9,
       "cases_unsupported": 0,
       "verdict": "PASS"
+    },
+    "P-R1-FU3": {
+      "cases": [
+        {
+          "case": "R1_current_pin_blocks_conversion_of_emptied_root",
+          "evidence": {
+            "emptied_root_scenarios": [
+              {
+                "conversion": [
+                  "converted",
+                  0
+                ],
+                "create_directory_ok": true,
+                "create_new_ok": true,
+                "emptied_by_attacker": [
+                  ".git",
+                  "run_marker.json"
+                ],
+                "escaped": true,
+                "gate_would_find_pi_runtime_in_pinned_root": false,
+                "hold_pin": true,
+                "mask": "GENERIC_WRITE",
+                "outside_changed_keys": [
+                  "directory_stat",
+                  "listing"
+                ],
+                "outside_new_names": [
+                  "pi_runtime",
+                  "zero_byte.bin"
+                ],
+                "pin_handle_identity_unchanged": true,
+                "pin_handle_sees_reparse_after": true,
+                "pin_identity_matches_path": true,
+                "root_path_classification_after": "reparse_point"
+              },
+              {
+                "conversion": [
+                  "converted",
+                  0
+                ],
+                "create_directory_ok": true,
+                "create_new_ok": true,
+                "emptied_by_attacker": [
+                  ".git",
+                  "run_marker.json"
+                ],
+                "escaped": true,
+                "gate_would_find_pi_runtime_in_pinned_root": false,
+                "hold_pin": true,
+                "mask": "FILE_WRITE_ATTRIBUTES",
+                "outside_changed_keys": [
+                  "directory_stat",
+                  "listing"
+                ],
+                "outside_new_names": [
+                  "pi_runtime",
+                  "zero_byte.bin"
+                ],
+                "pin_handle_identity_unchanged": true,
+                "pin_handle_sees_reparse_after": true,
+                "pin_identity_matches_path": true,
+                "root_path_classification_after": "reparse_point"
+              }
+            ],
+            "masks": {
+              "ADD_FILE|ADD_SUBDIR|WRITE_ATTR": {
+                "held": [
+                  "converted",
+                  0
+                ],
+                "object_identity_preserved_while_held": true,
+                "real_conversion_mechanism": true,
+                "released_control": [
+                  "converted",
+                  0
+                ]
+              },
+              "DELETE": {
+                "held": [
+                  "open_refused",
+                  32
+                ],
+                "object_identity_preserved_while_held": true,
+                "real_conversion_mechanism": false,
+                "released_control": [
+                  "fsctl_refused",
+                  5
+                ]
+              },
+              "FILE_ADD_FILE": {
+                "held": [
+                  "converted",
+                  0
+                ],
+                "object_identity_preserved_while_held": true,
+                "real_conversion_mechanism": true,
+                "released_control": [
+                  "converted",
+                  0
+                ]
+              },
+              "FILE_ADD_SUBDIRECTORY": {
+                "held": [
+                  "converted",
+                  0
+                ],
+                "object_identity_preserved_while_held": true,
+                "real_conversion_mechanism": true,
+                "released_control": [
+                  "converted",
+                  0
+                ]
+              },
+              "FILE_READ_ATTRIBUTES": {
+                "held": [
+                  "fsctl_refused",
+                  5
+                ],
+                "object_identity_preserved_while_held": true,
+                "real_conversion_mechanism": false,
+                "released_control": [
+                  "fsctl_refused",
+                  5
+                ]
+              },
+              "FILE_WRITE_ATTRIBUTES": {
+                "held": [
+                  "converted",
+                  0
+                ],
+                "object_identity_preserved_while_held": true,
+                "real_conversion_mechanism": true,
+                "released_control": [
+                  "converted",
+                  0
+                ]
+              },
+              "FILE_WRITE_EA": {
+                "held": [
+                  "fsctl_refused",
+                  5
+                ],
+                "object_identity_preserved_while_held": true,
+                "real_conversion_mechanism": false,
+                "released_control": [
+                  "fsctl_refused",
+                  5
+                ]
+              },
+              "GENERIC_WRITE": {
+                "held": [
+                  "converted",
+                  0
+                ],
+                "object_identity_preserved_while_held": true,
+                "real_conversion_mechanism": true,
+                "released_control": [
+                  "converted",
+                  0
+                ]
+              },
+              "READ|WRITE_ATTRIBUTES|SYNCHRONIZE": {
+                "held": [
+                  "converted",
+                  0
+                ],
+                "object_identity_preserved_while_held": true,
+                "real_conversion_mechanism": true,
+                "released_control": [
+                  "converted",
+                  0
+                ]
+              },
+              "WRITE_DAC": {
+                "held": [
+                  "fsctl_refused",
+                  5
+                ],
+                "object_identity_preserved_while_held": true,
+                "real_conversion_mechanism": false,
+                "released_control": [
+                  "fsctl_refused",
+                  5
+                ]
+              },
+              "_outside_unchanged": true
+            },
+            "masks_refused_while_held": [],
+            "masks_that_convert_while_the_pin_is_held": [
+              "FILE_WRITE_ATTRIBUTES",
+              "READ|WRITE_ATTRIBUTES|SYNCHRONIZE",
+              "FILE_ADD_FILE",
+              "FILE_ADD_SUBDIRECTORY",
+              "GENERIC_WRITE",
+              "ADD_FILE|ADD_SUBDIR|WRITE_ATTR"
+            ],
+            "real_conversion_mechanisms": [
+              "FILE_WRITE_ATTRIBUTES",
+              "READ|WRITE_ATTRIBUTES|SYNCHRONIZE",
+              "FILE_ADD_FILE",
+              "FILE_ADD_SUBDIRECTORY",
+              "GENERIC_WRITE",
+              "ADD_FILE|ADD_SUBDIR|WRITE_ATTR"
+            ],
+            "shape": "FILE_LIST_DIRECTORY|FILE_READ_ATTRIBUTES, share READ|WRITE"
+          },
+          "status": "FAIL"
+        },
+        {
+          "case": "R2_current_pin_pre_gate_creates_cannot_escape",
+          "evidence": {
+            "held_pin": [
+              {
+                "conversion": [
+                  "converted",
+                  0
+                ],
+                "create_directory_ok": true,
+                "create_new_ok": true,
+                "emptied_by_attacker": [
+                  ".git",
+                  "run_marker.json"
+                ],
+                "escaped": true,
+                "gate_would_find_pi_runtime_in_pinned_root": false,
+                "hold_pin": true,
+                "mask": "GENERIC_WRITE",
+                "outside_changed_keys": [
+                  "directory_stat",
+                  "listing"
+                ],
+                "outside_new_names": [
+                  "pi_runtime",
+                  "zero_byte.bin"
+                ],
+                "pin_handle_identity_unchanged": true,
+                "pin_handle_sees_reparse_after": true,
+                "pin_identity_matches_path": true,
+                "root_path_classification_after": "reparse_point"
+              },
+              {
+                "conversion": [
+                  "converted",
+                  0
+                ],
+                "create_directory_ok": true,
+                "create_new_ok": true,
+                "emptied_by_attacker": [
+                  ".git",
+                  "run_marker.json"
+                ],
+                "escaped": true,
+                "gate_would_find_pi_runtime_in_pinned_root": false,
+                "hold_pin": true,
+                "mask": "FILE_WRITE_ATTRIBUTES",
+                "outside_changed_keys": [
+                  "directory_stat",
+                  "listing"
+                ],
+                "outside_new_names": [
+                  "pi_runtime",
+                  "zero_byte.bin"
+                ],
+                "pin_handle_identity_unchanged": true,
+                "pin_handle_sees_reparse_after": true,
+                "pin_identity_matches_path": true,
+                "root_path_classification_after": "reparse_point"
+              }
+            ],
+            "masks_with_outside_mutation_in_control": [
+              "GENERIC_WRITE",
+              "FILE_WRITE_ATTRIBUTES"
+            ],
+            "masks_with_outside_mutation_while_pinned": [
+              "GENERIC_WRITE",
+              "FILE_WRITE_ATTRIBUTES"
+            ],
+            "released_pin_controls": [
+              {
+                "conversion": [
+                  "converted",
+                  0
+                ],
+                "create_directory_ok": true,
+                "create_new_ok": true,
+                "emptied_by_attacker": [
+                  ".git",
+                  "run_marker.json"
+                ],
+                "escaped": true,
+                "hold_pin": false,
+                "mask": "GENERIC_WRITE",
+                "outside_changed_keys": [
+                  "directory_stat",
+                  "listing"
+                ],
+                "outside_new_names": [
+                  "pi_runtime",
+                  "zero_byte.bin"
+                ],
+                "pin_identity_matches_path": true,
+                "root_path_classification_after": "reparse_point"
+              },
+              {
+                "conversion": [
+                  "converted",
+                  0
+                ],
+                "create_directory_ok": true,
+                "create_new_ok": true,
+                "emptied_by_attacker": [
+                  ".git",
+                  "run_marker.json"
+                ],
+                "escaped": true,
+                "hold_pin": false,
+                "mask": "FILE_WRITE_ATTRIBUTES",
+                "outside_changed_keys": [
+                  "directory_stat",
+                  "listing"
+                ],
+                "outside_new_names": [
+                  "pi_runtime",
+                  "zero_byte.bin"
+                ],
+                "pin_identity_matches_path": true,
+                "root_path_classification_after": "reparse_point"
+              }
+            ],
+            "shape": "share READ|WRITE"
+          },
+          "status": "FAIL"
+        },
+        {
+          "case": "R3_share_read_root_pin_compatible_with_nested_construction",
+          "evidence": {
+            "byte_mismatches": [],
+            "files_with_content_at_their_gate": 0,
+            "files_written": 379,
+            "gates_passed": 153,
+            "peak_handles": 513,
+            "root_level_rename_attempts_during_construction": 3,
+            "root_pin": "FILE_LIST_DIRECTORY|FILE_READ_ATTRIBUTES, share READ, OPEN_REPARSE_POINT",
+            "rt_created_and_pinned_beneath_the_root": true
+          },
+          "status": "PASS"
+        },
+        {
+          "case": "R4_share_read_root_pin_refuses_rename_and_removal_of_empty_root",
+          "evidence": {
+            "operations": [
+              {
+                "held_win32_error": 32,
+                "identity_preserved": true,
+                "op": "MoveFileExW",
+                "released_control_error": null,
+                "released_control_ok": true,
+                "unchanged": true
+              },
+              {
+                "held_win32_error": 32,
+                "identity_preserved": true,
+                "op": "FileRenameInfo",
+                "released_control_error": null,
+                "released_control_ok": true,
+                "unchanged": true
+              },
+              {
+                "held_win32_error": 32,
+                "identity_preserved": true,
+                "op": "FileRenameInfoEx_posix",
+                "released_control_error": null,
+                "released_control_ok": true,
+                "unchanged": true
+              },
+              {
+                "held_win32_error": 32,
+                "identity_preserved": true,
+                "op": "RemoveDirectoryW",
+                "released_control_error": null,
+                "released_control_ok": true,
+                "unchanged": true
+              },
+              {
+                "held_win32_error": 32,
+                "identity_preserved": true,
+                "op": "FileDispositionInfo",
+                "released_control_error": null,
+                "released_control_ok": true,
+                "unchanged": true
+              },
+              {
+                "held_win32_error": 32,
+                "identity_preserved": true,
+                "op": "FileDispositionInfoEx_delete",
+                "released_control_error": null,
+                "released_control_ok": true,
+                "unchanged": true
+              },
+              {
+                "held_win32_error": 32,
+                "identity_preserved": true,
+                "op": "FileDispositionInfoEx_posix",
+                "released_control_error": null,
+                "released_control_ok": true,
+                "unchanged": true
+              }
+            ],
+            "root_state": "EMPTY"
+          },
+          "status": "PASS"
+        },
+        {
+          "case": "R5_share_read_root_pin_blocks_conversion_of_empty_root_all_masks",
+          "evidence": {
+            "masks": {
+              "ADD_FILE|ADD_SUBDIR|WRITE_ATTR": {
+                "held": [
+                  "open_refused",
+                  32
+                ],
+                "object_identity_preserved_while_held": true,
+                "real_conversion_mechanism": true,
+                "released_control": [
+                  "converted",
+                  0
+                ]
+              },
+              "DELETE": {
+                "held": [
+                  "open_refused",
+                  32
+                ],
+                "object_identity_preserved_while_held": true,
+                "real_conversion_mechanism": false,
+                "released_control": [
+                  "fsctl_refused",
+                  5
+                ]
+              },
+              "FILE_ADD_FILE": {
+                "held": [
+                  "open_refused",
+                  32
+                ],
+                "object_identity_preserved_while_held": true,
+                "real_conversion_mechanism": true,
+                "released_control": [
+                  "converted",
+                  0
+                ]
+              },
+              "FILE_ADD_SUBDIRECTORY": {
+                "held": [
+                  "open_refused",
+                  32
+                ],
+                "object_identity_preserved_while_held": true,
+                "real_conversion_mechanism": true,
+                "released_control": [
+                  "converted",
+                  0
+                ]
+              },
+              "FILE_READ_ATTRIBUTES": {
+                "held": [
+                  "fsctl_refused",
+                  5
+                ],
+                "object_identity_preserved_while_held": true,
+                "real_conversion_mechanism": false,
+                "released_control": [
+                  "fsctl_refused",
+                  5
+                ]
+              },
+              "FILE_WRITE_ATTRIBUTES": {
+                "held": [
+                  "converted",
+                  0
+                ],
+                "object_identity_preserved_while_held": true,
+                "real_conversion_mechanism": true,
+                "released_control": [
+                  "converted",
+                  0
+                ]
+              },
+              "FILE_WRITE_EA": {
+                "held": [
+                  "fsctl_refused",
+                  5
+                ],
+                "object_identity_preserved_while_held": true,
+                "real_conversion_mechanism": false,
+                "released_control": [
+                  "fsctl_refused",
+                  5
+                ]
+              },
+              "GENERIC_WRITE": {
+                "held": [
+                  "open_refused",
+                  32
+                ],
+                "object_identity_preserved_while_held": true,
+                "real_conversion_mechanism": true,
+                "released_control": [
+                  "converted",
+                  0
+                ]
+              },
+              "READ|WRITE_ATTRIBUTES|SYNCHRONIZE": {
+                "held": [
+                  "converted",
+                  0
+                ],
+                "object_identity_preserved_while_held": true,
+                "real_conversion_mechanism": true,
+                "released_control": [
+                  "converted",
+                  0
+                ]
+              },
+              "WRITE_DAC": {
+                "held": [
+                  "fsctl_refused",
+                  5
+                ],
+                "object_identity_preserved_while_held": true,
+                "real_conversion_mechanism": false,
+                "released_control": [
+                  "fsctl_refused",
+                  5
+                ]
+              },
+              "_outside_unchanged": true
+            },
+            "masks_refused_while_held": [
+              "FILE_ADD_FILE",
+              "FILE_ADD_SUBDIRECTORY",
+              "GENERIC_WRITE",
+              "ADD_FILE|ADD_SUBDIR|WRITE_ATTR"
+            ],
+            "masks_that_are_not_conversion_mechanisms_here": [
+              "FILE_READ_ATTRIBUTES",
+              "WRITE_DAC",
+              "FILE_WRITE_EA",
+              "DELETE"
+            ],
+            "masks_that_convert_while_the_pin_is_held": [
+              "FILE_WRITE_ATTRIBUTES",
+              "READ|WRITE_ATTRIBUTES|SYNCHRONIZE"
+            ],
+            "reading": "a share mode does not govern an attribute-only open (FILE_WRITE_ATTRIBUTES): Windows exempts such opens from share checking",
+            "real_conversion_mechanisms": [
+              "FILE_WRITE_ATTRIBUTES",
+              "READ|WRITE_ATTRIBUTES|SYNCHRONIZE",
+              "FILE_ADD_FILE",
+              "FILE_ADD_SUBDIRECTORY",
+              "GENERIC_WRITE",
+              "ADD_FILE|ADD_SUBDIR|WRITE_ATTR"
+            ],
+            "root_state": "EMPTY",
+            "shape": "FILE_LIST_DIRECTORY|FILE_READ_ATTRIBUTES, share READ"
+          },
+          "status": "FAIL"
+        },
+        {
+          "case": "R6_share_read_root_pin_pre_gate_creates_cannot_escape",
+          "evidence": {
+            "held_pin": [
+              {
+                "conversion": [
+                  "open_refused",
+                  32
+                ],
+                "create_directory_ok": true,
+                "create_new_ok": true,
+                "emptied_by_attacker": [
+                  ".git",
+                  "run_marker.json"
+                ],
+                "escaped": false,
+                "gate_would_find_pi_runtime_in_pinned_root": true,
+                "hold_pin": true,
+                "mask": "GENERIC_WRITE",
+                "outside_changed_keys": [],
+                "outside_new_names": [],
+                "pin_handle_identity_unchanged": true,
+                "pin_handle_sees_reparse_after": false,
+                "pin_identity_matches_path": true,
+                "root_path_classification_after": "directory"
+              },
+              {
+                "conversion": [
+                  "converted",
+                  0
+                ],
+                "create_directory_ok": true,
+                "create_new_ok": true,
+                "emptied_by_attacker": [
+                  ".git",
+                  "run_marker.json"
+                ],
+                "escaped": true,
+                "gate_would_find_pi_runtime_in_pinned_root": false,
+                "hold_pin": true,
+                "mask": "FILE_WRITE_ATTRIBUTES",
+                "outside_changed_keys": [
+                  "directory_stat",
+                  "listing"
+                ],
+                "outside_new_names": [
+                  "pi_runtime",
+                  "zero_byte.bin"
+                ],
+                "pin_handle_identity_unchanged": true,
+                "pin_handle_sees_reparse_after": true,
+                "pin_identity_matches_path": true,
+                "root_path_classification_after": "reparse_point"
+              }
+            ],
+            "masks_with_outside_mutation_while_pinned": [
+              "FILE_WRITE_ATTRIBUTES"
+            ],
+            "released_pin_controls": [
+              {
+                "conversion": [
+                  "converted",
+                  0
+                ],
+                "create_directory_ok": true,
+                "create_new_ok": true,
+                "emptied_by_attacker": [
+                  ".git",
+                  "run_marker.json"
+                ],
+                "escaped": true,
+                "hold_pin": false,
+                "mask": "GENERIC_WRITE",
+                "outside_changed_keys": [
+                  "directory_stat",
+                  "listing"
+                ],
+                "outside_new_names": [
+                  "pi_runtime",
+                  "zero_byte.bin"
+                ],
+                "pin_identity_matches_path": true,
+                "root_path_classification_after": "reparse_point"
+              },
+              {
+                "conversion": [
+                  "converted",
+                  0
+                ],
+                "create_directory_ok": true,
+                "create_new_ok": true,
+                "emptied_by_attacker": [
+                  ".git",
+                  "run_marker.json"
+                ],
+                "escaped": true,
+                "hold_pin": false,
+                "mask": "FILE_WRITE_ATTRIBUTES",
+                "outside_changed_keys": [
+                  "directory_stat",
+                  "listing"
+                ],
+                "outside_new_names": [
+                  "pi_runtime",
+                  "zero_byte.bin"
+                ],
+                "pin_identity_matches_path": true,
+                "root_path_classification_after": "reparse_point"
+              }
+            ],
+            "shape": "share READ"
+          },
+          "status": "FAIL"
+        },
+        {
+          "case": "R7_share_read_root_pin_enumeration_and_child_identity",
+          "evidence": {
+            "dot_file_id_equals_root_pin": true,
+            "entries_listed": [
+              ".",
+              "..",
+              ".git",
+              "pi_runtime",
+              "run_marker.json"
+            ],
+            "membership_gate": {
+              "entries": 5,
+              "names_checked": 2
+            },
+            "pre_existing_children_listed": true,
+            "rt_file_id_equals_its_own_handle": true,
+            "same_volume": true
+          },
+          "status": "PASS"
+        }
+      ],
+      "cases_expected": 7,
+      "cases_fail": 4,
+      "cases_not_run": [],
+      "cases_pass": 3,
+      "cases_recorded": 7,
+      "cases_unsupported": 0,
+      "verdict": "FAIL"
     }
+  },
+  "r1_fu3_disposition": {
+    "closure_claimed": false,
+    "disposition": "HOLD",
+    "verdict": "FAIL"
   },
   "record_kind": "aido-f5a-pr1-windows-premise-evidence.v1",
   "scope": "measured only against disposable synthetic trees on this host; no Node, Pi, npm, model or network was used; this proves nothing about Node compatibility, which is first observable at E5",
   "supplemental": [
+    {
+      "case": "fu3_conversion_vs_every_share_mode",
+      "evidence": {
+        "reading": "including share 0, FILE_WRITE_ATTRIBUTES converts an empty pinned directory: the share flags of the pin are not a lever for this vector",
+        "share_0": {
+          "masks_that_convert_while_pinned": [
+            "FILE_WRITE_ATTRIBUTES",
+            "READ|WRITE_ATTRIBUTES|SYNCHRONIZE"
+          ]
+        },
+        "share_ALL": {
+          "masks_that_convert_while_pinned": [
+            "FILE_WRITE_ATTRIBUTES",
+            "READ|WRITE_ATTRIBUTES|SYNCHRONIZE",
+            "FILE_ADD_FILE",
+            "FILE_ADD_SUBDIRECTORY",
+            "GENERIC_WRITE",
+            "ADD_FILE|ADD_SUBDIR|WRITE_ATTR"
+          ]
+        },
+        "share_READ": {
+          "masks_that_convert_while_pinned": [
+            "FILE_WRITE_ATTRIBUTES",
+            "READ|WRITE_ATTRIBUTES|SYNCHRONIZE"
+          ]
+        },
+        "share_READ_WRITE": {
+          "masks_that_convert_while_pinned": [
+            "FILE_WRITE_ATTRIBUTES",
+            "READ|WRITE_ATTRIBUTES|SYNCHRONIZE",
+            "FILE_ADD_FILE",
+            "FILE_ADD_SUBDIRECTORY",
+            "GENERIC_WRITE",
+            "ADD_FILE|ADD_SUBDIR|WRITE_ATTR"
+          ]
+        }
+      },
+      "status": "OBSERVATION"
+    },
+    {
+      "case": "fu3_empty_p_r1_4_child_pin_window",
+      "evidence": {
+        "conversion": [
+          "converted",
+          0
+        ],
+        "create_beneath_child_ok": true,
+        "outside_new_names": [
+          "x"
+        ],
+        "reading": "the accepted P-R1-4 iv_convert evidence attacked with GENERIC_WRITE only; an empty pinned CHILD directory is exposed to the same attribute-only conversion before its first child"
+      },
+      "status": "OBSERVATION"
+    },
+    {
+      "case": "fu3_exclusive_child_keeps_root_non_empty",
+      "evidence": {
+        "child_deletable_by_attacker": false,
+        "conversion_with_FILE_WRITE_ATTRIBUTES": [
+          "fsctl_refused",
+          145
+        ],
+        "reading": "measured only; NOT adopted by this probe (it would be a design change for the reviewer)"
+      },
+      "status": "OBSERVATION"
+    },
     {
       "case": "run_root_pin_shape_READ_WRITE_conversion",
       "evidence": {

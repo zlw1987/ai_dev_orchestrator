@@ -34,6 +34,13 @@ where their semantics match rather than copied):
 * every handle this module opens is registered and an autouse fixture proves none
   survives a test.
 
+R1-FU3 (``P-R1-FU3``, last section) is a narrow follow-up probe of the RUN-ROOT pin
+only: does the Sec. 7.4A.1 pin (share READ|WRITE) or the candidate share-READ pin
+stop a same-user actor from converting an EMPTY run root into a junction, and so
+from redirecting RPR's pre-gate creates outside the minted root. A case there is
+PASS only if the requirement it names holds; the cases that do not hold are FAIL
+and are left failing.
+
 Pure Python / ctypes. No Node, no Pi, no npm, no network, no model, no
 credential. Every write is under pytest ``tmp_path`` / ``tmp_path_factory``.
 Set ``F5A_PR1_REPORT_PATH`` to also write the machine-readable evidence report.
@@ -141,6 +148,15 @@ EXPECTED_CASES = {
         "payload_walk_held_equals_expected_equals_released",
         "l14_l21a_proof_leaves",
         "sensitivity_control_incompatible_shape",
+    ],
+    "P-R1-FU3": [
+        "R1_current_pin_blocks_conversion_of_emptied_root",
+        "R2_current_pin_pre_gate_creates_cannot_escape",
+        "R3_share_read_root_pin_compatible_with_nested_construction",
+        "R4_share_read_root_pin_refuses_rename_and_removal_of_empty_root",
+        "R5_share_read_root_pin_blocks_conversion_of_empty_root_all_masks",
+        "R6_share_read_root_pin_pre_gate_creates_cannot_escape",
+        "R7_share_read_root_pin_enumeration_and_child_identity",
     ],
     "P-R1-4": [
         "i_child_directory_create_and_pin",
@@ -261,9 +277,9 @@ class _DirPin:
     ``BACKUP_SEMANTICS | OPEN_REPARSE_POINT``; refuses a reparse point or a
     non-directory FROM THE HANDLE."""
 
-    def __init__(self, path, share: int = SHARE_READ):
+    def __init__(self, path, share: int = SHARE_READ, access: int = GENERIC_READ):
         self.path = str(path)
-        handle, error = q._open(self.path, GENERIC_READ, share, OPEN_EXISTING, NO_FOLLOW)
+        handle, error = q._open(self.path, access, share, OPEN_EXISTING, NO_FOLLOW)
         if handle is None:
             raise _Refused(f"directory pin refused (Win32 {error})")
         attributes, tag = q._tag_info(handle)
@@ -1191,11 +1207,11 @@ def _make_hook(outside: Path):
     return hook
 
 
-@pytest.fixture(scope="module")
-def constructed(tmp_path_factory):
+def _construct(tmp_path_factory, name: str, root_share: int, root_access: int = GENERIC_READ):
     """ONE nested construction at maximum fan-out, with the (iv) attacks run at
-    its deepest point, then (after every handle is released) the matched controls."""
-    base = tmp_path_factory.mktemp("f5a_construct")
+    its deepest point. ``root_share`` / ``root_access`` are the run-root pin's
+    flags -- the only thing the R1-FU3 probe varies."""
+    base = tmp_path_factory.mktemp(name)
     root = base / "R"
     root.mkdir()
     outside = base / "outside"
@@ -1218,7 +1234,7 @@ def constructed(tmp_path_factory):
             raise AssertionError("HARNESS[a pathname os.open of a constructed file during construction]")
         return real_os_open(path, *args, **kwargs)
 
-    root_pin = _DirPin(root, SHARE_READ | SHARE_WRITE)  # Sec. 7.4A.1: omit only FILE_SHARE_DELETE
+    root_pin = _DirPin(root, root_share, root_access)
     error = None
     q._K.CreateFileW = spy
     builtins.open, os.open = guarded_open, guarded_os_open
@@ -1232,9 +1248,17 @@ def constructed(tmp_path_factory):
         q._K.CreateFileW = spy.original
         constructor.release_everything()
         root_pin.release()
-    yield SimpleNamespace(base=base, root=root, outside=outside, constructor=constructor, spy=spy, error=error,
-                          spec=spec, hook=constructor.hook_results, maxima=maxima)
-    shutil.rmtree(base, ignore_errors=True)
+    return SimpleNamespace(base=base, root=root, outside=outside, constructor=constructor, spy=spy, error=error,
+                           spec=spec, hook=constructor.hook_results, maxima=maxima)
+
+
+@pytest.fixture(scope="module")
+def constructed(tmp_path_factory):
+    """The Sec. 7.4A.1 run-root pin as currently written: share READ|WRITE
+    (omitting only FILE_SHARE_DELETE), then the matched controls in the tests."""
+    state = _construct(tmp_path_factory, "f5a_construct", SHARE_READ | SHARE_WRITE)
+    yield state
+    shutil.rmtree(state.base, ignore_errors=True)
 
 
 def _require_constructed(constructed):
@@ -1559,6 +1583,449 @@ def test_supplemental_run_root_pin_shape_on_an_empty_directory(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# R1-FU3 -- the run-root pin and in-place junction conversion of an EMPTY root
+# ---------------------------------------------------------------------------
+#
+# PRE-TEST ADVERSARIAL ANALYSIS (written before any measurement; the probes below
+# test each vector, none is assumed).
+#
+# The invariant under test:  no RPR construction operation may create or mutate
+# an object outside the proven AIDO run root R -- including the zero-byte files
+# and directories that are created BEFORE the content-write parentage gate.
+#
+#   V1  root emptiness.  R normally holds a marker and a Git repository, but a
+#       same-user actor can delete ordinary children (the pin omits only
+#       FILE_SHARE_DELETE of R itself). Non-emptiness cannot be relied on unless
+#       something AIDO holds mechanically prevents the emptying.
+#   V2  in-place conversion.  FSCTL_SET_REPARSE_POINT turns an EMPTY directory
+#       into a junction where it stands; the pin handle is still a handle to that
+#       same object. Two ways to obtain a write-capable handle: (a) a data-write
+#       open, which the share mode of the pin governs; (b) an ATTRIBUTE-ONLY open
+#       (FILE_WRITE_ATTRIBUTES), which Windows exempts from share checking (the
+#       Q2 finding for files). A pin shape that only fixes (a) is not enough.
+#   V3  redirected pathname creation.  After conversion, CreateDirectoryW or a
+#       CREATE_NEW|FILE_FLAG_OPEN_REPARSE_POINT on R\name follows the junction:
+#       the flag protects only the FINAL component, never an ancestor.
+#   V4  pre-gate mutation.  The parentage gate (Sec. 7.4A.2 step 3) runs AFTER
+#       the first create in R; at best it can detect, after the fact, that the
+#       child is not an entry of the pinned handle. An outside zero-byte file or
+#       directory already exists by then.
+#   V5  rename-aside-and-substitute.  Refused by any pin that omits
+#       FILE_SHARE_DELETE; included as a control.
+#   V6  scope.  The same window exists for EVERY empty pinned directory between
+#       its pin and its first child (not only R); measured as a supplemental row.
+#   V7  detection.  The pin handle is the converted object, so a re-check from the
+#       handle can see the reparse attribute; that is a TOCTOU narrowing, not a
+#       prevention, and is measured only as a fact (nothing here adopts it).
+#
+# STATUS OF THE FU3 CASES: a case is PASS only if the REQUIREMENT it names holds.
+# The current-shape cases name "the current pin blocks X"; where the measurement
+# shows it does not, the case is FAIL and the test is left failing.
+
+CONVERT_MASKS = {
+    "FILE_READ_ATTRIBUTES": q.FILE_READ_ATTRIBUTES,
+    "FILE_WRITE_ATTRIBUTES": q.FILE_WRITE_ATTRIBUTES,
+    "READ|WRITE_ATTRIBUTES|SYNCHRONIZE": q.FILE_READ_ATTRIBUTES | q.FILE_WRITE_ATTRIBUTES | q.SYNCHRONIZE,
+    "WRITE_DAC": q.WRITE_DAC,
+    "FILE_ADD_FILE": 0x2,
+    "FILE_ADD_SUBDIRECTORY": 0x4,
+    "FILE_WRITE_EA": 0x10,
+    "DELETE": DELETE,
+    "GENERIC_WRITE": GENERIC_WRITE,
+    "ADD_FILE|ADD_SUBDIR|WRITE_ATTR": 0x2 | 0x4 | q.FILE_WRITE_ATTRIBUTES,
+}
+ROOT_ACCESS = q.FILE_LIST_DIRECTORY | q.FILE_READ_ATTRIBUTES  # FU15 acquire_root_pin's access, reproduced
+CURRENT_ROOT_SHARE = SHARE_READ | SHARE_WRITE                    # Sec. 7.4A.1 as written
+CANDIDATE_ROOT_SHARE = SHARE_READ                                # the proposed RPR-only shape
+ROOT_SHAPES = {
+    "current_root_pin_share_READ_WRITE": CURRENT_ROOT_SHARE,
+    "candidate_root_pin_share_READ": CANDIDATE_ROOT_SHARE,
+}
+#: masks whose conversion is attempted end to end (the two that matter and the control-only ones follow from the matrix)
+REDIRECT_MASKS = ("GENERIC_WRITE", "FILE_WRITE_ATTRIBUTES")
+
+
+def _convert_with(path, outside, access: int) -> tuple[str, int]:
+    """In-place junction conversion through an open requesting exactly ``access``
+    (share ALL, BACKUP_SEMANTICS|OPEN_REPARSE_POINT). ``("converted", 0)``,
+    ``("open_refused", err)`` or ``("fsctl_refused", err)``."""
+    handle = probe._K32.CreateFileW(str(path), access, SHARE_ALL, None, OPEN_EXISTING, NO_FOLLOW, None)
+    if handle is None or handle == probe._INVALID_HANDLE_VALUE:
+        return "open_refused", ctypes.get_last_error()
+    try:
+        ok, error = probe.set_mount_point_reparse(handle, str(outside))
+        return ("converted", 0) if ok else ("fsctl_refused", error)
+    finally:
+        probe.close_handle(handle)
+
+
+class _Outside:
+    """A sentinel tree OUTSIDE the minted root, observed by content AND metadata."""
+
+    def __init__(self, base: Path):
+        self.directory = base / "outside"
+        self.directory.mkdir()
+        self.sentinel = self.directory / "sentinel.txt"
+        self.sentinel.write_bytes(b"OUTSIDE-SENTINEL-BYTES\n")
+        self.nested = self.directory / "nested"
+        self.nested.mkdir()
+        (self.nested / "n.txt").write_bytes(b"OUTSIDE-NESTED\n")
+        self.baseline = self.observe()
+
+    def observe(self) -> dict:
+        def stat(path):
+            info = os.stat(path)
+            return (q._attributes(path), info.st_size, info.st_mtime_ns)
+
+        return {
+            "listing": sorted(os.listdir(self.directory)),
+            "nested_listing": sorted(os.listdir(self.nested)),
+            "sentinel_bytes": self.sentinel.read_bytes(),
+            "nested_bytes": (self.nested / "n.txt").read_bytes(),
+            "sentinel_stat": stat(self.sentinel),
+            "nested_file_stat": stat(self.nested / "n.txt"),
+            "directory_stat": stat(self.directory),
+            "nested_dir_stat": stat(self.nested),
+            "identity": leaves.inspect_no_follow(str(self.directory)).identity,
+        }
+
+    def changed(self) -> list[str]:
+        now = self.observe()
+        return sorted(key for key in self.baseline if self.baseline[key] != now[key])
+
+    def new_names(self) -> list[str]:
+        return sorted(set(os.listdir(self.directory)) - set(self.baseline["listing"]))
+
+
+def _make_run_root(base: Path, name: str = "R") -> Path:
+    """A minted-root lookalike: a marker and a Git-like directory, both ordinary
+    files that a same-user actor can delete (nothing holds them)."""
+    root = base / name
+    (root / ".git").mkdir(parents=True)
+    (root / ".git" / "HEAD").write_bytes(b"ref: refs/heads/main\n")
+    (root / "run_marker.json").write_bytes(b'{"synthetic": true}\n')
+    return root
+
+
+def _empty_it(root: Path) -> list[str]:
+    """The attacker empties the run root by pathname. Returns what it removed."""
+    removed = []
+    for entry in sorted(os.listdir(root)):
+        target = root / entry
+        if target.is_dir():
+            shutil.rmtree(target)
+        else:
+            os.remove(target)
+        removed.append(entry)
+    return removed
+
+
+def _redirect_scenario(base: Path, label: str, share: int, mask_name: str, *, hold_pin: bool) -> dict:
+    """Pin R, let a same-user actor empty and convert it, then perform the two
+    pathname creates RPR makes before any gate (CreateDirectoryW of R\\pi_runtime
+    and a CREATE_NEW zero-byte file). ``hold_pin=False`` is the matched control:
+    the identical sequence with the pin acquired and released first."""
+    scratch = base / label
+    scratch.mkdir()
+    outside = _Outside(scratch)
+    root = _make_run_root(scratch)
+    before_identity = leaves.inspect_no_follow(str(root)).identity
+    pin = _RootPin(root, share)
+    result: dict = {"hold_pin": hold_pin, "mask": mask_name, "pin_identity_matches_path": pin.identity == before_identity}
+    if not hold_pin:
+        pin.release()
+    try:
+        result["emptied_by_attacker"] = _empty_it(root)
+        outcome, error = _convert_with(root, outside.directory, CONVERT_MASKS[mask_name])
+        result["conversion"] = [outcome, error]
+        classification = leaves.inspect_no_follow(str(root)).classification
+        result["root_path_classification_after"] = classification
+        if hold_pin:
+            attributes, tag = q._tag_info(pin.handle)
+            result["pin_handle_sees_reparse_after"] = bool(attributes & ATTR_REPARSE) or tag != 0
+            result["pin_handle_identity_unchanged"] = q._handle_identity(pin.handle) == pin.identity
+        # --- the two creates RPR performs BEFORE the parentage gate -----------------------------
+        made = _W.CreateDirectoryW(str(root / "pi_runtime"), None)
+        result["create_directory_ok"] = bool(made)
+        handle, create_error = q._open(root / "zero_byte.bin", GENERIC_READ | GENERIC_WRITE | DELETE, 0,
+                                       CREATE_NEW, FLAG_REPARSE)
+        result["create_new_ok"] = handle is not None
+        q._close(handle)
+        result["outside_new_names"] = outside.new_names()
+        result["outside_changed_keys"] = outside.changed()
+        # --- what the gate would say, after the fact -------------------------------------------
+        if hold_pin:
+            names = {n for n, _f, _a, _t in _enumerate_once(pin.handle)}
+            result["gate_would_find_pi_runtime_in_pinned_root"] = "pi_runtime" in names
+    finally:
+        pin.release()
+        if leaves.inspect_no_follow(str(root)).classification == leaves.CLASSIFICATION_REPARSE_POINT:
+            os.rmdir(root)  # removes the junction itself, never its target
+    result["escaped"] = bool(result["outside_new_names"] or result["outside_changed_keys"])
+    return result
+
+
+class _RootPin(_DirPin):
+    """The RPR run-root pin under test: ``FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES``
+    (FU15's root-pin access), the given share, ``OPEN_EXISTING``,
+    ``BACKUP_SEMANTICS | OPEN_REPARSE_POINT``; proves FROM THE HANDLE a plain
+    directory. Test-local; FU15's ``acquire_root_pin`` is neither used nor modified."""
+
+    def __init__(self, path, share: int):
+        super().__init__(path, share, ROOT_ACCESS)
+
+
+def _matrix(base: Path, label: str, share: int) -> dict:
+    """For every access mask, on a fresh EMPTY directory: the held-pin attempt and
+    the matched control (the same pin acquired then released, then the same
+    attempt). A mask is a real conversion mechanism only if its control converts."""
+    (base / label).mkdir()
+    outside = _Outside(base / label)
+    rows = {}
+    for name, mask in CONVERT_MASKS.items():
+        held_dir = base / label / f"held_{len(rows)}"
+        held_dir.mkdir()
+        pin = _RootPin(held_dir, share)
+        before = pin.identity
+        try:
+            held = _convert_with(held_dir, outside.directory, mask)
+            after = leaves.inspect_no_follow(str(held_dir))
+        finally:
+            pin.release()
+        if after.classification == leaves.CLASSIFICATION_REPARSE_POINT:
+            os.rmdir(held_dir)
+        control_dir = base / label / f"control_{len(rows)}"
+        control_dir.mkdir()
+        released = _RootPin(control_dir, share)
+        released.release()
+        control = _convert_with(control_dir, outside.directory, mask)
+        if leaves.inspect_no_follow(str(control_dir)).classification == leaves.CLASSIFICATION_REPARSE_POINT:
+            os.rmdir(control_dir)
+        rows[name] = {"held": list(held), "released_control": list(control),
+                      "real_conversion_mechanism": control[0] == "converted",
+                      "object_identity_preserved_while_held": after.identity in (before, None)}
+    rows["_outside_unchanged"] = outside.changed() == []
+    return rows
+
+
+def _mask_verdict(rows: dict) -> tuple[list[str], list[str], list[str]]:
+    mechanisms = [m for m, r in rows.items() if not m.startswith("_") and r["real_conversion_mechanism"]]
+    bypass = [m for m in mechanisms if rows[m]["held"][0] == "converted"]
+    blocked = [m for m in mechanisms if rows[m]["held"][0] != "converted"]
+    return mechanisms, bypass, blocked
+
+
+# -- R1 / R2: the CURRENT Sec. 7.4A.1 shape -----------------------------------------------------
+
+
+def test_r1_fu3_current_root_pin_does_not_block_conversion_of_an_emptied_root(tmp_path):
+    rows = _matrix(tmp_path, "current_matrix", CURRENT_ROOT_SHARE)
+    mechanisms, bypass, blocked = _mask_verdict(rows)
+    scenarios = [_redirect_scenario(tmp_path, f"cur_conv_{mask}", CURRENT_ROOT_SHARE, mask, hold_pin=True)
+                 for mask in REDIRECT_MASKS]
+    ok = not bypass and all(s["conversion"][0] != "converted" for s in scenarios)
+    _finish("P-R1-FU3", "R1_current_pin_blocks_conversion_of_emptied_root", "PASS" if ok else "FAIL",
+            shape="FILE_LIST_DIRECTORY|FILE_READ_ATTRIBUTES, share READ|WRITE", masks=rows,
+            real_conversion_mechanisms=mechanisms, masks_that_convert_while_the_pin_is_held=bypass,
+            masks_refused_while_held=blocked, emptied_root_scenarios=scenarios)
+
+
+def test_r2_fu3_current_root_pin_lets_a_converted_root_redirect_pre_gate_creates(tmp_path):
+    held = [_redirect_scenario(tmp_path, f"cur_redir_{mask}", CURRENT_ROOT_SHARE, mask, hold_pin=True)
+            for mask in REDIRECT_MASKS]
+    controls = [_redirect_scenario(tmp_path, f"cur_ctrl_{mask}", CURRENT_ROOT_SHARE, mask, hold_pin=False)
+                for mask in REDIRECT_MASKS]
+    escaped = [s["mask"] for s in held if s["escaped"]]
+    control_escaped = [s["mask"] for s in controls if s["escaped"]]
+    # a control that cannot even convert says nothing about the pin
+    controls_valid = all(s["conversion"][0] == "converted" for s in controls)
+    status = "FAIL" if escaped else ("PASS" if controls_valid else "UNSUPPORTED")
+    _finish("P-R1-FU3", "R2_current_pin_pre_gate_creates_cannot_escape", status,
+            shape="share READ|WRITE", held_pin=held, released_pin_controls=controls,
+            masks_with_outside_mutation_while_pinned=escaped, masks_with_outside_mutation_in_control=control_escaped)
+
+
+# -- R3 / R7: the candidate share-READ root pin is compatible with the construction ------------------
+
+
+@pytest.fixture(scope="module")
+def constructed_candidate_root(tmp_path_factory):
+    state = _construct(tmp_path_factory, "f5a_construct_fu3", CANDIDATE_ROOT_SHARE, ROOT_ACCESS)
+    yield state
+    shutil.rmtree(state.base, ignore_errors=True)
+
+
+def test_r3_fu3_share_read_root_pin_is_compatible_with_rt_creation_and_the_nested_construction(
+    constructed_candidate_root,
+):
+    state = constructed_candidate_root
+    _require_constructed(state)
+    c = state.constructor
+    mismatches = [os.path.basename(p) for p, data in c.written.items() if Path(p).read_bytes() != data]
+    ok = c.gates > 100 and not mismatches and len(c.written) > 0 and c.files_with_content_at_gate == 0
+    root_level = [r for r in state.hook["rename"] if r["target"] == "level0"]
+    _finish("P-R1-FU3", "R3_share_read_root_pin_compatible_with_nested_construction", "PASS" if ok else "FAIL",
+            root_pin="FILE_LIST_DIRECTORY|FILE_READ_ATTRIBUTES, share READ, OPEN_REPARSE_POINT",
+            gates_passed=c.gates, rt_created_and_pinned_beneath_the_root=True, files_written=len(c.written),
+            peak_handles=c.peak, byte_mismatches=mismatches[:5], files_with_content_at_their_gate=c.files_with_content_at_gate,
+            root_level_rename_attempts_during_construction=len(root_level))
+
+
+def test_r7_fu3_share_read_root_pin_supports_handle_enumeration_and_child_identity_proof(tmp_path):
+    root = _make_run_root(tmp_path)
+    pin = _RootPin(root, CANDIDATE_ROOT_SHARE)
+    reader = _RootPin(root, CANDIDATE_ROOT_SHARE)  # a second handle: the cursor of `pin` is kept for the gate
+    child = None
+    try:
+        child = _create_dir_and_pin(root / "pi_runtime", SHARE_READ)  # pathname create beneath the pinned root
+        by_name = {n: (fid, attrs, tag) for n, fid, attrs, tag in _enumerate_once(reader.handle)}
+        # membership gate (Sec. 7.4A.2: RT is gated by MEMBERSHIP in R's enumeration), ONE pass on `pin`
+        gate = _gate(pin, {}, {"pi_runtime": child}, exact=False)
+        evidence = {
+            "entries_listed": sorted(by_name),
+            "rt_file_id_equals_its_own_handle": by_name.get("pi_runtime", (None,))[0] == child.identity[1],
+            "dot_file_id_equals_root_pin": by_name.get(".", (None,))[0] == pin.identity[1],
+            "pre_existing_children_listed": {".git", "run_marker.json"} <= set(by_name),
+            "membership_gate": gate,
+            "same_volume": child.identity[0] == pin.identity[0],
+        }
+    finally:
+        if child is not None:
+            child.release()
+        reader.release()
+        pin.release()
+    ok = (evidence["rt_file_id_equals_its_own_handle"] and evidence["dot_file_id_equals_root_pin"]
+          and evidence["pre_existing_children_listed"] and evidence["same_volume"])
+    _finish("P-R1-FU3", "R7_share_read_root_pin_enumeration_and_child_identity", "PASS" if ok else "FAIL", **evidence)
+
+
+# -- R4: rename and removal of R, including an EMPTY R -------------------------------------------
+
+
+def test_r4_fu3_share_read_root_pin_refuses_rename_and_removal_of_an_empty_root(tmp_path):
+    rows = []
+    for op in [*RENAMER_NAMES, *DELETE_OPS]:
+        held_dir = tmp_path / f"held_{len(rows)}"
+        held_dir.mkdir()
+        pin = _RootPin(held_dir, CANDIDATE_ROOT_SHARE)
+        try:
+            if op in RENAMER_NAMES:
+                error, unchanged = _attempt_rename(op, held_dir)
+            else:
+                error, unchanged = _attempt_delete(op, held_dir)
+            identity_ok = leaves.inspect_no_follow(str(held_dir)).identity == pin.identity
+        finally:
+            pin.release()
+        control_dir = tmp_path / f"control_{len(rows)}"
+        control_dir.mkdir()
+        released = _RootPin(control_dir, CANDIDATE_ROOT_SHARE)
+        released.release()
+        if op in RENAMER_NAMES:
+            moved = Path(str(control_dir) + "_moved")
+            control_error = RENAMERS[op](control_dir, moved)
+            control_ok = control_error is None and moved.is_dir() and not control_dir.exists()
+            if control_ok:
+                RENAMERS[op](moved, control_dir)
+        else:
+            control_error, _unchanged = _attempt_delete(op, control_dir)
+            control_ok = control_error is None and not control_dir.exists()
+        rows.append({"op": op, "held_win32_error": error, "unchanged": bool(unchanged), "identity_preserved": identity_ok,
+                     "released_control_ok": bool(control_ok), "released_control_error": control_error})
+    failures = [r for r in rows if r["held_win32_error"] is None or not r["unchanged"] or not r["identity_preserved"]]
+    not_blocked = [r for r in rows if r["held_win32_error"] not in BLOCKING and r["held_win32_error"] is not None]
+    controls_ok = all(r["released_control_ok"] for r in rows)
+    status = "FAIL" if failures else ("PASS" if controls_ok and not not_blocked else "UNSUPPORTED")
+    _finish("P-R1-FU3", "R4_share_read_root_pin_refuses_rename_and_removal_of_empty_root", status,
+            root_state="EMPTY", operations=rows)
+
+
+# -- R5 / R6: the CANDIDATE share-READ pin against the full access-mask matrix ----------------------
+
+
+def test_r5_fu3_share_read_root_pin_blocks_in_place_conversion_for_every_access_mask(tmp_path):
+    rows = _matrix(tmp_path, "candidate_matrix", CANDIDATE_ROOT_SHARE)
+    mechanisms, bypass, blocked = _mask_verdict(rows)
+    unsupported = [m for m, r in rows.items() if not m.startswith("_") and not r["real_conversion_mechanism"]]
+    status = "FAIL" if bypass else ("PASS" if mechanisms else "UNSUPPORTED")
+    _finish("P-R1-FU3", "R5_share_read_root_pin_blocks_conversion_of_empty_root_all_masks", status,
+            shape="FILE_LIST_DIRECTORY|FILE_READ_ATTRIBUTES, share READ", root_state="EMPTY", masks=rows,
+            real_conversion_mechanisms=mechanisms, masks_that_convert_while_the_pin_is_held=bypass,
+            masks_refused_while_held=blocked, masks_that_are_not_conversion_mechanisms_here=unsupported,
+            reading="a share mode does not govern an attribute-only open (FILE_WRITE_ATTRIBUTES): Windows exempts "
+                    "such opens from share checking")
+
+
+def test_r6_fu3_share_read_root_pin_pre_gate_creates_cannot_escape_the_minted_root(tmp_path):
+    held = [_redirect_scenario(tmp_path, f"cand_redir_{mask}", CANDIDATE_ROOT_SHARE, mask, hold_pin=True)
+            for mask in REDIRECT_MASKS]
+    controls = [_redirect_scenario(tmp_path, f"cand_ctrl_{mask}", CANDIDATE_ROOT_SHARE, mask, hold_pin=False)
+                for mask in REDIRECT_MASKS]
+    escaped = [s["mask"] for s in held if s["escaped"]]
+    controls_valid = all(s["conversion"][0] == "converted" for s in controls)
+    status = "FAIL" if escaped else ("PASS" if controls_valid else "UNSUPPORTED")
+    _finish("P-R1-FU3", "R6_share_read_root_pin_pre_gate_creates_cannot_escape", status,
+            shape="share READ", held_pin=held, released_pin_controls=controls,
+            masks_with_outside_mutation_while_pinned=escaped)
+
+
+# -- supplemental characterization (never feeds a verdict; adopts nothing) -------------------------------
+
+
+def test_supplemental_fu3_no_share_mode_governs_an_attribute_only_open(tmp_path):
+    results = {}
+    for label, share in (("share_0", 0), ("share_READ", SHARE_READ), ("share_READ_WRITE", SHARE_READ | SHARE_WRITE),
+                         ("share_ALL", SHARE_ALL)):
+        rows = _matrix(tmp_path, f"shape_{label}", share)
+        _mechanisms, bypass, _blocked = _mask_verdict(rows)
+        results[label] = {"masks_that_convert_while_pinned": bypass}
+    _supplemental("fu3_conversion_vs_every_share_mode", "OBSERVATION", **results,
+                  reading="including share 0, FILE_WRITE_ATTRIBUTES converts an empty pinned directory: the "
+                          "share flags of the pin are not a lever for this vector")
+
+
+def test_supplemental_fu3_the_accepted_p_r1_4_child_pins_have_the_same_window(tmp_path):
+    outside = _Outside(tmp_path)
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    parent_pin = _DirPin(parent, SHARE_READ)
+    child = _create_dir_and_pin(parent / "child")  # the exact P-R1-4 child-directory pin: GENERIC_READ, share READ
+    try:
+        outcome, error = _convert_with(parent / "child", outside.directory, CONVERT_MASKS["FILE_WRITE_ATTRIBUTES"])
+        created = bool(_W.CreateDirectoryW(str(parent / "child" / "x"), None))
+        escaped_names = outside.new_names()
+    finally:
+        child.release()
+        parent_pin.release()
+        if leaves.inspect_no_follow(str(parent / "child")).classification == leaves.CLASSIFICATION_REPARSE_POINT:
+            os.rmdir(parent / "child")
+    _supplemental("fu3_empty_p_r1_4_child_pin_window", "OBSERVATION", conversion=[outcome, error],
+                  create_beneath_child_ok=created, outside_new_names=escaped_names,
+                  reading="the accepted P-R1-4 iv_convert evidence attacked with GENERIC_WRITE only; an empty pinned "
+                          "CHILD directory is exposed to the same attribute-only conversion before its first child")
+
+
+def test_supplemental_fu3_non_emptiness_held_mechanically_defeats_conversion(tmp_path):
+    outside = _Outside(tmp_path)
+    root = tmp_path / "R"
+    root.mkdir()
+    pin = _RootPin(root, CANDIDATE_ROOT_SHARE)
+    held = _create_exclusive_zero_byte(root / "held.bin")  # an exclusive handle the attacker cannot delete
+    try:
+        try:
+            os.remove(root / "held.bin")
+            deletable = True
+        except OSError:
+            deletable = False
+        outcome, error = _convert_with(root, outside.directory, CONVERT_MASKS["FILE_WRITE_ATTRIBUTES"])
+    finally:
+        held.release()
+        pin.release()
+    _supplemental("fu3_exclusive_child_keeps_root_non_empty", "OBSERVATION", child_deletable_by_attacker=deletable,
+                  conversion_with_FILE_WRITE_ATTRIBUTES=[outcome, error],
+                  reading="measured only; NOT adopted by this probe (it would be a design change for the reviewer)")
+
+
+# ---------------------------------------------------------------------------
 # Roll-up
 # ---------------------------------------------------------------------------
 
@@ -1607,6 +2074,12 @@ def test_zz_rollup_and_report(tmp_path):
         "supplemental": [_SUPPLEMENTAL[k] for k in sorted(_SUPPLEMENTAL)],
         "scope": "measured only against disposable synthetic trees on this host; no Node, Pi, npm, model or network "
                  "was used; this proves nothing about Node compatibility, which is first observable at E5",
+    }
+    fu3 = report["premises"]["P-R1-FU3"]["verdict"]
+    report["r1_fu3_disposition"] = {
+        "verdict": fu3,
+        "disposition": "CANDIDATE_PENDING_FINAL_INDEPENDENT_REVIEW" if fu3 == "PASS" else "HOLD",
+        "closure_claimed": False,
     }
     print("\n==== F5A P-R1 verdicts ====")
     for premise, body in report["premises"].items():
