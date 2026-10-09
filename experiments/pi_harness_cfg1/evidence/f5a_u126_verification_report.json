@@ -1,0 +1,655 @@
+{
+  "author_semantic_analysis": {
+    "claimed_basis_counts": {
+      "B": 5,
+      "C": 42,
+      "D": 10,
+      "E": 0
+    },
+    "claimed_u126_read_unproven_count": 0,
+    "note": "The counts above are READ FROM THE AMENDMENT'S OWN ROWS. This program did not read, search, parse or execute the JavaScript and so measured no import.meta / path-derivation / filesystem-read route. Matching checksums show only that the reviewed bytes were the approved bytes.",
+    "source": "amendment section 8.10.8 (static review by the amendment's author; not independently reviewed)",
+    "status": "AUTHOR_CLAIM_NOT_VERIFIED_BY_THIS_PROGRAM"
+  },
+  "failures": [],
+  "inputs": {
+    "amendment": {
+      "repo_path": "docs/PHASE_5F3B_CFG1_F5A_LIVE_LAUNCH_AUTHORITY_AMENDMENT.md",
+      "sha256_after_crlf_to_lf": "5552f675f70585a14c6d714ff9d61c1df53ff1fbca3d44b135b2120b6dcff8b3"
+    },
+    "approved_inventory": {
+      "bound_by_aps": {
+        "profile_id": "56651d0b2b6995e05b6de3aa012f5a82f276b2ac817dcce00844d1db2a9ffd67",
+        "repo_path": "experiments/pi_harness_cfg1/pi_profile_policy/aps/aps.r0002.json",
+        "sha256": "606eca5260632fc1763d0f80c96a9ead599ee2639b92fb9109e8ce19f6fda799"
+      },
+      "directory_count": 1436,
+      "entry_count": 16482,
+      "file_count": 15046,
+      "repo_path": "experiments/pi_harness_cfg1/pi_profile_policy/inventories/66cf8a815d91aeaf3eb920763c6a4f3b98c17625dbaa93c540fb424c451664dc.json",
+      "sha256": "f84fb68dd4b90ae81b77049197373497b3b05e33cb679465cb513f6b86671e82"
+    }
+  },
+  "measured_facts": {
+    "agreement_with_amendment_stated_numbers": {
+      "approved_file_count": {
+        "agree": true,
+        "amendment_states": 15046,
+        "measured": 15046
+      },
+      "approved_files_not_in_tarballs": {
+        "agree": true,
+        "amendment_states": 12679,
+        "measured": 12679
+      },
+      "other_u126_not_in_packages": {
+        "agree": true,
+        "amendment_states": 7,
+        "measured": 7
+      },
+      "other_u126_recovered": {
+        "agree": true,
+        "amendment_states": 62,
+        "measured": 62
+      },
+      "review_files_recovered": {
+        "agree": true,
+        "amendment_states": 57,
+        "measured": 57
+      },
+      "tarball_member_count": {
+        "agree": true,
+        "amendment_states": 2367,
+        "measured": 2367
+      }
+    },
+    "amendment_internal_consistency": {
+      "all_u126_paths_are_approved_inventory_files": true,
+      "appendix_rows": 126,
+      "section_8_10_5_table_equals_appendix_R_rows": true,
+      "section_8_10_8_9_basis_letter_equals_appendix_suffix": true,
+      "section_8_10_8_9_table_equals_appendix_R_rows": true,
+      "unproven_rows": 0
+    },
+    "archive_safety": {
+      "members_not_in_inventory": 0,
+      "rule": "regular-file members only, under package/, validated relative paths, no link, no duplicate, no case collision, every member present in the approved inventory",
+      "unsafe_or_rejected_members": 0
+    },
+    "members_vs_inventory": {
+      "equal_by_path_size_sha256": 2367,
+      "members": 2367,
+      "size_or_digest_mismatches": 0
+    },
+    "other_u126_files_not_re_reviewed": {
+      "count": 69,
+      "incidentally_recovered_and_equal": 62,
+      "not_in_the_five_packages": 7,
+      "not_in_the_five_packages_paths": [
+        "node_modules/@babel/runtime/helpers/esm/interopRequireWildcard.js",
+        "node_modules/@babel/runtime/helpers/esm/toPrimitive.js",
+        "node_modules/@babel/runtime/helpers/interopRequireWildcard.js",
+        "node_modules/@babel/runtime/helpers/toPrimitive.js",
+        "node_modules/@earendil-works/pi-codemode/dist/runtime/host.js",
+        "node_modules/@earendil-works/pi-codemode/dist/runtime/prelude-source.js",
+        "node_modules/@earendil-works/pi-codemode/dist/runtime/worker.js"
+      ]
+    },
+    "packages": [
+      {
+        "member_count": 1248,
+        "package": "@earendil-works/pi-coding-agent",
+        "payload_prefix": "",
+        "registry_integrity_check": {
+          "integrity": "verified:sha512",
+          "shasum": "verified:sha1"
+        },
+        "tarball_bytes": 7474225,
+        "tarball_sha256": "106eadb1f823f72f012c08f23bd36e435f9e62f6c81e98a5d8f70c8a9543dd05",
+        "tarball_url": "https://registry.npmjs.org/@earendil-works/pi-coding-agent/-/pi-coding-agent-1.0.3.tgz",
+        "version": "1.0.3"
+      },
+      {
+        "member_count": 26,
+        "package": "@earendil-works/pi-agent-core",
+        "payload_prefix": "node_modules/@earendil-works/pi-agent-core",
+        "registry_integrity_check": {
+          "integrity": "verified:sha512",
+          "shasum": "verified:sha1"
+        },
+        "tarball_bytes": 61366,
+        "tarball_sha256": "1a6466c6d10849960f62f6066ce6d159c721c4d294bcf3536519f65684a719e1",
+        "tarball_url": "https://registry.npmjs.org/@earendil-works/pi-agent-core/-/pi-agent-core-1.0.3.tgz",
+        "version": "1.0.3"
+      },
+      {
+        "member_count": 817,
+        "package": "@earendil-works/pi-ai",
+        "payload_prefix": "node_modules/@earendil-works/pi-ai",
+        "registry_integrity_check": {
+          "integrity": "verified:sha512",
+          "shasum": "verified:sha1"
+        },
+        "tarball_bytes": 774640,
+        "tarball_sha256": "dd8995fb1df3ca3e2bd033053bd2c28b40c44bb7f53c253578ca68082611e0ee",
+        "tarball_url": "https://registry.npmjs.org/@earendil-works/pi-ai/-/pi-ai-1.0.3.tgz",
+        "version": "1.0.3"
+      },
+      {
+        "member_count": 76,
+        "package": "@earendil-works/pi-mcp",
+        "payload_prefix": "node_modules/@earendil-works/pi-mcp",
+        "registry_integrity_check": {
+          "integrity": "verified:sha512",
+          "shasum": "verified:sha1"
+        },
+        "tarball_bytes": 90153,
+        "tarball_sha256": "0ca4a95f2a1459e51ab1d761ac84186bf2cf2bd2c236034d8f18513e964df229",
+        "tarball_url": "https://registry.npmjs.org/@earendil-works/pi-mcp/-/pi-mcp-1.0.3.tgz",
+        "version": "1.0.3"
+      },
+      {
+        "member_count": 200,
+        "package": "@earendil-works/pi-tui",
+        "payload_prefix": "node_modules/@earendil-works/pi-tui",
+        "registry_integrity_check": {
+          "integrity": "verified:sha512",
+          "shasum": "verified:sha1"
+        },
+        "tarball_bytes": 513772,
+        "tarball_sha256": "673000db8f98fd8c3166d7ca8fb9b6679bf341a4aa6961966f6e20834dbfa205",
+        "tarball_url": "https://registry.npmjs.org/@earendil-works/pi-tui/-/pi-tui-1.0.3.tgz",
+        "version": "1.0.3"
+      }
+    ],
+    "path_set_digests_recomputed_from_amendment_rows": {
+      "convention": "sha256 of the UTF-8 paths, sorted, joined by LF, no trailing newline",
+      "sets": {
+        "A": {
+          "computed_sha256": "c24e9e60992d3a03a2accd8dbfd35eebe4559ba108ce0cde51447f65f32f6f7c",
+          "count": 54,
+          "equal": true,
+          "stated_count_equal": true,
+          "stated_sha256": "c24e9e60992d3a03a2accd8dbfd35eebe4559ba108ce0cde51447f65f32f6f7c"
+        },
+        "B_F": {
+          "computed_sha256": "a03d99ba4d805b0303ae816b0a910b4a954cd64a02be0bb060c293894c08b23c",
+          "count": 15,
+          "equal": true,
+          "stated_count_equal": true,
+          "stated_sha256": "a03d99ba4d805b0303ae816b0a910b4a954cd64a02be0bb060c293894c08b23c"
+        },
+        "B_R": {
+          "computed_sha256": "eea3a75a366ebe6abb98e9c4f96af0ed4c6addb9fe80f25a3174f06d7d587005",
+          "count": 5,
+          "equal": true,
+          "stated_count_equal": true,
+          "stated_sha256": "eea3a75a366ebe6abb98e9c4f96af0ed4c6addb9fe80f25a3174f06d7d587005"
+        },
+        "C_R": {
+          "computed_sha256": "7f47a89245f670553fe7bbaf4dd7338af46771b2af090415a32df007eaccd121",
+          "count": 42,
+          "equal": true,
+          "stated_count_equal": true,
+          "stated_sha256": "7f47a89245f670553fe7bbaf4dd7338af46771b2af090415a32df007eaccd121"
+        },
+        "D_R": {
+          "computed_sha256": "34e755cbb37b23c971832d4cd5e8e38d87a8dd6ef8746b001ea30666e5bf6d6c",
+          "count": 10,
+          "equal": true,
+          "stated_count_equal": true,
+          "stated_sha256": "34e755cbb37b23c971832d4cd5e8e38d87a8dd6ef8746b001ea30666e5bf6d6c"
+        },
+        "U126": {
+          "computed_sha256": "775a8f9d1d02ffdd9f31c518bbad88c8727df381d80abe1f8f67fac27d6e3dba",
+          "count": 126,
+          "equal": true,
+          "stated_count_equal": true,
+          "stated_sha256": "775a8f9d1d02ffdd9f31c518bbad88c8727df381d80abe1f8f67fac27d6e3dba"
+        },
+        "original_57": {
+          "computed_sha256": "e55241b9a056a27d5ea4a10905edba4149c02bfc7d362b42bbef59e36369033a",
+          "count": 57,
+          "equal": true,
+          "stated_count_equal": true,
+          "stated_sha256": "e55241b9a056a27d5ea4a10905edba4149c02bfc7d362b42bbef59e36369033a"
+        },
+        "original_57_per_8.10.5": {
+          "computed_sha256": "e55241b9a056a27d5ea4a10905edba4149c02bfc7d362b42bbef59e36369033a",
+          "count": 57,
+          "equal": true,
+          "stated_count_equal": true,
+          "stated_sha256": "e55241b9a056a27d5ea4a10905edba4149c02bfc7d362b42bbef59e36369033a"
+        }
+      }
+    },
+    "review_set": {
+      "count": 57,
+      "failed_or_unavailable": 0,
+      "files": [
+        {
+          "basis_per_amendment": "C/R",
+          "path": "dist/cli/args.js",
+          "sha256": "f48f91efc303fc7b826f0ce02ba6eb70fcc271d31671f0f68f562fdd8c6885e6",
+          "size": 20967,
+          "source_package": "@earendil-works/pi-coding-agent"
+        },
+        {
+          "basis_per_amendment": "D/R",
+          "path": "dist/core/agent-session.js",
+          "sha256": "35ca1dabd54d98c236c9601b569c2856b726ade392d06b2eaaf50158f48913ab",
+          "size": 163913,
+          "source_package": "@earendil-works/pi-coding-agent"
+        },
+        {
+          "basis_per_amendment": "C/R",
+          "path": "dist/core/bash-executor.js",
+          "sha256": "271043574266730c9fd213c47e5b59bc36b7d214307d021ab96c1e97f5e96627",
+          "size": 3894,
+          "source_package": "@earendil-works/pi-coding-agent"
+        },
+        {
+          "basis_per_amendment": "C/R",
+          "path": "dist/core/export-html/tool-renderer.js",
+          "sha256": "012240a9044746655d708422ac5de1b5c75761d9e8319b897f69a0babbc1a395",
+          "size": 4537,
+          "source_package": "@earendil-works/pi-coding-agent"
+        },
+        {
+          "basis_per_amendment": "D/R",
+          "path": "dist/core/model-runtime.js",
+          "sha256": "da26f76339a031456f6d239a249159231776f760ab4ac538c6b54c417dea6f67",
+          "size": 36245,
+          "source_package": "@earendil-works/pi-coding-agent"
+        },
+        {
+          "basis_per_amendment": "C/R",
+          "path": "dist/core/nested-tool-calls.js",
+          "sha256": "4a492ada9360c4b9e8d1f7a222f1975540c65373ac31a53a6ddb4128063c5973",
+          "size": 6777,
+          "source_package": "@earendil-works/pi-coding-agent"
+        },
+        {
+          "basis_per_amendment": "D/R",
+          "path": "dist/core/resource-loader.js",
+          "sha256": "710e367e37c40df9f8f0239ebee6955e0a971a028d20467024bf4ea9ff55a42a",
+          "size": 46451,
+          "source_package": "@earendil-works/pi-coding-agent"
+        },
+        {
+          "basis_per_amendment": "D/R",
+          "path": "dist/core/sdk.js",
+          "sha256": "fe643170de3d259c7e06179d9e18270a009dfb54df915f6e3de515425b8d009b",
+          "size": 15014,
+          "source_package": "@earendil-works/pi-coding-agent"
+        },
+        {
+          "basis_per_amendment": "D/R",
+          "path": "dist/core/settings-manager.js",
+          "sha256": "b3a424ac1af9bd0c380796f9e5d812e2c61755ed3b31dd39982a57bbe0d5a391",
+          "size": 42894,
+          "source_package": "@earendil-works/pi-coding-agent"
+        },
+        {
+          "basis_per_amendment": "D/R",
+          "path": "dist/core/system-prompt.js",
+          "sha256": "83aa42fae07830d5a73431935af3390ec397d8333269d75cfe49c1afbc55369c",
+          "size": 7787,
+          "source_package": "@earendil-works/pi-coding-agent"
+        },
+        {
+          "basis_per_amendment": "B/R",
+          "path": "dist/core/tools/read.js",
+          "sha256": "6be7949968968f42a17ccbe341008db3f061cc1d757b42ff1d269bb0d4cc66f1",
+          "size": 10247,
+          "source_package": "@earendil-works/pi-coding-agent"
+        },
+        {
+          "basis_per_amendment": "C/R",
+          "path": "dist/core/tools/renderers/bash.js",
+          "sha256": "eb8c67c2ce6b511795e333a6fb6fdc6ffcb68f643bce0087f7c16cf95b107fa0",
+          "size": 5423,
+          "source_package": "@earendil-works/pi-coding-agent"
+        },
+        {
+          "basis_per_amendment": "C/R",
+          "path": "dist/core/tools/renderers/edit.js",
+          "sha256": "0df695f15ff66f664fb86c21a55550685810f86c9b770dd651953c048f0bbea4",
+          "size": 7076,
+          "source_package": "@earendil-works/pi-coding-agent"
+        },
+        {
+          "basis_per_amendment": "B/R",
+          "path": "dist/extensions/codemode/execute.js",
+          "sha256": "56d1e135818d79200e11ffa513ac8ba421a71e79d309de841aa3aeabf0e62f87",
+          "size": 27636,
+          "source_package": "@earendil-works/pi-coding-agent"
+        },
+        {
+          "basis_per_amendment": "C/R",
+          "path": "dist/extensions/codemode/index.js",
+          "sha256": "ca9e7ee5789a96960e6d26e2aaf6b0472c29f24974c7e1a127f670fa991f4b8b",
+          "size": 1400,
+          "source_package": "@earendil-works/pi-coding-agent"
+        },
+        {
+          "basis_per_amendment": "D/R",
+          "path": "dist/extensions/codemode/tool.js",
+          "sha256": "821a864469e7fbeba4c509d5bb70ce6e7bc1ead9756ff4b49d1ee847321ddb09",
+          "size": 14538,
+          "source_package": "@earendil-works/pi-coding-agent"
+        },
+        {
+          "basis_per_amendment": "C/R",
+          "path": "dist/extensions/llama/provider.js",
+          "sha256": "8115eeefcdca8373992ef98c2e07478b0d0254c81c7ecfc38b83c0b2eaf1ac54",
+          "size": 10517,
+          "source_package": "@earendil-works/pi-coding-agent"
+        },
+        {
+          "basis_per_amendment": "B/R",
+          "path": "dist/extensions/mcp/cli.js",
+          "sha256": "5e02ecbac788ee17ead7ada54a0db8ddb6e41234016214a0736006724a982efc",
+          "size": 21694,
+          "source_package": "@earendil-works/pi-coding-agent"
+        },
+        {
+          "basis_per_amendment": "B/R",
+          "path": "dist/extensions/mcp/index.js",
+          "sha256": "90779ac1e18246c84888024645a21a1877bb85595dac1b8bf33b28163c3d0057",
+          "size": 55998,
+          "source_package": "@earendil-works/pi-coding-agent"
+        },
+        {
+          "basis_per_amendment": "C/R",
+          "path": "dist/extensions/mcp/resources.js",
+          "sha256": "b9a6be71ce15d2604e6c36721a14c2b3056cae3e7f3315d5ade7aa4bcbe67572",
+          "size": 12285,
+          "source_package": "@earendil-works/pi-coding-agent"
+        },
+        {
+          "basis_per_amendment": "B/R",
+          "path": "dist/extensions/mcp/runtime.js",
+          "sha256": "446b2b858dae2ad82a928a1fe384aa82bae860b9321ae7b646dbeb0f18b90829",
+          "size": 16600,
+          "source_package": "@earendil-works/pi-coding-agent"
+        },
+        {
+          "basis_per_amendment": "C/R",
+          "path": "dist/extensions/mcp/tools.js",
+          "sha256": "132c8a852555f4b8835caef71e175a94dbcb62b1a270b9c8c45779aa8ced086a",
+          "size": 12527,
+          "source_package": "@earendil-works/pi-coding-agent"
+        },
+        {
+          "basis_per_amendment": "C/R",
+          "path": "dist/extensions/mcp/ui.js",
+          "sha256": "1f65b84bb8a84021001b098aa0f5e47efca743a7f674bd8cac215c362d68aac0",
+          "size": 7371,
+          "source_package": "@earendil-works/pi-coding-agent"
+        },
+        {
+          "basis_per_amendment": "D/R",
+          "path": "dist/main.js",
+          "sha256": "060521b0b81f91948d8ded9139e423e5d0c9e6808a45c81750cc30519de4d2db",
+          "size": 37764,
+          "source_package": "@earendil-works/pi-coding-agent"
+        },
+        {
+          "basis_per_amendment": "C/R",
+          "path": "dist/modes/interactive/components/bash-execution.js",
+          "sha256": "605b02b0108c767aa2ee2125cc97eb33806fe421b2dc53c8a7d5b231f4a6f558",
+          "size": 7570,
+          "source_package": "@earendil-works/pi-coding-agent"
+        },
+        {
+          "basis_per_amendment": "C/R",
+          "path": "dist/modes/interactive/components/branch-summary-message.js",
+          "sha256": "3712821cc00a478318e9f82e86ae8060a80121447e21f9f63ab8baceae54a784",
+          "size": 1994,
+          "source_package": "@earendil-works/pi-coding-agent"
+        },
+        {
+          "basis_per_amendment": "C/R",
+          "path": "dist/modes/interactive/components/compaction-summary-message.js",
+          "sha256": "4b8858901b0182a85a7628313d398049ee23a27c00a2fe9416eeb14edae3c087",
+          "size": 2109,
+          "source_package": "@earendil-works/pi-coding-agent"
+        },
+        {
+          "basis_per_amendment": "C/R",
+          "path": "dist/modes/interactive/components/custom-entry.js",
+          "sha256": "b7fa09b49d1ac9e12f6d86fd030f91e221fbd05cd749188644aa5d04495eb38b",
+          "size": 1631,
+          "source_package": "@earendil-works/pi-coding-agent"
+        },
+        {
+          "basis_per_amendment": "C/R",
+          "path": "dist/modes/interactive/components/custom-message.js",
+          "sha256": "848f981da26ab064b16d07be3e88fc2dcb86f5c290f6048ca3a5bc1765530973",
+          "size": 3062,
+          "source_package": "@earendil-works/pi-coding-agent"
+        },
+        {
+          "basis_per_amendment": "C/R",
+          "path": "dist/modes/interactive/components/settings-selector.js",
+          "sha256": "705aba8ad29b2a8f603ff8fef24fdcdcc4e31f8942ebca5cc2ad7c4fb2c10843",
+          "size": 35633,
+          "source_package": "@earendil-works/pi-coding-agent"
+        },
+        {
+          "basis_per_amendment": "C/R",
+          "path": "dist/modes/interactive/components/skill-invocation-message.js",
+          "sha256": "a20d763cbb9db632f154c717a05d5ff0e48e554a12535f8270ad32efb23837f6",
+          "size": 2260,
+          "source_package": "@earendil-works/pi-coding-agent"
+        },
+        {
+          "basis_per_amendment": "C/R",
+          "path": "dist/modes/interactive/components/tool-execution.js",
+          "sha256": "84c0b25031d0702f7599f6a779642c3bf7822e1f89919a543901da733e817941",
+          "size": 12465,
+          "source_package": "@earendil-works/pi-coding-agent"
+        },
+        {
+          "basis_per_amendment": "D/R",
+          "path": "dist/modes/interactive/theme/theme.js",
+          "sha256": "a7b93b9cc50d9f44c2a728c8df5de67dc41efead57d1554e0ff32b73bb358cf4",
+          "size": 34689,
+          "source_package": "@earendil-works/pi-coding-agent"
+        },
+        {
+          "basis_per_amendment": "C/R",
+          "path": "dist/utils/ansi.js",
+          "sha256": "20e9caeb257d1b2bb362adc9caf1bf5c22cccdbcecb43793faece6daff15f19b",
+          "size": 2576,
+          "source_package": "@earendil-works/pi-coding-agent"
+        },
+        {
+          "basis_per_amendment": "C/R",
+          "path": "dist/utils/image-resize-core.js",
+          "sha256": "5f6f1464c21e196a5742b943a403aa843fb319c9d2ff024ca04bb809a18de261",
+          "size": 4846,
+          "source_package": "@earendil-works/pi-coding-agent"
+        },
+        {
+          "basis_per_amendment": "D/R",
+          "path": "dist/utils/syntax-highlight.js",
+          "sha256": "cde55591ba804d1cd8efdba605e9cae894e722241e61a738163755362457cd2d",
+          "size": 5729,
+          "source_package": "@earendil-works/pi-coding-agent"
+        },
+        {
+          "basis_per_amendment": "C/R",
+          "path": "node_modules/@earendil-works/pi-agent-core/dist/agent-loop.js",
+          "sha256": "65def8c7f3fa01e38fe05467520efc8673c22ea8197833a3b04b29c8a60cb1e3",
+          "size": 28866,
+          "source_package": "@earendil-works/pi-agent-core"
+        },
+        {
+          "basis_per_amendment": "C/R",
+          "path": "node_modules/@earendil-works/pi-ai/dist/api/cloudflare-workers-ai-system-one.js",
+          "sha256": "3001ee95e7a02073530319f2827b286d4eb3948c707e218f627226986f0e67c0",
+          "size": 2356,
+          "source_package": "@earendil-works/pi-ai"
+        },
+        {
+          "basis_per_amendment": "C/R",
+          "path": "node_modules/@earendil-works/pi-ai/dist/api/lazy.js",
+          "sha256": "4b8083fd71cbbe2ed01be00fc6ae9bc67f84aa7bf50ef815f7863e156a3e003c",
+          "size": 2619,
+          "source_package": "@earendil-works/pi-ai"
+        },
+        {
+          "basis_per_amendment": "C/R",
+          "path": "node_modules/@earendil-works/pi-ai/dist/api/llama-cpp-classify.js",
+          "sha256": "250d02be1637c1ab431f3da2912459d076e516e5395d52e10414da0e4aeabca9",
+          "size": 17192,
+          "source_package": "@earendil-works/pi-ai"
+        },
+        {
+          "basis_per_amendment": "C/R",
+          "path": "node_modules/@earendil-works/pi-ai/dist/api/mistral-conversations.js",
+          "sha256": "e043c1c06427a0384d6e7d416c8d019d6342fb6f729fa80430c7cff43fc82d25",
+          "size": 30761,
+          "source_package": "@earendil-works/pi-ai"
+        },
+        {
+          "basis_per_amendment": "C/R",
+          "path": "node_modules/@earendil-works/pi-ai/dist/api/system-one-shared.js",
+          "sha256": "2b33d289d2adc1810f1ce7fdb04f8516f24bfe64ace01d54fdc442e5971853d9",
+          "size": 7607,
+          "source_package": "@earendil-works/pi-ai"
+        },
+        {
+          "basis_per_amendment": "C/R",
+          "path": "node_modules/@earendil-works/pi-ai/dist/api/typesafe-system-one.js",
+          "sha256": "d0f15d314902eb4af7cb52189e3ab5b22ffe306ab41eabbf3ba0788a0078647a",
+          "size": 865,
+          "source_package": "@earendil-works/pi-ai"
+        },
+        {
+          "basis_per_amendment": "C/R",
+          "path": "node_modules/@earendil-works/pi-ai/dist/models.js",
+          "sha256": "633161a0067abbb20a434acc3605f8f25d2fa6d32f903cc7edcdcaa7e0ba7083",
+          "size": 31839,
+          "source_package": "@earendil-works/pi-ai"
+        },
+        {
+          "basis_per_amendment": "C/R",
+          "path": "node_modules/@earendil-works/pi-ai/dist/providers/faux.js",
+          "sha256": "d8834e63c120a62d562c0740d989eb5fe0eca0fcf570a3543855c30840ab6b1c",
+          "size": 19791,
+          "source_package": "@earendil-works/pi-ai"
+        },
+        {
+          "basis_per_amendment": "C/R",
+          "path": "node_modules/@earendil-works/pi-ai/dist/providers/openai.js",
+          "sha256": "0b5ce81ec2e4838ac3ac362c2bcd1c68f07f7aa30b198163d9c05e7cd3d6b0f8",
+          "size": 914,
+          "source_package": "@earendil-works/pi-ai"
+        },
+        {
+          "basis_per_amendment": "C/R",
+          "path": "node_modules/@earendil-works/pi-ai/dist/providers/radius.js",
+          "sha256": "c50694f71a7cac5d15630b3d8c2e7dee830eb756b4296f899899e7729889969e",
+          "size": 3567,
+          "source_package": "@earendil-works/pi-ai"
+        },
+        {
+          "basis_per_amendment": "C/R",
+          "path": "node_modules/@earendil-works/pi-ai/dist/utils/estimate.js",
+          "sha256": "ad08d86f790f6113d82610d9b0d5007eb8ebd27245409cc7262aed0b43613ced",
+          "size": 3750,
+          "source_package": "@earendil-works/pi-ai"
+        },
+        {
+          "basis_per_amendment": "C/R",
+          "path": "node_modules/@earendil-works/pi-ai/dist/utils/event-stream.js",
+          "sha256": "29a6bb6b21387b8c1f2ecfb1ec508b4030aba3727373ab854d28333557f7a68e",
+          "size": 2940,
+          "source_package": "@earendil-works/pi-ai"
+        },
+        {
+          "basis_per_amendment": "C/R",
+          "path": "node_modules/@earendil-works/pi-ai/dist/utils/model-operations.js",
+          "sha256": "1f05431db8497143a9d692bac4619380a18559d2547fd1e7e09e11e676de1a73",
+          "size": 1709,
+          "source_package": "@earendil-works/pi-ai"
+        },
+        {
+          "basis_per_amendment": "C/R",
+          "path": "node_modules/@earendil-works/pi-ai/dist/utils/provider-retry.js",
+          "sha256": "4aa5c34d72f58d3cb67bc8b71c486f11237cda02c86889e7a67c20d6418c35a9",
+          "size": 4007,
+          "source_package": "@earendil-works/pi-ai"
+        },
+        {
+          "basis_per_amendment": "C/R",
+          "path": "node_modules/@earendil-works/pi-ai/dist/utils/retry.js",
+          "sha256": "8302372246b92d5047bb5715afeee374c672e1652d96a80268dc3b5758a7cae4",
+          "size": 8191,
+          "source_package": "@earendil-works/pi-ai"
+        },
+        {
+          "basis_per_amendment": "C/R",
+          "path": "node_modules/@earendil-works/pi-mcp/dist/oauth/flow.js",
+          "sha256": "0899824db5ab657dedab42c2f4f288a492941664fff5aeaeddf3e13a952de734",
+          "size": 15388,
+          "source_package": "@earendil-works/pi-mcp"
+        },
+        {
+          "basis_per_amendment": "C/R",
+          "path": "node_modules/@earendil-works/pi-tui/dist/components/box.js",
+          "sha256": "9beb38db81255ff91e66644b271702d0ac1a99279316989f99f3b23a06731690",
+          "size": 4856,
+          "source_package": "@earendil-works/pi-tui"
+        },
+        {
+          "basis_per_amendment": "C/R",
+          "path": "node_modules/@earendil-works/pi-tui/dist/components/text.js",
+          "sha256": "b972e4190c930fc98c3eb1f4309449fb815b32f4360c3e14c2438ed5fc46e79d",
+          "size": 3576,
+          "source_package": "@earendil-works/pi-tui"
+        },
+        {
+          "basis_per_amendment": "C/R",
+          "path": "node_modules/@earendil-works/pi-tui/dist/index.js",
+          "sha256": "3d02bb385cd25c3fdfca6f375250a2b40083d594bd3f2b99c3bdedf67b5a0b9d",
+          "size": 3014,
+          "source_package": "@earendil-works/pi-tui"
+        },
+        {
+          "basis_per_amendment": "C/R",
+          "path": "node_modules/@earendil-works/pi-tui/dist/tui-alt-screen.js",
+          "sha256": "fbb884590131d89bf3faa0bb52f4669473b72f274f15a01be15ef896760027c8",
+          "size": 68465,
+          "source_package": "@earendil-works/pi-tui"
+        }
+      ],
+      "recovered_and_exactly_equal": 57,
+      "sorted_path_sha256": "e55241b9a056a27d5ea4a10905edba4149c02bfc7d362b42bbef59e36369033a"
+    },
+    "statement": "Each item below was computed by this program from bytes or from the committed text; none is an interpretation of what any file does."
+  },
+  "not_established": [
+    "that the B / C / D read-relocation classification of any file is correct",
+    "that any of the 57 files was read, or is harmless, or runs correctly from the relocated package",
+    "that the recovered files form a complete approved installation",
+    "anything about the other 69 U126 files beyond whether their bytes were incidentally present",
+    "anything about Node, Pi, npm or any model; none was run"
+  ],
+  "record_kind": "aido-f5a-u126-approved-byte-verification.v1",
+  "scope_declaration": {
+    "downloaded_bytes_persisted": false,
+    "execution": "none: no Node, Pi, npm, lifecycle script or downloaded code was executed or imported",
+    "network": "five unauthenticated HTTPS GETs of version metadata and five of tarballs from registry.npmjs.org; no credential, cookie or authorization header; environment proxies not used",
+    "repository_files_written_by_verification": "report only, and only when --report is given"
+  },
+  "subject": {
+    "package_version": "1.0.3",
+    "payload_fingerprint": "66cf8a815d91aeaf3eb920763c6a4f3b98c17625dbaa93c540fb424c451664dc",
+    "profile_id": "56651d0b2b6995e05b6de3aa012f5a82f276b2ac817dcce00844d1db2a9ffd67"
+  },
+  "verdict": "PASS"
+}

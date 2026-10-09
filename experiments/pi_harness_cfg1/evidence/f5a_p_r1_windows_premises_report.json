@@ -1,0 +1,1303 @@
+{
+  "environment": {
+    "filesystem": "NTFS",
+    "flags": "0x1c72edf",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "python": "3.14.7",
+    "windows_build": "10.0.26200"
+  },
+  "facts": {
+    "full_copy": {
+      "directories": 1436,
+      "files": 15046,
+      "longest_absolute_path_chars": 240
+    },
+    "inventory_maxima": {
+      "max_depth_below_C": 11,
+      "max_dir_children": 80,
+      "max_entries_in_one_directory": 362,
+      "max_file_children": 360
+    },
+    "recomputed_peak_handles_real_tree": {
+      "at_directory": "node_modules/@earendil-works/pi-ai/dist/providers",
+      "frozen_bound_sec_7_4A_6": 462,
+      "peak": 449,
+      "within_frozen_bound": true
+    }
+  },
+  "premises": {
+    "P-R1-1": {
+      "cases": [
+        {
+          "case": "OP:CreateFileW_CREATE_ALWAYS_recreate",
+          "evidence": {
+            "held": [
+              {
+                "file": "package.json",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              },
+              {
+                "file": "dist/cli.js",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              },
+              {
+                "file": "dist/main.js",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              },
+              {
+                "file": "dist/config.js",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              }
+            ],
+            "held_errors": [
+              32
+            ],
+            "released_controls": [
+              {
+                "file": "package.json",
+                "released_control_ok": true,
+                "win32_error": 0
+              },
+              {
+                "file": "dist/cli.js",
+                "released_control_ok": true,
+                "win32_error": 0
+              },
+              {
+                "file": "dist/main.js",
+                "released_control_ok": true,
+                "win32_error": 0
+              },
+              {
+                "file": "dist/config.js",
+                "released_control_ok": true,
+                "win32_error": 0
+              }
+            ]
+          },
+          "status": "PASS"
+        },
+        {
+          "case": "OP:CreateFileW_OPEN_EXISTING_write_bytes",
+          "evidence": {
+            "held": [
+              {
+                "file": "package.json",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              },
+              {
+                "file": "dist/cli.js",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              },
+              {
+                "file": "dist/main.js",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              },
+              {
+                "file": "dist/config.js",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              }
+            ],
+            "held_errors": [
+              32
+            ],
+            "released_controls": [
+              {
+                "file": "package.json",
+                "released_control_ok": true,
+                "win32_error": 0
+              },
+              {
+                "file": "dist/cli.js",
+                "released_control_ok": true,
+                "win32_error": 0
+              },
+              {
+                "file": "dist/main.js",
+                "released_control_ok": true,
+                "win32_error": 0
+              },
+              {
+                "file": "dist/config.js",
+                "released_control_ok": true,
+                "win32_error": 0
+              }
+            ]
+          },
+          "status": "PASS"
+        },
+        {
+          "case": "OP:CreateFileW_TRUNCATE_EXISTING_recreate",
+          "evidence": {
+            "held": [
+              {
+                "file": "package.json",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              },
+              {
+                "file": "dist/cli.js",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              },
+              {
+                "file": "dist/main.js",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              },
+              {
+                "file": "dist/config.js",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              }
+            ],
+            "held_errors": [
+              32
+            ],
+            "released_controls": [
+              {
+                "file": "package.json",
+                "released_control_ok": true,
+                "win32_error": 0
+              },
+              {
+                "file": "dist/cli.js",
+                "released_control_ok": true,
+                "win32_error": 0
+              },
+              {
+                "file": "dist/main.js",
+                "released_control_ok": true,
+                "win32_error": 0
+              },
+              {
+                "file": "dist/config.js",
+                "released_control_ok": true,
+                "win32_error": 0
+              }
+            ]
+          },
+          "status": "PASS"
+        },
+        {
+          "case": "OP:DeleteFileW",
+          "evidence": {
+            "held": [
+              {
+                "file": "package.json",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              },
+              {
+                "file": "dist/cli.js",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              },
+              {
+                "file": "dist/main.js",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              },
+              {
+                "file": "dist/config.js",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              }
+            ],
+            "held_errors": [
+              32
+            ],
+            "released_controls": [
+              {
+                "file": "package.json",
+                "released_control_ok": true,
+                "win32_error": 0
+              },
+              {
+                "file": "dist/cli.js",
+                "released_control_ok": true,
+                "win32_error": 0
+              },
+              {
+                "file": "dist/main.js",
+                "released_control_ok": true,
+                "win32_error": 0
+              },
+              {
+                "file": "dist/config.js",
+                "released_control_ok": true,
+                "win32_error": 0
+              }
+            ]
+          },
+          "status": "PASS"
+        },
+        {
+          "case": "OP:FileDispositionInfo",
+          "evidence": {
+            "held": [
+              {
+                "file": "package.json",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              },
+              {
+                "file": "dist/cli.js",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              },
+              {
+                "file": "dist/main.js",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              },
+              {
+                "file": "dist/config.js",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              }
+            ],
+            "held_errors": [
+              32
+            ],
+            "released_controls": [
+              {
+                "file": "package.json",
+                "released_control_ok": true,
+                "win32_error": 0
+              },
+              {
+                "file": "dist/cli.js",
+                "released_control_ok": true,
+                "win32_error": 0
+              },
+              {
+                "file": "dist/main.js",
+                "released_control_ok": true,
+                "win32_error": 0
+              },
+              {
+                "file": "dist/config.js",
+                "released_control_ok": true,
+                "win32_error": 0
+              }
+            ]
+          },
+          "status": "PASS"
+        },
+        {
+          "case": "OP:FileDispositionInfoEx_delete",
+          "evidence": {
+            "held": [
+              {
+                "file": "package.json",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              },
+              {
+                "file": "dist/cli.js",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              },
+              {
+                "file": "dist/main.js",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              },
+              {
+                "file": "dist/config.js",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              }
+            ],
+            "held_errors": [
+              32
+            ],
+            "released_controls": [
+              {
+                "file": "package.json",
+                "released_control_ok": true,
+                "win32_error": 0
+              },
+              {
+                "file": "dist/cli.js",
+                "released_control_ok": true,
+                "win32_error": 0
+              },
+              {
+                "file": "dist/main.js",
+                "released_control_ok": true,
+                "win32_error": 0
+              },
+              {
+                "file": "dist/config.js",
+                "released_control_ok": true,
+                "win32_error": 0
+              }
+            ]
+          },
+          "status": "PASS"
+        },
+        {
+          "case": "OP:FileDispositionInfoEx_posix",
+          "evidence": {
+            "held": [
+              {
+                "file": "package.json",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              },
+              {
+                "file": "dist/cli.js",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              },
+              {
+                "file": "dist/main.js",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              },
+              {
+                "file": "dist/config.js",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              }
+            ],
+            "held_errors": [
+              32
+            ],
+            "released_controls": [
+              {
+                "file": "package.json",
+                "released_control_ok": true,
+                "win32_error": 0
+              },
+              {
+                "file": "dist/cli.js",
+                "released_control_ok": true,
+                "win32_error": 0
+              },
+              {
+                "file": "dist/main.js",
+                "released_control_ok": true,
+                "win32_error": 0
+              },
+              {
+                "file": "dist/config.js",
+                "released_control_ok": true,
+                "win32_error": 0
+              }
+            ]
+          },
+          "status": "PASS"
+        },
+        {
+          "case": "OP:FileRenameInfoEx_directory_replacing_file",
+          "evidence": {
+            "held": [
+              {
+                "file": "package.json",
+                "held_outcome": "other_refusal",
+                "win32_error": 267
+              },
+              {
+                "file": "dist/cli.js",
+                "held_outcome": "other_refusal",
+                "win32_error": 267
+              },
+              {
+                "file": "dist/main.js",
+                "held_outcome": "other_refusal",
+                "win32_error": 267
+              },
+              {
+                "file": "dist/config.js",
+                "held_outcome": "other_refusal",
+                "win32_error": 267
+              }
+            ],
+            "held_errors": [
+              267
+            ],
+            "released_controls": [
+              {
+                "file": "package.json",
+                "released_control_ok": false,
+                "win32_error": 267
+              },
+              {
+                "file": "dist/cli.js",
+                "released_control_ok": false,
+                "win32_error": 267
+              },
+              {
+                "file": "dist/main.js",
+                "released_control_ok": false,
+                "win32_error": 267
+              },
+              {
+                "file": "dist/config.js",
+                "released_control_ok": false,
+                "win32_error": 267
+              }
+            ]
+          },
+          "status": "UNSUPPORTED"
+        },
+        {
+          "case": "OP:FileRenameInfoEx_posix_rename",
+          "evidence": {
+            "held": [
+              {
+                "file": "package.json",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              },
+              {
+                "file": "dist/cli.js",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              },
+              {
+                "file": "dist/main.js",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              },
+              {
+                "file": "dist/config.js",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              }
+            ],
+            "held_errors": [
+              32
+            ],
+            "released_controls": [
+              {
+                "file": "package.json",
+                "released_control_ok": true,
+                "win32_error": 0
+              },
+              {
+                "file": "dist/cli.js",
+                "released_control_ok": true,
+                "win32_error": 0
+              },
+              {
+                "file": "dist/main.js",
+                "released_control_ok": true,
+                "win32_error": 0
+              },
+              {
+                "file": "dist/config.js",
+                "released_control_ok": true,
+                "win32_error": 0
+              }
+            ]
+          },
+          "status": "PASS"
+        },
+        {
+          "case": "OP:FileRenameInfoEx_posix_replace_as_target",
+          "evidence": {
+            "held": [
+              {
+                "file": "package.json",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              },
+              {
+                "file": "dist/cli.js",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              },
+              {
+                "file": "dist/main.js",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              },
+              {
+                "file": "dist/config.js",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              }
+            ],
+            "held_errors": [
+              32
+            ],
+            "released_controls": [
+              {
+                "file": "package.json",
+                "released_control_ok": true,
+                "win32_error": 0
+              },
+              {
+                "file": "dist/cli.js",
+                "released_control_ok": true,
+                "win32_error": 0
+              },
+              {
+                "file": "dist/main.js",
+                "released_control_ok": true,
+                "win32_error": 0
+              },
+              {
+                "file": "dist/config.js",
+                "released_control_ok": true,
+                "win32_error": 0
+              }
+            ]
+          },
+          "status": "PASS"
+        },
+        {
+          "case": "OP:FileRenameInfo_rename",
+          "evidence": {
+            "held": [
+              {
+                "file": "package.json",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              },
+              {
+                "file": "dist/cli.js",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              },
+              {
+                "file": "dist/main.js",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              },
+              {
+                "file": "dist/config.js",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              }
+            ],
+            "held_errors": [
+              32
+            ],
+            "released_controls": [
+              {
+                "file": "package.json",
+                "released_control_ok": true,
+                "win32_error": 0
+              },
+              {
+                "file": "dist/cli.js",
+                "released_control_ok": true,
+                "win32_error": 0
+              },
+              {
+                "file": "dist/main.js",
+                "released_control_ok": true,
+                "win32_error": 0
+              },
+              {
+                "file": "dist/config.js",
+                "released_control_ok": true,
+                "win32_error": 0
+              }
+            ]
+          },
+          "status": "PASS"
+        },
+        {
+          "case": "OP:FileRenameInfo_replace_as_target",
+          "evidence": {
+            "held": [
+              {
+                "file": "package.json",
+                "held_outcome": "blocked",
+                "win32_error": 5
+              },
+              {
+                "file": "dist/cli.js",
+                "held_outcome": "blocked",
+                "win32_error": 5
+              },
+              {
+                "file": "dist/main.js",
+                "held_outcome": "blocked",
+                "win32_error": 5
+              },
+              {
+                "file": "dist/config.js",
+                "held_outcome": "blocked",
+                "win32_error": 5
+              }
+            ],
+            "held_errors": [
+              5
+            ],
+            "released_controls": [
+              {
+                "file": "package.json",
+                "released_control_ok": true,
+                "win32_error": 0
+              },
+              {
+                "file": "dist/cli.js",
+                "released_control_ok": true,
+                "win32_error": 0
+              },
+              {
+                "file": "dist/main.js",
+                "released_control_ok": true,
+                "win32_error": 0
+              },
+              {
+                "file": "dist/config.js",
+                "released_control_ok": true,
+                "win32_error": 0
+              }
+            ]
+          },
+          "status": "PASS"
+        },
+        {
+          "case": "OP:MoveFileExW_rename",
+          "evidence": {
+            "held": [
+              {
+                "file": "package.json",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              },
+              {
+                "file": "dist/cli.js",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              },
+              {
+                "file": "dist/main.js",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              },
+              {
+                "file": "dist/config.js",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              }
+            ],
+            "held_errors": [
+              32
+            ],
+            "released_controls": [
+              {
+                "file": "package.json",
+                "released_control_ok": true,
+                "win32_error": 0
+              },
+              {
+                "file": "dist/cli.js",
+                "released_control_ok": true,
+                "win32_error": 0
+              },
+              {
+                "file": "dist/main.js",
+                "released_control_ok": true,
+                "win32_error": 0
+              },
+              {
+                "file": "dist/config.js",
+                "released_control_ok": true,
+                "win32_error": 0
+              }
+            ]
+          },
+          "status": "PASS"
+        },
+        {
+          "case": "OP:MoveFileExW_replace_as_target",
+          "evidence": {
+            "held": [
+              {
+                "file": "package.json",
+                "held_outcome": "blocked",
+                "win32_error": 5
+              },
+              {
+                "file": "dist/cli.js",
+                "held_outcome": "blocked",
+                "win32_error": 5
+              },
+              {
+                "file": "dist/main.js",
+                "held_outcome": "blocked",
+                "win32_error": 5
+              },
+              {
+                "file": "dist/config.js",
+                "held_outcome": "blocked",
+                "win32_error": 5
+              }
+            ],
+            "held_errors": [
+              5
+            ],
+            "released_controls": [
+              {
+                "file": "package.json",
+                "released_control_ok": true,
+                "win32_error": 0
+              },
+              {
+                "file": "dist/cli.js",
+                "released_control_ok": true,
+                "win32_error": 0
+              },
+              {
+                "file": "dist/main.js",
+                "released_control_ok": true,
+                "win32_error": 0
+              },
+              {
+                "file": "dist/config.js",
+                "released_control_ok": true,
+                "win32_error": 0
+              }
+            ]
+          },
+          "status": "PASS"
+        },
+        {
+          "case": "OP:ReplaceFileW_as_replaced",
+          "evidence": {
+            "held": [
+              {
+                "file": "package.json",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              },
+              {
+                "file": "dist/cli.js",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              },
+              {
+                "file": "dist/main.js",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              },
+              {
+                "file": "dist/config.js",
+                "held_outcome": "blocked",
+                "win32_error": 32
+              }
+            ],
+            "held_errors": [
+              32
+            ],
+            "released_controls": [
+              {
+                "file": "package.json",
+                "released_control_ok": true,
+                "win32_error": 0
+              },
+              {
+                "file": "dist/cli.js",
+                "released_control_ok": true,
+                "win32_error": 0
+              },
+              {
+                "file": "dist/main.js",
+                "released_control_ok": true,
+                "win32_error": 0
+              },
+              {
+                "file": "dist/config.js",
+                "released_control_ok": true,
+                "win32_error": 0
+              }
+            ]
+          },
+          "status": "PASS"
+        }
+      ],
+      "cases_expected": 15,
+      "cases_fail": 0,
+      "cases_not_run": [],
+      "cases_pass": 14,
+      "cases_recorded": 15,
+      "cases_unsupported": 1,
+      "verdict": "PARTIAL"
+    },
+    "P-R1-2": {
+      "cases": [
+        {
+          "case": "RENAME:FileRenameInfo:dist",
+          "evidence": {
+            "ancestor": "dist",
+            "ancestor_and_pins_unchanged": true,
+            "held_win32_error": 5,
+            "released_control_renamed_back": true,
+            "released_control_win32_error": null,
+            "renamer": "FileRenameInfo",
+            "unpinned_sibling_rename_error": null
+          },
+          "status": "PASS"
+        },
+        {
+          "case": "RENAME:FileRenameInfo:C",
+          "evidence": {
+            "ancestor": "C",
+            "ancestor_and_pins_unchanged": true,
+            "held_win32_error": 5,
+            "released_control_renamed_back": true,
+            "released_control_win32_error": null,
+            "renamer": "FileRenameInfo",
+            "unpinned_sibling_rename_error": null
+          },
+          "status": "PASS"
+        },
+        {
+          "case": "RENAME:FileRenameInfo:RT",
+          "evidence": {
+            "ancestor": "RT",
+            "ancestor_and_pins_unchanged": true,
+            "held_win32_error": 5,
+            "released_control_renamed_back": true,
+            "released_control_win32_error": null,
+            "renamer": "FileRenameInfo",
+            "unpinned_sibling_rename_error": null
+          },
+          "status": "PASS"
+        },
+        {
+          "case": "RENAME:FileRenameInfo:R",
+          "evidence": {
+            "ancestor": "R",
+            "ancestor_and_pins_unchanged": true,
+            "held_win32_error": 5,
+            "released_control_renamed_back": true,
+            "released_control_win32_error": null,
+            "renamer": "FileRenameInfo",
+            "unpinned_sibling_rename_error": null
+          },
+          "status": "PASS"
+        },
+        {
+          "case": "RENAME:FileRenameInfoEx_posix:dist",
+          "evidence": {
+            "ancestor": "dist",
+            "ancestor_and_pins_unchanged": true,
+            "held_win32_error": 5,
+            "released_control_renamed_back": true,
+            "released_control_win32_error": null,
+            "renamer": "FileRenameInfoEx_posix",
+            "unpinned_sibling_rename_error": null
+          },
+          "status": "PASS"
+        },
+        {
+          "case": "RENAME:FileRenameInfoEx_posix:C",
+          "evidence": {
+            "ancestor": "C",
+            "ancestor_and_pins_unchanged": true,
+            "held_win32_error": 5,
+            "released_control_renamed_back": true,
+            "released_control_win32_error": null,
+            "renamer": "FileRenameInfoEx_posix",
+            "unpinned_sibling_rename_error": null
+          },
+          "status": "PASS"
+        },
+        {
+          "case": "RENAME:FileRenameInfoEx_posix:RT",
+          "evidence": {
+            "ancestor": "RT",
+            "ancestor_and_pins_unchanged": true,
+            "held_win32_error": 5,
+            "released_control_renamed_back": true,
+            "released_control_win32_error": null,
+            "renamer": "FileRenameInfoEx_posix",
+            "unpinned_sibling_rename_error": null
+          },
+          "status": "PASS"
+        },
+        {
+          "case": "RENAME:FileRenameInfoEx_posix:R",
+          "evidence": {
+            "ancestor": "R",
+            "ancestor_and_pins_unchanged": true,
+            "held_win32_error": 5,
+            "released_control_renamed_back": true,
+            "released_control_win32_error": null,
+            "renamer": "FileRenameInfoEx_posix",
+            "unpinned_sibling_rename_error": null
+          },
+          "status": "PASS"
+        },
+        {
+          "case": "RENAME:MoveFileExW:dist",
+          "evidence": {
+            "ancestor": "dist",
+            "ancestor_and_pins_unchanged": true,
+            "held_win32_error": 5,
+            "released_control_renamed_back": true,
+            "released_control_win32_error": null,
+            "renamer": "MoveFileExW",
+            "unpinned_sibling_rename_error": null
+          },
+          "status": "PASS"
+        },
+        {
+          "case": "RENAME:MoveFileExW:C",
+          "evidence": {
+            "ancestor": "C",
+            "ancestor_and_pins_unchanged": true,
+            "held_win32_error": 5,
+            "released_control_renamed_back": true,
+            "released_control_win32_error": null,
+            "renamer": "MoveFileExW",
+            "unpinned_sibling_rename_error": null
+          },
+          "status": "PASS"
+        },
+        {
+          "case": "RENAME:MoveFileExW:RT",
+          "evidence": {
+            "ancestor": "RT",
+            "ancestor_and_pins_unchanged": true,
+            "held_win32_error": 5,
+            "released_control_renamed_back": true,
+            "released_control_win32_error": null,
+            "renamer": "MoveFileExW",
+            "unpinned_sibling_rename_error": null
+          },
+          "status": "PASS"
+        },
+        {
+          "case": "RENAME:MoveFileExW:R",
+          "evidence": {
+            "ancestor": "R",
+            "ancestor_and_pins_unchanged": true,
+            "held_win32_error": 5,
+            "released_control_renamed_back": true,
+            "released_control_win32_error": null,
+            "renamer": "MoveFileExW",
+            "unpinned_sibling_rename_error": null
+          },
+          "status": "PASS"
+        }
+      ],
+      "cases_expected": 12,
+      "cases_fail": 0,
+      "cases_not_run": [],
+      "cases_pass": 12,
+      "cases_recorded": 12,
+      "cases_unsupported": 0,
+      "verdict": "PASS"
+    },
+    "P-R1-3": {
+      "cases": [
+        {
+          "case": "readers_on_held_pins",
+          "evidence": {
+            "failures": [],
+            "files": [
+              "package.json",
+              "dist/cli.js",
+              "dist/main.js",
+              "dist/config.js"
+            ],
+            "readers": [
+              "read_payload_file_digest",
+              "read_payload_file_bytes",
+              "proof_leaves.read_digest",
+              "inspect_no_follow"
+            ],
+            "released_control_ok": true
+          },
+          "status": "PASS"
+        },
+        {
+          "case": "directory_walk_over_chain",
+          "evidence": {
+            "entry_counts": {
+              "C": 7,
+              "R": 1,
+              "RT": 1,
+              "dist": 35
+            },
+            "failures": [],
+            "released_equals_held": true
+          },
+          "status": "PASS"
+        },
+        {
+          "case": "payload_walk_held_equals_expected_equals_released",
+          "evidence": {
+            "fingerprint_held_equals_released": true,
+            "held_complete": true,
+            "held_entries": 16482,
+            "held_equals_independently_computed_expected": true,
+            "held_refusal_code": null,
+            "pinned_files": 4,
+            "released_control_complete": true,
+            "released_equals_independently_computed_expected": true
+          },
+          "status": "PASS"
+        },
+        {
+          "case": "l14_l21a_proof_leaves",
+          "evidence": {
+            "held": {
+              "exposures": "EXPOSURES_ABSENT",
+              "pin_path_identity_equals_pin_handle": true,
+              "root_identity_holds": true,
+              "walk_complete": true,
+              "walk_equals_expected": true
+            },
+            "leaves_used": [
+              "genuine_pi_proof_leaves().enumerate_directory",
+              "\u2026read_digest",
+              "\u2026inspect",
+              "observe_payload via pi_identity._observe_payload",
+              "pi_identity.observe_profile_exposures",
+              "pi_identity._identity_still_holds"
+            ],
+            "not_exercised": "reprove_pi_identity_for_launch / reobserve_pi_profile_after_runtime need a profile fingerprint a synthetic tree cannot equal; the leaves they call are what is exercised",
+            "released_control": {
+              "exposures": "EXPOSURES_ABSENT",
+              "pin_path_identity_equals_pin_handle": null,
+              "root_identity_holds": true,
+              "walk_complete": true,
+              "walk_equals_expected": true
+            }
+          },
+          "status": "PASS"
+        },
+        {
+          "case": "sensitivity_control_incompatible_shape",
+          "evidence": {
+            "shapes_refused": [
+              "R0_shape_GENERIC_WRITE_share_READ",
+              "share_0"
+            ]
+          },
+          "status": "PASS"
+        }
+      ],
+      "cases_expected": 5,
+      "cases_fail": 0,
+      "cases_not_run": [],
+      "cases_pass": 5,
+      "cases_recorded": 5,
+      "cases_unsupported": 0,
+      "verdict": "PASS"
+    },
+    "P-R1-4": {
+      "cases": [
+        {
+          "case": "i_child_directory_create_and_pin",
+          "evidence": {
+            "pinned_parent": {
+              "created_and_pinned": true,
+              "directory": true,
+              "nested_grandchild_pinned": true,
+              "parent_enumeration_lists_child": true,
+              "reparse_attribute": false,
+              "reparse_tag": 0
+            },
+            "released_parent_control": {
+              "created_and_pinned": true,
+              "directory": true,
+              "nested_grandchild_pinned": true,
+              "reparse_attribute": false,
+              "reparse_tag": 0
+            }
+          },
+          "status": "PASS"
+        },
+        {
+          "case": "ii_exclusive_zero_byte_children",
+          "evidence": {
+            "attribute_only_open_admitted": true,
+            "create_new_on_occupied_name_error": 80,
+            "delete_error": 32,
+            "end_of_file_after_create": 0,
+            "other_read_open_error": 32,
+            "other_write_open_error": 32,
+            "released_control_delete_ok": true,
+            "released_control_read_open_error": 0
+          },
+          "status": "PASS"
+        },
+        {
+          "case": "ii_iii_fanout_gate_and_peak",
+          "evidence": {
+            "directories_constructed": 153,
+            "directory_pins_held_at_deepest": 153,
+            "file_handles_held_with_directory_pins_at_deepest": 360,
+            "frozen_bound_for_the_real_tree_Sec_7_4A_6": 462,
+            "gates_passed": 153,
+            "host_held_at_least_the_frozen_bound_simultaneously": true,
+            "largest_single_enumeration_entries": 442,
+            "note": "this synthetic maximum-fan-out chain is not the real tree; the real tree's own peak is recomputed in facts.recomputed_peak_handles_real_tree. What is measured here is that the host holds this many exclusive file handles and directory pins at once, gating each directory by handle enumeration",
+            "peak_handles_during_construction": 513,
+            "pending_sibling_pins_at_deepest": 140,
+            "stack_depth_at_deepest": 13,
+            "total_handles_held_at_deepest": 513
+          },
+          "status": "PASS"
+        },
+        {
+          "case": "iii_single_pass_cursor",
+          "evidence": {
+            "dot_entry_file_id_equals_parent_pin": true,
+            "every_file_id_equals_its_own_handle": true,
+            "first_pass_entries": 14,
+            "first_pass_names_equal_created": true,
+            "fresh_handle_entries": 14,
+            "second_pass_same_handle_entries": 0
+          },
+          "status": "PASS"
+        },
+        {
+          "case": "iii_gate_negative_controls",
+          "evidence": {
+            "foreign_name_refused": true,
+            "honest_state_passes": true,
+            "missing_child_refused": true,
+            "unpresented_children_refused": true,
+            "wrong_file_id_refused": true
+          },
+          "status": "PASS"
+        },
+        {
+          "case": "iv_rename",
+          "evidence": {
+            "attempts": 78,
+            "control_failures": [],
+            "controls_ok": true,
+            "controls_total": 78,
+            "failures": [],
+            "held_errors": [
+              32
+            ],
+            "non_blocking_refusals": [],
+            "targets": 26
+          },
+          "status": "PASS"
+        },
+        {
+          "case": "iv_delete",
+          "evidence": {
+            "controls_ok": true,
+            "controls_total": 52,
+            "empty_held_errors": [
+              32
+            ],
+            "empty_not_blocked_by_share_or_access": [],
+            "empty_pinned_directories_attacked": 52,
+            "failures": [],
+            "non_empty_pinned_directories_attacked": 52,
+            "non_empty_refusal_mechanisms": {
+              "sharing_or_access": 52
+            },
+            "ops": [
+              "RemoveDirectoryW",
+              "FileDispositionInfo",
+              "FileDispositionInfoEx_delete",
+              "FileDispositionInfoEx_posix"
+            ]
+          },
+          "status": "PASS"
+        },
+        {
+          "case": "iv_convert",
+          "evidence": {
+            "controls_ok": true,
+            "controls_total": 13,
+            "empty_not_refused_at_the_pin": [],
+            "empty_outcomes": [
+              "open_refused:32"
+            ],
+            "empty_pinned_directories_attacked": 13,
+            "failures": [],
+            "non_empty_outcomes": {
+              "fsctl_refused:145": 1,
+              "open_refused:32": 12
+            },
+            "non_empty_pinned_directories_attacked": 13,
+            "outside_directory_untouched": true
+          },
+          "status": "PASS"
+        },
+        {
+          "case": "v_content_through_child_handles",
+          "evidence": {
+            "byte_mismatches_after_release": [],
+            "every_write_capable_open_was_CREATE_NEW": true,
+            "exclusive_sample_ok_at_fanout": true,
+            "exclusive_samples": 10,
+            "files_holding_any_content_when_their_gate_ran": 0,
+            "files_seen_at_their_gate": 379,
+            "files_written": 379,
+            "pathname_open_guard": "builtins.open and os.open raised on any constructed path during construction",
+            "successful_write_capable_opens": 379,
+            "write_capable_opens_equal_files": true
+          },
+          "status": "PASS"
+        }
+      ],
+      "cases_expected": 9,
+      "cases_fail": 0,
+      "cases_not_run": [],
+      "cases_pass": 9,
+      "cases_recorded": 9,
+      "cases_unsupported": 0,
+      "verdict": "PASS"
+    }
+  },
+  "record_kind": "aido-f5a-pr1-windows-premise-evidence.v1",
+  "scope": "measured only against disposable synthetic trees on this host; no Node, Pi, npm, model or network was used; this proves nothing about Node compatibility, which is first observable at E5",
+  "supplemental": [
+    {
+      "case": "run_root_pin_shape_READ_WRITE_conversion",
+      "evidence": {
+        "empty_directory": [
+          "converted",
+          0
+        ],
+        "non_empty_directory": [
+          "fsctl_refused",
+          145
+        ],
+        "reading": "the READ|WRITE run-root pin shape does not by itself refuse conversion of an EMPTY directory; non-emptiness (W5) does for a non-empty one"
+      },
+      "status": "OBSERVATION"
+    },
+    {
+      "case": "sensitivity:R0_shape_GENERIC_WRITE_share_READ",
+      "evidence": {
+        "reader_classification": "other",
+        "shape": "R0_shape_GENERIC_WRITE_share_READ",
+        "walk_complete": false,
+        "walk_refusal_code": "PAYLOAD_ENTRY_UNOBSERVABLE"
+      },
+      "status": "PASS"
+    },
+    {
+      "case": "sensitivity:share_0",
+      "evidence": {
+        "reader_classification": "other",
+        "shape": "share_0",
+        "walk_complete": false,
+        "walk_refusal_code": "PAYLOAD_ENTRY_UNOBSERVABLE"
+      },
+      "status": "PASS"
+    }
+  ]
+}
