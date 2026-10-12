@@ -17,9 +17,22 @@ refusals are reached through monkeypatched seams (named in each test); those
 show the candidate's own branches refuse, not that a real native anomaly
 occurs. A green run here does not clear the A2-3 hard bar.
 
-Every object lives under ``tmp_path``. No Node, Pi, npm, network, model or
-credential is touched; the approved-inventory test reads only the committed
-policy file.
+FU1 (authority binding and lifecycle closure). Provisioning is reachable only
+through a workspace CFG1's own registry minted: every end-to-end test below
+mints a REAL disposable ``CFG1-T1`` workspace (the frozen creator, a real Git
+repository, under the system temporary directory, removed at teardown) and
+approves a SYNTHETIC payload through a genuine PE-2b load of a synthetic
+sealed policy. The only test-local seam on authority is
+``monkeypatch.setitem(LAUNCH_DERIVATION_TABLE, <synthetic profile id>, ...)``
+(the LDT is keyed by the one genuine profile id) and the policy-load install the
+whole CFG1 suite already uses; the private creation primitives are exercised
+directly on a ``tmp_path`` directory and are NOT reachable from the public API.
+Several refusals (FU1's lifecycle tests) are reached through monkeypatched
+callbacks that run INSIDE the active construction interval; they show the
+guard refuses re-entrant and cross-thread release, not any native anomaly.
+
+No Node, Pi, npm, network, model or credential is touched; the
+approved-inventory test reads only the committed policy file.
 """
 
 from __future__ import annotations
@@ -27,16 +40,22 @@ from __future__ import annotations
 import ast
 import copy
 import hashlib
+import inspect
 import json
 import os
 import pickle
 import sys
+import threading
 from pathlib import Path
 
 import pytest
+from pe2a_support import synthetic_payload_files
+from pe2b_support import Payload
+from pe2c_support import install_synthetic_policy
 
 from pi_harness_cfg1 import pi_fs_leaves, pi_payload
 from pi_harness_cfg1 import pi_runtime_provision as rp
+from pi_harness_cfg1 import run_workspace
 
 _MODULE_PATH = Path(rp.__file__)
 _PROFILE_ID = "56651d0b2b6995e05b6de3aa012f5a82f276b2ac817dcce00844d1db2a9ffd67"
@@ -51,29 +70,34 @@ windows_only = pytest.mark.skipif(
     sys.platform != "win32", reason="Win32/NTFS semantics; a skip is not a pass"
 )
 
-#: A synthetic payload: the four LDT files, nested directories, an empty
-#: directory, the payload's OWN ``node_modules`` descendant (allowed: T-NM only
-#: walks upward from ``C``), and a supplementary-plane file name.
-_PAYLOAD = {
-    "package.json": b'{"name":"synthetic"}\n',
-    "dist/cli.js": b"import './main.js';\n",
-    "dist/main.js": b"import './config.js';\n" * 40,
-    "dist/config.js": b"export const x = 1;\n",
-    "dist/core/extensions/loader.js": b"// loader\n",
-    "docs/readme.md": b"# synthetic\n",
-    "docs/\U0001F600.md": b"astral name\n",
-    "node_modules/dep/index.js": b"module.exports = 1;\n",
-    "empty.bin": b"",
-}
-_EMPTY_DIRS = ("examples/empty",)
+def _payload_files(extra: dict | None = None) -> tuple[dict, tuple]:
+    """A synthetic, approvable payload (the PE-2a synthetic Pi tree) that also
+    carries the four LDT files, nested directories, empty directories, the
+    payload's OWN ``node_modules`` descendant (allowed: T-NM only walks upward
+    from ``C``), an empty file and a supplementary-plane file name."""
+    files, empty_dirs = synthetic_payload_files()
+    files = dict(files)
+    files.update(
+        {
+            "dist/config.js": b"export const x = 1;\n",
+            "dist/core/extensions/loader.js": b"// loader\n",
+            "docs/\U0001F600.md": b"astral name\n",
+            "empty.bin": b"",
+        }
+    )
+    files.update(extra or {})
+    return files, tuple(empty_dirs) + ("examples/empty",)
 
 
-def _write_source(root: Path) -> None:
-    for relative, data in _PAYLOAD.items():
+_PAYLOAD, _EMPTY_DIRS = _payload_files()
+
+
+def _write_source(root: Path, files: dict = _PAYLOAD, empty_dirs: tuple = _EMPTY_DIRS) -> None:
+    for relative, data in files.items():
         target = root.joinpath(*relative.split("/"))
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
-    for relative in _EMPTY_DIRS:
+    for relative in empty_dirs:
         root.joinpath(*relative.split("/")).mkdir(parents=True, exist_ok=True)
 
 
@@ -82,30 +106,58 @@ def _identity(path: Path) -> tuple[int, int]:
     return (result.st_dev, result.st_ino)
 
 
+def _approve(monkeypatch, *payloads: Payload) -> None:
+    """Install a genuine PE-2b load of a synthetic sealed policy approving
+    ``payloads`` and give each the one LDT entry (the LDT is keyed by the
+    genuine profile id, so a synthetic profile needs its own row)."""
+    install_synthetic_policy(monkeypatch, *payloads)
+    for payload in payloads:
+        monkeypatch.setitem(rp.LAUNCH_DERIVATION_TABLE, payload.profile_id, rp.LAUNCH_DERIVATION_TABLE[_PROFILE_ID])
+
+
+def _remove_workspace(workspace) -> None:
+    try:
+        run_workspace.remove_cfg1_run_workspace(workspace)
+    except Exception:  # noqa: BLE001 - teardown only; never mask the test's own result
+        run_workspace.discard_cfg1_run_workspace(workspace)
+
+
 @pytest.fixture
-def scenario(tmp_path):
-    """A source package, its observed inventory, and a non-empty run root."""
+def scenario(tmp_path, monkeypatch, git_executable):
+    """A source package, its observed inventory, a profile approved by a
+    synthetic sealed policy for exactly that inventory, and a REAL minted
+    workspace whose experiment root is the run root."""
+    if sys.platform != "win32":
+        pytest.skip("Win32/NTFS semantics; a skip is not a pass")
     source = tmp_path / "src" / "pkg"
     _write_source(source)
     observation = pi_payload.observe_payload(str(source), leaves=pi_payload.genuine_payload_leaves())
     assert observation.complete
-    run_root = tmp_path / "run"
-    (run_root / "workspace").mkdir(parents=True)
-    (run_root / "workspace" / "keep.txt").write_bytes(b"workspace bytes")
-    return {
-        "tmp": tmp_path,
-        "source": source,
-        "inventory": observation.inventory,
-        "run_root": run_root,
-        "package_root": run_root / rp.RUNTIME_DIR_NAME / rp.PACKAGE_DIR_NAME,
-    }
+    payload = Payload(dict(_PAYLOAD), _EMPTY_DIRS)
+    assert payload.fingerprint == observation.inventory.payload_fingerprint
+    _approve(monkeypatch, payload)
+    workspace, _built = run_workspace.mint_cfg1_run_workspace(git_executable=git_executable)
+    run_root = Path(workspace.experiment_root)
+    try:
+        yield {
+            "tmp": tmp_path,
+            "source": source,
+            "inventory": observation.inventory,
+            "payload": payload,
+            "profile_id": payload.profile_id,
+            "workspace": workspace,
+            "run_root": run_root,
+            "run_root_before": sorted(path.name for path in run_root.iterdir()),
+            "package_root": run_root / rp.RUNTIME_DIR_NAME / rp.PACKAGE_DIR_NAME,
+        }
+    finally:
+        _remove_workspace(workspace)
 
 
 def _admit(scenario, **overrides):
     arguments = {
-        "run_root": str(scenario["run_root"]),
-        "run_root_identity": _identity(scenario["run_root"]),
-        "profile_id": _PROFILE_ID,
+        "workspace": scenario["workspace"],
+        "profile_id": scenario["profile_id"],
         "approved_inventory": scenario["inventory"],
         "source_package_root": str(scenario["source"]),
     }
@@ -246,8 +298,34 @@ def test_static_audit_no_pathname_creation_no_deletion_no_fallback():
         assert not any(module in name for name in imported), (module, imported)
     # No module that can delete, rename or create by pathname is even imported.
     assert {name.split(".")[0] for name in imported} <= {
-        "__future__", "hashlib", "ntpath", "secrets", "sys", "ctypes", "pi_harness_cfg1"
+        "__future__", "hashlib", "ntpath", "secrets", "sys", "threading", "ctypes", "pi_harness_cfg1"
     }, imported
+    # The workspace and policy facilities are the FROZEN ones, imported whole.
+    assert {"pi_harness_cfg1.pi_identity", "pi_harness_cfg1.run_workspace"} <= imported
+
+
+def test_authority_is_consumed_at_admission_and_again_before_the_first_create():
+    """FU1 Finding A, as AST facts: no public callable accepts a path or an
+    identity to write under, and ``_consume_authority`` is the single place
+    authority is obtained, called at admission and in ``_construct``."""
+    tree = ast.parse(_MODULE_PATH.read_text(encoding="utf-8"))
+    forbidden_parameters = {"run_root", "run_root_identity", "root", "path", "directory", "parent", "identity"}
+    for node in tree.body:
+        # ``lexical_topology_refusal`` is a pure string function: it does no I/O.
+        if isinstance(node, ast.FunctionDef) and not node.name.startswith("_") and node.name != "lexical_topology_refusal":
+            names = {a.arg for a in node.args.args + node.args.kwonlyargs}
+            assert not names & forbidden_parameters, (node.name, names & forbidden_parameters)
+    assert list(inspect.signature(rp.admit_runtime_provision).parameters) == [
+        "workspace", "profile_id", "approved_inventory", "source_package_root"
+    ]
+    callers = {
+        function.name
+        for function in ast.walk(tree)
+        if isinstance(function, ast.FunctionDef)
+        for call in ast.walk(function)
+        if isinstance(call, ast.Call) and _call_name(call) == "_consume_authority"
+    }
+    assert callers == {"admit_runtime_provision", "_construct"}
 
 
 def test_provision_types_are_not_mint_backed_cfg1_authority():
@@ -322,18 +400,29 @@ def test_a_raising_close_is_recorded_as_close_failed(monkeypatch):
 
 
 @windows_only
-def test_successful_provision_is_byte_identical_contained_and_released(scenario):
+def test_successful_provision_is_byte_identical_contained_and_released(scenario, monkeypatch):
     """T-F5A-01/08/10/11 (synthetic): exact copy; topology; ledger closed; peak
-    equals the simulation; four final pins held until L27; derived release fact."""
+    equals the simulation; four final pins held until L27; derived release fact.
+    FU1: the run root is the minted workspace's experiment root, and each OS
+    handle is closed exactly once across the whole life of the provision."""
     before_tmp = sorted(path.name for path in scenario["tmp"].iterdir())
     provision = _admit(scenario)
     assert provision.state == rp.STATE_ADMITTED
     assert not (scenario["run_root"] / rp.RUNTIME_DIR_NAME).exists()  # admission writes nothing
+    closes: list[int] = []
+    real_close = rp._close_raw_handle
+
+    def counting_close(raw):
+        closes.append(raw)
+        return real_close(raw)
+
+    monkeypatch.setattr(rp, "_close_raw_handle", counting_close)
     rp.run_runtime_provision(provision)
     try:
         assert provision.state == rp.STATE_PROVEN
         package_root = scenario["package_root"]
         assert provision.package_root == str(package_root)
+        assert provision.package_root.startswith(scenario["workspace"].experiment_root + "\\")
         copied = pi_payload.observe_payload(str(package_root), leaves=pi_payload.genuine_payload_leaves())
         assert copied.complete
         assert copied.inventory.payload_fingerprint == scenario["inventory"].payload_fingerprint
@@ -342,8 +431,9 @@ def test_successful_provision_is_byte_identical_contained_and_released(scenario)
         assert sorted(path.name for path in (scenario["run_root"] / rp.RUNTIME_DIR_NAME).iterdir()) == [
             rp.PACKAGE_DIR_NAME
         ]
-        assert sorted(path.name for path in scenario["run_root"].iterdir()) == [rp.RUNTIME_DIR_NAME, "workspace"]
-        assert (scenario["run_root"] / "workspace" / "keep.txt").read_bytes() == b"workspace bytes"
+        assert sorted(path.name for path in scenario["run_root"].iterdir()) == sorted(
+            scenario["run_root_before"] + [rp.RUNTIME_DIR_NAME]
+        )
         assert sorted(path.name for path in scenario["tmp"].iterdir()) == before_tmp
         assert provision.package_root_identity == _identity(package_root)
         assert provision.construction_open_count == 0
@@ -355,7 +445,15 @@ def test_successful_provision_is_byte_identical_contained_and_released(scenario)
         rp.release_at_l27_entry(provision)
     assert provision.final_pins_held == 0
     assert provision.live_references_released is True
-    rp.release_at_l27_entry(provision)  # idempotent: nothing is closed twice
+    closes_after_release = list(closes)
+    # exactly once: one CloseHandle per ledger entry (raw values are recycled by
+    # the OS, so they are counted, not de-duplicated), every entry CLOSED
+    assert len(closes) == provision._construction.entry_count + provision._final_pins.entry_count
+    assert provision._construction.entry_count > 0 and provision._final_pins.entry_count == 4
+    with pytest.raises(rp.Cfg1RuntimeProvisionError) as again:
+        rp.release_at_l27_entry(provision)  # FU1: a duplicate release fails closed
+    assert again.value.reason_code == "PROVISION_ALREADY_RELEASED"
+    assert closes == closes_after_release
     assert provision.live_references_released is True
 
 
@@ -397,14 +495,16 @@ def test_a_provision_runs_once_and_cannot_be_forged_copied_or_transferred(scenar
 @pytest.mark.parametrize(
     ("overrides", "reason"),
     [
-        ({"profile_id": "0" * 64}, "NO_LDT_ENTRY"),
-        ({"run_root": 7}, "MALFORMED_INPUT"),
-        ({"run_root_identity": (1,)}, "MALFORMED_INPUT"),
-        ({"run_root_identity": (1, True)}, "MALFORMED_INPUT"),
+        ({"workspace": 7}, "MALFORMED_INPUT"),
+        ({"workspace": None}, "MALFORMED_INPUT"),
+        ({"profile_id": 7}, "MALFORMED_INPUT"),
+        ({"source_package_root": 7}, "MALFORMED_INPUT"),
         ({"approved_inventory": object()}, "MALFORMED_INPUT"),
+        ({"profile_id": "0" * 64}, "PROFILE_NOT_APPROVED"),
+        ({"profile_id": _PROFILE_ID}, "PROFILE_NOT_APPROVED"),  # genuine id, but not in THIS sealed policy
     ],
 )
-def test_admission_refuses_malformed_inputs_and_unlisted_profiles(scenario, overrides, reason):
+def test_admission_refuses_malformed_inputs_and_unapproved_profiles(scenario, overrides, reason):
     with pytest.raises(rp.Cfg1RuntimeProvisionError) as refused:
         _admit(scenario, **overrides)
     assert refused.value.reason_code == reason
@@ -412,21 +512,247 @@ def test_admission_refuses_malformed_inputs_and_unlisted_profiles(scenario, over
 
 
 @windows_only
-def test_admission_refuses_an_inventory_missing_an_ldt_file(scenario):
-    entries = tuple(entry for entry in scenario["inventory"].entries if entry[1] != "dist/main.js")
+def test_an_approved_profile_without_an_ldt_row_is_refused(scenario, monkeypatch):
+    monkeypatch.delitem(rp.LAUNCH_DERIVATION_TABLE, scenario["profile_id"])
     with pytest.raises(rp.Cfg1RuntimeProvisionError) as refused:
-        _admit(scenario, approved_inventory=pi_payload.inventory_from_entries(entries))
+        _admit(scenario)
+    assert refused.value.reason_code == "NO_LDT_ENTRY"
+
+
+@windows_only
+def test_admission_refuses_an_approved_inventory_missing_an_ldt_file(scenario, monkeypatch):
+    """The inventory IS the approved one; the LDT row (injected here) names a
+    derivation file it does not contain."""
+    row = dict(rp.LAUNCH_DERIVATION_TABLE[scenario["profile_id"]])
+    row["derivation_chain"] = ("dist/cli.js", "dist/main.js", "dist/not-in-inventory.js")
+    monkeypatch.setitem(rp.LAUNCH_DERIVATION_TABLE, scenario["profile_id"], row)
+    with pytest.raises(rp.Cfg1RuntimeProvisionError) as refused:
+        _admit(scenario)
     assert refused.value.reason_code == "LDT_PATH_NOT_IN_INVENTORY"
 
 
 @windows_only
-def test_admission_refuses_a_node_modules_ancestor_before_any_write(tmp_path, scenario):
-    run_root = tmp_path / "node_modules" / "run"
-    run_root.mkdir(parents=True)
+def test_admission_derives_topology_from_the_workspace_and_refuses_before_any_write(scenario, monkeypatch):
+    """INJECTED: the lexical topology leaf reports a ``node_modules`` ancestor
+    for the DERIVED package path. (The real temporary root of a minted workspace
+    cannot be relocated: the frozen scratch boundary is fixed.) Shows admission
+    runs T-NM over a path derived from the workspace, before any write."""
+    real = rp.lexical_topology_refusal
+    seen: list[str] = []
+
+    def spy(path):
+        seen.append(path)
+        return "TOPOLOGY_NODE_MODULES_ANCESTOR"
+
+    monkeypatch.setattr(rp, "lexical_topology_refusal", spy)
     with pytest.raises(rp.Cfg1RuntimeProvisionError) as refused:
-        _admit(scenario, run_root=str(run_root), run_root_identity=_identity(run_root))
+        _admit(scenario)
     assert refused.value.reason_code == "TOPOLOGY_NODE_MODULES_ANCESTOR"
-    assert list(run_root.iterdir()) == []
+    assert seen == [str(scenario["package_root"] / "dist" / "config.js")]
+    assert not (scenario["run_root"] / rp.RUNTIME_DIR_NAME).exists()
+    assert real(seen[0]) is None  # the genuine rule accepts the genuine root
+
+
+# ---------------------------------------------------------------------------
+# FU1 Finding A: authority is the minted workspace and the sealed policy
+# ---------------------------------------------------------------------------
+
+
+def _impostor_workspace(directory: Path):
+    """A ``Cfg1RunWorkspace`` for an ARBITRARY existing directory, built the only
+    way possible: bypassing the frozen dataclass's own ``__post_init__``."""
+    forged = object.__new__(run_workspace.Cfg1RunWorkspace)
+    object.__setattr__(forged, "run_workspace_nonce", "ab" * 16)
+    object.__setattr__(forged, "experiment_root", str(directory))
+    object.__setattr__(forged, "workspace_root", str(directory))
+    return forged
+
+
+@windows_only
+def test_an_arbitrary_existing_directory_is_never_a_run_root(scenario, tmp_path):
+    """The pre-FU1 bypass: an ordinary directory plus its own identity
+    provisioned successfully. No such call shape exists now, and every route to
+    one refuses before a single create."""
+    arbitrary = tmp_path / "arbitrary"
+    (arbitrary / "workspace").mkdir(parents=True)
+    # the old call shape no longer exists
+    with pytest.raises(TypeError):
+        rp.admit_runtime_provision(
+            run_root=str(arbitrary),
+            run_root_identity=_identity(arbitrary),
+            profile_id=scenario["profile_id"],
+            approved_inventory=scenario["inventory"],
+            source_package_root=str(scenario["source"]),
+        )
+    # the frozen dataclass will not even construct a workspace for it ...
+    with pytest.raises(run_workspace.Cfg1WorkspaceAuthorityError):
+        run_workspace.Cfg1RunWorkspace("ab" * 16, str(arbitrary), str(arbitrary))
+    # ... a path, a string and a look-alike are not workspaces ...
+    class LookAlike:
+        experiment_root = workspace_root = str(arbitrary)
+        run_workspace_nonce = "ab" * 16
+
+    for not_a_workspace in (str(arbitrary), arbitrary, LookAlike(), {"experiment_root": str(arbitrary)}):
+        with pytest.raises(rp.Cfg1RuntimeProvisionError) as refused:
+            _admit(scenario, workspace=not_a_workspace)
+        assert refused.value.reason_code == "MALFORMED_INPUT"
+    # ... and one forced past __post_init__ is not in the registry.
+    with pytest.raises(rp.Cfg1RuntimeProvisionError) as refused:
+        _admit(scenario, workspace=_impostor_workspace(arbitrary))
+    assert refused.value.reason_code == "WORKSPACE_AUTHORITY_UNVERIFIED"
+    assert sorted(path.name for path in arbitrary.iterdir()) == ["workspace"]
+    assert not (arbitrary / rp.RUNTIME_DIR_NAME).exists()
+
+
+@windows_only
+def test_a_real_nonce_with_a_foreign_path_is_not_a_workspace(scenario, tmp_path):
+    genuine = scenario["workspace"]
+    foreign = tmp_path / "foreign_root"
+    foreign.mkdir()
+    with pytest.raises(run_workspace.Cfg1WorkspaceAuthorityError):
+        run_workspace.Cfg1RunWorkspace(genuine.run_workspace_nonce, str(foreign), str(foreign))
+    mixed = object.__new__(run_workspace.Cfg1RunWorkspace)
+    object.__setattr__(mixed, "run_workspace_nonce", genuine.run_workspace_nonce)
+    object.__setattr__(mixed, "experiment_root", str(foreign))
+    object.__setattr__(mixed, "workspace_root", genuine.workspace_root)
+    with pytest.raises(rp.Cfg1RuntimeProvisionError) as refused:
+        _admit(scenario, workspace=mixed)
+    assert refused.value.reason_code == "WORKSPACE_AUTHORITY_UNVERIFIED"
+    assert list(foreign.iterdir()) == []
+
+
+@windows_only
+def test_a_structurally_valid_but_unapproved_inventory_is_refused(scenario):
+    """A fully valid PI-PC1 inventory (with every LDT file) whose content the
+    sealed policy does not approve for the claimed profile."""
+    entries = tuple(
+        entry if entry[1] != "README.md" else ("file", "README.md", "0" * 64, 1)
+        for entry in scenario["inventory"].entries
+    )
+    altered = pi_payload.inventory_from_entries(entries)
+    assert altered.payload_fingerprint != scenario["inventory"].payload_fingerprint
+    for LDT_file in ("package.json", "dist/cli.js", "dist/main.js", "dist/config.js"):
+        assert altered.is_file(LDT_file)  # structurally complete: only approval distinguishes it
+    with pytest.raises(rp.Cfg1RuntimeProvisionError) as refused:
+        _admit(scenario, approved_inventory=altered)
+    assert refused.value.reason_code == "INVENTORY_NOT_APPROVED_FOR_PROFILE"
+    assert not (scenario["run_root"] / rp.RUNTIME_DIR_NAME).exists()
+
+
+@windows_only
+def test_an_inventory_approved_for_another_profile_cannot_be_paired_with_this_one(scenario, monkeypatch):
+    other_files, other_dirs = _payload_files({"README.md": b"# a different but equally approved payload\n"})
+    other = Payload(other_files, other_dirs)
+    assert other.fingerprint != scenario["payload"].fingerprint
+    _approve(monkeypatch, scenario["payload"], other)
+    other_source = scenario["tmp"] / "src" / "other"
+    _write_source(other_source, other_files, other_dirs)
+    other_inventory = pi_payload.observe_payload(
+        str(other_source), leaves=pi_payload.genuine_payload_leaves()
+    ).inventory
+    assert other_inventory.payload_fingerprint == other.fingerprint
+    # each profile with ITS OWN inventory is admitted ...
+    first = _admit(scenario)
+    rp.release_at_l27_entry(first)
+    second = _admit(scenario, profile_id=other.profile_id, approved_inventory=other_inventory)
+    rp.release_at_l27_entry(second)
+    # ... and a cross pairing, both halves individually approved, is not.
+    for profile_id, inventory in (
+        (scenario["profile_id"], other_inventory),
+        (other.profile_id, scenario["inventory"]),
+    ):
+        with pytest.raises(rp.Cfg1RuntimeProvisionError) as refused:
+            _admit(scenario, profile_id=profile_id, approved_inventory=inventory)
+        assert refused.value.reason_code == "INVENTORY_NOT_APPROVED_FOR_PROFILE"
+    assert not (scenario["run_root"] / rp.RUNTIME_DIR_NAME).exists()
+
+
+@windows_only
+def test_a_retired_profile_is_not_approved(scenario, monkeypatch):
+    """The sealed snapshot is read at call time: a profile retired by the policy
+    is no longer an eligible one, whatever the caller still holds."""
+    from pe2c_support import install_policy_load, synthetic_policy_load
+
+    payload = scenario["payload"]
+    load = synthetic_policy_load([{"approve": [payload]}, {"retire": [payload.profile_id]}])
+    install_policy_load(monkeypatch, load)
+    with pytest.raises(rp.Cfg1RuntimeProvisionError) as refused:
+        _admit(scenario)
+    assert refused.value.reason_code == "PROFILE_NOT_APPROVED"
+
+
+@windows_only
+def test_admission_followed_by_loss_of_authority_refuses_at_consumption(scenario, monkeypatch):
+    """Authority is re-consumed immediately before the first create. Three
+    independent losses, each between admission and run, each with nothing created."""
+    from pe2c_support import install_policy_load, synthetic_policy_load
+
+    # (1) the workspace registry forgets the workspace (L27's discard)
+    provision = _admit(scenario)
+    survivor_registry = dict(run_workspace._MINTED)
+    run_workspace.discard_cfg1_run_workspace(scenario["workspace"])
+    with pytest.raises(rp.Cfg1RuntimeProvisionError) as refused:
+        rp.run_runtime_provision(provision)
+    assert refused.value.reason_code == "WORKSPACE_AUTHORITY_UNVERIFIED"
+    _assert_refused_cleanly(provision, "WORKSPACE_AUTHORITY_UNVERIFIED")
+    assert not (scenario["run_root"] / rp.RUNTIME_DIR_NAME).exists()
+    rp.release_at_l27_entry(provision)
+    run_workspace._MINTED.update(survivor_registry)  # restore for the cases below
+
+    # (2) the policy retires the profile
+    provision = _admit(scenario)
+    install_policy_load(monkeypatch, synthetic_policy_load([{"approve": [scenario["payload"]]}, {"retire": [scenario["profile_id"]]}]))
+    with pytest.raises(rp.Cfg1RuntimeProvisionError) as refused:
+        rp.run_runtime_provision(provision)
+    assert refused.value.reason_code == "PROFILE_NOT_APPROVED"
+    _assert_refused_cleanly(provision, "PROFILE_NOT_APPROVED")
+    assert not (scenario["run_root"] / rp.RUNTIME_DIR_NAME).exists()
+    rp.release_at_l27_entry(provision)
+    _approve(monkeypatch, scenario["payload"])
+
+    # (3) the owned root is moved aside and an ordinary directory takes its name
+    root = scenario["run_root"]
+    aside = root.with_name(root.name + "_aside")
+    provision = _admit(scenario)
+    root.rename(aside)
+    try:
+        root.mkdir()
+        with pytest.raises(rp.Cfg1RuntimeProvisionError) as refused:
+            rp.run_runtime_provision(provision)
+        assert refused.value.reason_code == "WORKSPACE_AUTHORITY_UNVERIFIED"
+        assert list(root.iterdir()) == []  # nothing written into the impostor
+    finally:
+        if root.exists():
+            root.rmdir()
+        aside.rename(root)
+    _assert_refused_cleanly(provision, "WORKSPACE_AUTHORITY_UNVERIFIED")
+    rp.release_at_l27_entry(provision)
+    assert not (root / rp.RUNTIME_DIR_NAME).exists()
+
+
+@windows_only
+def test_two_legitimate_workspaces_cannot_be_mixed(scenario, git_executable):
+    """A provision is bound to the one workspace it was admitted with: another
+    perfectly valid workspace cannot stand in for it, and losing the first is not
+    cured by the second being alive."""
+    other, _built = run_workspace.mint_cfg1_run_workspace(git_executable=git_executable)
+    try:
+        provision = _admit(scenario)
+        run_workspace.discard_cfg1_run_workspace(scenario["workspace"])
+        run_workspace.verify_cfg1_run_workspace(other)  # the other one is alive and genuine
+        with pytest.raises(rp.Cfg1RuntimeProvisionError) as refused:
+            rp.run_runtime_provision(provision)
+        assert refused.value.reason_code == "WORKSPACE_AUTHORITY_UNVERIFIED"
+        assert not (Path(other.experiment_root) / rp.RUNTIME_DIR_NAME).exists()
+        assert not (scenario["run_root"] / rp.RUNTIME_DIR_NAME).exists()
+        rp.release_at_l27_entry(provision)
+        # one workspace's nonce with the other's paths cannot be assembled either
+        with pytest.raises(run_workspace.Cfg1WorkspaceAuthorityError):
+            run_workspace.Cfg1RunWorkspace(
+                other.run_workspace_nonce, scenario["workspace"].experiment_root, scenario["workspace"].workspace_root
+            )
+    finally:
+        _remove_workspace(other)
 
 
 @windows_only
@@ -460,6 +786,12 @@ def test_existing_runtime_dir_or_run_root_node_modules_refuses_admission(scenari
     assert refused.value.reason_code == "RUNTIME_ROOT_ALREADY_PRESENT"
 
 
+def _assert_second_release_refused(provision):
+    with pytest.raises(rp.Cfg1RuntimeProvisionError) as again:
+        rp.release_at_l27_entry(provision)
+    assert again.value.reason_code == "PROVISION_ALREADY_RELEASED"
+
+
 def _assert_refused_cleanly(provision, reason):
     assert provision.state == rp.STATE_REFUSED
     assert provision.refusal_reason == reason
@@ -467,14 +799,22 @@ def _assert_refused_cleanly(provision, reason):
 
 
 @windows_only
-def test_run_root_identity_mismatch_refuses_before_any_create(scenario):
-    provision = _admit(scenario, run_root_identity=_identity(scenario["source"]))
-    with pytest.raises(rp.Cfg1RuntimeProvisionError) as refused:
-        rp.run_runtime_provision(provision)
-    assert refused.value.reason_code == "RUN_ROOT_IDENTITY_MISMATCH"
-    _assert_refused_cleanly(provision, "RUN_ROOT_IDENTITY_MISMATCH")
+def test_run_root_pin_refuses_an_identity_that_is_not_the_registered_one(scenario):
+    """The path selects; the HANDLE proves. The pin compares the opened root's
+    own id against the identity registered at mint -- here a deliberately wrong
+    one is handed to the private pin primitive (not reachable via the public API)."""
+    registered = run_workspace.registered_root_identity(scenario["workspace"])
+    ledger = rp._HandleLedger(rp._LEDGER_KEY, frozenset({rp._KIND_DIRECTORY, rp._KIND_FILE}))
+    try:
+        with pytest.raises(rp.Cfg1RuntimeProvisionError) as refused:
+            rp._pin_run_root(ledger, str(scenario["run_root"]), _identity(scenario["source"]))
+        assert refused.value.reason_code == "RUN_ROOT_IDENTITY_MISMATCH"
+        pin = rp._pin_run_root(ledger, str(scenario["run_root"]), registered)
+        assert pin.identity == registered
+    finally:
+        ledger.close_all()
+    assert ledger.all_proven_closed()
     assert not (scenario["run_root"] / rp.RUNTIME_DIR_NAME).exists()
-    assert provision.live_references_released is True
 
 
 @windows_only
@@ -487,7 +827,7 @@ def test_unavailable_native_create_fails_closed_with_no_fallback(scenario, monke
         rp.run_runtime_provision(provision)
     assert refused.value.reason_code == "NATIVE_RELATIVE_CREATE_UNAVAILABLE"
     _assert_refused_cleanly(provision, "NATIVE_RELATIVE_CREATE_UNAVAILABLE")
-    assert sorted(path.name for path in scenario["run_root"].iterdir()) == ["workspace"]
+    assert sorted(path.name for path in scenario["run_root"].iterdir()) == scenario["run_root_before"]
     assert provision.live_references_released is True
 
 
@@ -623,7 +963,7 @@ def test_construction_close_failure_latches_and_is_never_retried(scenario, monke
         assert provision.state == rp.STATE_REFUSED
         assert provision.live_references_released is False
         rp.release_at_l27_entry(provision)
-        rp.release_at_l27_entry(provision)
+        _assert_second_release_refused(provision)
         assert attempts == targets and len(targets) == 1
         assert provision.live_references_released is False
     finally:
@@ -653,7 +993,7 @@ def test_final_pin_close_failure_latches_false(scenario, monkeypatch):
     monkeypatch.setattr(rp, "_close_raw_handle", failing_close)
     try:
         rp.release_at_l27_entry(provision)
-        rp.release_at_l27_entry(provision)
+        _assert_second_release_refused(provision)
         assert attempts == [victim]
         assert provision.final_pins_held == 0
         assert provision.live_references_released is False
@@ -808,3 +1148,183 @@ def test_an_unknown_kind_is_refused_before_the_native_call(primitive, monkeypatc
     assert calls == []
     assert ledger.entry_count == entries_before
     assert not (parent / "k").exists()
+
+
+# ---------------------------------------------------------------------------
+# FU1 Finding B: run and release never own the same handles
+# ---------------------------------------------------------------------------
+
+
+def _states(handles):
+    return [entry.state for entry in handles._entries]
+
+
+def _probe_during_construction(monkeypatch, provision, probe):
+    """Run ``probe(provision)`` ONCE, from inside the active construction
+    interval (the first source read: directory pins and file handles are OPEN)."""
+    seen: list = []
+    real = rp._read_verified_source
+
+    def hooked(*args, **kwargs):
+        if not seen:
+            seen.append(probe(provision))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(rp, "_read_verified_source", hooked)
+    return seen
+
+
+@windows_only
+def test_premature_release_on_the_running_thread_closes_nothing(scenario, monkeypatch):
+    """INJECTED callback re-entering ``release_at_l27_entry`` from INSIDE the
+    active construction. Pre-FU1 this closed every handle the construction still
+    needed. Now it is refused, no handle changes state, the construction
+    completes, and the copy is byte-identical."""
+
+    def reenter(provision):
+        before_states = _states(provision._construction)
+        before_open = provision._construction.open_count
+        assert before_open > 3  # run-root pin, RT, C ... plus pending children are OPEN
+        with pytest.raises(rp.Cfg1RuntimeProvisionError) as refused:
+            rp.release_at_l27_entry(provision)
+        with pytest.raises(rp.Cfg1RuntimeProvisionError) as second_run:
+            rp.run_runtime_provision(provision)  # a re-entrant run is refused too
+        return (
+            refused.value.reason_code,
+            second_run.value.reason_code,
+            before_states == _states(provision._construction),
+            before_open == provision._construction.open_count,
+            provision._released,
+        )
+
+    provision = _admit(scenario)
+    seen = _probe_during_construction(monkeypatch, provision, reenter)
+    rp.run_runtime_provision(provision)
+    try:
+        assert seen == [("PROVISION_ACTIVE", "PROVISION_ACTIVE", True, True, False)]
+        assert provision.state == rp.STATE_PROVEN
+        package_root = scenario["package_root"]
+        for relative, data in _PAYLOAD.items():
+            assert package_root.joinpath(*relative.split("/")).read_bytes() == data
+        assert provision.construction_open_count == 0
+    finally:
+        rp.release_at_l27_entry(provision)
+    assert provision.live_references_released is True
+
+
+@windows_only
+def test_premature_release_from_another_thread_closes_nothing(scenario, monkeypatch):
+    """A second thread holding the provision calls release (and run) while the
+    first thread is mid-construction. Both are refused; nothing is closed."""
+
+    def other_thread(provision):
+        outcome: dict = {}
+        before_open = provision._construction.open_count
+
+        def work():
+            for name, call in (("release", rp.release_at_l27_entry), ("run", rp.run_runtime_provision)):
+                try:
+                    call(provision)
+                    outcome[name] = "returned"
+                except rp.Cfg1RuntimeProvisionError as refusal:
+                    outcome[name] = refusal.reason_code
+
+        thread = threading.Thread(target=work)
+        thread.start()
+        thread.join(timeout=30)
+        assert not thread.is_alive()
+        outcome["still_open"] = before_open == provision._construction.open_count
+        return outcome
+
+    provision = _admit(scenario)
+    seen = _probe_during_construction(monkeypatch, provision, other_thread)
+    rp.run_runtime_provision(provision)
+    try:
+        assert seen == [{"release": "PROVISION_ACTIVE", "run": "PROVISION_ACTIVE", "still_open": True}]
+        assert provision.state == rp.STATE_PROVEN
+        assert provision.construction_open_count == 0
+        assert provision.final_pins_held == 4
+    finally:
+        rp.release_at_l27_entry(provision)
+    assert provision.live_references_released is True
+
+
+@windows_only
+def test_the_guard_is_free_after_every_exit_so_release_always_follows_a_finished_attempt(scenario, monkeypatch):
+    """Completed, refused and unexpected exits each free the guard: the release
+    that follows is legal and exactly once. (The unexpected exit is INJECTED.)"""
+    # refused
+    refused_provision = _admit(scenario, source_package_root=str(scenario["tmp"] / "does-not-exist"))
+    with pytest.raises(rp.Cfg1RuntimeProvisionError):
+        rp.run_runtime_provision(refused_provision)
+    assert refused_provision.state == rp.STATE_REFUSED
+    rp.release_at_l27_entry(refused_provision)
+    assert refused_provision.live_references_released is True
+    _assert_second_release_refused(refused_provision)
+
+    # unexpected
+    def explode(*args, **kwargs):
+        raise RuntimeError("injected unexpected failure")
+
+    monkeypatch.setattr(rp, "_construct", explode)
+    unexpected = _admit(scenario)
+    with pytest.raises(RuntimeError):
+        rp.run_runtime_provision(unexpected)
+    assert unexpected.state == rp.STATE_FAILED_UNEXPECTED
+    rp.release_at_l27_entry(unexpected)
+    assert unexpected.live_references_released is True
+    _assert_second_release_refused(unexpected)
+    assert not (scenario["run_root"] / rp.RUNTIME_DIR_NAME).exists()
+
+
+@windows_only
+def test_release_closes_children_before_parents_and_a_duplicate_closes_nothing(scenario, monkeypatch):
+    provision = _admit(scenario)
+    rp.run_runtime_provision(provision)
+    order: list[int] = []
+    real_close = rp._close_raw_handle
+
+    def recording_close(raw):
+        order.append(raw)
+        return real_close(raw)
+
+    monkeypatch.setattr(rp, "_close_raw_handle", recording_close)
+    pins = provision._final_pins
+    expected = [entry.raw for entry in reversed(pins._entries)]
+    rp.release_at_l27_entry(provision)
+    assert order == expected  # reverse acquisition order
+    assert provision.live_references_released is True
+    for _ in range(2):
+        _assert_second_release_refused(provision)
+    assert order == expected  # nothing closed again, nothing retried
+
+
+@windows_only
+def test_release_needs_no_workspace_authority_and_loss_of_it_cannot_strand_handles(scenario):
+    provision = _admit(scenario)
+    rp.run_runtime_provision(provision)
+    run_workspace.discard_cfg1_run_workspace(scenario["workspace"])
+    assert provision.final_pins_held == 4
+    rp.release_at_l27_entry(provision)
+    assert provision.final_pins_held == 0
+    assert provision.live_references_released is True
+
+
+@windows_only
+def test_releasing_a_never_run_provision_closes_nothing_and_forbids_a_later_run(scenario):
+    provision = _admit(scenario)
+    rp.release_at_l27_entry(provision)
+    assert provision.live_references_released is True  # vacuously: no handle was ever opened
+    _assert_second_release_refused(provision)
+    with pytest.raises(rp.Cfg1RuntimeProvisionError) as refused:
+        rp.run_runtime_provision(provision)
+    assert refused.value.reason_code == "PROVISION_NOT_ADMITTED"
+    assert not (scenario["run_root"] / rp.RUNTIME_DIR_NAME).exists()
+
+
+def test_release_refuses_anything_that_is_not_a_provision():
+    forged = object.__new__(rp.RuntimeProvision)
+    for bad in (None, 7, object(), forged):
+        with pytest.raises(rp.Cfg1RuntimeProvisionError) as refused:
+            rp.release_at_l27_entry(bad)
+        assert refused.value.reason_code == "MALFORMED_INPUT"

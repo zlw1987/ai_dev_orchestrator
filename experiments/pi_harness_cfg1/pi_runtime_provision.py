@@ -20,6 +20,23 @@ containment of a handle-relative create beneath a CONVERTED parent rests on
 the FU4-A2 measurements (A2-3 INCOMPLETE, no racing-conversion measurement,
 one host, one build) and is NOT established by this code or its tests.
 
+**Authority (FU1).** The only way to obtain write authority is a workspace
+CFG1's own registry minted (:class:`run_workspace.Cfg1RunWorkspace`), re-proved
+by ``verify_cfg1_run_workspace``; the run root and its identity are DERIVED from
+it, never supplied. The profile must be an eligible profile of the sealed HPP-1
+snapshot and the inventory's content-derived fingerprint must equal that
+profile's loader-bound one. Both are consumed at admission AND again immediately
+before the first create (:func:`_consume_authority`). The private creation
+primitives remain private: no public callable accepts a path, parent or
+identity to write under. This is NOT a claim that the executor binds the
+workspace to a claimed run (``claim_cfg1_run_workspace``): that, and the sealed
+snapshot read at executor level, are integration obligations.
+
+**Lifecycle (FU1).** One non-blocking guard per provision is held for the whole
+of :func:`run_runtime_provision` and for :func:`release_at_l27_entry`, so a run
+and a release can never own the same handles (cross-thread or re-entrant), a
+second run is refused, and release is exactly once.
+
 **What this module guarantees by construction (static, not empirical):**
 
 * no pathname-based creation exists here -- the only creating call is the
@@ -47,9 +64,12 @@ import hashlib
 import ntpath
 import secrets
 import sys
+import threading
 
 from pi_harness_cfg1 import pi_fs_leaves as _leaves
+from pi_harness_cfg1 import pi_identity as _identity
 from pi_harness_cfg1 import pi_payload as _payload
+from pi_harness_cfg1 import run_workspace as _workspace
 
 PLATFORM_SUPPORTED = sys.platform == "win32"
 
@@ -604,6 +624,7 @@ class RuntimeProvision:
         "_nonce",
         "_state",
         "_reason",
+        "_workspace",
         "_run_root",
         "_run_root_identity",
         "_profile_id",
@@ -613,6 +634,8 @@ class RuntimeProvision:
         "_final_pins",
         "_created_identity",
         "_package_root_identity",
+        "_guard",
+        "_released",
     )
 
     def __init__(self, key: object, **values) -> None:
@@ -627,6 +650,13 @@ class RuntimeProvision:
         object.__setattr__(self, "_final_pins", None)
         object.__setattr__(self, "_created_identity", {})
         object.__setattr__(self, "_package_root_identity", None)
+        object.__setattr__(self, "_run_root_identity", None)
+        # Lifecycle exclusion (A2 FU1, Finding B): held, non-blocking, for the
+        # WHOLE of a run and for a release -- so the two can never own the same
+        # handles, whether racing from another thread or re-entering from a
+        # callback on the running thread.
+        object.__setattr__(self, "_guard", threading.Lock())
+        object.__setattr__(self, "_released", False)
 
     def __setattr__(self, name: str, value: object) -> None:  # noqa: D105
         raise AttributeError("RuntimeProvision is immutable from outside its module")
@@ -722,35 +752,77 @@ def _require_missing(path: str, reason: str) -> None:
         _refuse(reason)
 
 
+def _consume_authority(
+    workspace: object, profile_id: object, inventory: object
+) -> tuple[str, tuple[int, int]]:
+    """The ONE place this module obtains write authority. ``(run_root, identity)``.
+
+    Called at admission AND again immediately before the first create, so loss
+    of authority between the two refuses rather than being trusted from before.
+    Nothing here comes from the caller as a claim:
+
+    * the run root is the ``experiment_root`` of a :class:`Cfg1RunWorkspace`
+      that CFG1's own registry minted, re-proved against the filesystem
+      (``verify_cfg1_run_workspace``); there is no parameter naming a path;
+    * its identity is ``registered_root_identity`` -- the value read when the
+      frozen creator returned the root, never re-derived from the path;
+    * the profile must be an ELIGIBLE profile of the sealed HPP-1 snapshot
+      (read at call time), and the inventory's content-derived
+      ``payload_fingerprint`` must equal THAT profile's loader-bound
+      fingerprint. The comparison is against loader-sealed policy, not against
+      another value the same caller supplied.
+
+    Frozen CFG1 facilities are used unmodified.
+    """
+    if type(workspace) is not _workspace.Cfg1RunWorkspace:
+        _refuse("MALFORMED_INPUT")
+    try:
+        _workspace.verify_cfg1_run_workspace(workspace)
+        identity = _workspace.registered_root_identity(workspace)
+    except _workspace.Cfg1WorkspaceAuthorityError:
+        _refuse("WORKSPACE_AUTHORITY_UNVERIFIED")
+    if type(identity) is not tuple or len(identity) != 2 or any(type(part) is not int for part in identity):
+        _refuse("WORKSPACE_AUTHORITY_UNVERIFIED")
+    run_root = workspace.experiment_root
+    if type(run_root) is not str:
+        _refuse("WORKSPACE_AUTHORITY_UNVERIFIED")
+    if type(profile_id) is not str or type(inventory) is not _payload.PayloadInventory:
+        _refuse("MALFORMED_INPUT")
+    try:
+        view = _identity.eligible_profile_view(profile_id)
+    except _identity.Cfg1PiIdentityError:
+        _refuse("PROFILE_NOT_APPROVED")
+    if view.payload_fingerprint != inventory.payload_fingerprint:
+        _refuse("INVENTORY_NOT_APPROVED_FOR_PROFILE")
+    return run_root, identity
+
+
 def admit_runtime_provision(
     *,
-    run_root: str,
-    run_root_identity: tuple[int, int],
+    workspace: _workspace.Cfg1RunWorkspace,
     profile_id: str,
     approved_inventory: _payload.PayloadInventory,
     source_package_root: str,
 ) -> RuntimeProvision:
     """Steps 1-2 of amendment Sec. 7.4: bind inputs, LDT, topology. NO write.
 
-    ``run_root`` and ``run_root_identity`` are what the executor's L2 recorded;
-    the path is never treated as proof -- the run root is pinned and proven by
-    identity FROM THE HANDLE before anything is created. ``approved_inventory``
-    is the matched profile's approved inventory; pairing it with
-    ``profile_id`` is the caller's (future executor's) obligation and is not
-    re-derived here.
+    There is no run-root parameter and no identity parameter: both are derived
+    from ``workspace`` by :func:`_consume_authority`, which also refuses any
+    ``(profile_id, approved_inventory)`` pair the sealed policy snapshot does
+    not itself approve. ``source_package_root`` is only ever READ, and every
+    byte read from it is verified against the approved inventory before it is
+    persisted (Sec. 7.4B).
     """
     if not PLATFORM_SUPPORTED:
         _refuse("UNSUPPORTED_PLATFORM")
     if (
-        type(run_root) is not str
+        type(workspace) is not _workspace.Cfg1RunWorkspace
         or type(profile_id) is not str
         or type(source_package_root) is not str
         or type(approved_inventory) is not _payload.PayloadInventory
-        or type(run_root_identity) is not tuple
-        or len(run_root_identity) != 2
-        or any(type(part) is not int for part in run_root_identity)
     ):
         _refuse("MALFORMED_INPUT")
+    run_root, _identity_at_admission = _consume_authority(workspace, profile_id, approved_inventory)
     ldt = LAUNCH_DERIVATION_TABLE.get(profile_id)
     if ldt is None:
         _refuse("NO_LDT_ENTRY")
@@ -768,8 +840,8 @@ def admit_runtime_provision(
 
     provision = RuntimeProvision(
         _PROVISION_KEY,
+        _workspace=workspace,
         _run_root=run_root,
-        _run_root_identity=run_root_identity,
         _profile_id=profile_id,
         _inventory=approved_inventory,
         _source_root=source_package_root,
@@ -856,7 +928,7 @@ def _pin_run_root(handles: _HandleLedger, run_root: str, expected: tuple[int, in
 
     ``OPEN_EXISTING``, no-follow, share ``READ | WRITE`` (omitting only
     ``DELETE``). The path selects; the HANDLE proves: a directory, no reparse
-    attribute or tag, and ``FileIdInfo`` equal to the identity L2 recorded.
+    attribute or tag, and ``FileIdInfo`` equal to the identity registered at mint.
     """
     raw = _K32.CreateFileW(
         run_root,
@@ -987,7 +1059,16 @@ def _construct(provision: RuntimeProvision, handles: _HandleLedger, native) -> N
     ldt = LAUNCH_DERIVATION_TABLE[provision._profile_id]
     recorded = {ldt["package_manifest"], *ldt["derivation_chain"]}
 
-    root = _pin_run_root(handles, provision._run_root, provision._run_root_identity)
+    # Authority is consumed HERE, immediately before the first create -- not
+    # trusted from admission, and after the (long) source observation. The
+    # root's identity is the one registered at mint; the path only selects.
+    run_root, run_root_identity = _consume_authority(
+        provision._workspace, provision._profile_id, provision._inventory
+    )
+    if run_root != provision._run_root:
+        _refuse("WORKSPACE_AUTHORITY_UNVERIFIED")
+    provision._set("_run_root_identity", run_root_identity)
+    root = _pin_run_root(handles, run_root, run_root_identity)
     runtime_dir = _create_child(handles, native, root, RUNTIME_DIR_NAME, _KIND_DIRECTORY)
     _gate_membership(handles, root, runtime_dir)
     package_dir = _create_child(handles, native, runtime_dir, PACKAGE_DIR_NAME, _KIND_DIRECTORY)
@@ -1098,10 +1179,27 @@ def run_runtime_provision(provision: RuntimeProvision) -> None:
     is deleted on any path. Final read-only pins acquired before a later
     refusal stay held for :func:`release_at_l27_entry`, as amendment Sec. 7.8
     requires.
+
+    The provision's guard is taken (non-blocking) BEFORE the admission nonce is
+    claimed and held until this returns, so a second concurrent or re-entrant
+    run, and :func:`release_at_l27_entry`, are refused while this one owns the
+    handles.
     """
+    guard = getattr(provision, "_guard", None) if type(provision) is RuntimeProvision else None
+    if guard is None:
+        _refuse("PROVISION_NOT_ADMITTED")
+    if not guard.acquire(blocking=False):
+        _refuse("PROVISION_ACTIVE")
+    try:
+        _run_guarded(provision)
+    finally:
+        guard.release()
+
+
+def _run_guarded(provision: RuntimeProvision) -> None:
     if (
-        type(provision) is not RuntimeProvision
-        or getattr(provision, "_state", None) != STATE_ADMITTED
+        getattr(provision, "_state", None) != STATE_ADMITTED
+        or getattr(provision, "_released", True)
         or getattr(provision, "_nonce", None) not in _ADMITTED_NONCES
     ):
         _refuse("PROVISION_NOT_ADMITTED")
@@ -1149,11 +1247,37 @@ def run_runtime_provision(provision: RuntimeProvision) -> None:
 def release_at_l27_entry(provision: RuntimeProvision) -> None:
     """Amendment Sec. 7.8 / 7.4A.5: close every still-``OPEN`` construction
     entry (backstop), then every final pin -- each exactly once, by handle,
-    never by name, no retry, no force, unconditionally. Never raises for a
-    close failure: the failure is recorded and latches
-    :attr:`RuntimeProvision.live_references_released` ``False``."""
-    if type(provision) is not RuntimeProvision:
+    never by name, no retry, no force. Never raises for a close failure: the
+    failure is recorded and latches
+    :attr:`RuntimeProvision.live_references_released` ``False``.
+
+    **Lifecycle (A2 FU1, Finding B).** Legal only when no run owns the
+    handles and the provision has not already been released:
+
+    * while :func:`run_runtime_provision` is active -- another thread, or a
+      callback re-entering on the running thread -- the guard is held and this
+      REFUSES (``PROVISION_ACTIVE``) without closing anything;
+    * a second release REFUSES (``PROVISION_ALREADY_RELEASED``): release is
+      exactly once, and nothing is retried;
+    * releasing a never-run ADMITTED provision closes nothing and consumes its
+      admission nonce, so it can never run afterwards.
+
+    Release deliberately re-verifies no workspace: it closes handles this
+    provision already holds, and loss of workspace authority must never prevent
+    that.
+    """
+    guard = getattr(provision, "_guard", None) if type(provision) is RuntimeProvision else None
+    if guard is None:
         _refuse("MALFORMED_INPUT")
-    for handles in (getattr(provision, "_construction", None), getattr(provision, "_final_pins", None)):
-        if handles is not None:
-            handles.close_all()
+    if not guard.acquire(blocking=False):
+        _refuse("PROVISION_ACTIVE")
+    try:
+        if provision._released:
+            _refuse("PROVISION_ALREADY_RELEASED")
+        _ADMITTED_NONCES.discard(provision._nonce)
+        for handles in (provision._construction, provision._final_pins):
+            if handles is not None:
+                handles.close_all()
+        provision._set("_released", True)
+    finally:
+        guard.release()

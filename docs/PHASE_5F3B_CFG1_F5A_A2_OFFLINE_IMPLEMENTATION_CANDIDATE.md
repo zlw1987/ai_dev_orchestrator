@@ -9,7 +9,9 @@ A2-3              INCOMPLETE (unchanged): fixture-teardown conflict, corrected d
                   never validated. Nothing here clears it.
 R-ALIAS           UNRESOLVED (unchanged). A2 does not solve hard-link aliasing.
 LIVE LAUNCH       UNAUTHORIZED. No executor wiring, no L3R step, no launch path.
-BASE HEAD         09d62e5d1cd0c550b0f7979cdfb28fb423db51a4
+BASE HEAD         09d62e5d1cd0c550b0f7979cdfb28fb423db51a4  (FU1 base: 177ddc653e2b257e8263f582bdefe3e957d1de33)
+FU1               Authority binding + lifecycle closure (section 9). Still an offline
+                  candidate; still NOT qualified; still not executor-wired.
 CODE              experiments/pi_harness_cfg1/pi_runtime_provision.py            (new)
 TESTS             experiments/pi_harness_cfg1/tests/test_cfg1_f5a_a2_offline_candidate.py (new)
 DOES NOT TOUCH    CLAUDE.md; the F5-A amendment (so the U126 evidence binding is
@@ -101,8 +103,10 @@ none of it is required to inspect the creation mechanism):**
 - the L14 precondition and topology re-proof; the L21A input change;
 - the **executor-level** `live_references_released` derivation (§7.8.1) and its
   L30 consequence. The candidate computes the fact for its own handles only;
-- binding `approved_inventory` to `profile_id`. The candidate accepts the pair
-  from its caller; in the executor it must come from the sealed HPP snapshot.
+- ~~binding `approved_inventory` to `profile_id`~~ -- **done in FU1 (section 9)**:
+  the pair is bound to the sealed HPP-1 snapshot, not accepted from the caller.
+  What remains for the executor is only to supply the matched profile (and to
+  claim the workspace for its run).
 
 Because none of this is wired, the module has no caller in production code and
 cannot launch anything.
@@ -137,7 +141,7 @@ every caller-supplied object, and anything the payload or a model says.
 | F-5 | R-ALIAS chain: a hard link from outside to a held share-0 child was *recorded* (supplemental, same process). Under that observation an outside name can alias approved runtime bytes written through `h_f`. Combined with F-4 it could also place a link to an escaped object back into `D` so that `D`'s gate matches. | Not prevented, and no link-count gate is added (directive §7). Content is approved runtime bytes; L9 impact is separate (see the L9 note). |
 | F-6 | Directory construction pins use the FU4-A2 shape, not §7.4A.2's `GENERIC_READ`. | Both are read-only, share READ, no DELETE. Recorded as a deliberate, reviewer-visible difference (§1). |
 | F-7 | The run-root pin keeps §7.4A.1's share `READ \| WRITE`; R1-FU3 showed it does not refuse conversion of an **empty** `R`. | `R` is non-empty at L3R (the workspace from L3), and relative creates do not resolve `R` by name. Not changed (frozen shape). |
-| F-8 | Post-pin item 2 (exposure absence) and the `inventory`↔`profile_id` pairing are not checked by the candidate. | Deferred to executor integration (§2), because both need the matched profile object. |
+| F-8 | Post-pin item 2 (exposure absence) is not checked by the candidate. | Deferred to executor integration (§2): it needs the matched profile's resolution exposures. (The `inventory`↔`profile_id` pairing originally listed here was **wrongly left to the caller** and is closed by FU1, §9.) |
 | F-9 | Source reads and final pins, and the post-pin walk, still use pathnames. | Intended: source reads are **reads** verified before persist (§7.4B); final pins are opens of existing objects checked against creating-handle ids (pre-authority, §7.6). No pathname **creation** remains. |
 | F-10 | `construction_handle_peak` is a simulation of the code's order, and the test asserts the ledger's observed peak equals it on the synthetic payload. On the committed approved inventory it gives **449** (≤ 462). | The synthetic run does not exercise 360-file fan-out; that is P-R1-4 (ii) territory. |
 
@@ -149,7 +153,7 @@ deliberately not added.
 
 ## 5. Tests — what they show and what they do not
 
-`test_cfg1_f5a_a2_offline_candidate.py` (76 tests). Kinds of evidence:
+`test_cfg1_f5a_a2_offline_candidate.py` (76 tests at 177ddc6; the FU1 suite is described in section 9.4). Kinds of evidence:
 
 - **Pure logic (any platform):** single-component validation, T-CANON / T-NM /
   T-BUN, ledger state machine (with a replaced close seam), static AST audit (no
@@ -225,3 +229,131 @@ where it is permitted (FU4 report §10). If A2-3 then passes with no teardown
 error, the next step is a narrowly scoped qualification run of **this
 candidate's** construction under the A2-3/A2-6 conversion scenarios (§6 item 6),
 before any executor integration is authorized.
+
+---
+
+## 9. FU1 — authority binding and lifecycle closure
+
+Base `177ddc6`. An independent review accepted the candidate as a useful offline
+candidate and found two genuine blockers. Only they are addressed. F5-A remains
+HOLD; A2-3 remains INCOMPLETE; nothing is executor-wired or live-authorized.
+
+### 9.1 Finding A — caller-supplied authority was not AIDO authority
+
+**Defect (real, reproduced by the old tests themselves).**
+`admit_runtime_provision(run_root, run_root_identity, profile_id,
+approved_inventory, source_package_root)` proved only that a directory agreed with
+an identity *the same caller supplied*, and that a structurally valid inventory
+was an inventory. An ordinary caller could provision beneath **any** existing
+directory and persist bytes from an inventory unrelated to the claimed profile.
+The old suite did exactly that with `tmp_path` and an unapproved inventory.
+
+**Correction (enforced at the consumption boundary).**
+
+| Authority | Origin now | Not accepted from the caller |
+|---|---|---|
+| Run root `R` | `Cfg1RunWorkspace.experiment_root` of a workspace the CFG1 registry minted, re-proved by `verify_cfg1_run_workspace` (frozen AR2 marker re-read, scratch-boundary and canonical-path checks) | a path |
+| Root identity | `registered_root_identity(workspace)` — the value read when the frozen creator returned the root | an identity; and never re-derived from the path |
+| Profile | an **eligible** profile of the sealed HPP-1 snapshot (`pi_identity.eligible_profile_view`, read at call time) | an "eligible" claim |
+| Inventory | content-derived `payload_fingerprint` must equal **that profile's loader-bound** fingerprint | a pairing |
+
+`_consume_authority` is the single place authority is obtained. It runs at
+admission **and again in `_construct`, immediately before the first create** (after
+the long source observation), so loss of authority in between refuses rather than
+being trusted from earlier. The public signature is now
+`admit_runtime_provision(*, workspace, profile_id, approved_inventory,
+source_package_root)`; there is no run-root or identity parameter, and an AST test
+asserts no public non-pure callable has a path/parent/root/identity parameter.
+The private creation primitives (`_pin_run_root`, `_create_child`, …) still take
+those, are exercised directly under `tmp_path`, and are not reachable from the
+public API.
+
+**Frozen contracts:** none modified. `run_workspace`, `pi_identity` and the policy
+loader are used as they are. The binding needed no surrogate: the sealed snapshot
+already carries `payload_fingerprint` per eligible profile, and
+`PayloadInventory.payload_fingerprint` is derived from the canonical inventory
+bytes (`SHA-256(domain tag || canonical)`), not stored.
+
+**Not claimed.** (i) The module does not bind the workspace to a *claimed run*
+(`claim_cfg1_run_workspace` needs a `run_id`, which L3R integration owns).
+(ii) The profile is whichever eligible profile the *executor* matched; this module
+checks the pair against policy, it does not re-run profile discovery. (iii) The
+`LAUNCH_DERIVATION_TABLE` is a plain module dict; same-process mutation of it is
+outside the CFG1 threat model as everywhere else. (iv) A synthetic profile in the
+tests needs a test-local `monkeypatch.setitem` LDT row, because the LDT is keyed by
+the one genuine profile id; that is the only test-local seam on authority.
+
+### 9.2 Finding B — premature release of active construction handles
+
+**Defect (real).** `release_at_l27_entry` closed handles with no lifecycle check.
+A holder of the provision object could call it from another thread, or from a
+callback re-entering on the running thread, while `run_runtime_provision` was
+still creating and writing; the construction would then continue against closed
+handles. The run's own nonce check also was not atomic with its claim, so two
+concurrent runs of one provision were not provably exclusive.
+
+**Correction (smallest mechanism).** One `threading.Lock` per provision, taken
+**non-blocking** for the whole of `run_runtime_provision` and for
+`release_at_l27_entry`:
+
+* release while a run is active (another thread, or re-entry) → refused,
+  `PROVISION_ACTIVE`, nothing closed; a concurrent or re-entrant second run →
+  `PROVISION_ACTIVE` (the nonce is claimed *under* the guard);
+* a duplicate release → `PROVISION_ALREADY_RELEASED`; release is exactly once;
+* releasing a never-run `ADMITTED` provision closes nothing and consumes its
+  nonce, so it can never run afterwards;
+* the guard is freed in `finally`, so completed, refused and unexpected exits all
+  leave release legal.
+
+Preserved: each OS handle is closed exactly once (`CloseHandle` only from `OPEN`);
+`CLOSE_FAILED` is terminal and never retried; children-before-parents ordering;
+`live_references_released` is derived from the ledgers; no pathname cleanup, no
+deletion. Release deliberately **does not** re-verify the workspace: it closes
+handles this provision already holds, and loss of workspace authority must never
+strand them. No retry loop, supervisor or new state machine was added.
+
+### 9.3 Genuine bypasses found during the actual-code review (all fixed)
+
+1. **Non-atomic run claim.** `state == ADMITTED and nonce in set` followed by
+   `discard` is check-then-act; two threads could both pass. Fixed by taking the
+   guard first.
+2. **Release-then-run.** A released (or never-run, released) provision could still
+   be run afterwards, creating handles nobody would release. Fixed: release
+   consumes the nonce and marks the provision released; run also checks it.
+3. **Uninitialised instance.** `object.__new__(RuntimeProvision)` reached
+   `release` with no guard; it now refuses (`MALFORMED_INPUT`).
+4. **Forged workspace by `object.__new__`** (bypassing the frozen dataclass
+   `__post_init__`): refused by `verify_cfg1_run_workspace` (`NOT_MINTED_BY_CFG1` /
+   `MINTED_PATH_MISMATCH`) before any create. Regression-tested.
+5. **Cross-profile pairing** (inventory approved for profile Y paired with approved
+   profile X): refused; each is admitted with its own.
+
+### 9.4 Tests added or changed
+
+`test_cfg1_f5a_a2_offline_candidate.py`. The end-to-end fixture now mints a
+**real** workspace and approves a **synthetic** payload through a genuine PE-2b
+load. New: arbitrary directory (old call shape gone; path, look-alike and
+`object.__new__` impostors refused; nothing created); real nonce with a foreign
+path; structurally valid but unapproved inventory; cross-profile pairing; retired
+profile; loss of authority between admission and run (registry discard, policy
+retirement, owned root moved aside and replaced by an ordinary directory — all
+refuse with nothing created); two legitimate workspaces not mixable; premature
+release on the running thread and from another thread (**injected callbacks inside
+the active construction**; they show the guard refuses, not a native anomaly);
+guard freed after refused/unexpected exits (**unexpected exit injected**); reverse
+close order and duplicate release closing nothing; release without workspace
+authority; never-run release; exactly-once `CloseHandle` count; the AST audit that
+authority is consumed in exactly `admit_runtime_provision` and `_construct`. The
+duplicate-release expectation (formerly "idempotent") changed deliberately.
+With the release guard disabled the two premature-release tests fail, so they are
+not vacuous.
+
+**Real Windows observations** (not injected): the minted workspace, the real
+handle-relative creates, root-moved-aside refusal, byte-identical copy, exact
+topology. **Injected seams** are named in each test and unchanged in kind.
+
+### 9.5 What FU1 does not change
+
+A2-3 INCOMPLETE; no racing-conversion measurement; R-ALIAS UNRESOLVED; F5-A HOLD;
+sections 6 and 7 obligations stand. A passing suite here is ordinary regression
+evidence, **not** Windows A2-3 qualification.
