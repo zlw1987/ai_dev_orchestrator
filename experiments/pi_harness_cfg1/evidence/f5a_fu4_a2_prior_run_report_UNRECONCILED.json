@@ -1,0 +1,1090 @@
+{
+  "cases": [
+    {
+      "case": "A2_1_directory_child_created_relative_with_identity_bearing_handle",
+      "evidence": {
+        "outside_changed": [],
+        "reading": "the directory and its share-READ handle come from ONE call: there is no interval between creation and the first identity-bearing handle (the FU15 R-WINDOW does not arise)",
+        "shapes": {
+          "p_r1_4_child_pin_GENERIC_READ_share_READ": {
+            "created_handle_usable_as_next_parent": true,
+            "link_parent_equals_parent_handle_reference": true,
+            "links_from_child_handle": [
+              [
+                10414574140264255,
+                "pi_runtime_2"
+              ]
+            ],
+            "parent_enumeration_lists_child_with_its_handle_id": true,
+            "released_control_rename_ok": true,
+            "rename_refused": true,
+            "rename_while_created_handle_held_win32": 32,
+            "second_FILE_CREATE_status": "0xc0000035"
+          },
+          "run_root_pin_candidate_share_READ": {
+            "created_handle_usable_as_next_parent": true,
+            "link_parent_equals_parent_handle_reference": true,
+            "links_from_child_handle": [
+              [
+                10414574140264255,
+                "pi_runtime_1"
+              ]
+            ],
+            "parent_enumeration_lists_child_with_its_handle_id": true,
+            "released_control_rename_ok": true,
+            "rename_refused": true,
+            "rename_while_created_handle_held_win32": 32,
+            "second_FILE_CREATE_status": "0xc0000035"
+          },
+          "run_root_pin_current_share_READ_WRITE": {
+            "created_handle_usable_as_next_parent": true,
+            "link_parent_equals_parent_handle_reference": true,
+            "links_from_child_handle": [
+              [
+                10414574140264255,
+                "pi_runtime_0"
+              ]
+            ],
+            "parent_enumeration_lists_child_with_its_handle_id": true,
+            "released_control_rename_ok": true,
+            "rename_refused": true,
+            "rename_while_created_handle_held_win32": 32,
+            "second_FILE_CREATE_status": "0xc0000035"
+          }
+        }
+      },
+      "status": "PASS"
+    },
+    {
+      "case": "A2_2_file_child_created_relative_exclusive_and_occupied_names_refuse",
+      "evidence": {
+        "links": [
+          [
+            9288674233421655,
+            "zero.bin"
+          ]
+        ],
+        "occupied_name_statuses": {
+          "occupied_dangling:dir": "0xc0000035",
+          "occupied_dangling:file": "0xc0000035",
+          "occupied_file:dir": "0xc0000035",
+          "occupied_file:file": "0xc0000035",
+          "occupied_junction:dir": "0xc0000035",
+          "occupied_junction:file": "0xc00000ba",
+          "occupied_symlink:dir": "0xc0000035",
+          "occupied_symlink:file": "0xc0000035"
+        },
+        "outside_changed": [],
+        "outside_new_names": [],
+        "parent_enumeration_id_matches": true,
+        "second_actor_read_open_win32": 32,
+        "symlink_creation": true,
+        "zero_bytes_at_create": true
+      },
+      "status": "FAIL"
+    },
+    {
+      "case": "A2_3_fu3_converted_parent_relative_create_creates_nothing_anywhere",
+      "evidence": {
+        "converted_scenarios": 12,
+        "pathname_matched_controls": [
+          {
+            "CreateDirectoryW_ok": true,
+            "CreateFileW_CREATE_NEW_ok": true,
+            "conversion": [
+              "converted",
+              0
+            ],
+            "outside_new_names": [
+              "pi_runtime",
+              "zero.bin"
+            ],
+            "tag": "mount_point"
+          },
+          {
+            "CreateDirectoryW_ok": true,
+            "CreateFileW_CREATE_NEW_ok": true,
+            "conversion": [
+              "converted",
+              0
+            ],
+            "outside_new_names": [
+              "pi_runtime",
+              "zero.bin"
+            ],
+            "tag": "symlink_tag"
+          }
+        ],
+        "reading": "after the FU3 conversion the kernel refuses a create relative to the converted directory (STATUS_REPARSE_POINT_NOT_RESOLVED for name-surrogate tags, STATUS_IO_REPARSE_TAG_NOT_HANDLED for the non-Microsoft tag); the identical pathname creates escape",
+        "scenarios": [
+          {
+            "contained": true,
+            "conversion": [
+              "converted",
+              0
+            ],
+            "emptied_by_attacker": [
+              ".git",
+              "run_marker.json"
+            ],
+            "mask": "FILE_WRITE_ATTRIBUTES",
+            "outside_changed_keys": [],
+            "outside_new_names": [],
+            "parent_handle_sees_reparse": true,
+            "parent_object_entries_after": [],
+            "relative_creates": {
+              "dir": {
+                "candidate": "NATIVE_CREATE_REFUSED:0xc0000280",
+                "handle_returned": false,
+                "information": 0,
+                "ntstatus": "0xc0000280"
+              },
+              "file": {
+                "candidate": "NATIVE_CREATE_REFUSED:0xc0000280",
+                "handle_returned": false,
+                "information": 0,
+                "ntstatus": "0xc0000280"
+              }
+            },
+            "shape": "run_root_pin_current_share_READ_WRITE",
+            "tag": "mount_point"
+          },
+          {
+            "contained": true,
+            "conversion": [
+              "converted",
+              0
+            ],
+            "emptied_by_attacker": [
+              ".git",
+              "run_marker.json"
+            ],
+            "mask": "GENERIC_WRITE",
+            "outside_changed_keys": [],
+            "outside_new_names": [],
+            "parent_handle_sees_reparse": true,
+            "parent_object_entries_after": [],
+            "relative_creates": {
+              "dir": {
+                "candidate": "NATIVE_CREATE_REFUSED:0xc0000280",
+                "handle_returned": false,
+                "information": 0,
+                "ntstatus": "0xc0000280"
+              },
+              "file": {
+                "candidate": "NATIVE_CREATE_REFUSED:0xc0000280",
+                "handle_returned": false,
+                "information": 0,
+                "ntstatus": "0xc0000280"
+              }
+            },
+            "shape": "run_root_pin_current_share_READ_WRITE",
+            "tag": "mount_point"
+          },
+          {
+            "contained": true,
+            "conversion": [
+              "converted",
+              0
+            ],
+            "emptied_by_attacker": [
+              ".git",
+              "run_marker.json"
+            ],
+            "mask": "FILE_WRITE_ATTRIBUTES",
+            "outside_changed_keys": [],
+            "outside_new_names": [],
+            "parent_handle_sees_reparse": true,
+            "parent_object_entries_after": [],
+            "relative_creates": {
+              "dir": {
+                "candidate": "NATIVE_CREATE_REFUSED:0xc0000280",
+                "handle_returned": false,
+                "information": 0,
+                "ntstatus": "0xc0000280"
+              },
+              "file": {
+                "candidate": "NATIVE_CREATE_REFUSED:0xc0000280",
+                "handle_returned": false,
+                "information": 0,
+                "ntstatus": "0xc0000280"
+              }
+            },
+            "shape": "run_root_pin_current_share_READ_WRITE",
+            "tag": "symlink_tag"
+          },
+          {
+            "contained": true,
+            "conversion": [
+              "converted",
+              0
+            ],
+            "emptied_by_attacker": [
+              ".git",
+              "run_marker.json"
+            ],
+            "mask": "GENERIC_WRITE",
+            "outside_changed_keys": [],
+            "outside_new_names": [],
+            "parent_handle_sees_reparse": true,
+            "parent_object_entries_after": [],
+            "relative_creates": {
+              "dir": {
+                "candidate": "NATIVE_CREATE_REFUSED:0xc0000280",
+                "handle_returned": false,
+                "information": 0,
+                "ntstatus": "0xc0000280"
+              },
+              "file": {
+                "candidate": "NATIVE_CREATE_REFUSED:0xc0000280",
+                "handle_returned": false,
+                "information": 0,
+                "ntstatus": "0xc0000280"
+              }
+            },
+            "shape": "run_root_pin_current_share_READ_WRITE",
+            "tag": "symlink_tag"
+          },
+          {
+            "contained": true,
+            "conversion": [
+              "converted",
+              0
+            ],
+            "emptied_by_attacker": [
+              ".git",
+              "run_marker.json"
+            ],
+            "mask": "FILE_WRITE_ATTRIBUTES",
+            "outside_changed_keys": [],
+            "outside_new_names": [],
+            "parent_handle_sees_reparse": true,
+            "parent_object_entries_after": [],
+            "relative_creates": {
+              "dir": {
+                "candidate": "NATIVE_CREATE_REFUSED:0xc0000279",
+                "handle_returned": false,
+                "information": 2147549183,
+                "ntstatus": "0xc0000279"
+              },
+              "file": {
+                "candidate": "NATIVE_CREATE_REFUSED:0xc0000279",
+                "handle_returned": false,
+                "information": 2147549183,
+                "ntstatus": "0xc0000279"
+              }
+            },
+            "shape": "run_root_pin_current_share_READ_WRITE",
+            "tag": "generic_tag_0x8000FFFF"
+          },
+          {
+            "contained": true,
+            "conversion": [
+              "converted",
+              0
+            ],
+            "emptied_by_attacker": [
+              ".git",
+              "run_marker.json"
+            ],
+            "mask": "GENERIC_WRITE",
+            "outside_changed_keys": [],
+            "outside_new_names": [],
+            "parent_handle_sees_reparse": true,
+            "parent_object_entries_after": [],
+            "relative_creates": {
+              "dir": {
+                "candidate": "NATIVE_CREATE_REFUSED:0xc0000279",
+                "handle_returned": false,
+                "information": 2147549183,
+                "ntstatus": "0xc0000279"
+              },
+              "file": {
+                "candidate": "NATIVE_CREATE_REFUSED:0xc0000279",
+                "handle_returned": false,
+                "information": 2147549183,
+                "ntstatus": "0xc0000279"
+              }
+            },
+            "shape": "run_root_pin_current_share_READ_WRITE",
+            "tag": "generic_tag_0x8000FFFF"
+          },
+          {
+            "contained": true,
+            "conversion": [
+              "converted",
+              0
+            ],
+            "emptied_by_attacker": [
+              ".git",
+              "run_marker.json"
+            ],
+            "mask": "FILE_WRITE_ATTRIBUTES",
+            "outside_changed_keys": [],
+            "outside_new_names": [],
+            "parent_handle_sees_reparse": true,
+            "parent_object_entries_after": [],
+            "relative_creates": {
+              "dir": {
+                "candidate": "NATIVE_CREATE_REFUSED:0xc0000280",
+                "handle_returned": false,
+                "information": 0,
+                "ntstatus": "0xc0000280"
+              },
+              "file": {
+                "candidate": "NATIVE_CREATE_REFUSED:0xc0000280",
+                "handle_returned": false,
+                "information": 0,
+                "ntstatus": "0xc0000280"
+              }
+            },
+            "shape": "run_root_pin_candidate_share_READ",
+            "tag": "mount_point"
+          },
+          {
+            "contained": false,
+            "conversion": [
+              "open_refused",
+              32
+            ],
+            "emptied_by_attacker": [
+              ".git",
+              "run_marker.json"
+            ],
+            "mask": "GENERIC_WRITE",
+            "outside_changed_keys": [],
+            "outside_new_names": [],
+            "parent_handle_sees_reparse": false,
+            "parent_object_entries_after": [
+              "pi_runtime",
+              "pi_runtime_wrapped",
+              "zero.bin",
+              "zero.bin_wrapped"
+            ],
+            "relative_creates": {
+              "dir": {
+                "candidate": "CREATED",
+                "handle_returned": true,
+                "information": 2,
+                "links": [
+                  [
+                    8444249303289767,
+                    "pi_runtime"
+                  ]
+                ],
+                "ntstatus": "0x0"
+              },
+              "file": {
+                "candidate": "CREATED",
+                "handle_returned": true,
+                "information": 2,
+                "links": [
+                  [
+                    8444249303289767,
+                    "zero.bin"
+                  ]
+                ],
+                "ntstatus": "0x0"
+              }
+            },
+            "shape": "run_root_pin_candidate_share_READ",
+            "tag": "mount_point"
+          },
+          {
+            "contained": true,
+            "conversion": [
+              "converted",
+              0
+            ],
+            "emptied_by_attacker": [
+              ".git",
+              "run_marker.json"
+            ],
+            "mask": "FILE_WRITE_ATTRIBUTES",
+            "outside_changed_keys": [],
+            "outside_new_names": [],
+            "parent_handle_sees_reparse": true,
+            "parent_object_entries_after": [],
+            "relative_creates": {
+              "dir": {
+                "candidate": "NATIVE_CREATE_REFUSED:0xc0000280",
+                "handle_returned": false,
+                "information": 0,
+                "ntstatus": "0xc0000280"
+              },
+              "file": {
+                "candidate": "NATIVE_CREATE_REFUSED:0xc0000280",
+                "handle_returned": false,
+                "information": 0,
+                "ntstatus": "0xc0000280"
+              }
+            },
+            "shape": "run_root_pin_candidate_share_READ",
+            "tag": "symlink_tag"
+          },
+          {
+            "contained": false,
+            "conversion": [
+              "open_refused",
+              32
+            ],
+            "emptied_by_attacker": [
+              ".git",
+              "run_marker.json"
+            ],
+            "mask": "GENERIC_WRITE",
+            "outside_changed_keys": [],
+            "outside_new_names": [],
+            "parent_handle_sees_reparse": false,
+            "parent_object_entries_after": [
+              "pi_runtime",
+              "pi_runtime_wrapped",
+              "zero.bin",
+              "zero.bin_wrapped"
+            ],
+            "relative_creates": {
+              "dir": {
+                "candidate": "CREATED",
+                "handle_returned": true,
+                "information": 2,
+                "links": [
+                  [
+                    8444249303289788,
+                    "pi_runtime"
+                  ]
+                ],
+                "ntstatus": "0x0"
+              },
+              "file": {
+                "candidate": "CREATED",
+                "handle_returned": true,
+                "information": 2,
+                "links": [
+                  [
+                    8444249303289788,
+                    "zero.bin"
+                  ]
+                ],
+                "ntstatus": "0x0"
+              }
+            },
+            "shape": "run_root_pin_candidate_share_READ",
+            "tag": "symlink_tag"
+          },
+          {
+            "contained": true,
+            "conversion": [
+              "converted",
+              0
+            ],
+            "emptied_by_attacker": [
+              ".git",
+              "run_marker.json"
+            ],
+            "mask": "FILE_WRITE_ATTRIBUTES",
+            "outside_changed_keys": [],
+            "outside_new_names": [],
+            "parent_handle_sees_reparse": true,
+            "parent_object_entries_after": [],
+            "relative_creates": {
+              "dir": {
+                "candidate": "NATIVE_CREATE_REFUSED:0xc0000279",
+                "handle_returned": false,
+                "information": 2147549183,
+                "ntstatus": "0xc0000279"
+              },
+              "file": {
+                "candidate": "NATIVE_CREATE_REFUSED:0xc0000279",
+                "handle_returned": false,
+                "information": 2147549183,
+                "ntstatus": "0xc0000279"
+              }
+            },
+            "shape": "run_root_pin_candidate_share_READ",
+            "tag": "generic_tag_0x8000FFFF"
+          },
+          {
+            "contained": false,
+            "conversion": [
+              "open_refused",
+              32
+            ],
+            "emptied_by_attacker": [
+              ".git",
+              "run_marker.json"
+            ],
+            "mask": "GENERIC_WRITE",
+            "outside_changed_keys": [],
+            "outside_new_names": [],
+            "parent_handle_sees_reparse": false,
+            "parent_object_entries_after": [
+              "pi_runtime",
+              "pi_runtime_wrapped",
+              "zero.bin",
+              "zero.bin_wrapped"
+            ],
+            "relative_creates": {
+              "dir": {
+                "candidate": "CREATED",
+                "handle_returned": true,
+                "information": 2,
+                "links": [
+                  [
+                    9007199256711124,
+                    "pi_runtime"
+                  ]
+                ],
+                "ntstatus": "0x0"
+              },
+              "file": {
+                "candidate": "CREATED",
+                "handle_returned": true,
+                "information": 2,
+                "links": [
+                  [
+                    9007199256711124,
+                    "zero.bin"
+                  ]
+                ],
+                "ntstatus": "0x0"
+              }
+            },
+            "shape": "run_root_pin_candidate_share_READ",
+            "tag": "generic_tag_0x8000FFFF"
+          },
+          {
+            "contained": true,
+            "conversion": [
+              "converted",
+              0
+            ],
+            "emptied_by_attacker": [
+              ".git",
+              "run_marker.json"
+            ],
+            "mask": "FILE_WRITE_ATTRIBUTES",
+            "outside_changed_keys": [],
+            "outside_new_names": [],
+            "parent_handle_sees_reparse": true,
+            "parent_object_entries_after": [],
+            "relative_creates": {
+              "dir": {
+                "candidate": "NATIVE_CREATE_REFUSED:0xc0000280",
+                "handle_returned": false,
+                "information": 0,
+                "ntstatus": "0xc0000280"
+              },
+              "file": {
+                "candidate": "NATIVE_CREATE_REFUSED:0xc0000280",
+                "handle_returned": false,
+                "information": 0,
+                "ntstatus": "0xc0000280"
+              }
+            },
+            "shape": "p_r1_4_child_pin_GENERIC_READ_share_READ",
+            "tag": "mount_point"
+          },
+          {
+            "contained": false,
+            "conversion": [
+              "open_refused",
+              32
+            ],
+            "emptied_by_attacker": [
+              ".git",
+              "run_marker.json"
+            ],
+            "mask": "GENERIC_WRITE",
+            "outside_changed_keys": [],
+            "outside_new_names": [],
+            "parent_handle_sees_reparse": false,
+            "parent_object_entries_after": [
+              "pi_runtime",
+              "pi_runtime_wrapped",
+              "zero.bin",
+              "zero.bin_wrapped"
+            ],
+            "relative_creates": {
+              "dir": {
+                "candidate": "CREATED",
+                "handle_returned": true,
+                "information": 2,
+                "links": [
+                  [
+                    16044073674477546,
+                    "pi_runtime"
+                  ]
+                ],
+                "ntstatus": "0x0"
+              },
+              "file": {
+                "candidate": "CREATED",
+                "handle_returned": true,
+                "information": 2,
+                "links": [
+                  [
+                    16044073674477546,
+                    "zero.bin"
+                  ]
+                ],
+                "ntstatus": "0x0"
+              }
+            },
+            "shape": "p_r1_4_child_pin_GENERIC_READ_share_READ",
+            "tag": "mount_point"
+          },
+          {
+            "contained": true,
+            "conversion": [
+              "converted",
+              0
+            ],
+            "emptied_by_attacker": [
+              ".git",
+              "run_marker.json"
+            ],
+            "mask": "FILE_WRITE_ATTRIBUTES",
+            "outside_changed_keys": [],
+            "outside_new_names": [],
+            "parent_handle_sees_reparse": true,
+            "parent_object_entries_after": [],
+            "relative_creates": {
+              "dir": {
+                "candidate": "NATIVE_CREATE_REFUSED:0xc0000280",
+                "handle_returned": false,
+                "information": 0,
+                "ntstatus": "0xc0000280"
+              },
+              "file": {
+                "candidate": "NATIVE_CREATE_REFUSED:0xc0000280",
+                "handle_returned": false,
+                "information": 0,
+                "ntstatus": "0xc0000280"
+              }
+            },
+            "shape": "p_r1_4_child_pin_GENERIC_READ_share_READ",
+            "tag": "symlink_tag"
+          },
+          {
+            "contained": false,
+            "conversion": [
+              "open_refused",
+              32
+            ],
+            "emptied_by_attacker": [
+              ".git",
+              "run_marker.json"
+            ],
+            "mask": "GENERIC_WRITE",
+            "outside_changed_keys": [],
+            "outside_new_names": [],
+            "parent_handle_sees_reparse": false,
+            "parent_object_entries_after": [
+              "pi_runtime",
+              "pi_runtime_wrapped",
+              "zero.bin",
+              "zero.bin_wrapped"
+            ],
+            "relative_creates": {
+              "dir": {
+                "candidate": "CREATED",
+                "handle_returned": true,
+                "information": 2,
+                "links": [
+                  [
+                    8725724280000521,
+                    "pi_runtime"
+                  ]
+                ],
+                "ntstatus": "0x0"
+              },
+              "file": {
+                "candidate": "CREATED",
+                "handle_returned": true,
+                "information": 2,
+                "links": [
+                  [
+                    8725724280000521,
+                    "zero.bin"
+                  ]
+                ],
+                "ntstatus": "0x0"
+              }
+            },
+            "shape": "p_r1_4_child_pin_GENERIC_READ_share_READ",
+            "tag": "symlink_tag"
+          },
+          {
+            "contained": true,
+            "conversion": [
+              "converted",
+              0
+            ],
+            "emptied_by_attacker": [
+              ".git",
+              "run_marker.json"
+            ],
+            "mask": "FILE_WRITE_ATTRIBUTES",
+            "outside_changed_keys": [],
+            "outside_new_names": [],
+            "parent_handle_sees_reparse": true,
+            "parent_object_entries_after": [],
+            "relative_creates": {
+              "dir": {
+                "candidate": "NATIVE_CREATE_REFUSED:0xc0000279",
+                "handle_returned": false,
+                "information": 2147549183,
+                "ntstatus": "0xc0000279"
+              },
+              "file": {
+                "candidate": "NATIVE_CREATE_REFUSED:0xc0000279",
+                "handle_returned": false,
+                "information": 2147549183,
+                "ntstatus": "0xc0000279"
+              }
+            },
+            "shape": "p_r1_4_child_pin_GENERIC_READ_share_READ",
+            "tag": "generic_tag_0x8000FFFF"
+          },
+          {
+            "contained": false,
+            "conversion": [
+              "open_refused",
+              32
+            ],
+            "emptied_by_attacker": [
+              ".git",
+              "run_marker.json"
+            ],
+            "mask": "GENERIC_WRITE",
+            "outside_changed_keys": [],
+            "outside_new_names": [],
+            "parent_handle_sees_reparse": false,
+            "parent_object_entries_after": [
+              "pi_runtime",
+              "pi_runtime_wrapped",
+              "zero.bin",
+              "zero.bin_wrapped"
+            ],
+            "relative_creates": {
+              "dir": {
+                "candidate": "CREATED",
+                "handle_returned": true,
+                "information": 2,
+                "links": [
+                  [
+                    10414574140264494,
+                    "pi_runtime"
+                  ]
+                ],
+                "ntstatus": "0x0"
+              },
+              "file": {
+                "candidate": "CREATED",
+                "handle_returned": true,
+                "information": 2,
+                "links": [
+                  [
+                    10414574140264494,
+                    "zero.bin"
+                  ]
+                ],
+                "ntstatus": "0x0"
+              }
+            },
+            "shape": "p_r1_4_child_pin_GENERIC_READ_share_READ",
+            "tag": "generic_tag_0x8000FFFF"
+          }
+        ],
+        "scenarios_where_the_pin_refused_the_conversion_open": [
+          [
+            "run_root_pin_candidate_share_READ",
+            "mount_point",
+            "GENERIC_WRITE",
+            [
+              "open_refused",
+              32
+            ]
+          ],
+          [
+            "run_root_pin_candidate_share_READ",
+            "symlink_tag",
+            "GENERIC_WRITE",
+            [
+              "open_refused",
+              32
+            ]
+          ],
+          [
+            "run_root_pin_candidate_share_READ",
+            "generic_tag_0x8000FFFF",
+            "GENERIC_WRITE",
+            [
+              "open_refused",
+              32
+            ]
+          ],
+          [
+            "p_r1_4_child_pin_GENERIC_READ_share_READ",
+            "mount_point",
+            "GENERIC_WRITE",
+            [
+              "open_refused",
+              32
+            ]
+          ],
+          [
+            "p_r1_4_child_pin_GENERIC_READ_share_READ",
+            "symlink_tag",
+            "GENERIC_WRITE",
+            [
+              "open_refused",
+              32
+            ]
+          ],
+          [
+            "p_r1_4_child_pin_GENERIC_READ_share_READ",
+            "generic_tag_0x8000FFFF",
+            "GENERIC_WRITE",
+            [
+              "open_refused",
+              32
+            ]
+          ]
+        ],
+        "unconverted_matched_controls": {
+          "p_r1_4_child_pin_GENERIC_READ_share_READ": {
+            "dir": true,
+            "entries": [
+              "pi_runtime",
+              "zero.bin"
+            ],
+            "file": true
+          },
+          "run_root_pin_candidate_share_READ": {
+            "dir": true,
+            "entries": [
+              "pi_runtime",
+              "zero.bin"
+            ],
+            "file": true
+          },
+          "run_root_pin_current_share_READ_WRITE": {
+            "dir": true,
+            "entries": [
+              "pi_runtime",
+              "zero.bin"
+            ],
+            "file": true
+          }
+        }
+      },
+      "status": "PASS"
+    },
+    {
+      "case": "A2_4_only_single_component_names_are_contained",
+      "evidence": {
+        "candidate_results": {
+          ".": "NAME_NOT_A_SINGLE_COMPONENT",
+          "..\\dotdot": "NAME_NOT_A_SINGLE_COMPONENT",
+          "\\??\\C:\\Users\\LEVIN-Z\\AppData\\Local\\Temp\\pytest-of-LEVIN-Z\\pytest-2900\\test_a2_4_only_single_componen0\\outside\\abs": "NAME_NOT_A_SINGLE_COMPONENT",
+          "\\abs2": "NAME_NOT_A_SINGLE_COMPONENT",
+          "a:stream": "NAME_NOT_A_SINGLE_COMPONENT",
+          "fwd/slash": "NAME_NOT_A_SINGLE_COMPONENT",
+          "j\\via_junction": "NAME_NOT_A_SINGLE_COMPONENT",
+          "trailingdot.": "NAME_NOT_A_SINGLE_COMPONENT"
+        },
+        "outside_new_names": [
+          "via_junction"
+        ],
+        "raw_kernel_results": {
+          ".": {
+            "created": false,
+            "ntstatus": "0xc0000033"
+          },
+          "..\\dotdot": {
+            "created": false,
+            "ntstatus": "0xc0000033"
+          },
+          "\\??\\C:\\Users\\LEVIN-Z\\AppData\\Local\\Temp\\pytest-of-LEVIN-Z\\pytest-2900\\test_a2_4_only_single_componen0\\outside\\abs": {
+            "created": false,
+            "ntstatus": "0xc000000d"
+          },
+          "\\abs2": {
+            "created": false,
+            "ntstatus": "0xc000000d"
+          },
+          "a:stream": {
+            "created": false,
+            "ntstatus": "0xc0000103"
+          },
+          "fwd/slash": {
+            "created": false,
+            "ntstatus": "0xc0000033"
+          },
+          "j\\via_junction": {
+            "created": true,
+            "ntstatus": "0x0"
+          },
+          "trailingdot.": {
+            "created": true,
+            "ntstatus": "0x0"
+          }
+        },
+        "reading": "a relative name with an intermediate component IS resolved through a junction child and creates outside: containment holds only for one component directly under the held parent"
+      },
+      "status": "PASS"
+    },
+    {
+      "case": "A2_5_native_failure_fails_closed_without_pathname_fallback",
+      "evidence": {
+        "cases": {
+          "error_ntstatus_collision": {
+            "handles_left_open": 0,
+            "reason": "NATIVE_CREATE_REFUSED:0xc0000035",
+            "refused": true
+          },
+          "export_unavailable": {
+            "handles_left_open": 0,
+            "reason": "NATIVE_RELATIVE_CREATE_UNAVAILABLE",
+            "refused": true
+          },
+          "handle_proof_failure": {
+            "handles_left_open": 0,
+            "reason": "CREATED_OBJECT_NOT_PLAIN",
+            "refused": true
+          },
+          "success_without_FILE_CREATED": {
+            "handles_left_open": 0,
+            "reason": "NATIVE_CREATE_UNEXPECTED_RESULT:1",
+            "refused": true
+          }
+        },
+        "parent_entries_after": [
+          "collide",
+          "proof",
+          "unexpected"
+        ],
+        "pathname_api_calls": [],
+        "reading": "an unexpected success leaves an object in the parent (it is an entry of the held parent and receives no content); the candidate refuses and does not delete it -- L27 owns teardown"
+      },
+      "status": "PASS"
+    },
+    {
+      "case": "A2_6_converted_empty_child_directory_refuses_relative_creates",
+      "evidence": {
+        "attribute_only_conversion_of_created_child": [
+          "converted",
+          0
+        ],
+        "child_entries_after": [],
+        "data_write_conversion_against_created_handle": [
+          "open_refused",
+          32
+        ],
+        "outside_new_names": [],
+        "reading": "the FU3 conversion of an empty created directory still happens (no share mode governs it); what changes is that every later create into it refuses instead of escaping",
+        "relative_creates_into_converted_child": {
+          "dir": "0xc0000280",
+          "file": "0xc0000280"
+        }
+      },
+      "status": "PASS"
+    },
+    {
+      "case": "A2_7_content_through_creating_handle_stays_in_the_object",
+      "evidence": {
+        "outside_changed": [],
+        "parent_entries": [
+          "f_file.js",
+          "f_none.js"
+        ],
+        "reading": "content follows the handle, never a name: a reparse attribute acquired by the zero-byte child after creation does not move the write; the child handle can see the attribute (detection only)",
+        "rows": {
+          "file_symlink_tag_via_FILE_WRITE_ATTRIBUTES": {
+            "child_handle_sees_reparse": true,
+            "conversion": [
+              "converted",
+              0
+            ],
+            "identity_unchanged": true,
+            "read_back_equals_payload": true
+          },
+          "none": {
+            "child_handle_sees_reparse": false,
+            "conversion": null,
+            "identity_unchanged": true,
+            "read_back_equals_payload": true
+          }
+        }
+      },
+      "status": "PASS"
+    },
+    {
+      "case": "A2_8_nested_construction_by_relative_creates_passes_every_gate",
+      "evidence": {
+        "files_written": 432,
+        "filesystem": "NTFS",
+        "gates_passed": 19,
+        "outside_changed": [],
+        "peak_open_handles": 366,
+        "refused": null,
+        "rt_membership_gate": true
+      },
+      "status": "PASS"
+    }
+  ],
+  "cases_fail": 1,
+  "cases_not_run": [],
+  "cases_pass": 7,
+  "cases_unsupported": 0,
+  "closure_claimed": false,
+  "environment": {
+    "filesystem": "NTFS",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "python": "3.14.7",
+    "windows_build": "10.0.26200"
+  },
+  "mechanism": {
+    "call": "ntdll!NtCreateFile",
+    "directory": {
+      "access": "0x100081",
+      "options": "0x200021",
+      "share": "0x1"
+    },
+    "disposition": "FILE_CREATE",
+    "file": {
+      "access": "0xc0110000",
+      "options": "0x200060",
+      "share": "0x0"
+    },
+    "object_attributes": "RootDirectory = held parent handle; ObjectName = ONE component; OBJ_CASE_INSENSITIVE"
+  },
+  "record_kind": "aido-f5a-fu4-a2-native-relative-creation-evidence.v1",
+  "scope": "measured only against disposable synthetic trees under pytest tmp_path on this host; no Node, Pi, npm, model or network; other builds, filesystems and filter drivers are not measured",
+  "supplemental": [
+    {
+      "case": "R_ALIAS_hard_link_to_held_share_0_child",
+      "evidence": {
+        "alias_reads_bytes_written_through_handle": true,
+        "hard_link_created_while_held": true,
+        "links_from_child_handle": [
+          [
+            10414574140265582,
+            "alias.json"
+          ],
+          [
+            12947848930661492,
+            "models.json"
+          ]
+        ],
+        "number_of_links_after": 2,
+        "number_of_links_before": 1,
+        "reading": "mechanism-independent: the same holds for a pathname-created child. A2 creates nothing outside R; a same-user actor can give the object an extra outside NAME. Link count is visible from the handle (detection only); no measured mechanism prevents it",
+        "win32_error": 0
+      },
+      "status": "OBSERVATION"
+    }
+  ],
+  "verdict": "FAIL"
+}
