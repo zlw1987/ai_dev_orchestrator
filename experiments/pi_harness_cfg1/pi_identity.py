@@ -206,7 +206,8 @@ class Cfg1PiIdentity:
     ``matched_profile_id`` -- deliberately no ``version``, ``reported_version``
     or ``launch_shape``. Never durable, never rendered, never returned by the
     gate, never accepted by ``run_cfg1_stage``, and constructible only by a
-    passing P.
+    passing P -- or, F5-A amendment Sec. 11.4, by the L3R copy proof over P's
+    own result (:func:`bind_run_provisioned_launch_identity`).
 
     The frozen ``ar2.launch.build_pi_argv`` reads exactly ``node_executable``
     and ``pi_cli_js`` from it (Test AG pins that).
@@ -921,6 +922,79 @@ def require_pi_proof_result_shape(result: object) -> PiProofResult:
     if identity is not None or complete is not ALLOWED_PAYLOAD_OBSERVATION_COMPLETE[code]:
         raise Cfg1PiIdentityError("MALFORMED_PROOF_RESULT")
     return result
+
+
+# ---------------------------------------------------------------------------
+# L3R step 9 -- the run-provisioned launch identity L (F5-A amendment Sec. 7.4
+# step 9 and Sec. 11.4). Read-only; constructs, never writes.
+# ---------------------------------------------------------------------------
+
+
+def bind_run_provisioned_launch_identity(
+    source: object,
+    *,
+    package_root: object,
+    package_root_identity: object,
+    leaves: PiProofLeaves,
+) -> Cfg1PiIdentity | None:
+    """Construct ``L`` from an exact ``S`` and a post-pin-validated copy, or ``None``.
+
+    The ONE constructor of :class:`Cfg1PiIdentity` besides P (amendment Sec.
+    11.4: "constructible only by a passing P or by the L3R copy proof over P's
+    own result"). It does not take the copy's validation on trust: through
+    ``leaves`` it re-observes, itself and NOW,
+
+    1. a complete PI-PC1 walk of ``package_root`` whose fingerprint EQUALS the
+       payload fingerprint of ``S.matched_profile_id`` in the sealed snapshot;
+    2. that profile's resolution exposures absent above ``package_root``
+       (post-pin validation item 2, Sec. 8.8);
+    3. ``package_root``'s no-follow identity equal to ``package_root_identity``.
+
+    Only then does it build ``L``: ``node_executable``/``node_identity`` copied
+    from ``S``, ``pi_package_root = package_root``, ``pi_cli_js =
+    package_root\\dist\\cli.js``, ``package_root_identity = I_c`` and
+    ``matched_profile_id = S``'s. ``None`` for any anticipated failure,
+    including a profile no longer eligible and a root equal to ``S``'s own (the
+    byte source is never a launch root). A malformed leaf output raises.
+
+    ``L`` grants nothing by existing: the executor admits it at L14 only when it
+    IS the launch identity recorded in this run's own provision, which recorded
+    it only after checking it names that provision's root and ``I_c``.
+    """
+    if type(source) is not Cfg1PiIdentity or type(leaves) is not PiProofLeaves:
+        return None
+    if type(package_root) is not str or not package_root or not ntpath.isabs(package_root):
+        return None
+    try:
+        expected_identity = _require_identity_pair(package_root_identity)
+        view = eligible_profile_view(source.matched_profile_id)
+    except Cfg1PiIdentityError:
+        return None
+    if ntpath.normcase(ntpath.normpath(package_root)) == ntpath.normcase(
+        ntpath.normpath(source.pi_package_root)
+    ):
+        return None
+    observation = _observe_payload(leaves, package_root)
+    if observation.complete is not True or observation.payload_fingerprint != view.payload_fingerprint:
+        return None
+    if (
+        observe_profile_exposures(package_root, view.resolution_exposures, inspect=leaves.inspect)
+        != EXPOSURES_ABSENT
+    ):
+        return None
+    if not _identity_still_holds(
+        leaves, package_root, classification=CLASSIFICATION_DIRECTORY, expected=expected_identity
+    ):
+        return None
+    return Cfg1PiIdentity(
+        _P_ONLY,
+        node_executable=source.node_executable,
+        pi_cli_js=ntpath.join(package_root, "dist", "cli.js"),
+        pi_package_root=package_root,
+        node_identity=source.node_identity,
+        package_root_identity=expected_identity,
+        matched_profile_id=source.matched_profile_id,
+    )
 
 
 # ---------------------------------------------------------------------------

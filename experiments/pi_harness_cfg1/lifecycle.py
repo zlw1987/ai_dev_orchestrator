@@ -28,6 +28,10 @@ LIFECYCLE_STEPS: tuple[str, ...] = tuple(f"L{index}" for index in range(0, 31))
 #: all post-dispatch, so the refusal window is exactly L1..L18.
 REFUSAL_STEPS: frozenset[str] = frozenset(f"L{index}" for index in range(1, 19))
 
+#: F5-A amendment Sec. 11.1 -- v3 ONLY: the inserted ``L3R`` step (after L3,
+#: before L4). ``REFUSAL_STEPS`` above stays the v1/v2 object, unchanged.
+REFUSAL_STEPS_V3: frozenset[str] = REFUSAL_STEPS | frozenset({"L3R"})
+
 #: The steps that may appear in ``lifecycle_failure_steps``. Each names the
 #: step that OWNS the closure fact which failed, never the step that first
 #: noticed it -- which is why an L2 partial workspace mint surfaces here as

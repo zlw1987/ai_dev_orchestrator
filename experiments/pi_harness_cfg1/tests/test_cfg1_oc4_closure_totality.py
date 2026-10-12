@@ -1594,6 +1594,8 @@ def test_x3_the_closure_phase_is_an_unguarded_pure_sequencer_and_is_not_laundere
     allowed = {
         ("_closure_l21_runtime", "_closure_l21_runtime_applicable"),
         ("_closure_l26_verification", "_closure_l26_project_verification"),
+        # F5-A amendment Sec. 7.8: L27's own entry action (a helper, not a step).
+        ("_closure_l27_workspace", "_closure_l27_release_runtime_provision"),
     }
     for name in _CLOSURE_STEP_NAMES:
         if name == "_closure_phase":

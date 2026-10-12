@@ -92,11 +92,41 @@ def install_policy_load(monkeypatch, load) -> object:
 
 
 def install_synthetic_policy(monkeypatch, *approved: Payload, retire=()) -> object:
-    """Approve ``approved`` in revision 1 (and retire ``retire`` in revision 2)."""
+    """Approve ``approved`` in revision 1 (and retire ``retire`` in revision 2).
+
+    F5-A (executor integration): each approved synthetic profile also gets a
+    TEST-LOCAL Launch Derivation Table row (:func:`install_synthetic_ldt_rows`),
+    because the LDT is keyed by the one genuine profile id and L3R refuses a
+    matched profile without a row.
+    """
     revisions: list[dict] = [{"approve": list(approved)}]
     if retire:
         revisions.append({"retire": list(retire)})
-    return install_policy_load(monkeypatch, synthetic_policy_load(revisions))
+    load = install_policy_load(monkeypatch, synthetic_policy_load(revisions))
+    install_synthetic_ldt_rows(monkeypatch, *approved)
+    return load
+
+
+#: The genuine LDT row's profile id (amendment Sec. 7.3). Never modified here.
+GENUINE_LDT_PROFILE_ID = "56651d0b2b6995e05b6de3aa012f5a82f276b2ac817dcce00844d1db2a9ffd67"
+
+#: The derivation chain of a SYNTHETIC profile's test-local row. The PE-2a
+#: synthetic payload carries ``package.json``, ``dist/cli.js`` and
+#: ``dist/main.js`` (PI-SC1 seams) but no ``dist/config.js``, so its chain's
+#: third member is another PI-SC1 seam file. It is a test fixture only: the
+#: genuine row is untouched and is checked against the committed inventory.
+SYNTHETIC_LDT_DERIVATION_CHAIN = ("dist/cli.js", "dist/main.js", "dist/core/sdk.js")
+
+
+def install_synthetic_ldt_rows(monkeypatch, *payloads: Payload) -> None:
+    """Give each synthetic profile a test-local LDT row (``monkeypatch.setitem``)."""
+    from pi_harness_cfg1 import pi_runtime_provision as rp
+
+    row = dict(rp.LAUNCH_DERIVATION_TABLE[GENUINE_LDT_PROFILE_ID])
+    row["derivation_chain"] = SYNTHETIC_LDT_DERIVATION_CHAIN
+    for payload in payloads:
+        if payload.profile_id != GENUINE_LDT_PROFILE_ID:
+            monkeypatch.setitem(rp.LAUNCH_DERIVATION_TABLE, payload.profile_id, dict(row))
 
 
 def install_empty_policy(monkeypatch) -> object:

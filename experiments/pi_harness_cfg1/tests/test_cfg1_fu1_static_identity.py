@@ -1073,11 +1073,12 @@ def _l14_run(git_executable, tree, *, mutate=None, recorder=None):
     supervisor = _LaunchRecordingSupervisor(log)
     reads: list[str] = []
 
-    def _build_supervisor(**_kwargs):
+    def _build_supervisor(**kwargs):
         # L14 step 1 (in-memory construction) runs BEFORE the re-proof, so a
         # mutation here is "after L1 passed, before L14's first execution".
+        # F5-A (amendment Sec. 11.3): it receives the launch root ``C``.
         if mutate is not None:
-            mutate()
+            mutate(kwargs["identity"].pi_package_root)
         return supervisor
 
     def _read_connection():
@@ -1107,17 +1108,24 @@ def test_p_the_l14_reproof_order_is_walk_then_root_then_node_then_launch(
     # handle, every directory enumerated through its own handle), then the
     # root, then node.exe -- and NOTHING between node.exe's re-proof and
     # launch().
+    # F5-A (amendment Sec. 11.3): the launch root is the run-provisioned copy C.
+    launch_root = before[-2][1]
+    assert before[-2][0] == "inspect"
+    assert launch_root.endswith("\\pi_runtime\\pi-coding-agent")
+    assert not launch_root.startswith(tree.package_root)
     assert before[-1] == ("inspect", tree.node_exe)
-    assert before[-2] == ("inspect", tree.package_root)
     digest_positions = [index for index, (kind, _) in enumerate(before) if kind == "digest"]
     l14_digests = [before[index][1] for index in digest_positions[-files:]]
-    assert sorted(l14_digests) == sorted(tree.seam_path(key) for key in tree.files)
+    assert sorted(l14_digests) == sorted(
+        os.path.join(launch_root, *key.split("/")) for key in tree.files
+    )
     assert digest_positions[-1] < len(before) - 2
     for _kind, path in before[digest_positions[-files] : len(before) - 2]:
-        assert path.startswith(tree.package_root)
-    # The L14 walk is uncached: every payload file was read TWICE in the run
-    # (L1's P2 and L14's walk).
-    assert sum(1 for kind, _ in before if kind == "digest") == 2 * files
+        assert path.startswith(launch_root)
+    # The L14 walk is uncached: every payload file was read THREE times
+    # through the run's proof leaves (L1's P2 over S, the L3R binder's walk
+    # of C, and L14's walk of C).
+    assert sum(1 for kind, _ in before if kind == "digest") == 3 * files
     assert supervisor.launch_calls == 1
 
 
@@ -1129,24 +1137,34 @@ def test_s_v_and_p_a_change_after_l1_refuses_at_l14_with_no_launch(
     mutation, tmp_path, monkeypatch, git_executable
 ):
     tree = make_pi_world(tmp_path, monkeypatch)
-    cli = tree.seam_path("dist/cli.js")
+    blocked: list = []
 
-    def _mutate():
-        if mutation == "cli_in_place":
-            with open(cli, "r+b") as handle:  # same file record, changed bytes
-                handle.write(b"X")
-        elif mutation == "cli_replaced":
-            os.unlink(cli)
-            Path(cli).write_bytes(b"a new file in the same directory")
-        elif mutation == "other_seam_in_place":
-            with open(tree.seam_path("dist/core/model-runtime.js"), "r+b") as handle:
-                handle.write(b"Y")
-        elif mutation == "node_same_bytes":
-            replace_same_bytes(tree.node_exe)
-        else:
-            replace_directory_with_identical_copy(tree.package_root)
+    def _mutate(launch_root):
+        # F5-A: the change targets the launch copy C. ``dist/cli.js`` is one of
+        # the four held final read-only pins and ``C`` is their ancestor, so
+        # those mutations are refused by the platform -- recorded below; the
+        # hook's raise is itself an L14 refusal.
+        cli = os.path.join(launch_root, "dist", "cli.js")
+        try:
+            if mutation == "cli_in_place":
+                with open(cli, "r+b") as handle:  # same file record, changed bytes
+                    handle.write(b"X")
+            elif mutation == "cli_replaced":
+                os.unlink(cli)
+                Path(cli).write_bytes(b"a new file in the same directory")
+            elif mutation == "other_seam_in_place":
+                with open(os.path.join(launch_root, "dist", "core", "model-runtime.js"), "r+b") as handle:
+                    handle.write(b"Y")
+            elif mutation == "node_same_bytes":
+                replace_same_bytes(tree.node_exe)
+            else:
+                replace_directory_with_identical_copy(launch_root)
+        except PermissionError:
+            blocked.append(mutation)
+            raise
 
     outcome, supervisor, log, reads = _l14_run(git_executable, tree, mutate=_mutate)
+    assert blocked == ([mutation] if mutation in ("cli_in_place", "cli_replaced", "root_identical_copy") else [])
     observations = outcome.observations
     assert supervisor.launch_calls == 0
     assert observations["refused_at_step"] == "L14"
@@ -1171,8 +1189,13 @@ def test_s_v_and_p_a_change_after_l1_refuses_at_l14_with_no_launch(
 def test_ad_i_a_createprocess_failure_is_l14_with_no_runtime(
     tmp_path, monkeypatch, git_executable
 ):
-    """The REAL supervisor hands the synthetic, non-image ``node.exe`` to
-    ``CreateProcess`` -- which refuses it. Nothing executes."""
+    """The GENUINE supervisor builder at L14, with the genuine L3R launch identity.
+
+    Before F5-A this handed the synthetic, non-image ``node.exe`` to
+    ``CreateProcess``, which refused it. F5-A's live barrier (no live launch is
+    qualified) now refuses EVERY genuine CFG1 identity in that builder, before
+    any real supervisor exists: still L14 / ``RUNTIME_LAUNCH_FAILED`` with no
+    runtime -- and now with ZERO creation attempts of ``node.exe``."""
     tree = make_pi_world(tmp_path, monkeypatch)
     genuine = run_executor.default_cfg1_run_ports(ambient_environ={})
     reads: list[str] = []
@@ -1211,11 +1234,11 @@ def test_ad_i_a_createprocess_failure_is_l14_with_no_runtime(
     assert observations["dispatch_state"] == "NOT_ATTEMPTED"
     assert observations["prompt_writes"] == 0
     assert reads == ["read"]
-    assert built and built[0].process is None
-    # AF (dynamic): exactly ONE creation attempt whose image is the resolved
-    # node.exe -- at L14 -- and it was refused by the OS.
+    assert built == []
+    # AF (dynamic), under the F5-A barrier: NO creation attempt whose image is
+    # the resolved node.exe, at L14 or anywhere else.
     node_attempts = [event for event in events if tree.node_exe.lower() in event[2].lower()]
-    assert [event[1] for event in node_attempts].count("CreateProcess") == 1
+    assert node_attempts == []
     record = _record(outcome)
     assert record["run_classification"] == "REFUSED_PRE_DISPATCH"
     assert all("L1" not in code for code in outcome.console_codes)
@@ -1235,7 +1258,7 @@ def test_ad_i_and_iii_are_durably_identical_and_told_apart_only_by_calls(
     )
     outcome_i = execute_cfg1_run(make_admission(), ports=ports_i)
     outcome_iii, supervisor_iii, _log, _reads = _l14_run(
-        git_executable, tree, mutate=lambda: replace_same_bytes(tree.node_exe)
+        git_executable, tree, mutate=lambda _launch_root: replace_same_bytes(tree.node_exe)
     )
     assert supervisor_iii.launch_calls == 0
     assert _record(outcome_i) == _record(outcome_iii)

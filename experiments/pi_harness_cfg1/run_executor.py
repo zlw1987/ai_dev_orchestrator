@@ -30,6 +30,18 @@ the Pi tree between that proof and ``Popen``. L21A re-observes the payload
 after L24 and before L25 (PE-1 Sec. 15.2, Sec. 18); it is an observation,
 never a closure predicate.
 
+**F5-A -- L3R, OFFLINE ONLY.** After L3 and before L4 (credentials) the
+executor provisions a run-private copy of L1's matched profile at
+``R\\pi_runtime\\pi-coding-agent`` through the ``provision_runtime`` port,
+binds the launch identity ``L`` from it, and drops ``S``; L14 admits only that
+``L``, under the Sec. 7.7 precondition; L27 entry releases the provision's
+handles; and ``live_references_released`` is DERIVED from that release
+(amendment Sec. 7.8.1). The A2 creation mechanism is NOT security-qualified
+(A2-3 incomplete), so :func:`default_cfg1_run_ports` binds a provisioning port
+that ALWAYS refuses: the genuine executor halts at L3R before any credential,
+copy or process, and its genuine supervisor builder refuses every genuine
+CFG1 identity. Only an explicitly composed offline port set provisions.
+
 **Attribution is the executor's own (FU1, R6 Sec. 9).** One monotonic step
 cursor is advanced at each step's entry, before its first side effect, and
 ``refused_at_step`` is always the cursor. An unexpected raise before dispatch
@@ -88,10 +100,12 @@ from .lifecycle import (
 )
 from .pi_identity import (
     PI_PROFILE_CHANGED_WITHIN_STAGE,
+    Cfg1PiIdentity,
     PI_PROFILE_REOBSERVATION_NOT_APPLICABLE,
     PI_PROFILE_REOBSERVATION_PROCEDURE_VALUES,
     PI_PROFILE_REOBSERVATION_UNPROVEN,
     PiProofLeaves,
+    bind_run_provisioned_launch_identity,
     declared_package_version_for_profile,
     genuine_pi_proof_leaves,
     prove_pi_identity,
@@ -256,6 +270,13 @@ class Cfg1RunPorts:
     ``run_verification(workspace_root=..., args=...)``
         ``.started``, ``.completed``, ``.timed_out``,
         ``.output_limit_exceeded``, ``.return_code``, ``.passed``, ``.counts``
+    ``provision_runtime(workspace=..., source=...)``
+        F5-A L3R: an ADMITTED (never run) ``pi_runtime_provision``
+        ``RuntimeProvision`` for THIS run's workspace and L1's exact identity
+        ``S``, or a raise. The executor re-checks the binding, adopts it
+        (write-ahead), runs it, binds ``L`` and releases it at L27 entry; the
+        port never runs or releases anything. The genuine (default) binding
+        ALWAYS refuses -- live provisioning is not qualified
     ``read_connection()``
         ``(base_url, credential_value)`` -- the ONE place either is ever read
     ``observe_route(base_url=..., api_key=..., model_id=...)``
@@ -306,6 +327,7 @@ class Cfg1RunPorts:
     mint_workspace: Callable[..., Any]
     observe_repository: Callable[..., Any]
     run_verification: Callable[..., Any]
+    provision_runtime: Callable[..., Any]
     read_connection: Callable[[], tuple[str, str]]
     observe_route: Callable[..., Any]
     mint_capability: Callable[..., Any]
@@ -484,8 +506,14 @@ class _RunState:
     #: prompt write. Decides REFUSAL vs POST_DISPATCH_UNEXPECTED for a raise.
     dispatch_attempted: bool = False
     #: AMEND1 Sec. 10: the static identity a passing L1 produced. In memory
-    #: only; consumed by L12 and L14; never durable, never rendered.
+    #: only; consumed by L12 and L14; never durable, never rendered. F5-A: L3R
+    #: REPLACES it with the run-provisioned launch identity ``L``, so no
+    #: reference to ``S`` survives L3R in executor state.
     pi_identity: Any = None
+    #: F5-A amendment Sec. 7.4 step 3: the adopted provision, written BEFORE
+    #: its first create so L27 always knows what to release. Only an exact
+    #: provision already proven bound to this run's workspace is ever adopted.
+    runtime_provision: Any = None
     #: OC-4 D-3: AIDO's OWN record that it called the side-effecting
     #: ``supervisor.launch()`` boundary. Written by exactly one executor line,
     #: immediately before that call; never reset; never read from a port, a
@@ -594,9 +622,35 @@ def execute_cfg1_run(admission: Cfg1RunAdmission, *, ports: Cfg1RunPorts) -> Cfg
     return Cfg1RunOutcome(
         observations=observations,
         safety=state.safety if state.safety is not None else ArtifactSafetyContext.none_declared(),
-        live_references_released=True,
+        live_references_released=_derive_live_references_released(state),
         console_codes=tuple(state.console_codes),
     )
+
+
+def _derive_live_references_released(state: _RunState) -> bool:
+    """F5-A amendment Sec. 7.8.1 / Sec. 11.7: DERIVED, never a constant.
+
+    ``True`` iff every executor-owned live reference this derivation covers is
+    PROVEN released: provisioning never adopted (refused before L3R adopted a
+    provision) is vacuously ``True``; an adopted provision counts only when
+    its L27-entry release ran and every construction entry and final pin reads
+    ``CLOSED`` (:func:`pi_runtime_provision.provision_live_references_proven_released`).
+    A ``CLOSE_FAILED`` or still-``OPEN`` entry latches ``False`` for the run;
+    L27's removal outcome, empty registries, or a dropped Python reference
+    never repair it. The config/extension issuance and retained-authority
+    handles are proven by their own registries at L30, not by this fact.
+    """
+    if state.runtime_provision is None:
+        return True
+    from . import pi_runtime_provision
+
+    try:
+        return (
+            pi_runtime_provision.provision_live_references_proven_released(state.runtime_provision)
+            is True
+        )
+    except Exception:  # noqa: BLE001 - an unprovable release is not a proven one
+        return False
 
 
 class _MalformedAdmissionProfile(Exception):
@@ -786,6 +840,11 @@ def _dispatch_phase(
         # and an exact ``passed is False`` is not that task.
         raise _PreDispatchRefusal("WORKSPACE_BASELINE_FAILED", "L3")
 
+    # ---------------- L3R RUN-PROVISIONED PI RUNTIME (F5-A) ----------------
+    # Pre-credential. Cursor advanced at entry, before the first side effect.
+    state.cursor = "L3R"
+    _l3r_provision_runtime(admission, ports=ports, state=state)
+
     # ---------------- L4 CREDENTIAL BOUNDARY ----------------
     state.cursor = "L4"
     try:
@@ -943,6 +1002,11 @@ def _dispatch_phase(
 
     # ---------------- L14 PI LAUNCH: the FIRST Node/Pi execution ----------
     state.cursor = "L14"
+    # (0) F5-A amendment Sec. 7.7: the executor precondition, BEFORE the
+    # supervisor is built -- the provision is this run's, bound, its final
+    # pins held, and the topology re-proved NOW. Any failure: no launch.
+    if not _l14_runtime_provision_precondition(admission, state):
+        raise _PreDispatchRefusal("RUNTIME_LAUNCH_FAILED", "L14")
     # (1) Construct the supervisor in memory: the extension entry from a FRESH
     # issuance verification, the argv from the static identity object. This
     # reads no Pi file and starts nothing.
@@ -1064,6 +1128,95 @@ def _dispatch_phase(
     observations["extension_error_count"] = len(
         getattr(state.supervisor.activity, "extension_errors", ()) or ()
     )
+
+
+def _l3r_provision_runtime(
+    admission: Cfg1RunAdmission, *, ports: Cfg1RunPorts, state: _RunState
+) -> None:
+    """F5-A amendment Sec. 7.4 at the executor boundary. Raises to refuse.
+
+    Every input is re-validated HERE, at consumption: ``S`` must be L1's exact
+    identity; the workspace must be this run's claimed one; the port's return
+    must be an exact, never-run provision bound to this workspace, ``S``'s
+    profile and ``S``'s byte source -- anything else is never adopted, so it is
+    never run and never released by this run. Adoption is the write-ahead
+    (step 3): after it, every exit leaves the provision for L27 entry.
+
+    Anticipated failures -- a provisioning refusal, a binding mismatch, a copy
+    whose independent re-observation fails -- are ``RUNTIME_PROVISIONING_FAILED``
+    at ``L3R``; any other raise propagates to ``UNEXPECTED_STEP_FAILURE`` at
+    ``L3R``. L3R deletes nothing on any path.
+    """
+    from . import pi_runtime_provision
+    from . import run_workspace as workspace_module
+
+    source = state.pi_identity
+    if type(source) is not Cfg1PiIdentity or not workspace_module.workspace_is_claimed_by(
+        state.workspace, run_id=admission.run_id
+    ):
+        raise _PreDispatchRefusal("RUNTIME_PROVISIONING_FAILED", "L3R")
+    try:
+        provision = ports.provision_runtime(workspace=state.workspace, source=source)
+    except pi_runtime_provision.Cfg1RuntimeProvisionError as refusal:
+        # Reading the closed reason of the EXACT CFG1-owned type only, to make
+        # the default binding's refusal visible on the console. Nothing else of
+        # the exception is read or kept.
+        if (
+            type(refusal) is pi_runtime_provision.Cfg1RuntimeProvisionError
+            and refusal.reason_code == pi_runtime_provision.LIVE_PROVISIONING_NOT_QUALIFIED
+        ):
+            state.console_codes.append("F5A_LIVE_PROVISIONING_NOT_QUALIFIED")
+        raise _PreDispatchRefusal("RUNTIME_PROVISIONING_FAILED", "L3R") from None
+    if not pi_runtime_provision.provision_is_admitted_for(
+        provision, workspace=state.workspace, source=source
+    ):
+        raise _PreDispatchRefusal("RUNTIME_PROVISIONING_FAILED", "L3R")
+    state.runtime_provision = provision
+    try:
+        pi_runtime_provision.run_runtime_provision(provision)
+    except pi_runtime_provision.Cfg1RuntimeProvisionError:
+        raise _PreDispatchRefusal("RUNTIME_PROVISIONING_FAILED", "L3R") from None
+    launch = bind_run_provisioned_launch_identity(
+        source,
+        package_root=provision.package_root,
+        package_root_identity=provision.package_root_identity,
+        leaves=ports.pi_proof_leaves,
+    )
+    if launch is None:
+        raise _PreDispatchRefusal("RUNTIME_PROVISIONING_FAILED", "L3R")
+    try:
+        pi_runtime_provision.record_launch_identity(provision, launch)
+    except pi_runtime_provision.Cfg1RuntimeProvisionError:
+        raise _PreDispatchRefusal("RUNTIME_PROVISIONING_FAILED", "L3R") from None
+    # Step 9: S is dropped. From here on L12, L14 and L21A consume L.
+    state.pi_identity = launch
+
+
+def _l14_runtime_provision_precondition(admission: Cfg1RunAdmission, state: _RunState) -> bool:
+    """F5-A amendment Sec. 7.7: exact ``True`` or no launch. Total.
+
+    The workspace is re-proved and must still be this run's claimed one; the
+    provision must be exact; ``state.pi_identity`` must BE its recorded launch
+    identity; and the provisioner's own read-only re-proof (pins held and
+    re-proven from their handles, topology, identities) must pass. The frozen
+    ``reprove_pi_identity_for_launch(L)`` still follows.
+    """
+    from . import pi_runtime_provision
+    from . import run_workspace as workspace_module
+
+    try:
+        workspace_module.verify_cfg1_run_workspace(state.workspace)
+        return (
+            workspace_module.workspace_is_claimed_by(state.workspace, run_id=admission.run_id)
+            and type(state.runtime_provision) is pi_runtime_provision.RuntimeProvision
+            and state.pi_identity is state.runtime_provision.launch_identity
+            and pi_runtime_provision.reprove_provision_for_launch(
+                state.runtime_provision, workspace=state.workspace, launch=state.pi_identity
+            )
+            is True
+        )
+    except Exception:  # noqa: BLE001 - an unprovable precondition is a failed one
+        return False
 
 
 def _verified_extension_view(state: _RunState) -> _Cfg1VerifiedExtension:
@@ -1625,6 +1778,12 @@ def _closure_l27_workspace(observations: dict[str, Any], state: _RunState) -> No
     """
     from . import run_workspace as workspace_module
 
+    # F5-A amendment Sec. 7.8: at L27 ENTRY -- before the frozen re-proof and
+    # removal, and whatever W says -- release the adopted provision's handles,
+    # each exactly once, by handle. Its own region: a refused or failed release
+    # closes what it can and is decided later by the ledger, never by this.
+    _closure_l27_release_runtime_provision(state)
+
     if not (
         observations["workspace_mint_state"] == WORKSPACE_MINT_AUTHORITY_RETURNED
         and state.workspace is not None
@@ -1668,6 +1827,23 @@ def _closure_l27_workspace(observations: dict[str, Any], state: _RunState) -> No
         residual_count = 0
     observations["workspace_removed_verified"] = removed_verified
     observations["workspace_residual_file_count"] = residual_count
+
+
+def _closure_l27_release_runtime_provision(state: _RunState) -> None:
+    """L27 entry: ``release_at_l27_entry`` on the adopted provision, once.
+
+    Never retried and never forced; a close failure is latched in the
+    provision's ledger and surfaces only through the derived
+    ``live_references_released`` (Sec. 7.8.1). No pathname is touched here.
+    """
+    if state.runtime_provision is None:
+        return
+    from . import pi_runtime_provision
+
+    try:
+        pi_runtime_provision.release_at_l27_entry(state.runtime_provision)
+    except Exception:  # noqa: BLE001 - the ledger, not this call, decides the fact
+        pass
 
 
 def _closure_phase(
@@ -1744,6 +1920,7 @@ def default_cfg1_run_ports(*, ambient_environ: Mapping[str, str]) -> Cfg1RunPort
     from ar2.supervisor import PiRpcSupervisor, RunBounds
     from ar2.verification import run_verification
 
+    from . import pi_runtime_provision
     from . import run_workspace as workspace_module
     from .cfg1_extension import write_cfg1_extension
     from .cfg1_pi_config import write_cfg1_pi_config
@@ -1794,6 +1971,14 @@ def default_cfg1_run_ports(*, ambient_environ: Mapping[str, str]) -> Cfg1RunPort
         )
 
     def _build_supervisor(*, identity, extension, environment, workspace_root: str):
+        # F5-A live-launch barrier. The A2 provisioning mechanism is NOT
+        # security-qualified (A2-3 incomplete) and no live launch is
+        # authorized, so the ONE CFG1 site that constructs a real
+        # ``PiRpcSupervisor`` refuses EVERY genuine CFG1 identity -- the L1
+        # source identity and the L3R launch identity alike. Unconditional: no
+        # flag, environment value or caller claim reaches this decision.
+        if type(identity) is Cfg1PiIdentity:
+            raise RuntimeError("cfg1 live pi launch is not qualified")
         # R-40: the argv's provider/model and the probe's H2 expectations come
         # from the SAME frozen module constants -- never a literal, the
         # environment, a config file, or anything runtime-derived. ``identity``
@@ -1979,6 +2164,9 @@ def default_cfg1_run_ports(*, ambient_environ: Mapping[str, str]) -> Cfg1RunPort
         run_verification=lambda *, workspace_root, args: run_verification(
             python_executable=_python_executable(), workspace_root=workspace_root, args=args
         ),
+        # F5-A live barrier: the genuine binding ALWAYS refuses at L3R, before
+        # any copy, credential or process. Not configurable.
+        provision_runtime=pi_runtime_provision.live_runtime_provisioning_not_qualified,
         read_connection=_read_connection,
         observe_route=_observe_route,
         mint_capability=_mint_capability,

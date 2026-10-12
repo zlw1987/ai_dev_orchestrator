@@ -108,6 +108,7 @@ from .identity import (
 from .lifecycle import (
     LIFECYCLE_FAILURE_STEPS,
     REFUSAL_STEPS,
+    REFUSAL_STEPS_V3,
     WORKSPACE_MINT_ATTEMPTED_NO_AUTHORITY,
     WORKSPACE_MINT_NOT_ATTEMPTED,
     WORKSPACE_MINT_STATES,
@@ -1123,6 +1124,28 @@ REFUSAL_CODES_BY_STEP: dict[str, frozenset[str]] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# F5-A amendment Sec. 11.1 -- the v3-ONLY L3R refusal vocabulary
+# ---------------------------------------------------------------------------
+#
+# v3 gets its OWN extended objects. ``PRE_DISPATCH_REFUSAL_CODES``,
+# ``PRE_DISPATCH_REFUSAL_CODES_V2``, ``REFUSAL_CODES_BY_STEP`` and
+# ``lifecycle.REFUSAL_STEPS`` stay the identical v1/v2 objects; only the v3
+# run validator switches to the objects below.
+
+L3R = "L3R"
+RUNTIME_PROVISIONING_FAILED = "RUNTIME_PROVISIONING_FAILED"
+
+PRE_DISPATCH_REFUSAL_CODES_V3: frozenset[str] = PRE_DISPATCH_REFUSAL_CODES_V2 | frozenset(
+    {RUNTIME_PROVISIONING_FAILED}
+)
+
+REFUSAL_CODES_BY_STEP_V3: dict[str, frozenset[str]] = {
+    **REFUSAL_CODES_BY_STEP,
+    L3R: frozenset({RUNTIME_PROVISIONING_FAILED, UNEXPECTED_STEP_FAILURE}),
+}
+
+
 def _require_pi_identity_rules_v2(
     *, step: str | None, code: str | None, failure: str | None, seam: bool
 ) -> None:
@@ -1764,9 +1787,9 @@ def _require_valid_cfg1_run_payload_v3(payload: Mapping[str, Any]) -> None:
         payload, "runtime_reported_thinking_level", RUNTIME_THINKING_LEVELS
     )
     refusal_code = _require_optional_enum(
-        payload, "pre_dispatch_refusal_code", PRE_DISPATCH_REFUSAL_CODES_V2
+        payload, "pre_dispatch_refusal_code", PRE_DISPATCH_REFUSAL_CODES_V3
     )
-    refused_at_step = _require_optional_enum(payload, "refused_at_step", REFUSAL_STEPS)
+    refused_at_step = _require_optional_enum(payload, "refused_at_step", REFUSAL_STEPS_V3)
     unexpected_step = _require_optional_enum(
         payload, "unexpected_failure_step", UNEXPECTED_FAILURE_STEPS
     )
@@ -1868,10 +1891,20 @@ def _require_valid_cfg1_run_payload_v3(payload: Mapping[str, Any]) -> None:
         raise _invariant("REFUSAL_CODE_AND_STEP_NOT_TOGETHER")
     if unexpected_step is not None and refusal_code is not None:
         raise _invariant("REFUSAL_AND_POST_DISPATCH_UNEXPECTED_TOGETHER")
-    if refused_at_step is not None and refusal_code not in REFUSAL_CODES_BY_STEP[refused_at_step]:
+    if refused_at_step is not None and refusal_code not in REFUSAL_CODES_BY_STEP_V3[refused_at_step]:
         raise _invariant("REFUSAL_CODE_DISAGREES_WITH_STEP")
     if unexpected_step is not None and dispatch_state == "NOT_ATTEMPTED":
         raise _invariant("POST_DISPATCH_UNEXPECTED_WITHOUT_DISPATCH_ATTEMPT")
+
+    # -- F5-A amendment Sec. 11.1: R3-S15 -------------------------------------
+    # K == "L3R" => C in {RUNTIME_PROVISIONING_FAILED, UNEXPECTED_STEP_FAILURE}
+    # and RC is False. (The code half is the v3 step/code table above; it is
+    # restated here so the rule stands on its own.) R3-S5 applies unchanged.
+    if refused_at_step == L3R and (
+        refusal_code not in (RUNTIME_PROVISIONING_FAILED, UNEXPECTED_STEP_FAILURE)
+        or payload["runtime_created"] is not False
+    ):
+        raise _invariant("L3R_REFUSAL_OUTSIDE_R3_S15")
 
     # -- PE-1 Sec. 19.3: R3-S2 .. R3-S10 --------------------------------------
     _require_pi_profile_rules_v3(

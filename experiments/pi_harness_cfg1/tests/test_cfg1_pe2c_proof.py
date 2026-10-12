@@ -508,12 +508,15 @@ class _LaunchRecorder(FakeSupervisor):
 
 
 def _l14_run(git_executable, tree, mutate=None):
+    """F5-A (amendment Sec. 11.3): the L14 / L21A payload root is the L3R copy
+    ``C``, so ``mutate`` receives the launch identity's root -- the object the
+    re-proof actually proves -- not the ambient byte source ``S``."""
     recorder = LeafRecorder()
     supervisor = _LaunchRecorder(recorder.log)
 
-    def _build_supervisor(**_kwargs):
+    def _build_supervisor(**kwargs):
         if mutate is not None:
-            mutate()
+            mutate(kwargs["identity"].pi_package_root)
         return supervisor
 
     ports, _made = fu1_ports(
@@ -521,6 +524,17 @@ def _l14_run(git_executable, tree, mutate=None):
     )
     outcome = execute_cfg1_run(make_admission(), ports=ports)
     return outcome, supervisor, recorder
+
+
+def outcome_launch_root(log, tree) -> str:
+    """The run-provisioned ``C`` the run's proof leaves walked (never ``S``)."""
+    roots = {
+        path[: path.index("\\pi_runtime\\pi-coding-agent") + len("\\pi_runtime\\pi-coding-agent")]
+        for kind, path in log
+        if kind == "digest" and "\\pi_runtime\\pi-coding-agent\\" in path
+    }
+    assert len(roots) == 1 and not next(iter(roots)).startswith(tree.package_root)
+    return next(iter(roots))
 
 
 def _assert_refused_at_l14(outcome, supervisor, tree):
@@ -537,8 +551,8 @@ def _assert_refused_at_l14(outcome, supervisor, tree):
 def test_c5_counterexample_9_a_payload_change_between_l1_and_l14_refuses(tmp_path, monkeypatch, git_executable):
     tree = make_pi_world(tmp_path, monkeypatch)
 
-    def _mutate():
-        Path(tree.seam_path("dist/other.js")).write_bytes(b"export const other = 99;\n")
+    def _mutate(launch_root):
+        Path(launch_root, "dist", "other.js").write_bytes(b"export const other = 99;\n")
 
     outcome, supervisor, _recorder = _l14_run(git_executable, tree, _mutate)
     _assert_refused_at_l14(outcome, supervisor, tree)
@@ -553,21 +567,29 @@ def test_c5_a_different_but_approved_profile_is_refused_at_l14(tmp_path, monkeyp
     approve_profiles(monkeypatch, tree, variant)
     assert pre_consumption_pi_identity_gate({"PATH": variant.path_value}) == PI_IDENTITY_GATE_PASSED
 
-    def _mutate():
-        Path(tree.seam_path("dist/other.js")).write_bytes(variant_files["dist/other.js"])
+    fingerprints: list = []
+
+    def _mutate(launch_root):
+        Path(launch_root, "dist", "other.js").write_bytes(variant_files["dist/other.js"])
+        observation = pi_payload.observe_payload(launch_root, leaves=pi_payload.genuine_payload_leaves())
+        fingerprints.append(observation.inventory.payload_fingerprint)
 
     outcome, supervisor, _recorder = _l14_run(git_executable, tree, _mutate)
     _assert_refused_at_l14(outcome, supervisor, tree)
-    # The mutated tree now IS the approved variant: P from scratch would pass.
-    result = prove_pi_identity({"PATH": tree.path_value}, leaves=genuine_pi_proof_leaves())
-    assert result.failure_code is None and result.identity.matched_profile_id == variant.profile_id
+    # The mutated launch copy now IS the approved variant's payload -- and is
+    # still refused: L14 is equality with L1's profile, never re-membership.
+    assert fingerprints == [variant.payload_fingerprint]
 
 
 def test_c5_an_exposure_appearing_between_l1_and_l14_refuses(tmp_path, monkeypatch, git_executable):
     files, empty_dirs = _exposed_files()
     tree = make_pi_world(tmp_path, monkeypatch, files=files, empty_dirs=empty_dirs)
+    # Under RPR the nearest qualifying ancestor of the launch root ``C`` is
+    # ``RT`` (= ``R\\pi_runtime``); the exposure is planted there.
     outcome, supervisor, _recorder = _l14_run(
-        git_executable, tree, lambda: _exposure_site(tree).mkdir(parents=True)
+        git_executable,
+        tree,
+        lambda launch_root: (Path(launch_root).parent / "node_modules" / _EXPOSED_NAME).mkdir(parents=True),
     )
     _assert_refused_at_l14(outcome, supervisor, tree)
 
@@ -576,14 +598,24 @@ def test_c5_an_exposure_appearing_between_l1_and_l14_refuses(tmp_path, monkeypat
 def test_c5_identity_drift_between_l1_and_l14_refuses(drift, tmp_path, monkeypatch, git_executable):
     tree = make_pi_world(tmp_path, monkeypatch)
 
-    def _mutate():
+    blocked: list = []
+
+    def _mutate(launch_root):
         if drift == "root":
-            replace_directory_with_identical_copy(tree.package_root)
+            # The four final read-only pins under ``C`` are held: a rename of
+            # ``C`` is refused by the platform (the hook's raise is itself an
+            # L14 refusal). Recorded, never relied on as the safety argument.
+            try:
+                replace_directory_with_identical_copy(launch_root)
+            except PermissionError:
+                blocked.append("root")
+                raise
         else:
             replace_same_bytes(tree.node_exe)
 
     outcome, supervisor, _recorder = _l14_run(git_executable, tree, _mutate)
     _assert_refused_at_l14(outcome, supervisor, tree)
+    assert blocked == (["root"] if drift == "root" else [])
 
 
 def test_c5_nothing_reads_the_pi_tree_between_the_reproof_and_launch(tmp_path, monkeypatch, git_executable):
@@ -592,11 +624,14 @@ def test_c5_nothing_reads_the_pi_tree_between_the_reproof_and_launch(tmp_path, m
     assert outcome.observations["dispatch_state"] == "CONFIRMED_SENT"
     log = recorder.log
     launch_at = log.index(("launch", ""))
+    launch_root = outcome_launch_root(log, tree)
     assert log[launch_at - 1] == ("inspect", tree.node_exe)
-    assert log[launch_at - 2] == ("inspect", tree.package_root)
+    assert log[launch_at - 2] == ("inspect", launch_root)
     l14_walk = [entry for entry in log[:launch_at] if entry[0] in ("digest", "enumerate")]
-    # Two complete walks before launch: L1's P2 and L14's re-walk.
-    assert sum(1 for kind, _ in l14_walk if kind == "digest") == 2 * len(tree.files)
+    # Three complete walks through the run's proof leaves before launch: L1's
+    # P2 over S, the L3R binder's independent walk of C, and L14's re-walk of
+    # C (the provisioner's own walks use its own genuine leaves).
+    assert sum(1 for kind, _ in l14_walk if kind == "digest") == 3 * len(tree.files)
     assert supervisor.launch_calls == 1
 
 

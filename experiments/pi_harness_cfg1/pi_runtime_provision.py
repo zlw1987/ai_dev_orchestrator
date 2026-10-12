@@ -13,12 +13,16 @@ PATHNAME create beneath it lands outside the run root before any gate runs.
 A handle-relative create is resolved against the parent OBJECT, not a name.
 
 **Status, stated exactly.** This module is NOT security-qualified, F5-A is NOT
-frozen, and nothing here authorizes a launch. It is not wired into
-:mod:`pi_harness_cfg1.run_executor`: there is no L3R step, no L14
-precondition, no L27 entry release and no record vocabulary change. The
-containment of a handle-relative create beneath a CONVERTED parent rests on
-the FU4-A2 measurements (A2-3 INCOMPLETE, no racing-conversion measurement,
-one host, one build) and is NOT established by this code or its tests.
+frozen, and nothing here authorizes a launch. F5A-INT wired it into
+:mod:`pi_harness_cfg1.run_executor` OFFLINE ONLY (the L3R step, the L14
+precondition :func:`reprove_provision_for_launch`, the L27-entry release and
+the derived release fact): the executor's genuine default binding is
+:func:`live_runtime_provisioning_not_qualified`, which refuses before any
+I/O, and only an explicitly composed offline port set binds
+:func:`admit_runtime_provision_for_source`. The containment of a
+handle-relative create beneath a CONVERTED parent rests on the FU4-A2
+measurements (A2-3 INCOMPLETE, no racing-conversion measurement, one host, one
+build) and is NOT established by this code or its tests.
 
 **Authority (FU1).** The only way to obtain write authority is a workspace
 CFG1's own registry minted (:class:`run_workspace.Cfg1RunWorkspace`), re-proved
@@ -73,8 +77,8 @@ from pi_harness_cfg1 import run_workspace as _workspace
 
 PLATFORM_SUPPORTED = sys.platform == "win32"
 
-#: The one refusal code an L3R failure maps to (amendment Sec. 11.1). The
-#: executor integration that would record it is NOT part of this candidate.
+#: The one refusal code an L3R failure maps to (amendment Sec. 11.1); the
+#: executor records it in the v3 run record only (``records`` R3-S15).
 RUNTIME_PROVISIONING_FAILED = "RUNTIME_PROVISIONING_FAILED"
 
 #: Fixed topology (amendment Sec. 7.2). Constants, never parameters.
@@ -102,6 +106,8 @@ STATE_CHAIN_CREATED = "CHAIN_CREATED"
 STATE_POPULATED = "POPULATED"
 STATE_PINNED = "PINNED"
 STATE_PROVEN = "PROVEN"
+#: Executor integration (F5A-INT): the launch identity ``L`` is recorded.
+STATE_BOUND = "BOUND"
 STATE_REFUSED = "REFUSED"
 STATE_FAILED_UNEXPECTED = "FAILED_UNEXPECTED"
 
@@ -636,6 +642,7 @@ class RuntimeProvision:
         "_package_root_identity",
         "_guard",
         "_released",
+        "_launch_identity",
     )
 
     def __init__(self, key: object, **values) -> None:
@@ -657,6 +664,7 @@ class RuntimeProvision:
         # callback on the running thread.
         object.__setattr__(self, "_guard", threading.Lock())
         object.__setattr__(self, "_released", False)
+        object.__setattr__(self, "_launch_identity", None)
 
     def __setattr__(self, name: str, value: object) -> None:  # noqa: D105
         raise AttributeError("RuntimeProvision is immutable from outside its module")
@@ -695,9 +703,14 @@ class RuntimeProvision:
     @property
     def package_root_identity(self) -> tuple[int, int]:
         """``I_c``. Available ONLY after post-pin validation passed."""
-        if self._state != STATE_PROVEN or self._package_root_identity is None:
+        if self._state not in (STATE_PROVEN, STATE_BOUND) or self._package_root_identity is None:
             _refuse("PROVISION_NOT_PROVEN")
         return self._package_root_identity
+
+    @property
+    def launch_identity(self):
+        """``L`` once :func:`record_launch_identity` bound it, else ``None``."""
+        return self._launch_identity
 
     @property
     def construction_peak_open(self) -> int:
@@ -1129,6 +1142,7 @@ def _acquire_final_pins(provision: RuntimeProvision, pins: _HandleLedger) -> lis
         if raw is None or raw == _INVALID_HANDLE_VALUE:
             _refuse("FINAL_PIN_REFUSED")
         entry = pins.enter(raw, _KIND_FINAL_PIN)
+        entry.name = relative
         if not _raw_is_plain(entry.raw, _KIND_FILE):
             _refuse("FINAL_PIN_REFUSED")
         entry.identity = _raw_identity(entry.raw)
@@ -1143,30 +1157,40 @@ def _post_pin_validation(provision: RuntimeProvision, held: list[tuple[str, _Led
     absence against the profile's resolution exposures -- needs the matched
     profile object and is executor-integration work, NOT done here."""
     package_root = provision.package_root
-    runtime_dir = _runtime_dir_path(provision._run_root)
     observation = _payload.observe_payload(package_root, leaves=_payload.genuine_payload_leaves())
     if (
         not observation.complete
         or observation.inventory.payload_fingerprint != provision._inventory.payload_fingerprint
     ):
         _refuse("POST_PIN_VALIDATION_FAILED")
+    _reprove_topology(provision, held, "POST_PIN_VALIDATION_FAILED")
+    return provision._created_identity["C"]
+
+
+def _reprove_topology(provision: RuntimeProvision, held: list[tuple[str, _LedgerEntry]], reason: str) -> None:
+    """T-NM, T-CANON, T-BUN, T-PLAIN, T-RT and pin/created identity, re-observed NOW.
+
+    Read-only. Shared by post-pin validation (Sec. 7.6 items 3-5) and the L14
+    executor precondition (Sec. 7.7), so both prove exactly the same rules.
+    """
+    package_root = provision.package_root
+    runtime_dir = _runtime_dir_path(provision._run_root)
     if lexical_topology_refusal(_payload_path(package_root, "dist/config.js")) is not None:
-        _refuse("POST_PIN_VALIDATION_FAILED")
+        _refuse(reason)
     _require_plain_directory_chain(_payload_path(package_root, "dist"))
     listing = _leaves.enumerate_directory_no_follow(runtime_dir, 2)
     if not listing.complete or listing.entries != ((PACKAGE_DIR_NAME, _leaves.ENTRY_KIND_DIRECTORY),):
-        _refuse("POST_PIN_VALIDATION_FAILED")
-    _require_missing(runtime_dir + "\\" + _NODE_MODULES, "POST_PIN_VALIDATION_FAILED")
-    _require_missing(provision._run_root + "\\" + _NODE_MODULES, "POST_PIN_VALIDATION_FAILED")
+        _refuse(reason)
+    _require_missing(runtime_dir + "\\" + _NODE_MODULES, reason)
+    _require_missing(provision._run_root + "\\" + _NODE_MODULES, reason)
     for relative, entry in held:
         seen = _leaves.inspect_no_follow(_payload_path(package_root, relative))
         if seen.classification != _leaves.CLASSIFICATION_REGULAR_FILE or seen.identity != entry.identity:
-            _refuse("POST_PIN_VALIDATION_FAILED")
+            _refuse(reason)
     for path, key in ((runtime_dir, "RT"), (package_root, "C")):
         seen = _leaves.inspect_no_follow(path)
         if seen.classification != _leaves.CLASSIFICATION_DIRECTORY or seen.identity != provision._created_identity[key]:
-            _refuse("POST_PIN_VALIDATION_FAILED")
-    return provision._created_identity["C"]
+            _refuse(reason)
 
 
 def run_runtime_provision(provision: RuntimeProvision) -> None:
@@ -1281,3 +1305,183 @@ def release_at_l27_entry(provision: RuntimeProvision) -> None:
         provision._set("_released", True)
     finally:
         guard.release()
+
+
+# ---------------------------------------------------------------------------
+# Executor integration (F5A-INT, OFFLINE ONLY) -- amendment Sec. 7.4 steps 1
+# and 9, Sec. 7.7 (L14 precondition), Sec. 7.8.1 (the derived release fact).
+#
+# Nothing below launches, and nothing below makes provisioning reachable from
+# the default executor binding: ``run_executor.default_cfg1_run_ports`` binds
+# :func:`live_runtime_provisioning_not_qualified`, which refuses before any
+# observation or write. Only an explicitly composed (offline) port set binds
+# :func:`admit_runtime_provision_for_source`.
+# ---------------------------------------------------------------------------
+
+#: The closed reason of the default (live) binding. A2-3 is not qualified, so
+#: no default binding may provision; changing that is a code change under a
+#: separate authorization, never a flag, an environment value or a caller claim.
+LIVE_PROVISIONING_NOT_QUALIFIED = "LIVE_PROVISIONING_NOT_QUALIFIED"
+
+
+def live_runtime_provisioning_not_qualified(*, workspace: object, source: object) -> RuntimeProvision:
+    """The default executor's L3R port: ALWAYS refuses, before any I/O."""
+    _refuse(LIVE_PROVISIONING_NOT_QUALIFIED)
+
+
+def admit_runtime_provision_for_source(
+    *, workspace: _workspace.Cfg1RunWorkspace, source: object
+) -> RuntimeProvision:
+    """The offline L3R port: admit one provision from the executor's own ``S``.
+
+    ``source`` must be the exact :class:`pi_identity.Cfg1PiIdentity` a passing
+    P produced. The profile is ``S.matched_profile_id`` and the byte source is
+    ``S.pi_package_root`` -- never a caller choice. The copy manifest is the
+    source's own complete PI-PC1 observation; :func:`admit_runtime_provision`
+    then refuses it unless its content-derived fingerprint equals the sealed
+    profile's (amendment Sec. 7.4 step 4: by that equality it IS the approved
+    inventory). Returns an ADMITTED provision; nothing is created.
+    """
+    if type(source) is not _identity.Cfg1PiIdentity:
+        _refuse("MALFORMED_INPUT")
+    observation = _payload.observe_payload(source.pi_package_root, leaves=_payload.genuine_payload_leaves())
+    if not observation.complete or type(observation.inventory) is not _payload.PayloadInventory:
+        _refuse("SOURCE_NOT_APPROVED_PAYLOAD")
+    return admit_runtime_provision(
+        workspace=workspace,
+        profile_id=source.matched_profile_id,
+        approved_inventory=observation.inventory,
+        source_package_root=source.pi_package_root,
+    )
+
+
+def _workspace_nonce(workspace: object) -> str | None:
+    if type(workspace) is not _workspace.Cfg1RunWorkspace:
+        return None
+    nonce = workspace.run_workspace_nonce
+    return nonce if type(nonce) is str and nonce else None
+
+
+def provision_is_admitted_for(provision: object, *, workspace: object, source: object) -> bool:
+    """Consumption check BEFORE the executor adopts a port-returned object.
+
+    ``True`` only for an exact, never-run, never-released ADMITTED provision
+    bound to THIS workspace (nonce equality), THIS profile and THIS byte source.
+    A foreign, run, released, uninitialised or look-alike object is ``False``
+    and is never adopted -- so it is never run and never released by this run.
+    """
+    if type(provision) is not RuntimeProvision or type(source) is not _identity.Cfg1PiIdentity:
+        return False
+    if getattr(provision, "_guard", None) is None:
+        return False
+    nonce = _workspace_nonce(workspace)
+    return (
+        nonce is not None
+        and getattr(provision, "_state", None) == STATE_ADMITTED
+        and getattr(provision, "_released", True) is False
+        and getattr(provision, "_launch_identity", True) is None
+        and getattr(provision, "_nonce", None) in _ADMITTED_NONCES
+        and _workspace_nonce(getattr(provision, "_workspace", None)) == nonce
+        and getattr(provision, "_run_root", None) == workspace.experiment_root
+        and getattr(provision, "_profile_id", None) == source.matched_profile_id
+        and getattr(provision, "_source_root", None) == source.pi_package_root
+    )
+
+
+def record_launch_identity(provision: RuntimeProvision, launch: object) -> None:
+    """Amendment Sec. 7.4 step 9: record ``L`` in a PROVEN provision, once.
+
+    ``L`` must be the exact identity type and must name exactly this
+    provision's package root, its ``dist\\cli.js``, the ``I_c`` post-pin
+    validation proved, and this provision's profile. Refuses otherwise; refuses
+    while a run or release owns the provision.
+    """
+    guard = getattr(provision, "_guard", None) if type(provision) is RuntimeProvision else None
+    if guard is None:
+        _refuse("MALFORMED_INPUT")
+    if not guard.acquire(blocking=False):
+        _refuse("PROVISION_ACTIVE")
+    try:
+        if provision._state != STATE_PROVEN or provision._released or provision._launch_identity is not None:
+            _refuse("PROVISION_NOT_PROVEN")
+        package_root = provision.package_root
+        if (
+            type(launch) is not _identity.Cfg1PiIdentity
+            or launch.pi_package_root != package_root
+            or launch.pi_cli_js != _payload_path(package_root, "dist/cli.js")
+            or launch.package_root_identity != provision._package_root_identity
+            or launch.matched_profile_id != provision._profile_id
+        ):
+            _refuse("LAUNCH_IDENTITY_NOT_THIS_PROVISION")
+        provision._set("_launch_identity", launch)
+        provision._set("_state", STATE_BOUND)
+    finally:
+        guard.release()
+
+
+def reprove_provision_for_launch(provision: object, *, workspace: object, launch: object) -> bool:
+    """The L14 executor precondition (amendment Sec. 7.7), re-observed NOW.
+
+    Exact ``True`` only when: the provision is exact, BOUND and unreleased; its
+    workspace nonce equals ``workspace``'s; ``launch`` IS its recorded launch
+    identity; its profile still has an LDT row; every construction handle is
+    proven closed; exactly the four final pins are held, each re-proven FROM
+    ITS HANDLE (plain regular file, same id); and the topology re-proof (T-NM,
+    T-CANON, T-PLAIN, T-BUN, T-RT, pin and created identities) passes. Read-only.
+    The caller still runs the frozen ``reprove_pi_identity_for_launch(L)``.
+    """
+    guard = getattr(provision, "_guard", None) if type(provision) is RuntimeProvision else None
+    if guard is None or not guard.acquire(blocking=False):
+        return False
+    try:
+        nonce = _workspace_nonce(workspace)
+        construction = provision._construction
+        pins = provision._final_pins
+        ldt = LAUNCH_DERIVATION_TABLE.get(provision._profile_id)
+        if (
+            nonce is None
+            or provision._state != STATE_BOUND
+            or provision._released
+            or provision._launch_identity is None
+            or launch is not provision._launch_identity
+            or _workspace_nonce(provision._workspace) != nonce
+            or ldt is None
+            or type(construction) is not _HandleLedger
+            or not construction.all_proven_closed()
+            or type(pins) is not _HandleLedger
+        ):
+            return False
+        expected = (ldt["package_manifest"], *ldt["derivation_chain"])
+        held = [(entry.name, entry) for entry in pins._entries]
+        if pins.open_count != len(expected) or tuple(name for name, _ in held) != expected:
+            return False
+        for _name, entry in held:
+            raw = pins.raw_handle(entry, _KIND_FINAL_PIN)
+            if not _raw_is_plain(raw, _KIND_FILE) or _raw_identity(raw) != entry.identity:
+                return False
+        _reprove_topology(provision, held, "LAUNCH_PRECONDITION_FAILED")
+        return True
+    except Cfg1RuntimeProvisionError:
+        return False
+    finally:
+        guard.release()
+
+
+def provision_live_references_proven_released(provision: object) -> bool:
+    """This provision's share of amendment Sec. 7.8.1's derived fact.
+
+    ``True`` only when the provision was released through
+    :func:`release_at_l27_entry` AND every construction entry and every final
+    pin reads ``CLOSED``. ``False`` for an ``OPEN`` or ``CLOSE_FAILED`` entry
+    (a latch: nothing turns it back), for a provision never released, and for
+    a run that ended ``FAILED_UNEXPECTED`` -- an unexpected interruption can
+    fall between a native create returning and its ledger entry (candidate
+    Sec. 4 F-3), and an absent entry is never proof of a closed handle.
+    """
+    if type(provision) is not RuntimeProvision or getattr(provision, "_guard", None) is None:
+        return False
+    return (
+        provision._released is True
+        and provision._state != STATE_FAILED_UNEXPECTED
+        and provision.live_references_released is True
+    )

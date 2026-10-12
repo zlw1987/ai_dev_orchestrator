@@ -83,16 +83,23 @@ def _exposed_files():
 
 class _HookSupervisor(FakeSupervisor):
     """A FakeSupervisor whose ``shutdown`` (L21) runs a hook first, while the
-    "runtime" still exists: a mutation there is a change DURING the run."""
+    "runtime" still exists: a mutation there is a change DURING the run.
 
-    def __init__(self, hook=None, shutdown_result=None, **kwargs) -> None:
+    F5-A (amendment Sec. 11.3): the payload L14 and L21A prove is the L3R copy
+    ``C``, so a hook that takes an argument receives the launch root."""
+
+    def __init__(self, hook=None, shutdown_result=None, launch_root=None, **kwargs) -> None:
         super().__init__(**kwargs)
         self._hook = hook
         self._shutdown_result = shutdown_result
+        self._launch_root = launch_root
 
     def shutdown(self):
         if self._hook is not None:
-            self._hook()
+            if inspect.signature(self._hook).parameters:
+                self._hook(self._launch_root)
+            else:
+                self._hook()
         if self._shutdown_result is not None:
             self.shutdown_calls += 1
             if self._shutdown_result == "raise":
@@ -116,7 +123,11 @@ def _record_closure_entries(monkeypatch, log: list) -> None:
 
 def _run(git_executable, tree, *, hook=None, shutdown_result=None, overrides=None, recorder=None, admission=None):
     recorder = recorder or LeafRecorder()
-    merged = {"build_supervisor": lambda **_k: _HookSupervisor(hook, shutdown_result)}
+    merged = {
+        "build_supervisor": lambda **k: _HookSupervisor(
+            hook, shutdown_result, launch_root=k["identity"].pi_package_root
+        )
+    }
     merged.update(overrides or {})
     ports, made = fu1_ports(git_executable, tree, leaves=recorder.leaves(), overrides=merged)
     outcome = execute_cfg1_run(admission or make_admission(), ports=ports)
@@ -511,30 +522,35 @@ def test_c6_applicability_follows_the_d3_flip(supervisor_cls, tmp_path, monkeypa
 def test_c6_each_result_row(tmp_path, monkeypatch, git_executable):
     rows = {}
 
-    # CHANGED -- a persistent payload mutation during the runtime (cx 10).
+    # CHANGED -- a persistent payload mutation during the runtime (cx 10),
+    # of the run-private launch copy C (an unpinned file of it).
     tree = make_pi_world(tmp_path, monkeypatch, "changed")
     outcome, _r, _m = _run(
         git_executable,
         tree,
-        hook=lambda: Path(tree.seam_path("dist/other.js")).write_bytes(b"export const other = 5;\n"),
+        hook=lambda root: Path(root, "dist", "other.js").write_bytes(b"export const other = 5;\n"),
     )
     rows["CHANGED/fingerprint"] = outcome.observations
 
-    # CHANGED -- an exposure now present (exposure set of the run's profile).
+    # CHANGED -- an exposure now present (exposure set of the run's profile),
+    # under C's nearest qualifying ancestor RT (= R\\pi_runtime).
     files, empty_dirs = _exposed_files()
     exposed = make_pi_world(tmp_path, monkeypatch, "exposed", files=files, empty_dirs=empty_dirs)
     outcome, _r, _m = _run(
         git_executable,
         exposed,
-        hook=lambda: (Path(exposed.npm_dir) / "node_modules" / _EXPOSED_NAME).mkdir(parents=True),
+        hook=lambda root: (Path(root).parent / "node_modules" / _EXPOSED_NAME).mkdir(parents=True),
     )
     rows["CHANGED/exposure"] = outcome.observations
 
     # UNPROVEN -- an exposure observation that cannot complete: an
-    # intermediate component that is not a directory.
+    # intermediate component (RT\\node_modules) that is not a directory.
     unobservable = make_pi_world(tmp_path, monkeypatch, "unobservable", files=files, empty_dirs=empty_dirs)
-    blocker = Path(unobservable.npm_dir) / "node_modules" / "@earendil-works" / "node_modules"
-    outcome, _r, _m = _run(git_executable, unobservable, hook=lambda: blocker.write_bytes(b"not a directory"))
+    outcome, _r, _m = _run(
+        git_executable,
+        unobservable,
+        hook=lambda root: (Path(root).parent / "node_modules").write_bytes(b"not a directory"),
+    )
     rows["UNPROVEN/exposure"] = outcome.observations
 
     # UNPROVEN -- the direct child's exit was not proven by L21.
@@ -550,10 +566,23 @@ def test_c6_each_result_row(tmp_path, monkeypatch, git_executable):
     monkeypatch.setattr(pi_payload, "MAX_PAYLOAD_ENTRIES", 250000)
     rows["UNPROVEN/walk"] = outcome.observations
 
-    # UNPROVEN -- I_r drifted (a byte-identical copy at the same path).
+    # I_r drift of C during the runtime: under RPR the four final read-only
+    # pins beneath C are held until L27 entry, so the platform REFUSES the
+    # move-aside itself. Recorded as an observation of this host (P-R1-2's
+    # shape), never as the safety argument; the run that tried it shows the
+    # raising L21 hook, so it is not an INDETERMINATE_PI_PROFILE row.
     tree = make_pi_world(tmp_path, monkeypatch, "drift")
-    outcome, _r, _m = _run(git_executable, tree, hook=lambda: replace_directory_with_identical_copy(tree.package_root))
-    rows["UNPROVEN/root"] = outcome.observations
+    refused: list = []
+
+    def _drift(root):
+        try:
+            replace_directory_with_identical_copy(root)
+        except PermissionError:
+            refused.append(root)
+
+    outcome, _r, _m = _run(git_executable, tree, hook=_drift)
+    assert len(refused) == 1
+    assert outcome.observations["pi_profile_post_runtime_reobservation"] == "PROVEN_UNCHANGED"
 
     # PROVEN_UNCHANGED.
     tree = make_pi_world(tmp_path, monkeypatch, "clean")
@@ -575,10 +604,10 @@ def test_c6_each_result_row(tmp_path, monkeypatch, git_executable):
 
 def test_c6_counterexample_11_aba_is_undetected_the_documented_limit(tmp_path, monkeypatch, git_executable):
     tree = make_pi_world(tmp_path, monkeypatch)
-    target = Path(tree.seam_path("dist/other.js"))
-    original = target.read_bytes()
+    original = Path(tree.seam_path("dist/other.js")).read_bytes()
 
-    def _mutate_then_restore():
+    def _mutate_then_restore(root):
+        target = Path(root, "dist", "other.js")
         target.write_bytes(b"export const other = 'B';\n")
         target.write_bytes(original)
 

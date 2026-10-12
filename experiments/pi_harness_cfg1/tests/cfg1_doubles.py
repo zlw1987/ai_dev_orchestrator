@@ -346,7 +346,7 @@ def build_doubled_ports(
     returns from its probe. Absent both, the facts are those of a runtime that
     loaded the arm the doubled config generator recorded.
     """
-    from pi_harness_cfg1 import run_workspace
+    from pi_harness_cfg1 import pi_runtime_provision, run_workspace
     from pi_harness_cfg1.cfg1_extension import write_cfg1_extension
     from pi_harness_cfg1.cfg1_pi_config import write_cfg1_pi_config
     from pi_harness_cfg1.pi_identity import genuine_pi_proof_leaves
@@ -411,6 +411,10 @@ def build_doubled_ports(
         "mint_workspace": _mint_workspace,
         "observe_repository": lambda *, workspace_root: FakeRepositorySnapshot(),
         "run_verification": lambda *, workspace_root, args: FakeVerificationOutcome(),
+        # F5-A L3R, OFFLINE: the GENUINE provisioning adapter over the SYNTHETIC
+        # Pi tree, creating a real run-private copy inside the run's own minted
+        # workspace. The genuine default binding refuses instead.
+        "provision_runtime": pi_runtime_provision.admit_runtime_provision_for_source,
         "read_connection": lambda: (SYNTHETIC_BASE_URL, SYNTHETIC_CREDENTIAL),
         "observe_route": lambda *, base_url, api_key, model_id: FakeRouteObservation(),
         "mint_capability": lambda *, workspace, git_executable: object(),
