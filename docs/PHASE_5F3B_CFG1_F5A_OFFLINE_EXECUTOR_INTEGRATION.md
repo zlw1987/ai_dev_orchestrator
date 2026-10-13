@@ -9,6 +9,9 @@ R-ALIAS           UNRESOLVED (unchanged, not revisited).
 LIVE LAUNCH       UNAUTHORIZED, and now MECHANICALLY UNREACHABLE through every
                   supported CFG1 entry point (section 2).
 BASE HEAD         3bf223e0d84084db12e80df7dd6d8a027abb2e5a
+FU1               on ed69cca: Barrier 2 closed against non-exact identities
+                  (F5A-OI-FU1-1, section 2 and F-INT-9); one L21A coverage
+                  test restored (section 6.3). Live launch still unauthorized.
 CODE              run_executor.py, pi_runtime_provision.py, pi_identity.py,
                   records.py, lifecycle.py
 TESTS             tests/test_cfg1_f5a_executor_integration.py (new);
@@ -79,12 +82,23 @@ all halt at L3R. (Consequence, stated plainly: the production path can no
 longer launch Pi from the ambient installation either. That launch is the F5-A
 hazard itself, and the amendment makes L3R mandatory.)
 
-**Barrier 2 — no real supervisor accepts a genuine CFG1 identity.** The one CFG1
-site that constructs a real `PiRpcSupervisor` (`default_cfg1_run_ports.
-_build_supervisor`, the only user of `PiRpcSupervisor` and `build_pi_argv` in the
-package) refuses any `type(identity) is Cfg1PiIdentity` as its first statement.
-Since the L14 precondition admits **only** the genuine L3R launch identity
-(`state.pi_identity is provision.launch_identity`), a caller that composes the
+**Barrier 2 — the default supervisor builder has no construction path.**
+*(Corrected by FU1, finding F5A-OI-FU1-1.)* As first committed, Barrier 2 was a
+type guard — `default_cfg1_run_ports._build_supervisor` refused
+`type(identity) is Cfg1PiIdentity` and then built a real `PiRpcSupervisor`. That
+was not a barrier: the frozen AR2 `build_pi_argv` consumes plain attributes
+(`node_executable`, `pi_cli_js`) and never enforces the CFG1 type, so a
+duck-typed or malformed identity passed the guard and reached the real
+constructor. The barrier now depends on **no** input: the body of
+`_build_supervisor` is one unconditional `raise RuntimeError("cfg1 live pi launch
+is not qualified")`, executed before any argument, the environment, a flag or a
+caller claim is read, and the construction code itself (`PiRpcSupervisor`,
+`build_pi_argv`, and their imports) is **absent** from `run_executor.py` — there
+is nothing behind a guard to reach. A separately authorized, independently
+accepted live-enablement phase must restore it (argv provider/model from the
+frozen `PROVIDER_ID` / `CFG1_MODEL_ID`, per R-40). The L14 precondition still
+admits **only** the genuine L3R launch identity
+(`state.pi_identity is provision.launch_identity`), so a caller that composes the
 genuine offline provisioner with the genuine builder reaches L14 and is refused
 there: no real supervisor is constructed and `launch()` is never called
 (`test_composing_the_offline_provisioner_with_the_genuine_builder_never_launches`).
@@ -96,13 +110,24 @@ there: no real supervisor is constructed and `launch()` is never called
 verification and repository observation replaced; `read_connection` never
 called; a process tripwire sees no Node),
 `test_the_genuine_supervisor_builder_refuses_every_genuine_cfg1_identity`
-(a `PiRpcSupervisor` tripwire is never constructed), the composition test above,
-and `test_static_audit_of_the_barrier` (AST: the default binding names the
-refusing port; that port is a single unconditional refusal; the builder's first
-statement refuses a genuine identity; `PiRpcSupervisor`/`build_pi_argv` occur
-only there; exactly one `.launch()` call exists and it follows the L14
-precondition; L3R precedes `read_connection`; the provisioner reads no
-environment).
+(a `PiRpcSupervisor` tripwire is never constructed),
+`test_the_default_supervisor_builder_refuses_duck_typed_and_malformed_identities_before_construction`
+(FU1: a genuine-class object, a slotted lookalike, a `SimpleNamespace`, a dict,
+a class literally named `Cfg1PiIdentity`, `None`, `object()`, an int, a string,
+an empty tuple and an attribute-recording object all raise; `PiRpcSupervisor`
+and `build_pi_argv` are replaced with recorders and never called; a
+non-delegating process tripwire sees nothing; `os.environ` is replaced with a
+read spy and sees nothing; the extension/environment/identity arguments are
+never even attribute-read),
+`test_the_default_supervisor_builder_refusal_is_independent_of_environment_and_flags`,
+the composition test above, and `test_static_audit_of_the_barrier` (AST: the
+default binding names the refusing port; that port is a single unconditional
+refusal; the builder body is exactly one `raise`; `PiRpcSupervisor` and
+`build_pi_argv` are not named anywhere in `run_executor.py`, imports included;
+exactly one `.launch()` call exists and it follows the L14 precondition; L3R
+precedes `read_connection`; the provisioner reads no environment). The first
+two new tests fail against the type-guard form of the barrier (verified by
+restoring it).
 
 **What the barrier does not cover (stated, not closed).** A caller who writes
 its *own* process-launching supervisor (or calls AR2's `build_pi_argv` and
@@ -242,6 +267,8 @@ unproducible; that is stated in its row below.
 | `test_cfg1_fu1_static_identity.py::test_ad_i_…` | the genuine builder now refuses the genuine identity (Barrier 2): still L14 / `RUNTIME_LAUNCH_FAILED`, no runtime, and now **zero** `CreateProcess` attempts of `node.exe` (was one, refused by the OS) |
 | `test_cfg1_fu1_static_identity.py::test_ad_i_and_iii_…` | its zero-argument mutate lambda would have raised `TypeError` inside the hook and **passed for the wrong reason**; it now takes the root argument and mutates `node.exe` as intended |
 | `test_cfg1_pe2c_executor.py::test_c6_each_result_row` | L21A rows mutate `C` (unpinned file) / plant the exposure under `RT` / make `RT\node_modules` a file; the `I_r`-drift row became an observation that the move-aside of `C` is refused while the pins are held (`PROVEN_UNCHANGED`), because it cannot be produced during the runtime under RPR |
+| `test_cfg1_f5a_executor_integration.py::test_l21a_a_root_identity_mismatch_alone_is_unproven_by_injected_observation` (FU1, new) | restores explicit coverage of the frozen "`I_r` drifted → `UNPROVEN`" branch that the converted row above no longer exercises: genuine walk and exposures, but the root's inspected file id (or classification, or observability) is injected to differ → `UNPROVEN`, with a genuine-leaves control → `PROVEN_UNCHANGED`. Nothing is renamed, converted or made a reparse point; L21A semantics are untouched |
+| `test_cfg1_l16_fu2.py::test_r40_…` (FU1) | the old test drove a duck-typed `StaticIdentityShape` through the default builder and read the real supervisor's argv — that was the Barrier-2 bypass. It is now a refusal test; the R-40 requirement (argv and H2 expectations from the same frozen constants) binds the future live-enablement phase |
 | `test_cfg1_pe2c_executor.py::test_c6_counterexample_11_aba_…` | mutate-then-restore applied to `C` (still the documented R-ABA residual) |
 | `test_cfg1_oc4_closure_totality.py::test_x3_…` | one allowed helper relationship added: `_closure_l27_workspace → _closure_l27_release_runtime_provision` (L27's own entry action, not another step) |
 
@@ -339,6 +366,8 @@ correctness or evidence.
 | F-INT-6 | Concurrency: a port keeping a reference could release or re-record the provision concurrently. | Every mutating entry (`run`, `release`, `record_launch_identity`) and the L14 re-proof take the provision's non-blocking guard; a second record is refused (L3R fails closed); a foreign early release makes L14 refuse (pins not held) and the derived fact reads the ledger truthfully. No new mechanism was needed. |
 | F-INT-7 | Barrier coverage: a caller-authored process-launching supervisor passed as `build_supervisor`. | Not a supported entry point; stated as a residual in section 2 rather than "hardened" speculatively. |
 | F-INT-8 | Closure ordering: an implementation defect raising out of L21–L26, or a `BaseException` (e.g. `KeyboardInterrupt`) in the dispatch phase, would skip L27 and its release. | Pre-existing and identical for every CFG1 resource (OC-4 I-8 forbids a laundering `try` around closure); not changed here. Such a run produces no outcome at all, so no false `True` is possible. |
+
+| F-INT-9 (FU1, F5A-OI-FU1-1) | **Real, found by independent review.** Barrier 2 was a `type(identity) is Cfg1PiIdentity` guard in front of a real `PiRpcSupervisor(...)`; `build_pi_argv` does not enforce the type, so a duck-typed or malformed identity reached the real constructor through the default port. A pre-existing R-40 test exercised exactly that path. | The builder is one unconditional `raise`; the construction code is removed from the module; the R-40 test became a refusal test; regressions above. |
 
 No other bypass within scope was found.
 

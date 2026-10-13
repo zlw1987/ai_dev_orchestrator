@@ -421,7 +421,13 @@ def test_r36_each_sec82_classifier_has_exactly_one_definition():
         assert runtime_probe.classify_compat_shape({"model": model}) == ARM_SHAPE[arm_id]
 
 
-def test_r40_argv_and_expectations_come_from_the_same_frozen_constants(tmp_path):
+def test_r40_the_default_builder_has_no_argv_to_derive_so_it_refuses(tmp_path):
+    """F5A-OI-FU1-1: this test used to pass a duck-typed ``StaticIdentityShape``
+    through the default builder and inspect the REAL supervisor's argv -- that
+    was the live-launch bypass itself. The default port now has no construction
+    path, so there is no argv whose provider/model could be checked; the R-40
+    requirement (argv and H2 expectations from the SAME frozen constants)
+    binds the separately authorized live-enablement phase."""
     ports = run_executor.default_cfg1_run_ports(ambient_environ={})
 
     class _Environment:
@@ -429,30 +435,13 @@ def test_r40_argv_and_expectations_come_from_the_same_frozen_constants(tmp_path)
         def as_launch_snapshot():
             return {"SystemRoot": "C:\\Windows"}
 
-    supervisor = ports.build_supervisor(
-        identity=StaticIdentityShape(),
-        extension=FakeExtension(entry_path=str(tmp_path / "index.ts"), extension_dir=str(tmp_path)),
-        environment=_Environment(),
-        workspace_root=str(tmp_path),
-    )
-    argv = list(supervisor.argv)
-    provider = argv[argv.index("--provider") + 1]
-    model = argv[argv.index("--model") + 1]
-    assert provider == supervisor._expected_provider == PROVIDER_ID
-    assert model == supervisor._expected_model == CFG1_MODEL_ID
-    assert supervisor.process is None  # building launched nothing
-
-    tree = ast.parse(Path(run_executor.__file__).read_text(encoding="utf-8"))
-    (builder,) = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "_build_supervisor"]
-    keywords = {kw.arg: kw.value for call in ast.walk(builder) if isinstance(call, ast.Call)
-                for kw in call.keywords}
-    for keyword, constant in (("provider", "PROVIDER_ID"), ("model", "CFG1_MODEL_ID"),
-                              ("expected_provider", "PROVIDER_ID"),
-                              ("expected_model", "CFG1_MODEL_ID")):
-        assert isinstance(keywords[keyword], ast.Name) and keywords[keyword].id == constant, keyword
-    imports = [n for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module == "identity"]
-    imported = {alias.name for node in imports for alias in node.names}
-    assert {"PROVIDER_ID", "CFG1_MODEL_ID"} <= imported
+    with pytest.raises(RuntimeError, match="not qualified"):
+        ports.build_supervisor(
+            identity=StaticIdentityShape(),
+            extension=FakeExtension(entry_path=str(tmp_path / "index.ts"), extension_dir=str(tmp_path)),
+            environment=_Environment(),
+            workspace_root=str(tmp_path),
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -452,6 +452,85 @@ def _proven_source(tree):
     return prove_pi_identity({"PATH": tree.path_value}, leaves=genuine_pi_proof_leaves()).identity
 
 
+def test_l21a_a_root_identity_mismatch_alone_is_unproven_by_injected_observation(tmp_path, monkeypatch):
+    """Coverage restored by F5-A offline integration FU1.
+
+    The pre-F5-A ``UNPROVEN/root`` row replaced the Pi package directory with a
+    byte-identical copy to move its file id. Under F5-A the final read-only
+    pins beneath the launch copy make the platform refuse that move, so the
+    row was turned into a platform-behavior check and the frozen
+    ``I_r drifted -> UNPROVEN`` branch lost explicit coverage. This injects the
+    OBSERVATION instead: nothing is renamed, converted or made a reparse point.
+    The walk and exposures are genuine and unchanged, so the only differing
+    fact is the root's file id; the frozen result is ``UNPROVEN`` (never
+    ``CHANGED``, never ``PROVEN_UNCHANGED``). L21A semantics are not altered.
+    """
+    from pi_harness_cfg1.pi_fs_leaves import NoFollowObservation
+    from pi_harness_cfg1.pi_identity import PiProofLeaves, reobserve_pi_profile_after_runtime
+
+    tree = make_pi_world(tmp_path, monkeypatch)
+    identity = _proven_source(tree)
+    genuine = genuine_pi_proof_leaves()
+
+    def _leaves(inspect):
+        return PiProofLeaves(
+            inspect=inspect,
+            read_digest=genuine.read_digest,
+            enumerate_directory=genuine.enumerate_directory,
+            checkout_root=genuine.checkout_root,
+        )
+
+    # Control: the genuine observation of the same root is PROVEN_UNCHANGED.
+    assert (
+        reobserve_pi_profile_after_runtime(identity, leaves=genuine, runtime_exit_observed=True)
+        == "PROVEN_UNCHANGED"
+    )
+
+    root = identity.pi_package_root
+    volume, file_id = identity.package_root_identity
+    probed: list = []
+
+    def _root_id_differs(path):
+        observed = genuine.inspect(path)
+        if path == root:
+            probed.append(path)
+            return NoFollowObservation(observed.classification, (volume, file_id + 1))
+        return observed
+
+    assert (
+        reobserve_pi_profile_after_runtime(identity, leaves=_leaves(_root_id_differs), runtime_exit_observed=True)
+        == "UNPROVEN"
+    )
+    assert probed  # the mismatch was actually exercised, not skipped
+
+    # Same mismatch with a different classification at the root: also UNPROVEN.
+    def _root_not_a_directory(path):
+        observed = genuine.inspect(path)
+        if path == root:
+            return NoFollowObservation("regular_file", observed.identity)
+        return observed
+
+    assert (
+        reobserve_pi_profile_after_runtime(
+            identity, leaves=_leaves(_root_not_a_directory), runtime_exit_observed=True
+        )
+        == "UNPROVEN"
+    )
+
+    # An unobservable root (the leaf raises) is not proven unchanged either.
+    def _root_unobservable(path):
+        if path == root:
+            raise OSError("injected: root cannot be observed")
+        return genuine.inspect(path)
+
+    assert (
+        reobserve_pi_profile_after_runtime(
+            identity, leaves=_leaves(_root_unobservable), runtime_exit_observed=True
+        )
+        == "UNPROVEN"
+    )
+
+
 def test_the_binder_refuses_malformed_or_unproven_copies(tmp_path, monkeypatch):
     tree = make_pi_world(tmp_path, monkeypatch)
     source = _proven_source(tree)
@@ -673,6 +752,117 @@ def test_the_genuine_supervisor_builder_refuses_every_genuine_cfg1_identity(tmp_
     assert constructed == []
 
 
+class _RecordingObject:
+    """Records every attribute read made on it."""
+
+    def __init__(self):
+        object.__setattr__(self, "_log", [])
+
+    def __getattribute__(self, name):
+        if name != "_log":
+            object.__getattribute__(self, "_log").append(name)
+        return None if name != "_log" else object.__getattribute__(self, "_log")
+
+
+def _reads(recorder) -> list:
+    return object.__getattribute__(recorder, "_log")
+
+
+class _EnvironSpy(dict):
+    def __init__(self, source):
+        super().__init__(source)
+        self.reads: list = []
+
+    def __getitem__(self, key):
+        self.reads.append(key)
+        return super().__getitem__(key)
+
+    def get(self, key, *default):
+        self.reads.append(key)
+        return super().get(key, *default)
+
+    def __contains__(self, key):
+        self.reads.append(key)
+        return super().__contains__(key)
+
+    def __iter__(self):
+        self.reads.append("<iter>")
+        return super().__iter__()
+
+
+def _builder_inputs():
+    from types import SimpleNamespace
+
+    from cfg1_doubles import StaticIdentityShape
+
+    plausible = {
+        "node_executable": "C:\\cfg1-synthetic\\node.exe",
+        "pi_cli_js": "C:\\cfg1-synthetic\\cli.js",
+    }
+    return {
+        "duck_slots_shape": StaticIdentityShape(),
+        "duck_namespace": SimpleNamespace(**plausible),
+        "duck_dict": dict(plausible),
+        "duck_lookalike_class": type("Cfg1PiIdentity", (), plausible)(),
+        "none": None,
+        "bare_object": object(),
+        "int": 7,
+        "string": "node.exe",
+        "empty_tuple": (),
+        "the_genuine_class_object": Cfg1PiIdentity,
+        "recording": _RecordingObject(),
+    }
+
+
+def test_the_default_supervisor_builder_refuses_duck_typed_and_malformed_identities_before_construction(
+    monkeypatch
+):
+    """F5A-OI-FU1-1. The previous barrier compared ``type(identity)``; the
+    frozen ``build_pi_argv`` reads plain attributes, so a duck-typed identity
+    passed it and reached the real constructor. The port now refuses every
+    input; the real constructor and argv builder are tripwired as well as
+    absent, and nothing is launched, read from the environment, or touched."""
+    import ar2.launch
+    import ar2.supervisor
+
+    constructed: list = []
+    monkeypatch.setattr(ar2.supervisor, "PiRpcSupervisor", lambda *a, **k: constructed.append((a, k)))
+    monkeypatch.setattr(ar2.launch, "build_pi_argv", lambda *a, **k: constructed.append(("argv", a, k)))
+    ports = default_cfg1_run_ports(ambient_environ={"PATH": ""})
+    tripwire = ProcessTripwire(monkeypatch, delegate=False)
+    inputs = _builder_inputs()
+    environ_spy = _EnvironSpy(os.environ)
+    monkeypatch.setattr(os, "environ", environ_spy)
+    for label, identity in inputs.items():
+        extension = _RecordingObject()
+        environment = _RecordingObject()
+        with pytest.raises(RuntimeError, match="live pi launch is not qualified"):
+            ports.build_supervisor(
+                identity=identity, extension=extension, environment=environment, workspace_root="C:\\x"
+            )
+        # No argument is even read: the refusal precedes any consumption.
+        assert _reads(extension) == [] and _reads(environment) == [], label
+        if isinstance(identity, _RecordingObject):
+            assert _reads(identity) == []
+    assert constructed == []
+    assert tripwire.events == []
+    assert environ_spy.reads == []
+
+
+def test_the_default_supervisor_builder_refusal_is_independent_of_environment_and_flags(tmp_path, monkeypatch):
+    from cfg1_doubles import StaticIdentityShape
+
+    tree = make_pi_world(tmp_path, monkeypatch)
+    for name in ("AIDO_CFG1_LIVE", "AIDO_ALLOW_LIVE_PI", "CFG1_ENABLE_LIVE_LAUNCH", "AIDO_LIVE"):
+        monkeypatch.setenv(name, "1")
+    ports = default_cfg1_run_ports(ambient_environ={"PATH": tree.path_value, "AIDO_CFG1_LIVE": "1"})
+    for identity in (StaticIdentityShape(), _proven_source(tree)):
+        with pytest.raises(RuntimeError, match="not qualified"):
+            ports.build_supervisor(
+                identity=identity, extension=object(), environment=object(), workspace_root="C:\\x"
+            )
+
+
 def test_composing_the_offline_provisioner_with_the_genuine_builder_never_launches(
     tmp_path, monkeypatch, git_executable
 ):
@@ -695,9 +885,9 @@ def test_composing_the_offline_provisioner_with_the_genuine_builder_never_launch
 
 def test_static_audit_of_the_barrier():
     """AST facts: the default binding names the refusing port; that port is an
-    unconditional refusal; the genuine builder refuses a genuine identity
-    before anything else; ``PiRpcSupervisor`` and ``build_pi_argv`` are used
-    only inside it; ``launch()`` is called once, after the L14 precondition;
+    unconditional refusal; the default supervisor builder is a single
+    unconditional ``raise`` and ``PiRpcSupervisor`` / ``build_pi_argv`` are not
+    named anywhere in the executor module; ``launch()`` is called once, after the L14 precondition;
     and no environment value is read by the provisioner."""
     executor_source = Path(run_executor.__file__).read_text(encoding="utf-8")
     tree = ast.parse(executor_source)
@@ -711,17 +901,26 @@ def test_static_audit_of_the_barrier():
     bound = keywords["provision_runtime"]
     assert isinstance(bound, ast.Attribute) and bound.attr == "live_runtime_provisioning_not_qualified"
     builder = next(n for n in ast.walk(defaults) if isinstance(n, ast.FunctionDef) and n.name == "_build_supervisor")
-    first = builder.body[0]
-    assert isinstance(first, ast.If) and isinstance(first.body[0], ast.Raise)
-    assert "Cfg1PiIdentity" in ast.unparse(first.test)
-    users = {
-        holder.name
-        for holder in ast.walk(tree)
-        if isinstance(holder, ast.FunctionDef)
-        for node in ast.walk(holder)
-        if isinstance(node, ast.Name) and node.id in ("PiRpcSupervisor", "build_pi_argv")
-    }
-    assert users <= {"default_cfg1_run_ports", "_build_supervisor"}
+    statements = [
+        st for st in builder.body if not (isinstance(st, ast.Expr) and isinstance(st.value, ast.Constant))
+    ]
+    # FU1: the whole body is ONE unconditional raise -- no ``if``, no type
+    # guard, no argument read, no construction code behind a guard.
+    assert len(statements) == 1 and isinstance(statements[0], ast.Raise)
+    assert ast.unparse(statements[0]) == "raise RuntimeError('cfg1 live pi launch is not qualified')"
+    # ...and the real supervisor / argv builder are not even NAMED anywhere in
+    # the executor module (imports included): there is nothing to reach.
+    named = (
+        {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+        | {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
+        | {
+            alias.name
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.Import, ast.ImportFrom))
+            for alias in node.names
+        }
+    )
+    assert not named & {"PiRpcSupervisor", "build_pi_argv"}
     launches = [
         call for call in ast.walk(tree)
         if isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute) and call.func.attr == "launch"

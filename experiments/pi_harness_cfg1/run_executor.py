@@ -90,8 +90,6 @@ from .identity import (
     BASE_URL_ENV_VAR_NAME,
     CFG1_MODEL_ID,
     CREDENTIAL_ENV_VAR_NAME,
-    PROVIDER_ID,
-    TOOL_ALLOWLIST,
 )
 from .lifecycle import (
     WORKSPACE_MINT_ATTEMPTED_NO_AUTHORITY,
@@ -1915,9 +1913,8 @@ def default_cfg1_run_ports(*, ambient_environ: Mapping[str, str]) -> Cfg1RunPort
     )
     from ar2.capability import CapDefinitions, mint_capability
     from ar2.handshakes import evaluate_extension_identity
-    from ar2.launch import build_pi_argv
     from ar2.observation import observe_repository
-    from ar2.supervisor import PiRpcSupervisor, RunBounds
+    from ar2.supervisor import RunBounds
     from ar2.verification import run_verification
 
     from . import pi_runtime_provision
@@ -1971,33 +1968,20 @@ def default_cfg1_run_ports(*, ambient_environ: Mapping[str, str]) -> Cfg1RunPort
         )
 
     def _build_supervisor(*, identity, extension, environment, workspace_root: str):
-        # F5-A live-launch barrier. The A2 provisioning mechanism is NOT
+        # F5-A live-launch barrier (FU1). The A2 provisioning mechanism is NOT
         # security-qualified (A2-3 incomplete) and no live launch is
-        # authorized, so the ONE CFG1 site that constructs a real
-        # ``PiRpcSupervisor`` refuses EVERY genuine CFG1 identity -- the L1
-        # source identity and the L3R launch identity alike. Unconditional: no
-        # flag, environment value or caller claim reaches this decision.
-        if type(identity) is Cfg1PiIdentity:
-            raise RuntimeError("cfg1 live pi launch is not qualified")
-        # R-40: the argv's provider/model and the probe's H2 expectations come
-        # from the SAME frozen module constants -- never a literal, the
-        # environment, a config file, or anything runtime-derived. ``identity``
-        # is the CFG1 static identity object: the frozen ``build_pi_argv``
-        # reads exactly its ``node_executable`` and ``pi_cli_js`` (Test AG).
-        return PiRpcSupervisor(
-            argv=build_pi_argv(
-                identity,
-                extension_entry=extension.entry_path,
-                tool_allowlist=TOOL_ALLOWLIST,
-                provider=PROVIDER_ID,
-                model=CFG1_MODEL_ID,
-            ),
-            cwd=workspace_root,
-            environment=environment.as_launch_snapshot(),
-            bounds=RunBounds(),
-            expected_provider=PROVIDER_ID,
-            expected_model=CFG1_MODEL_ID,
-        )
+        # authorized, so the default binding has NO real-supervisor
+        # construction path at all: this port refuses UNCONDITIONALLY, before
+        # it reads, types or touches any argument, the environment, a flag or
+        # a caller claim. A type guard on ``identity`` is not a barrier -- the
+        # frozen ``build_pi_argv`` consumes plain attributes, so a duck-typed
+        # object would have passed it -- which is why the construction code
+        # (``PiRpcSupervisor`` / ``build_pi_argv``) is deliberately absent
+        # from this function rather than merely guarded. A separately
+        # authorized and independently accepted live-enablement phase must
+        # restore it, building the argv's provider/model from the frozen
+        # ``PROVIDER_ID`` / ``CFG1_MODEL_ID`` constants (R-40).
+        raise RuntimeError("cfg1 live pi launch is not qualified")
 
     def _build_broker(*, capability):
         """Compose the frozen broker exactly as AR2 does, plus two adapters.
