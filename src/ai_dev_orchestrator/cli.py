@@ -117,6 +117,7 @@ from pathlib import Path
 import typer
 
 from ai_dev_orchestrator import __version__
+from ai_dev_orchestrator.workspace import content_read as _content_read
 from ai_dev_orchestrator.redaction import (
     API_KEY_PLACEHOLDER,
     BEARER_TOKEN_RE,
@@ -1432,33 +1433,11 @@ _L2_INSPECT_EMPTY_NOTE = (
 )
 
 
-def _dedupe_preserving_order(values: list[str]) -> list[str]:
-    """Drop exact duplicate strings, keeping the first occurrence's position."""
-    seen: set[str] = set()
-    ordered: list[str] = []
-    for value in values:
-        if value in seen:
-            continue
-        seen.add(value)
-        ordered.append(value)
-    return ordered
-
-
-def _stat_kind_and_size(resolved_candidate: str) -> tuple[str, int | None]:
-    """Classify an already-canonicalized path from its metadata alone.
-
-    ``os.stat`` and nothing else: the path is never opened, never read, and
-    never listed. A directory reports its kind and a ``None`` size — its
-    entries are not enumerated.
-    """
-    import stat as stat_module
-
-    result = os.stat(resolved_candidate)
-    if stat_module.S_ISDIR(result.st_mode):
-        return "directory", None
-    if stat_module.S_ISREG(result.st_mode):
-        return "file", result.st_size
-    return "other", None
+# Moved to `ai_dev_orchestrator.workspace.content_read` in ALPHA-P1A, unchanged,
+# so the Phase 5D2 read can be called in-process. Aliased here so the Phase
+# 5D1 and 5D2 call sites and their tests keep naming what they always named.
+_dedupe_preserving_order = _content_read._dedupe_preserving_order
+_stat_kind_and_size = _content_read._stat_kind_and_size
 
 
 def _run_l2_inspect_workspace(
@@ -2208,55 +2187,10 @@ _redact_secret_like_text = redact_secret_like_text
 _replace_assignment_value = _shared_replace_assignment_value
 
 
-def _read_bounded_bytes(resolved_candidate: str, *, limit: int) -> bytes | None:
-    """Read at most ``limit`` bytes from an already-canonicalized regular file.
-
-    Returns ``None`` when the file holds more than ``limit`` bytes. The cap is
-    enforced at the read itself rather than only against the size a previous
-    ``stat`` reported, so a file that grew in between is still refused instead
-    of being slurped whole.
-    """
-    with open(resolved_candidate, "rb") as handle:
-        chunk = handle.read(limit + 1)
-    return None if len(chunk) > limit else chunk
-
-
-def _decode_utf8_text(chunk: bytes) -> str | None:
-    """Decode strictly as UTF-8, or return ``None`` for anything else.
-
-    An embedded NUL is rejected up front: such a file is binary in every sense
-    that matters here even in the cases where its bytes happen to decode.
-    """
-    if b"\x00" in chunk:
-        return None
-    try:
-        return chunk.decode("utf-8")
-    except UnicodeDecodeError:
-        return None
-
-
-def _empty_content_item(original: str, status: str, **overrides) -> dict:
-    """One result row for a candidate whose contents were deliberately not read.
-
-    Every status shares one shape, so a consumer never has to branch on which
-    keys are present — the not-read cases simply carry a null ``content_text``
-    and a zero ``bytes_read``.
-    """
-    item = {
-        "original_plan_path": original,
-        "canonical_relative_path": None,
-        "status": status,
-        "kind": None,
-        "size_bytes": None,
-        "bytes_read": 0,
-        "encoding": None,
-        "redacted": False,
-        "redaction_count": 0,
-        "redaction_kinds": [],
-        "content_text": None,
-    }
-    item.update(overrides)
-    return item
+# Moved to `ai_dev_orchestrator.workspace.content_read` in ALPHA-P1A, unchanged.
+_read_bounded_bytes = _content_read._read_bounded_bytes
+_decode_utf8_text = _content_read._decode_utf8_text
+_empty_content_item = _content_read._empty_content_item
 
 
 def _run_l2_read_workspace_files(
@@ -2296,12 +2230,9 @@ def _run_l2_read_workspace_files(
         ApprovedPlanError,
         parse_approved_l1_plan_artifact,
     )
-    from ai_dev_orchestrator.workspace import (
-        CanonicalPathError,
-        CanonicalPathInputError,
-        PathClassification,
-        PathPolicy,
-        canonicalize_existing_path_under_workspace,
+    from ai_dev_orchestrator.workspace.content_read import (
+        WorkspaceContentReadRefused,
+        read_approved_plan_workspace_contents,
     )
 
     # 1. Explicit confirmation that an approved plan may be acted on. Checked
@@ -2402,265 +2333,23 @@ def _run_l2_read_workspace_files(
         )
         raise typer.Exit(code=1)
 
-    # 8. Exact identity matching against the config (design §3.5). A plan
-    #    approved for one project/repo grants nothing for another — and here
-    #    that mistake would mean printing another project's source.
-    mismatches = [
-        f"{label}: artifact has {artifact_value!r}, project config has "
-        f"{config_value!r}"
-        for label, artifact_value, config_value in (
-            ("project_id", artifact.project_id, project.project_id),
-            ("repo", artifact.repo, project.repo.github_repo),
-            ("plan.repo", artifact.plan.repo, project.repo.github_repo),
-            (
-                "plan_provenance.repo",
-                artifact.plan_provenance.repo,
-                project.repo.github_repo,
-            ),
+    # 8-12. Identity matching, the candidate-count caps, the lexical policy for
+    #       every candidate, the canonical guard, stat, the byte caps, the
+    #       bounded read, decoding and redaction. Extracted in ALPHA-P1A,
+    #       unchanged, so the supervised implementer can run this same read
+    #       in-process; the refusal text is exactly what was printed before.
+    try:
+        content_read = read_approved_plan_workspace_contents(
+            project=project, artifact=artifact
         )
-        if artifact_value != config_value
-    ]
-    if mismatches:
-        typer.echo(
-            "Error: the approved plan does not match this project config "
-            "exactly. A plan approved for one project/repo grants nothing for "
-            "another.",
-            err=True,
-        )
-        for mismatch in mismatches:
-            typer.echo(f"  Mismatch in {mismatch}", err=True)
-        typer.echo("No workspace was touched.", err=True)
+    except WorkspaceContentReadRefused as exc:
+        for line in exc.lines:
+            typer.echo(line, err=True)
         raise typer.Exit(code=1)
 
     plan = artifact.plan
-
-    # 9. Candidates come from files_likely_to_change and nowhere else.
-    #    files_forbidden_or_out_of_scope is never read — naming a path as out of
-    #    scope must not become a way to have it printed — and proposed_steps /
-    #    required_verification / risks / open_questions are prose that is never
-    #    treated as a path.
-    candidates = _dedupe_preserving_order(list(plan.files_likely_to_change))
-
-    if len(candidates) > content_policy.max_files:
-        typer.echo(
-            f"Error: the approved plan names {len(candidates)} distinct paths, "
-            "which exceeds read_only_workspace_content.max_files "
-            f"({content_policy.max_files}). No workspace was touched.",
-            err=True,
-        )
-        raise typer.Exit(code=1)
-
-    if len(candidates) > project.workspace_policy.max_changed_files:
-        typer.echo(
-            f"Error: the approved plan names {len(candidates)} distinct paths, "
-            "which exceeds workspace_policy.max_changed_files "
-            f"({project.workspace_policy.max_changed_files}). No workspace was "
-            "touched.",
-            err=True,
-        )
-        raise typer.Exit(code=1)
-
-    # 10. The lexical Phase 1 policy runs for EVERY candidate before any of them
-    #     is canonicalized, stat'd, or opened. A single failure stops the whole
-    #     run: a plan that names one forbidden path does not get the contents of
-    #     its other paths printed.
-    policy = PathPolicy.from_project_config(project)
-    normalized: list[tuple[str, str]] = []
-    refusals: list[str] = []
-    for original in candidates:
-        decision = policy.check_read(original)
-        if decision.classification is PathClassification.PROTECTED:
-            if not content_policy.allow_protected_paths:
-                refusals.append(
-                    f"{original!r}: classified protected, and "
-                    "read_only_workspace_content.allow_protected_paths is false"
-                )
-                continue
-        elif not decision.permitted:
-            refusals.append(
-                f"{original!r}: classified {decision.classification.value} "
-                f"({decision.reason})"
-            )
-            continue
-        normalized.append((original, decision.path))
-
-    if refusals:
-        typer.echo(
-            "Error: the approved plan names paths the project's path policy "
-            "refuses to read. The whole run is abandoned; no path was "
-            "canonicalized, stat'd, opened, or otherwise touched.",
-            err=True,
-        )
-        for refusal in refusals:
-            typer.echo(f"  Refused {refusal}", err=True)
-        raise typer.Exit(code=1)
-
-    # 11. Every candidate passed the lexical gate, so — and only so — the
-    #     configured workspace may be touched. The root is canonicalized first,
-    #     which proves it exists, is a directory, and satisfies the symlink
-    #     policy before any candidate is resolved against it. With no candidates
-    #     there is nothing to read and the workspace stays untouched.
-    items: list[dict] = []
-    total_bytes_read = 0
-    allow_symlinks = project.workspace_policy.allow_symlinks
-
-    if normalized:
-        try:
-            canonicalize_existing_path_under_workspace(
-                project.repo.workspace_path,
-                project.repo.workspace_path,
-                allow_symlinks=allow_symlinks,
-            )
-        except CanonicalPathError as exc:
-            typer.echo(
-                "Error: the configured repo.workspace_path could not be "
-                f"canonicalized. {type(exc).__name__}: {exc}",
-                err=True,
-            )
-            typer.echo("No candidate path was read.", err=True)
-            raise typer.Exit(code=1)
-
-    for original, candidate in normalized:
-        try:
-            resolved = canonicalize_existing_path_under_workspace(
-                project.repo.workspace_path,
-                candidate,
-                allow_symlinks=allow_symlinks,
-            )
-        except CanonicalPathInputError:
-            # The root was proven good above and the candidate is a non-blank
-            # string that passed the lexical gate, so the only remaining input
-            # failure is "this path does not exist". That is an ordinary,
-            # reportable answer, not a boundary violation.
-            items.append(_empty_content_item(original, "missing"))
-            continue
-        except CanonicalPathError as exc:
-            # Containment, symlink, ambiguity, and resolution failures are
-            # boundary violations. They stop the whole run.
-            typer.echo(
-                f"Error: {original!r} failed the canonical workspace path "
-                f"guard. {type(exc).__name__}: {exc}",
-                err=True,
-            )
-            typer.echo("The run is abandoned; no result is printed.", err=True)
-            raise typer.Exit(code=1)
-
-        relative = resolved.relative_path.replace("\\", "/")
-
-        try:
-            kind, size_bytes = _stat_kind_and_size(resolved.resolved_candidate)
-        except FileNotFoundError:
-            # Time-of-check/time-of-use: the path existed a moment ago and does
-            # not now. Reported as missing rather than as a violation.
-            items.append(_empty_content_item(original, "missing"))
-            continue
-        except OSError as exc:
-            typer.echo(
-                f"Error: metadata for {original!r} could not be read after "
-                f"canonicalization. {type(exc).__name__}: {exc}",
-                err=True,
-            )
-            typer.echo("The run is abandoned; no result is printed.", err=True)
-            raise typer.Exit(code=1)
-
-        # A directory is reported as one and its entries are never enumerated;
-        # anything that is neither a regular file nor a directory is reported
-        # and left alone rather than guessed at.
-        if kind != "file":
-            items.append(
-                _empty_content_item(
-                    original,
-                    "directory_no_content" if kind == "directory" else "other_no_content",
-                    canonical_relative_path=relative,
-                    kind=kind,
-                )
-            )
-            continue
-
-        if size_bytes > content_policy.max_file_bytes:
-            items.append(
-                _empty_content_item(
-                    original,
-                    "too_large",
-                    canonical_relative_path=relative,
-                    kind=kind,
-                    size_bytes=size_bytes,
-                )
-            )
-            continue
-
-        if total_bytes_read + size_bytes > content_policy.max_total_bytes:
-            items.append(
-                _empty_content_item(
-                    original,
-                    "skipped_total_limit",
-                    canonical_relative_path=relative,
-                    kind=kind,
-                    size_bytes=size_bytes,
-                )
-            )
-            continue
-
-        # 12. Only now is a file opened, and only up to the per-file cap.
-        try:
-            chunk = _read_bounded_bytes(
-                resolved.resolved_candidate, limit=content_policy.max_file_bytes
-            )
-        except FileNotFoundError:
-            items.append(_empty_content_item(original, "missing"))
-            continue
-        except OSError as exc:
-            typer.echo(
-                f"Error: {original!r} could not be read after it was stat'd. "
-                f"{type(exc).__name__}: {exc}",
-                err=True,
-            )
-            typer.echo("The run is abandoned; no result is printed.", err=True)
-            raise typer.Exit(code=1)
-
-        if chunk is None:
-            # The file grew past the per-file cap between the stat and the read.
-            items.append(
-                _empty_content_item(
-                    original,
-                    "too_large",
-                    canonical_relative_path=relative,
-                    kind=kind,
-                    size_bytes=size_bytes,
-                )
-            )
-            continue
-
-        text = _decode_utf8_text(chunk)
-        if text is None:
-            items.append(
-                _empty_content_item(
-                    original,
-                    "binary_or_non_utf8",
-                    canonical_relative_path=relative,
-                    kind=kind,
-                    size_bytes=size_bytes,
-                )
-            )
-            continue
-
-        content_text, redaction_kinds = _redact_secret_like_text(text)
-        total_bytes_read += len(chunk)
-        items.append(
-            {
-                "original_plan_path": original,
-                "canonical_relative_path": relative,
-                "status": "read",
-                "kind": kind,
-                "size_bytes": size_bytes,
-                "bytes_read": len(chunk),
-                "encoding": "utf-8",
-                "redacted": bool(redaction_kinds),
-                "redaction_count": len(redaction_kinds),
-                "redaction_kinds": _dedupe_preserving_order(redaction_kinds),
-                "content_text": content_text,
-            }
-        )
+    items = list(content_read.items)
+    total_bytes_read = content_read.total_bytes_read
 
     approval = artifact.approval
     provenance = artifact.plan_provenance

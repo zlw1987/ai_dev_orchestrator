@@ -644,6 +644,86 @@ class ControlledReviewConfig(_Strict):
         return value
 
 
+class SupervisedImplementerConfig(BaseModel):
+    """Per-project opt-in for the **supervised implementer** (ALPHA-P1A, DEC-SUP).
+
+    The supervised implementer asks one exactly-named model for the final text
+    of **one** approved file. Its output is untrusted *proposed content* and
+    nothing more: it enters the unchanged L2 chain (deterministic diff, exact
+    human diff approval, the single 5F2C writer) and is never a write.
+
+    ALPHA-P1A is **offline and library-only**. No CLI command reads this block,
+    and the library's runner accepts exactly an ``httpx.MockTransport`` and
+    rejects any other transport type, a guard against accidental live use.
+    That gate is not a sandbox: a mock handler is arbitrary trusted caller code.
+    Enabling this block creates no authorized live entry point.
+
+    The block is ``strict`` (``"yes"`` is not ``true``, and ``1`` is not a
+    string) and ``frozen``. It fails closed by construction: an absent block is
+    identical to a disabled one. It deliberately has **no field** for an
+    endpoint, base URL, API key or environment-variable name (connection details
+    stay out of project config), a prompt, a retry count, a fallback model, a
+    second candidate, a protected-path override, or a multi-file switch.
+
+    ``candidate`` and ``model`` are both required and must agree **exactly**
+    with the supervised-candidate registry
+    (:data:`ai_dev_orchestrator.supervised_implementer.identity.SUPERVISED_CANDIDATE_MODEL_IDS`).
+    Requiring both is the point: a config that names candidate ``SUP-D`` with
+    any other model is refused, so no candidate can be silently substituted.
+    """
+
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+    enabled: bool = Field(
+        default=False,
+        description="Whether this project permits the supervised implementer at "
+        "all. Absent or false means no request is ever built.",
+    )
+    candidate: str | None = Field(
+        default=None,
+        description="The supervised candidate id, matched exactly (e.g. 'SUP-D'). "
+        "No default; an enabled block without one is refused at the gate.",
+    )
+    provider: str = Field(
+        default="litellm",
+        description="Exactly 'litellm' or 'vllm', matched exactly and "
+        "case-sensitively. Anything else is refused at the gate.",
+    )
+    model: str | None = Field(
+        default=None,
+        description="The exact model id. It must equal the registry's model for "
+        "'candidate'; there is no environment or CLI override.",
+    )
+    allow_insecure_http: bool = Field(
+        default=False,
+        description="Whether this project explicitly permits approved source "
+        "to be sent over PLAINTEXT HTTP, for EVERY provider. Defaults to false, "
+        "so an http:// endpoint is refused before any request is built. True "
+        "does NOT make the transport secure, encrypted, private, authenticated, "
+        "or safe for secrets; it records only that the project accepted an "
+        "unencrypted transport.",
+    )
+    structured_output: bool = Field(
+        default=False,
+        description="Whether the request carries the generated "
+        "SupervisedImplementerOutput JSON Schema as response_format. It "
+        "constrains generation only; the strict parser stays final, and a "
+        "server rejection is terminal with no unstructured fallback.",
+    )
+    max_output_tokens: int | None = Field(
+        default=None,
+        description="OPTIONAL operator-requested output cap. Absent or null — "
+        "the default — means no 'max_tokens' field is sent at all.",
+    )
+
+    @field_validator("max_output_tokens", mode="before")
+    @classmethod
+    def _check_max_output_tokens(cls, value: object) -> object:
+        return _validate_optional_output_token_cap(
+            value, "supervised_implementer.max_output_tokens"
+        )
+
+
 class ProjectConfig(_Strict):
     """Top-level typed project configuration."""
 
@@ -681,6 +761,9 @@ class ProjectConfig(_Strict):
     )
     controlled_review: ControlledReviewConfig = Field(
         default_factory=ControlledReviewConfig
+    )
+    supervised_implementer: SupervisedImplementerConfig = Field(
+        default_factory=SupervisedImplementerConfig
     )
 
     @property

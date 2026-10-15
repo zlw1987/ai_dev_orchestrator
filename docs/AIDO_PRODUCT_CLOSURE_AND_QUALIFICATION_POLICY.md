@@ -23,6 +23,7 @@
 | Recorded | 2026-09-24 |
 | Recorded after | CFG1 FU1 implementation ACCEPTED / FROZEN at `7f31217580b21027556b2061d5e765c7eef162c0` |
 | Authorizes | **Nothing** |
+| Amended | 2026-10-14 — §8 DEC-SUP: opens the supervised-implementer branch (`SUP-D`, no qualification credit). Offline, library-only ALPHA-P1A only; nothing live |
 
 ## 1. Closure discipline
 
@@ -146,3 +147,52 @@ This document does not authorize: any live run; qualification of any candidate;
 any addition to `CANDIDATE_MODEL_IDS`; any real-workspace write; A4; Stage 2; AR2
 live; any change to a hard bar, evidence semantic, or role qualification policy;
 or any removal of a frozen roadmap prerequisite.
+
+## 8. DEC-SUP amendment (2026-10-14) — supervised implementer branch
+
+> **Appended amendment. §1–§7 above are unchanged and still in force.** This
+> section records a human/architect decision, DEC-SUP option A, taken on the
+> proposal
+> [ALPHA_P1A_DEC_SUP_DECISION_PROPOSAL.md](ALPHA_P1A_DEC_SUP_DECISION_PROPOSAL.md).
+
+**What changes in §3.** §3 opened the supervised-implementer branch only after
+C and D had both failed the frozen hard bar. DEC-SUP opens **one** supervised
+branch now, **in parallel** with that sequence and without replacing it. §3's
+autonomous sequencing (C next, then D, and the hard bar never lowered) is
+otherwise unchanged.
+
+**The supervised role.**
+
+- Role `supervised_implementer` is distinct from the autonomous (Pi)
+  implementer role. Its output is **untrusted proposed content only**, and it
+  reaches a workspace only through the unchanged L2 chain: deterministic diff,
+  exact human diff approval (H6), then the single 5F2C writer.
+- Candidate `SUP-D` is bound to the exact model id `qwen3.8-27b`. `SUP-D` is
+  **not** added to `CANDIDATE_MODEL_IDS`, carries **no** qualification credit
+  in either direction, and is not Candidate D's autonomous qualification. A
+  supervised result is never evidence for the §16 hard bar, and no
+  autonomous-qualification record may reference it.
+- Role, harness, backend and model separation (§4) is unchanged. A supervised
+  PASS of any kind grants zero autonomous-implementer and zero reviewer
+  authority.
+
+**Item answers (proposal §6).** Items 2–7 and 9 adopt the recommended
+options. Item 8 was **not decided**: the proposal offered it with no
+recommended option, and the operator gave no separate answer.
+
+| # | Decision |
+|---|---|
+| 2 | Role `supervised_implementer`; candidate `SUP-D` = `qwen3.8-27b`, outside `CANDIDATE_MODEL_IDS`, no credit |
+| 3 | One in-scope, unredacted, cap-bounded file per request, announced before transmission; multi-file and repository-wide transmission stay forbidden |
+| 4 | The Phase 5D2 bounded read runs **in-process**; a saved packet is never transmission authority |
+| 5 | Plaintext HTTP requires an explicit acknowledgement opt-in for **every** provider, shipping `false`, worded as an acknowledgement and never as a security claim |
+| 6 | A separate implementer-provenance record; AIDO-fixed rationale prose in the diff artifact, never model prose |
+| 7 | Zero semantic retries and zero transport retries |
+| 8 | **Not authorized.** No permission to modify `CLAUDE.md` was given. Its existing non-goal wording ("no model-backed implementer", "nothing else may call a model") is acknowledged as stale relative to the authorized offline supervised library. Updating `CLAUDE.md` requires a separate, explicit operator authorization |
+| 9 | ALPHA-P1A is **offline and library-only**: no CLI command, no real client construction, no live request |
+
+**Still not authorized:** any live Qwen 3.8 request; any real-source
+transmission; any real-workspace execution; a CLI command for the supervised
+implementer; a fixer; a review/fix loop; a fallback model; or provider
+failover. The first live supervised pilot requires its own separate
+authorization (proposal §7).

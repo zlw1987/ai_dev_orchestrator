@@ -775,6 +775,14 @@ def test_the_canonical_guard_has_exactly_one_caller():
     :func:`canonicalize_write_target_under_workspace` — the create-aware Phase
     5F2B entry point — which is a separate function with its own separate test
     below. The read guard's caller count is unchanged at one.
+
+    **ALPHA-P1A moved it, deliberately.** The Phase 5D2 bounded read was
+    extracted unchanged from ``cli.py`` into ``workspace/content_read.py`` so
+    that the supervised implementer could run the *same* reader in-process
+    (DEC-SUP item 4). The set of things that can reach a workspace through this
+    guard is still exactly the Phase 5D1 inspection (in ``cli.py``) and the
+    Phase 5D2 read (now in ``content_read.py``). The supervised implementer
+    reaches it only through that reader and never names the guard itself.
     """
     package_root = Path(canonical.__file__).resolve().parents[1]
     exporter = Path(canonical.__file__).resolve().parent / "__init__.py"
@@ -787,4 +795,4 @@ def test_the_canonical_guard_has_exactly_one_caller():
         if "canonicalize_existing_path_under_workspace" in source:
             callers.append(module_path.name)
         assert "workspace.canonical" not in source, module_path.name
-    assert callers == ["cli.py"]
+    assert callers == ["cli.py", "content_read.py"]

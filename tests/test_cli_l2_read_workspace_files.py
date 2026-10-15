@@ -37,6 +37,7 @@ from ai_dev_orchestrator import cli
 from ai_dev_orchestrator import config_loader as _config_loader  # noqa: F401
 from ai_dev_orchestrator import models as _models  # noqa: F401
 from ai_dev_orchestrator import workspace as _workspace  # noqa: F401
+from ai_dev_orchestrator.workspace import content_read as _content_read
 from ai_dev_orchestrator.cli import app
 from ai_dev_orchestrator.config_loader import load_project_config
 from ai_dev_orchestrator.handoff import REQUIRED_APPROVAL_TEXT
@@ -1789,6 +1790,9 @@ def _command_source() -> str:
         for obj in (
             cli._run_l2_read_workspace_files,
             cli.l2_read_workspace_files,
+            # ALPHA-P1A moved steps 8-12 into this library reader, unchanged;
+            # it is part of the command's source for every assertion below.
+            _content_read.read_approved_plan_workspace_contents,
             cli._redact_secret_like_text,
             cli._replace_assignment_value,
             cli._read_bounded_bytes,
@@ -1840,8 +1844,10 @@ def test_command_source_names_no_client_network_process_or_patch_symbol():
 
 def test_the_canonical_guard_is_imported_lazily_not_at_module_import():
     assert not hasattr(cli, "canonicalize_existing_path_under_workspace")
+    assert not hasattr(_content_read, "canonicalize_existing_path_under_workspace")
+    # ALPHA-P1A: the guard is imported inside the extracted library reader.
     assert "canonicalize_existing_path_under_workspace" in inspect.getsource(
-        cli._run_l2_read_workspace_files
+        _content_read.read_approved_plan_workspace_contents
     )
 
 
