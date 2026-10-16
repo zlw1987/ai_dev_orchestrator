@@ -75,10 +75,15 @@ before doing any work here.
   accepted. **The reasoning was never the failure — the envelope was.** So V2
   adds one **generation constraint** and changes the parser not at all. The
   output artifact is now **`review-packet.v4`**.
+- **ALPHA-P1B (DEC-SUP-LIVE) implemented the live supervised, proposal-only
+  implementer** (two commands; it awaits independent review). It sends ONE
+  approved file to `SUP-D` once under a human-completed, single-use, per-run
+  consent and stops before human exact-diff approval. See "What the supervised
+  implementer can and cannot do" below.
 - **The first controlled write → verify → supervised review → human path now
   exists.** **L2 as originally defined is still NOT complete**: there is no
-  model-backed implementer, no automatic fixer, no branch creation, no commit, no
-  push, no PR, and no generalized writer.
+  **autonomous** model-backed implementer, no automatic fixer, no branch
+  creation, no commit, no push, no PR, and no generalized writer.
 
 ```text
 5F2C           Controlled Single-File Writer        DONE / ACCEPTED
@@ -90,12 +95,14 @@ before doing any work here.
 5F2E-V1        Direct vLLM Reviewer Provider        DONE
 5F2E-V1-FU1    Provider env isolation + wording     DONE
 5F2E-V2        Structured vLLM Reviewer Output      DONE
+ALPHA-P1A      Offline Supervised Implementer       DONE / ACCEPTED
+ALPHA-P1B      Live Supervised Implementer          IMPLEMENTED (awaiting review)
 → bounded write → verify → supervised review → human
 ```
 
 Do **not** insert generalized writer work here, and do **not** implement a fixer
-(old Phase 7) or a model-backed implementer: both remain separately
-unauthorized. The old roadmap's **Phase 6 "qwen reviewer" is superseded** by
+(old Phase 7) or an **autonomous** model-backed implementer: both remain
+separately unauthorized. The old roadmap's **Phase 6 "qwen reviewer" is superseded** by
 5F2E's configurable reviewer — 5F2E hard-codes no model, so no separate
 qwen-only integration phase is required.
 
@@ -543,11 +550,88 @@ waiting.
 > **Redaction is a backstop, not a guarantee.** Never write code or documentation
 > claiming the transmitted material is secret-free.
 
-Do **not** add any of the following without an explicit, separate prompt: a
-model-backed implementer; a fixer; a review/fix loop; a second reviewer,
-consensus, or voting; multiple reviewer models; full-file or repository-wide
-transmission; multi-file review; a prompt audit file; a persistent review
-database, queue, or background job.
+Do **not** add any of the following without an explicit, separate prompt: an
+autonomous model-backed implementer; a fixer; a review/fix loop; a second
+reviewer, consensus, or voting; multiple reviewer models; full-file or
+repository-wide transmission; multi-file review; a prompt audit file; a
+persistent review database, queue, or background job.
+
+### What the supervised implementer can and cannot do (ALPHA-P1A / ALPHA-P1B)
+
+Governed by DEC-SUP and DEC-SUP-LIVE (policy §8 and §9). This is a
+**supervised, proposal-only** implementer. It is **not** the autonomous
+model-backed implementer, which still does not exist and is still not
+authorized.
+
+- **Identity.** Role `supervised_implementer`, candidate `SUP-D` = exactly
+  `qwen3.8-27b`. It is outside `CANDIDATE_MODEL_IDS`, earns **no** qualification
+  credit in either direction, and is not Candidate D's autonomous
+  qualification. Never imply that Qwen 3.8 is qualified.
+- **The model proposes file content and nothing else.** It returns the complete
+  final text of ONE approved file as `{"content_text": ...}`. AIDO owns the path,
+  scope, change type, candidate identity and every word of prose in the approval
+  surface. The reply goes through the strict parser (rejected, never repaired),
+  an AIDO-assembled `proposed-content.v1`, the unchanged 5E3 generator and an
+  in-memory writer-reachability proof, then **stops before human exact-diff
+  approval (H6)**. No write, no approval, no apply, no verification, no Git
+  write, no commit, push or PR.
+- **ALPHA-P1A** is the offline library runner. It accepts exactly
+  `httpx.MockTransport`, and no CLI command reaches it.
+- **ALPHA-P1B** adds the only live entry points.
+  `l2-supervised-implementer-prepare` is offline: it reads no provider
+  environment variable and builds no client, and it writes an authorization
+  **draft** that grants nothing. `l2-supervised-implementer-run` consumes one
+  human-completed, **single-use, per-run** `supervised-implementer-authorization.v1`
+  that binds the plan, the config, the target, the exact source bytes, the
+  AIDO-observed clean Git HEAD, the exact wire payload, the model, the provider,
+  the human-typed endpoint scheme, host and port, the wait bound, the
+  evidence directory and the authorization ledger. It expires after 60 minutes.
+- **Single use is decided by the durable authorization ledger
+  (ALPHA-P1B-FU1), never by run evidence.** `prepare` records a positive
+  issuance record (holding a nonce whose SHA-256 the authorization binds) in
+  `supervised_implementer.authorization_ledger_dir`, which is outside the
+  workspace and disjoint from the evidence directory. `run` consumes it by
+  one exclusive create of a tombstone (`O_EXCL` — not `os.rename` or
+  `os.remove`, which racing Windows threads can all "win"), then deletes the
+  issuance record, destroying the nonce, and transmits only from that settled
+  state. A missing, corrupt or mismatched ledger record is refused and never
+  read as "unused", so deleting, rotating or archiving evidence, or the
+  ledger, cannot restore a spent authorization. Do **not** make evidence, or
+  the absence of anything, proof of an unused authorization again. A deliberate
+  restore of a pre-consumption ledger copy is outside the threat model (A-19).
+- **Gates.** `enabled` plus a **separate** `live_transmission_enabled` (ships
+  false); provider exactly `litellm` (D-2; `vllm` is refused on the live path);
+  `structured_output` false (D-9); an explicit `attempt_timeout_seconds` (D-4,
+  no default); an existing `authorization_ledger_dir` (FU1, no default); and
+  both `--transmit-approved-source` and `--real-implementer`.
+  Only the five `AIDO_LITELLM_*` names are read, once, after every offline
+  check. The model comes from the registry, and transport retries are forced to
+  0.
+- **Workspace state is AIDO-observed (D-6).** The live path reuses the 5F2C
+  writer's read-only Git preflight, unchanged, plus `rev_parse_head`. It brackets
+  the 5D2 read with two observations of a wholly clean tree at the bound HEAD.
+  No Git operation is added to the fixed set.
+- **Exactly one request.** AIDO's own bounded counting transport refuses a
+  second request, any URL or body other than the consented one, a status
+  outside 2xx/4xx/5xx, a non-identity encoding, and a body over 16 MiB (a
+  transport safety limit, never a token budget). The network transport is
+  `httpx.HTTPTransport(retries=0, trust_env=False)`, so environment proxies are
+  not consulted. The wait bound is AIDO's own deadline with the RS1 wording:
+  AIDO's wait ending is not cancellation, and a stall is terminal.
+- **Plaintext http** needs both `allow_insecure_http` and the exact per-run
+  acknowledgement phrase. It is never a security claim.
+- **Evidence** lives under an evidence directory outside the workspace. The
+  request and an accepted response are retained locally. A rejected reply is
+  recorded by digest and length only. No key, header or base URL is ever
+  printed or persisted.
+- **The first live run** needs a separate AUTH-PILOT decision (D-10) naming the
+  repository, clone and file. Implementation authority is offline only.
+
+Do **not** add any of the following without an explicit, separate prompt: an
+autonomous model-backed implementer; a fixer; a retry or a second request; a
+fallback model; a live `vllm` provider; structured output on the live path;
+multi-file transmission; a CLI model, endpoint, key, timeout or provider option;
+automatic H6 approval; or a real endpoint in code or docs.
 
 ## Role split
 
@@ -571,8 +655,10 @@ prompt explicitly asks:
   and no model-proposed command. `required_verification` remains planner prose
   and is **never** command authority. Exactly two subprocess capabilities exist,
   and neither is a general executor: the Phase 5F2C writer's **fixed, read-only**
-  Git inspection set, which is part of that writer's own correctness contract;
-  and Phase 5F2D's single project-config-authorized verification invocation.
+  Git inspection set, which is part of that writer's own correctness contract
+  (ALPHA-P1B reuses its read-only preflight, unchanged, to prove the source
+  state it binds; no operation was added); and Phase 5F2D's single
+  project-config-authorized verification invocation.
   Neither may grow into a general executor here.
 - **Project verification execution exists, in exactly one narrow form.** Phase
   5F2D's `l2-verify-approved-file-edit` launches **one** absolute executable
@@ -581,23 +667,25 @@ prompt explicitly asks:
   **controlled invocation, not a sandbox** — and must never claim otherwise.
 - **Reviewer integration exists, in exactly one narrow form** (Phase 5F2E,
   supervised by 5F2E-RS1, with two selectable backends since 5F2E-V1 and an
-  optional vLLM-only generation constraint since 5F2E-V2), and it is
-  the **only** role wired up. Two *providers* is not two *reviewers*: exactly one
+  optional vLLM-only generation constraint since 5F2E-V2). Besides it, the
+  only other model-backed role is the **supervised, proposal-only** implementer
+  (ALPHA-P1B). Two *providers* is not two *reviewers*: exactly one
   project-configured model reviews, over exactly one project-configured backend.
   There is **no fixer**, no review/fix loop, no second reviewer, no consensus, no
-  fallback model, no provider failover, and no model-backed implementer. A reviewer verdict is advisory and ends
+  fallback model, no provider failover, and no **autonomous** model-backed
+  implementer. A reviewer verdict is advisory and ends
   at a human. The only application-level second model call anywhere is RS1's
   **one** bounded compact retry, which fires only after a **completed** response
   carried no usable review at all — never after a timeout, and never to revisit a
   verdict that was produced.
 - No **agent logic** beyond that one reviewer role and its bounded attempt
-  policy. RS1 is resource-budget supervision of a one-shot reviewer, **not** an
+  policy, and the one-shot supervised implementer request. RS1 is resource-budget supervision of a one-shot reviewer, **not** an
   agent-loop supervisor, and must not grow into one here.
 - No LangGraph / CrewAI / AutoGen / n8n (no agent framework).
 
-Real model calls exist only behind the three explicitly gated commands
-(`real-llm-smoke-test`, `generate-model-plan`, `l2-review-approved-file-edit`);
-nothing else may call a model, and no model output may ever select a path, a
+Real model calls exist only behind the four explicitly gated commands
+(`real-llm-smoke-test`, `generate-model-plan`, `l2-review-approved-file-edit`,
+`l2-supervised-implementer-run`); nothing else may call a model, and no model output may ever select a path, a
 command, an executable, or a file to change.
 
 ## Coding discipline
@@ -613,8 +701,8 @@ command, an executable, or a file to change.
   repository under pytest `tmp_path`**. Never test against a real target project.
   A verification test's program must likewise be a **synthetic script written
   under `tmp_path`**, never a real project executable.
-- Any test that exercises the reviewer must use the existing mockable LiteLLM
-  client path with `httpx.MockTransport`. **No real model call and no socket in
+- Any test that exercises the reviewer or the supervised implementer must use
+  the existing mockable LiteLLM client path with `httpx.MockTransport`. **No real model call and no socket in
   the test suite**, and no API key is ever needed to run it.
 
 ## Safety principles

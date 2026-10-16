@@ -652,11 +652,19 @@ class SupervisedImplementerConfig(BaseModel):
     nothing more: it enters the unchanged L2 chain (deterministic diff, exact
     human diff approval, the single 5F2C writer) and is never a write.
 
-    ALPHA-P1A is **offline and library-only**. No CLI command reads this block,
-    and the library's runner accepts exactly an ``httpx.MockTransport`` and
-    rejects any other transport type, a guard against accidental live use.
-    That gate is not a sandbox: a mock handler is arbitrary trusted caller code.
-    Enabling this block creates no authorized live entry point.
+    ALPHA-P1A's library runner is **offline**: it accepts exactly an
+    ``httpx.MockTransport`` and rejects any other transport type, a guard
+    against accidental live use. That gate is not a sandbox: a mock handler is
+    arbitrary trusted caller code. ``enabled`` alone still creates no live
+    entry point.
+
+    ALPHA-P1B adds the live supervised path (``l2-supervised-implementer-prepare``
+    and ``l2-supervised-implementer-run``). It additionally requires
+    ``live_transmission_enabled: true``, ``provider: "litellm"``,
+    ``structured_output: false``, an explicit ``attempt_timeout_seconds`` and
+    an ``authorization_ledger_dir`` (ALPHA-P1B-FU1), plus a per-run,
+    human-completed, single-use authorization. No config value is ever per-run
+    consent.
 
     The block is ``strict`` (``"yes"`` is not ``true``, and ``1`` is not a
     string) and ``frozen``. It fails closed by construction: an absent block is
@@ -714,6 +722,38 @@ class SupervisedImplementerConfig(BaseModel):
         default=None,
         description="OPTIONAL operator-requested output cap. Absent or null — "
         "the default — means no 'max_tokens' field is sent at all.",
+    )
+    # ALPHA-P1B. Deliberately SEPARATE from `enabled`: P1A documented `enabled`
+    # as creating no live entry point, so reusing it would silently make every
+    # offline-enabled config live-capable.
+    live_transmission_enabled: bool = Field(
+        default=False,
+        description="ALPHA-P1B. Whether this project permits the two live "
+        "supervised-implementer commands at all. Separate from 'enabled'. It "
+        "grants NO per-run consent: every live run still needs a fresh, "
+        "human-completed, single-use authorization.",
+    )
+    attempt_timeout_seconds: float | None = Field(
+        default=None,
+        gt=0,
+        le=3600,
+        allow_inf_nan=False,
+        description="ALPHA-P1B. The maximum time AIDO WAITS for the one live "
+        "request, by AIDO's own monotonic deadline. Required (no default) when "
+        "the live path is used, and bound into the per-run authorization. It "
+        "bounds AIDO's wait only: it is not a cancellation, and the backend's "
+        "inference may continue after AIDO stops waiting.",
+    )
+    # ALPHA-P1B-FU1. Deliberately NOT the evidence directory: run evidence may be
+    # deleted, rotated or archived, and that must never restore authority.
+    authorization_ledger_dir: str | None = Field(
+        default=None,
+        description="ALPHA-P1B-FU1. The durable single-use authorization ledger: "
+        "an existing, absolute, canonical directory outside the workspace and "
+        "disjoint from every evidence directory. Required (no default) when the "
+        "live path is used. 'prepare' records each issued authorization there "
+        "and 'run' spends it there; a missing or unmatched record is refused, "
+        "never treated as unused. It holds no source text and no credential.",
     )
 
     @field_validator("max_output_tokens", mode="before")

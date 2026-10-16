@@ -1398,6 +1398,10 @@ def test_the_write_target_guard_has_exactly_two_callers():
     - ``verifier.py`` (Phase 5F2D) resolves the same target read-only, in order
       to prove it still holds the exact approved post-image before and after a
       verification process runs. It writes nothing.
+    - ``live_workspace.py`` (ALPHA-P1B, D-6) resolves the one approved target
+      read-only, to run the writer's own read-only Git preflight before a live
+      supervised-implementer transmission. It writes nothing. This third caller
+      was added on purpose, under DEC-SUP-LIVE.
     """
     package_root = Path(canonical.__file__).resolve().parents[2]
     exporter = Path(canonical.__file__).resolve().parent / "__init__.py"
@@ -1415,7 +1419,7 @@ def test_the_write_target_guard_has_exactly_two_callers():
             if name in source:
                 callers.add(module_path.name)
         assert "workspace.canonical" not in source, module_path.name
-    assert callers == {"writer.py", "verifier.py"}
+    assert callers == {"writer.py", "verifier.py", "live_workspace.py"}
 
 
 def test_exactly_one_write_command_exists_and_no_other_command_gained_one(tmp_path):

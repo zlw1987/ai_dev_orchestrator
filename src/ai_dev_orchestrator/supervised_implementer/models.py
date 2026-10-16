@@ -294,37 +294,66 @@ class SupervisedImplementerResult(_Frozen):
 
     @model_validator(mode="after")
     def _records_agree(self) -> SupervisedImplementerResult:
-        diff = self.diff_proposal
         prov = self.provenance
-        identity = diff.provenance
-        if (
-            identity.project_id != prov.project_id
-            or identity.repo != prov.repo
-            or identity.issue_number != prov.issue_number
-        ):
-            raise ValueError("diff proposal and provenance name different targets.")
-        if identity.engine != "deterministic" or identity.real_call is not False:
-            raise ValueError("the diff proposal was not produced by the deterministic generator.")
-
-        if prov.outcome == "diff_proposed":
-            if len(diff.changes) != 1 or diff.omitted_paths:
-                raise ValueError("a proposed diff must carry exactly one change.")
-            change = diff.changes[0]
-            if (
-                change.path != prov.target_path
-                or change.change_type != "modify"
-                or change.pre_image_sha256 != prov.transmitted_source_sha256
-                or change.post_image_sha256 != prov.proposed_content_sha256
-            ):
-                raise ValueError("diff change and provenance disagree on path, type or digests.")
-            if prov.proposed_content_sha256 == prov.transmitted_source_sha256:
-                raise ValueError("a proposed diff cannot have identical pre- and post-images.")
-        else:
-            if diff.changes or list(diff.omitted_paths) != [prov.target_path]:
-                raise ValueError("a no-change outcome must carry no diff and omit exactly the target.")
-            if prov.proposed_content_sha256 != prov.transmitted_source_sha256:
-                raise ValueError("a no-change outcome must propose the transmitted content unchanged.")
+        check_diff_agrees_with_content_provenance(
+            self.diff_proposal,
+            project_id=prov.project_id,
+            repo=prov.repo,
+            issue_number=prov.issue_number,
+            outcome=prov.outcome,
+            target_path=prov.target_path,
+            transmitted_source_sha256=prov.transmitted_source_sha256,
+            proposed_content_sha256=prov.proposed_content_sha256,
+        )
         return self
+
+
+def check_diff_agrees_with_content_provenance(
+    diff: DiffProposalArtifact,
+    *,
+    project_id: str,
+    repo: str,
+    issue_number: int,
+    outcome: str,
+    target_path: str,
+    transmitted_source_sha256: str,
+    proposed_content_sha256: str,
+) -> None:
+    """Raise ``ValueError`` unless a diff proposal and a content record agree.
+
+    Shared by the P1A v1 result and the P1B v2 live result, so two individually
+    valid records that disagree can never form either result.
+    """
+    identity = diff.provenance
+    if (
+        identity.project_id != project_id
+        or identity.repo != repo
+        or identity.issue_number != issue_number
+    ):
+        raise ValueError("diff proposal and provenance name different targets.")
+    if identity.engine != "deterministic" or identity.real_call is not False:
+        raise ValueError("the diff proposal was not produced by the deterministic generator.")
+
+    if outcome == "diff_proposed":
+        if len(diff.changes) != 1 or diff.omitted_paths:
+            raise ValueError("a proposed diff must carry exactly one change.")
+        change = diff.changes[0]
+        if (
+            change.path != target_path
+            or change.change_type != "modify"
+            or change.pre_image_sha256 != transmitted_source_sha256
+            or change.post_image_sha256 != proposed_content_sha256
+        ):
+            raise ValueError("diff change and provenance disagree on path, type or digests.")
+        if proposed_content_sha256 == transmitted_source_sha256:
+            raise ValueError("a proposed diff cannot have identical pre- and post-images.")
+    elif outcome == "no_change_proposed":
+        if diff.changes or list(diff.omitted_paths) != [target_path]:
+            raise ValueError("a no-change outcome must carry no diff and omit exactly the target.")
+        if proposed_content_sha256 != transmitted_source_sha256:
+            raise ValueError("a no-change outcome must propose the transmitted content unchanged.")
+    else:
+        raise ValueError("unknown outcome.")
 
 
 def revalidate_supervised_implementer_result(

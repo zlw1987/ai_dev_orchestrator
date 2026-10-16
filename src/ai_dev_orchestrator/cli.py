@@ -5,10 +5,11 @@ inspection), `llm-smoke-test` (a fake-provider dry-run of the Phase 3C LLM
 client — no real model call), `generate-plan` (an offline fake/deterministic L1
 plan generator — Phase 4D, no GitHub fetch, no model call), `l2-dry-run` (an
 offline validator that reports what a future L2 *would* have in scope — Phase
-5C, no workspace access and no implementation), and the **three** commands that
+5C, no workspace access and no implementation), and the **four** commands that
 may open a real socket, each only after every gate precondition passes:
-`real-llm-smoke-test` (Phase 4K), `generate-model-plan` (Phase 4L) and
-`l2-review-approved-file-edit` (Phase 5F2E).
+`real-llm-smoke-test` (Phase 4K), `generate-model-plan` (Phase 4L),
+`l2-review-approved-file-edit` (Phase 5F2E) and `l2-supervised-implementer-run`
+(ALPHA-P1B). Its companion `l2-supervised-implementer-prepare` is offline.
 
 `real-llm-smoke-test` is a **connectivity check, not a planner**: it sends a
 fixed, harmless prompt, never issue text, and produces no plan.
@@ -22,8 +23,9 @@ the only one of the three that transmits source-derived text; it is gated by a
 authorize it — plus two explicit flags, and it is described below.
 
 Every other command remains offline in the sense that matters here: no GitHub
-fetch happens in any gated command, and no model-backed implementer, fixer,
-review/fix loop, GitHub write, branch, commit, push or PR is wired up anywhere.
+fetch happens in any gated command, and no AUTONOMOUS model-backed implementer,
+fixer, review/fix loop, GitHub write, branch, commit, push or PR is wired up
+anywhere.
 
 **Three commands do act on explicitly approved artifacts**, and the older prose
 claiming that nothing here edits a file or runs a command is history, not current
@@ -32,8 +34,8 @@ modification to one tracked file, `l2-verify-approved-file-edit` (Phase 5F2D)
 executes one project-configured verification process, and
 `l2-review-approved-file-edit` (Phase 5F2E) runs that verification itself and
 then sends the approved change to a project-configured reviewer model. All three
-are described below. **L2 is still not complete**: there is no model-backed
-implementer, no automatic fixer, and no branch, commit, push or PR.
+are described below. **L2 is still not complete**: there is no autonomous
+model-backed implementer, no automatic fixer, and no branch, commit, push or PR.
 
 `l2-dry-run` is the first command that reads an approved-plan artifact, and it
 does exactly two file reads — the `--project-config` YAML and the
@@ -104,6 +106,16 @@ in the OpenAI-compatible `response_format` field — because an observed trial
 returned a semantically correct review wrapped in a markdown fence. The strict
 parser is unchanged and still rejects rather than repairs, there is no fallback to
 an unstructured request, and no CLI option was added for any of it.
+
+ALPHA-P1B (DEC-SUP-LIVE) added the **supervised, proposal-only implementer**:
+`l2-supervised-implementer-prepare` writes an offline authorization draft, and
+`l2-supervised-implementer-run` consumes one human-completed, single-use,
+per-run consent to send ONE approved file to candidate SUP-D (`qwen3.8-27b`)
+once, over the `litellm` provider, with zero retries, AIDO's own wait deadline
+and a response byte bound. Its reply is untrusted proposed content, turned into
+a diff proposal by the unchanged deterministic generator, and the command stops
+before human exact-diff approval. It writes nothing to the workspace, earns no
+qualification credit, and is not an autonomous implementer.
 """
 
 from __future__ import annotations
@@ -4401,6 +4413,494 @@ def l2_review_approved_file_edit(
         real_reviewer=real_reviewer,
         read_env=_read_reviewer_env,
         client_factory=_build_real_llm_client,
+    )
+
+
+# -- ALPHA-P1B: the live supervised implementer (DEC-SUP-LIVE) -------------------
+#
+# Two commands, and the only live entry points to the supervised implementer.
+# `prepare` re-derives one run's exact request offline and writes an
+# authorization DRAFT; it reads no provider environment variable and contacts
+# nothing. `run` consumes one human-completed, single-use authorization and
+# issues at most ONE request, then stops before human exact-diff approval (H6).
+# The library owns every authority check; these wrappers only parse flags and
+# paths, keep operator artifacts outside the workspace, and never print a
+# traceback, an environment value, a base URL or a credential.
+
+_SUPIMPL_EXIT_REFUSED = 1
+
+
+def _read_supervised_implementer_env(provider: str) -> dict[str, str]:
+    """Snapshot ONLY the configured live provider's names (D-2, D-3).
+
+    The provider is resolved to an exact name tuple before ``os.environ`` is
+    touched, so no other family's name is ever looked up. Only ``litellm`` has
+    names on the live path. No value is printed.
+    """
+    from ai_dev_orchestrator.supervised_implementer.live import (
+        supervised_implementer_env_names_for_provider,
+    )
+
+    names = supervised_implementer_env_names_for_provider(provider)
+    return {name: os.environ[name] for name in names if name in os.environ}
+
+
+def _supimpl_outside_workspace(path: Path, workspace_path: str, label: str) -> None:
+    """Refuse an operator artifact inside the workspace, lexically AND canonically.
+
+    The canonical check resolves the path, or its parent when the path does not
+    exist yet, so a link or junction cannot place it inside the workspace.
+    """
+    inside = _is_same_or_under(path, workspace_path)
+    if not inside:
+        target = path if path.exists() else path.parent
+        canonical = os.path.normcase(os.path.realpath(str(target)))
+        root = os.path.normcase(os.path.realpath(workspace_path))
+        inside = canonical == root or canonical.startswith(root.rstrip(os.sep) + os.sep)
+    if inside:
+        typer.echo(
+            f"Error: {label} is inside the project's configured workspace. "
+            "Operator artifacts must live outside the workspace they refer to. "
+            "Nothing was sent.",
+            err=True,
+        )
+        raise typer.Exit(code=_SUPIMPL_EXIT_REFUSED)
+
+
+def _supimpl_load_inputs(project_config: Path, approved_plan: Path):
+    """Load the project config, then the approved plan from outside the workspace."""
+    from ai_dev_orchestrator.config_loader import ConfigError, load_project_config
+    from ai_dev_orchestrator.handoff.models import (
+        ApprovedPlanError,
+        parse_approved_l1_plan_artifact,
+    )
+
+    try:
+        project = load_project_config(project_config)
+    except ConfigError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        typer.echo("Nothing else was read and nothing was sent.", err=True)
+        raise typer.Exit(code=_SUPIMPL_EXIT_REFUSED)
+    _supimpl_outside_workspace(approved_plan, project.repo.workspace_path, "--approved-plan")
+    try:
+        artifact_text = approved_plan.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        typer.echo("Error: could not read --approved-plan. Nothing was sent.", err=True)
+        raise typer.Exit(code=_SUPIMPL_EXIT_REFUSED)
+    try:
+        plan = parse_approved_l1_plan_artifact(artifact_text)
+    except ApprovedPlanError as exc:
+        typer.echo(
+            f"Error: {type(exc).__name__}: the approved plan was refused. The "
+            "artifact text is not echoed. Nothing was sent.",
+            err=True,
+        )
+        raise typer.Exit(code=_SUPIMPL_EXIT_REFUSED)
+    return project, plan
+
+
+def _supimpl_refused(exc: Exception) -> None:
+    typer.echo(f"Error: refused: {exc}", err=True)
+    raise typer.Exit(code=_SUPIMPL_EXIT_REFUSED)
+
+
+def _supimpl_internal_error(exc: BaseException, *, before_consumption: bool) -> None:
+    # Category only: an exception's text or traceback can carry a URL, and a
+    # rendered traceback could carry more (A-6).
+    tail = (
+        "No request was handed to a transport."
+        if before_consumption
+        else "If a run directory exists for this authorization, inspect it."
+    )
+    typer.echo(
+        f"Error: internal_error: an unexpected {type(exc).__name__} stopped the "
+        f"command. No traceback or detail is shown. {tail}",
+        err=True,
+    )
+    raise typer.Exit(code=_SUPIMPL_EXIT_REFUSED)
+
+
+def _run_l2_supervised_implementer_prepare(
+    *,
+    project_config: Path,
+    approved_plan: Path,
+    target_path: str,
+    evidence_dir: Path,
+    out: Path,
+    prepare_flag: bool,
+    _now=None,
+) -> None:
+    """Write one authorization DRAFT. Extracted for tests. Reads no provider env."""
+    if prepare_flag is not True:
+        typer.echo(
+            "Error: l2-supervised-implementer-prepare requires the explicit "
+            "--prepare-supervised-implementation flag. Nothing was read.",
+            err=True,
+        )
+        raise typer.Exit(code=_SUPIMPL_EXIT_REFUSED)
+    try:
+        from ai_dev_orchestrator.supervised_implementer.live import (
+            _create_exclusive,
+            prepare_supervised_implementation,
+        )
+        from ai_dev_orchestrator.supervised_implementer.live_authorization import (
+            CONSENT_TEXT,
+            PLAINTEXT_ACKNOWLEDGEMENT,
+        )
+        from ai_dev_orchestrator.supervised_implementer.models import (
+            SupervisedImplementerError,
+        )
+
+        project, plan = _supimpl_load_inputs(project_config, approved_plan)
+        _supimpl_outside_workspace(out, project.repo.workspace_path, "--out")
+        _supimpl_outside_workspace(evidence_dir, project.repo.workspace_path, "--evidence-dir")
+        if os.path.lexists(out):
+            # Checked before prepare so that an existing --out never leaves an
+            # orphan ledger issuance record behind (ALPHA-P1B-FU1).
+            typer.echo(
+                "Error: --out already exists; a draft is never overwritten. Nothing was written.",
+                err=True,
+            )
+            raise typer.Exit(code=_SUPIMPL_EXIT_REFUSED)
+        try:
+            prepared = prepare_supervised_implementation(
+                project=project,
+                approved_plan=plan,
+                target_path=target_path,
+                evidence_dir=str(evidence_dir),
+                _now=_now,
+            )
+        except SupervisedImplementerError as exc:
+            _supimpl_refused(exc)
+        try:
+            _create_exclusive(str(out), prepared.draft)
+        except FileExistsError:
+            typer.echo(
+                "Error: --out already exists; a draft is never overwritten. No draft "
+                "was written. The ledger's issuance record for this run id grants "
+                "nothing without a consent and expires with it.",
+                err=True,
+            )
+            raise typer.Exit(code=_SUPIMPL_EXIT_REFUSED)
+        except OSError:
+            typer.echo(
+                "Error: the draft could not be written to --out. The ledger's "
+                "issuance record for this run id grants nothing without a consent.",
+                err=True,
+            )
+            raise typer.Exit(code=_SUPIMPL_EXIT_REFUSED)
+    except typer.Exit:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        _supimpl_internal_error(exc, before_consumption=True)
+
+    bound = prepared.bound
+    plaintext = bound.allow_insecure_http
+    lines = [
+        "SUPERVISED IMPLEMENTER AUTHORIZATION DRAFT written. It grants NOTHING "
+        "until a human completes its consent block. No model was contacted and "
+        "no provider environment value was read. Its issuance is recorded in the "
+        "authorization ledger, which alone decides single use.",
+        f"  run id:          {bound.run_id}",
+        f"  target:          {bound.target_path!r} ({bound.source_bytes} bytes, "
+        f"sha256 {bound.source_sha256})",
+        f"  workspace HEAD:  {bound.workspace_head_object_id} (clean tree observed by AIDO)",
+        f"  candidate/model: {bound.candidate} / {bound.model} via {bound.provider}",
+        f"  AIDO wait bound: {bound.attempt_timeout_seconds:g} s",
+        f"  expires at:      {bound.expires_at}",
+        f"  binding_sha256:  {bound.binding_sha256}",
+        "To consent, edit ONLY the 'consent' block:",
+        "  consented_by, consented_at (ISO-8601 with offset), source: manual,",
+        "  binding_sha256 (echo the value above), endpoint_scheme, endpoint_host,",
+        "  endpoint_port (the EFFECTIVE port), and consent_text exactly:",
+        f"    {CONSENT_TEXT}",
+    ]
+    if plaintext:
+        lines += [
+            "  For an http endpoint, plaintext_acknowledgement exactly:",
+            f"    {PLAINTEXT_ACKNOWLEDGEMENT}",
+            "  (For https, leave plaintext_acknowledgement null.)",
+        ]
+    else:
+        lines.append("  plaintext_acknowledgement stays null (this project refuses http).")
+    for line in lines:
+        typer.echo(line, err=True)
+
+
+def _supimpl_echo_notice(notice) -> None:
+    typer.echo(notice.render(), err=True)
+
+
+def _run_l2_supervised_implementer_run(
+    *,
+    project_config: Path,
+    approved_plan: Path,
+    authorization: Path,
+    evidence_dir: Path,
+    transmit_flag: bool,
+    real_flag: bool,
+    read_env=_read_supervised_implementer_env,
+    _now=None,
+    _inner_transport_factory=None,
+) -> None:
+    """Consume one authorization; at most one request. Extracted for tests.
+
+    ``read_env`` is called at most once, with the configured provider, and only
+    after every offline check. ``_now`` and ``_inner_transport_factory`` are
+    private test seams: AIDO always wraps whatever inner transport in its own
+    bounded counting transport, so a test exercises the real wrapper.
+    """
+    if transmit_flag is not True:
+        typer.echo(
+            "Error: l2-supervised-implementer-run SENDS ONE APPROVED SOURCE FILE "
+            "to a model and requires the explicit --transmit-approved-source "
+            "flag. Nothing was read or sent.",
+            err=True,
+        )
+        raise typer.Exit(code=_SUPIMPL_EXIT_REFUSED)
+    if real_flag is not True:
+        typer.echo(
+            "Error: l2-supervised-implementer-run contacts a REAL model and "
+            "requires the explicit --real-implementer flag. Nothing was read or sent.",
+            err=True,
+        )
+        raise typer.Exit(code=_SUPIMPL_EXIT_REFUSED)
+    try:
+        from ai_dev_orchestrator.supervised_implementer.live import (
+            run_supervised_implementation,
+        )
+        from ai_dev_orchestrator.supervised_implementer.live_authorization import (
+            MAX_AUTHORIZATION_FILE_BYTES,
+        )
+        from ai_dev_orchestrator.supervised_implementer.models import (
+            SupervisedImplementerError,
+        )
+
+        project, plan = _supimpl_load_inputs(project_config, approved_plan)
+        _supimpl_outside_workspace(
+            authorization, project.repo.workspace_path, "--authorization"
+        )
+        _supimpl_outside_workspace(evidence_dir, project.repo.workspace_path, "--evidence-dir")
+        try:
+            with open(authorization, "rb") as handle:
+                authorization_bytes = handle.read(MAX_AUTHORIZATION_FILE_BYTES + 1)
+        except OSError:
+            typer.echo("Error: could not read --authorization. Nothing was sent.", err=True)
+            raise typer.Exit(code=_SUPIMPL_EXIT_REFUSED)
+        try:
+            report = run_supervised_implementation(
+                project=project,
+                approved_plan=plan,
+                authorization_bytes=authorization_bytes,
+                evidence_dir=str(evidence_dir),
+                read_env=read_env,
+                announce=_supimpl_echo_notice,
+                _now=_now,
+                _inner_transport_factory=_inner_transport_factory,
+            )
+        except SupervisedImplementerError as exc:
+            typer.echo(
+                "Nothing was sent, and this invocation consumed nothing.", err=True
+            )
+            _supimpl_refused(exc)
+    except typer.Exit:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        _supimpl_internal_error(exc, before_consumption=True)
+
+    try:
+        _supimpl_report(report)
+    except typer.Exit:
+        raise
+    except Exception as exc:  # noqa: BLE001 - e.g. stdout closed; never a traceback.
+        typer.echo(
+            f"Error: internal_error: an unexpected {type(exc).__name__} occurred while "
+            f"reporting outcome {report.state!r}. Evidence: {report.run_dir}.",
+            err=True,
+        )
+        raise typer.Exit(
+            code=report.exit_code if report.exit_code != 0 else _SUPIMPL_EXIT_EVIDENCE_INCOMPLETE
+        )
+
+
+_SUPIMPL_EXIT_EVIDENCE_INCOMPLETE = 5
+
+
+def _supimpl_report(report) -> None:
+    """Print one consumed run's outcome. stdout carries only provenance v2 JSON."""
+    if report.state == "implementer_stalled":
+        typer.echo(
+            "IMPLEMENTER STALLED — terminal. AIDO stopped waiting "
+            f"({report.stall_source}). The abandoned worker, the HTTP request and "
+            "the backend's inference may still be active; no cancellation was "
+            "requested or observed. Do not re-run immediately: the same local "
+            "model could receive two concurrent jobs.",
+            err=True,
+        )
+    if report.result is not None and report.exit_code == 0:
+        _echo_json_model(report.result.provenance)
+        typer.echo(
+            f"Outcome: {report.state}. The diff proposal is in {report.run_dir}. "
+            "NEXT: a human must approve the exact diff (Phase 5F0) before any "
+            "write. Nothing was written, approved, committed or pushed.",
+            err=True,
+        )
+        raise typer.Exit(code=0)
+    typer.echo(
+        f"Outcome: {report.state} ({report.failure_category}): {report.failure_message}",
+        err=True,
+    )
+    if report.transmission_attempted:
+        typer.echo(
+            "The request worker was started, so the approved source MAY have been "
+            "transmitted. Treat it as sent.",
+            err=True,
+        )
+    if not report.outcome_recorded:
+        typer.echo(
+            "The terminal outcome could NOT be recorded; the run directory's "
+            "pending record is the evidence."
+            if report.transmission_attempted
+            else "The terminal outcome could NOT be recorded in the run directory. "
+            "Nothing was sent; the authorization ledger records the consumption.",
+            err=True,
+        )
+    typer.echo(
+        f"The authorization is spent. Evidence: {report.run_dir}. To try again, "
+        "run l2-supervised-implementer-prepare and complete a new consent.",
+        err=True,
+    )
+    raise typer.Exit(code=report.exit_code)
+
+
+@app.command(
+    "l2-supervised-implementer-prepare",
+    short_help="Write a per-run SUP-D source-transmission authorization DRAFT (offline).",
+)
+def l2_supervised_implementer_prepare(
+    project_config: Path = typer.Option(
+        ...,
+        "--project-config",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Project config YAML. Its supervised_implementer block must be "
+        "enabled with live_transmission_enabled, provider litellm, structured "
+        "output off and an explicit attempt_timeout_seconds.",
+    ),
+    approved_plan: Path = typer.Option(
+        ...,
+        "--approved-plan",
+        help="The human-approved L1 plan artifact. Must be outside the workspace.",
+    ),
+    target_path: str = typer.Option(
+        ...,
+        "--target-path",
+        help="The ONE repo-relative file to propose a change to. A human's "
+        "choice, never the model's.",
+    ),
+    evidence_dir: Path = typer.Option(
+        ...,
+        "--evidence-dir",
+        help="An existing directory outside the workspace, named by its "
+        "canonical path. The run's evidence goes only there; single use is "
+        "decided by the project's authorization ledger, never by this directory.",
+    ),
+    out: Path = typer.Option(
+        ...,
+        "--out",
+        help="Where to write the authorization DRAFT. Outside the workspace; "
+        "never overwritten.",
+    ),
+    prepare_supervised_implementation: bool = typer.Option(
+        False,
+        "--prepare-supervised-implementation",
+        help="Required explicit flag.",
+    ),
+) -> None:
+    """Write ONE per-run authorization DRAFT for the live supervised implementer.
+
+    Offline: it observes the workspace read-only (the 5F2C writer's Git
+    preflight and the 5D2 bounded read), builds the exact request a run would
+    send, and binds all of it by digest. It reads no provider environment
+    variable, builds no client and contacts no model. The draft grants nothing
+    until a human completes its consent block.
+    """
+    _run_l2_supervised_implementer_prepare(
+        project_config=project_config,
+        approved_plan=approved_plan,
+        target_path=target_path,
+        evidence_dir=evidence_dir,
+        out=out,
+        prepare_flag=prepare_supervised_implementation,
+    )
+
+
+@app.command(
+    "l2-supervised-implementer-run",
+    short_help="Send ONE consented approved file to SUP-D once; stop before diff approval.",
+)
+def l2_supervised_implementer_run(
+    project_config: Path = typer.Option(
+        ...,
+        "--project-config",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="The same project config the authorization was prepared from.",
+    ),
+    approved_plan: Path = typer.Option(
+        ...,
+        "--approved-plan",
+        help="The same approved L1 plan. Must be outside the workspace.",
+    ),
+    authorization: Path = typer.Option(
+        ...,
+        "--authorization",
+        help="The human-consented authorization. Outside the workspace. "
+        "Single-use.",
+    ),
+    evidence_dir: Path = typer.Option(
+        ...,
+        "--evidence-dir",
+        help="The evidence directory the authorization was prepared for.",
+    ),
+    transmit_approved_source: bool = typer.Option(
+        False,
+        "--transmit-approved-source",
+        help="Required: consent to send the one approved source file.",
+    ),
+    real_implementer: bool = typer.Option(
+        False,
+        "--real-implementer",
+        help="Required: consent to contact a real model.",
+    ),
+) -> None:
+    """Consume ONE authorization and send ONE approved file to SUP-D, once.
+
+    It re-derives everything the authorization binds and refuses any mismatch
+    before reading the AIDO_LITELLM_* environment. The endpoint must equal the
+    scheme, host and port the human typed. It then consumes the authorization,
+    announces the transmission on stderr, and issues exactly one request: zero
+    retries, no fallback, AIDO's own wait deadline, a 16 MiB response byte
+    bound. The reply is untrusted proposed content, parsed strictly and turned
+    into a diff proposal by the unchanged deterministic generator. It STOPS
+    before human exact-diff approval and writes nothing to the workspace.
+
+    Exit codes: 0 a proposal (or no change) was produced; 1 refused, nothing
+    sent; 4 the request was attempted and produced no usable proposal; 5 the
+    request was attempted and the evidence is incomplete.
+    """
+    _run_l2_supervised_implementer_run(
+        project_config=project_config,
+        approved_plan=approved_plan,
+        authorization=authorization,
+        evidence_dir=evidence_dir,
+        transmit_flag=transmit_approved_source,
+        real_flag=real_implementer,
+        read_env=_read_supervised_implementer_env,
     )
 
 

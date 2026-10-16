@@ -484,6 +484,22 @@ def test_help_hides_forbidden_options():
         assert rejected.exit_code != 0
 
 
+# ALPHA-P1B: the two supervised-implementer commands legitimately contain
+# "implement" in their names. Every OTHER line of the root help must still not.
+_SUPERVISED_IMPLEMENTER_COMMANDS = (
+    "l2-supervised-implementer-prepare",
+    "l2-supervised-implementer-run",
+)
+
+
+def _help_without_supervised_implementer(output: str) -> str:
+    return "\n".join(
+        line
+        for line in output.splitlines()
+        if not any(name in line for name in _SUPERVISED_IMPLEMENTER_COMMANDS)
+    )
+
+
 def test_no_apply_edit_or_git_command_exists():
     result = runner.invoke(app, ["--help"])
 
@@ -497,7 +513,7 @@ def test_no_apply_edit_or_git_command_exists():
         "create-branch",
         "open-pr",
     ):
-        assert absent not in result.output
+        assert absent not in _help_without_supervised_implementer(result.output)
 
     for absent in (
         "apply-diff",

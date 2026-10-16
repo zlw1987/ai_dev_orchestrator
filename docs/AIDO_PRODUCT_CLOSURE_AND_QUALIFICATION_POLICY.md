@@ -24,6 +24,7 @@
 | Recorded after | CFG1 FU1 implementation ACCEPTED / FROZEN at `7f31217580b21027556b2061d5e765c7eef162c0` |
 | Authorizes | **Nothing** |
 | Amended | 2026-10-14 — §8 DEC-SUP: opens the supervised-implementer branch (`SUP-D`, no qualification credit). Offline, library-only ALPHA-P1A only; nothing live |
+| Amended | 2026-10-15 — §9 DEC-SUP-LIVE: authorizes the two live supervised-implementer commands (ALPHA-P1B), implemented and tested offline only. No live request is authorized by this amendment; the first one needs a separate AUTH-PILOT decision |
 
 ## 1. Closure discipline
 
@@ -196,3 +197,47 @@ transmission; any real-workspace execution; a CLI command for the supervised
 implementer; a fixer; a review/fix loop; a fallback model; or provider
 failover. The first live supervised pilot requires its own separate
 authorization (proposal §7).
+
+## 9. DEC-SUP-LIVE amendment (2026-10-15) — live supervised implementer authority
+
+> **Appended amendment. §1–§8 above are unchanged and still in force**,
+> including every DEC-SUP item answer in §8. This section does not retroactively
+> alter any P1A decision. It records the operator's decisions D-1 to D-10 on
+> [PHASE_ALPHA_P1B_LIVE_IMPLEMENTER_AUTHORITY_DESIGN.md](PHASE_ALPHA_P1B_LIVE_IMPLEMENTER_AUTHORITY_DESIGN.md)
+> (§11 there is authoritative).
+
+**What it authorizes.** The two ALPHA-P1B commands,
+`l2-supervised-implementer-prepare` and `l2-supervised-implementer-run`, as
+designed, **implemented and tested offline only**. That narrows §8's "Still not
+authorized" item "a CLI command for the supervised implementer" to exactly these
+two commands. §8 item 8 (`CLAUDE.md`) is now answered by D-1 for the P1B entry
+point only: a narrow `CLAUDE.md` update that distinguishes the supervised,
+proposal-only implementer from the still-absent autonomous one.
+
+**Decisions.**
+
+| # | Decision |
+|---|---|
+| D-1 | Narrow `CLAUDE.md` update for the supervised entry point; no unrelated operating rule changes |
+| D-2 | The live path uses the existing `litellm` provider contract only |
+| D-3 | It reads the existing `AIDO_LITELLM_*` environment family only |
+| D-4 | An explicitly configured wait deadline is required; there is no default |
+| D-5 | The request and an accepted response are retained as local evidence; no secret or authorization header is ever retained |
+| D-6 | Workspace and source state must be independently verified by AIDO at the live consumption boundary; an operator's clean-clone claim alone is insufficient |
+| D-7 | A per-run authorization expires 60 minutes after it is prepared |
+| D-8 | The maximum buffered response is 16 MiB, a transport safety limit and not a product token budget |
+| D-9 | Structured output is disabled for the initial pilot until its exact supported mode is established and separately authorized; the strict local response contract is always enforced |
+| D-10 | The pilot repository, clone and file are selected by a separate live-pilot authorization |
+
+**Unchanged.** `SUP-D` = `qwen3.8-27b` stays outside `CANDIDATE_MODEL_IDS` and
+earns no qualification credit, in either direction. §3's frozen C → D
+autonomous sequencing, every hard bar, and every historical candidate record
+are unchanged. Nothing here implies that Qwen 3.8 is qualified for any role.
+
+**Still not authorized:** any live model request; any real source
+transmission; any real-workspace access by the live commands; any H6 approval,
+write, verification, commit or push following a supervised proposal; an
+autonomous model-backed implementer; a fixer; a review/fix loop; a fallback
+model; provider failover; a live `vllm` provider; structured output on the live
+path. The first live supervised run needs a separate AUTH-PILOT decision (D-10)
+**and** a human-completed per-run consent.

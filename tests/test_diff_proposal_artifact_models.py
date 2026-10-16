@@ -1900,7 +1900,31 @@ EXPECTED_COMMANDS = [
     # model. The verdict is advisory: no fixer, no re-review, no patch, no file
     # edit, and no branch/commit/push/PR.
     "l2-review-approved-file-edit",
+    # ALPHA-P1B (DEC-SUP-LIVE). The SUPERVISED, proposal-only implementer's two
+    # live entry points: `prepare` writes an offline authorization draft and
+    # `run` consumes one human-completed, single-use consent to send ONE
+    # approved file to SUP-D once, then stops before human exact-diff approval.
+    # Still no AUTONOMOUS implementer, no write, no approval, no branch/commit/
+    # push/PR.
+    "l2-supervised-implementer-prepare",
+    "l2-supervised-implementer-run",
 ]
+
+
+# ALPHA-P1B: the two supervised-implementer commands legitimately contain
+# "implement" in their names. Every OTHER line of the root help must still not.
+_SUPERVISED_IMPLEMENTER_COMMANDS = (
+    "l2-supervised-implementer-prepare",
+    "l2-supervised-implementer-run",
+)
+
+
+def _help_without_supervised_implementer(output: str) -> str:
+    return "\n".join(
+        line
+        for line in output.splitlines()
+        if not any(name in line for name in _SUPERVISED_IMPLEMENTER_COMMANDS)
+    )
 
 
 def test_root_help_lists_exactly_the_shipped_commands():
@@ -1944,7 +1968,7 @@ def test_no_diff_apply_or_implement_command_exists():
         "implement",
         "edit-files",
     ):
-        assert absent not in result.output
+        assert absent not in _help_without_supervised_implementer(result.output)
 
     for absent in (
         "propose-diff",

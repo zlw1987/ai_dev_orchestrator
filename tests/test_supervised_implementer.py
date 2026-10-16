@@ -976,12 +976,21 @@ def test_the_implementer_cannot_write_approve_apply_or_run_anything():
     assert source.count("client.chat(") == 1
 
 
-def test_no_cli_command_reaches_the_supervised_implementer():
-    help_text = CliRunner().invoke(app, ["--help"]).output.lower()
-    assert "supervised" not in help_text
-    assert "implement" not in help_text
+def test_no_cli_command_reaches_the_offline_runner():
+    """P1A had no CLI command at all. ALPHA-P1B (DEC-SUP-LIVE) adds exactly two
+    live commands; neither reaches this offline, MockTransport-only runner."""
+    live_commands = ("l2-supervised-implementer-prepare", "l2-supervised-implementer-run")
+    help_lines = CliRunner().invoke(app, ["--help"]).output.lower().splitlines()
+    other_lines = "\n".join(
+        line for line in help_lines if not any(name in line for name in live_commands)
+    )
+    assert "supervised" not in other_lines
+    assert "implement" not in other_lines
+    registered = {info.name for info in app.registered_commands}
+    assert {name for name in registered if name and "implement" in name} == set(live_commands)
     cli_source = (REPO_ROOT / "src" / "ai_dev_orchestrator" / "cli.py").read_text(encoding="utf-8")
-    assert "supervised_implementer" not in cli_source
+    assert "run_supervised_implementer_offline" not in cli_source
+    assert "supervised_implementer.implementer" not in cli_source
 
 
 def test_the_real_endpoint_is_not_hard_coded_anywhere_in_this_phase():

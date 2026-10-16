@@ -53,6 +53,7 @@ from ai_dev_orchestrator.diff_proposal.generator import (
     build_deterministic_diff_proposal,
 )
 from ai_dev_orchestrator.diff_proposal.models import (
+    DiffProposalArtifact,
     _require_safe_relative_repo_path,
     _summarize_validation_error,
 )
@@ -434,6 +435,164 @@ def _check_post_image_reachable(
         )
 
 
+@dataclass(frozen=True)
+class _ApprovedSource:
+    """The one approved file's text as the in-process 5D2 read returned it."""
+
+    target_path: str
+    item: dict
+    original_text: str
+    ending: str
+    original_lines: tuple[str, ...]
+    source_sha256: str
+    source_bytes: int
+
+
+def _read_approved_source(
+    project: ProjectConfig, approved_plan: ApprovedL1PlanArtifact, target_path: object
+) -> _ApprovedSource:
+    """Identity, target path, the in-process 5D2 read, and the writer-domain check.
+
+    Shared by the offline runner and the ALPHA-P1B live path, so the rules for
+    what may be sent cannot drift between them. Both arguments must already be
+    the caller's private re-validated copies.
+    """
+    _check_identity(approved_plan, project)
+    target = _check_target_path(target_path, approved_plan, project)
+    try:
+        read = read_approved_plan_workspace_contents(project=project, artifact=approved_plan)
+    except WorkspaceContentReadRefused as exc:
+        raise _refuse("workspace_read_refused", exc.lines[0] if exc.lines else "refused") from None
+    item = _target_item(read.items, target)
+    original_text: str = item["content_text"]
+    ending, original_lines = _writer_text_domain_lines(original_text, target)
+    return _ApprovedSource(
+        target_path=target,
+        item=item,
+        original_text=original_text,
+        ending=ending,
+        original_lines=tuple(original_lines),
+        source_sha256=_sha256_of_utf8(original_text),
+        source_bytes=len(original_text.encode("utf-8")),
+    )
+
+
+def _proposal_from_reply(
+    *,
+    response: LLMResponse,
+    settings: SupervisedImplementerSettings,
+    project: ProjectConfig,
+    approved_plan: ApprovedL1PlanArtifact,
+    source: _ApprovedSource,
+    assumption_text: str,
+) -> tuple[DiffProposalArtifact, str, str]:
+    """Turn one received reply into a diff proposal, or reject it. Never repairs.
+
+    Returns ``(diff_proposal, outcome, proposed_content_sha256)``. Shared by the
+    offline runner and the ALPHA-P1B live path. ``assumption_text`` is AIDO-fixed
+    prose; it never contains model text.
+    """
+    # The reply is untrusted. Check what AIDO can observe, then parse strictly.
+    if response.model != settings.model:
+        raise SupervisedImplementerOutputRejected(
+            "model_substitution",
+            "the reply names a different model than the one requested. It was "
+            "rejected; no substitute is ever accepted.",
+        )
+    if response.finish_reason != "stop":
+        raise SupervisedImplementerOutputRejected(
+            "incomplete_reply",
+            f"the reply's finish_reason was {response.finish_reason!r}, not "
+            "'stop', so it may be truncated. It was rejected, not retried.",
+        )
+    output = parse_supervised_implementer_output(response.content)
+    proposed_text = output.content_text
+    target_path = source.target_path
+
+    # AIDO assembles proposed-content.v1 itself. The path, change type and
+    # prose come from AIDO; only content_text came from the model.
+    fixed = {"candidate": settings.candidate, "model": settings.model}
+    try:
+        proposed_content = ProposedContentInput.model_validate(
+            {
+                "schema_version": "proposed-content.v1",
+                "mode": "proposal-only",
+                "changes": [
+                    {
+                        "path": target_path,
+                        "change_type": "modify",
+                        "content_text": proposed_text,
+                        "rationale": _RATIONALE_TEMPLATE.format(**fixed),
+                        "risks": [_RISK_TEXT],
+                        "requires_human_review": True,
+                    }
+                ],
+                "assumptions": [assumption_text],
+                "risks": [],
+                "open_questions": [],
+                "requires_human_review": True,
+                "next_authorization_required": _NEXT_AUTHORIZATION,
+            }
+        )
+        packet = WorkspaceContentPacket.model_validate(
+            {
+                "mode": WORKSPACE_CONTENT_MODE,
+                "project": {
+                    "project_id": project.project_id,
+                    "repo": project.repo.github_repo,
+                },
+                "approved_plan": {
+                    "issue_number": approved_plan.issue_number,
+                    "title": approved_plan.plan.title,
+                },
+                "workspace_content": {
+                    "candidate_source": WORKSPACE_CONTENT_CANDIDATE_SOURCE,
+                    "file_contents_read": True,
+                    "directories_listed": False,
+                    "commands_run": False,
+                    "model_called": False,
+                    "diffs_generated": False,
+                    "files_edited": False,
+                    "items": [dict(source.item)],
+                },
+            }
+        )
+    except ValidationError as exc:
+        raise SupervisedImplementerOutputRejected(
+            "proposed_content_invalid", _summarize_validation_error(exc)
+        ) from None
+
+    # The existing deterministic diff generator, with every 5E3 rule.
+    try:
+        diff_proposal = build_deterministic_diff_proposal(
+            approved_plan=approved_plan,
+            project=project,
+            workspace_content=packet,
+            proposed_content=proposed_content,
+        )
+    except DiffProposalGenerationError as exc:
+        raise SupervisedImplementerOutputRejected("diff_generation_refused", str(exc)) from None
+
+    proposed_sha256 = _sha256_of_utf8(proposed_text)
+    outcome = "diff_proposed" if diff_proposal.changes else "no_change_proposed"
+    if outcome == "diff_proposed":
+        _check_post_image_reachable(
+            ending=source.ending,
+            original_lines=list(source.original_lines),
+            unified_diff=diff_proposal.changes[0].unified_diff,
+            target_path=target_path,
+            post_image_sha256=diff_proposal.changes[0].post_image_sha256,
+        )
+    elif proposed_sha256 != source.source_sha256:
+        raise SupervisedImplementerOutputRejected(
+            "post_image_unreachable",
+            "the proposed content differs from the file only in its final newline "
+            "or line endings, which a unified diff cannot express. It was "
+            "rejected, not normalized.",
+        )
+    return diff_proposal, outcome, proposed_sha256
+
+
 def _usage(response: LLMResponse) -> ReportedUsage | None:
     if response.usage is None:
         return None
@@ -523,26 +682,18 @@ def run_supervised_implementer_offline(
     )
     client = LLMClient(client_config, transport=transport)
 
-    # 3. Identity, then the target path, all before any disk access.
-    _check_identity(approved_plan, project)
-    target_path = _check_target_path(target_path, approved_plan, project)
-
-    # 4. The shipped Phase 5D2 bounded read, in-process, behind its own opt-in.
-    try:
-        read = read_approved_plan_workspace_contents(project=project, artifact=approved_plan)
-    except WorkspaceContentReadRefused as exc:
-        raise _refuse("workspace_read_refused", exc.lines[0] if exc.lines else "refused") from None
-    item = _target_item(read.items, target_path)
-    original_text: str = item["content_text"]
-    ending, original_lines = _writer_text_domain_lines(original_text, target_path)
-    source_sha256 = _sha256_of_utf8(original_text)
-    source_bytes = len(original_text.encode("utf-8"))
+    # 3-4. Identity, the target path, then the shipped Phase 5D2 bounded read,
+    #      in-process, behind its own opt-in. Shared with the ALPHA-P1B path.
+    source = _read_approved_source(project, approved_plan, target_path)
+    target_path = source.target_path
+    source_sha256 = source.source_sha256
+    source_bytes = source.source_bytes
 
     # 5. Build the one request, then announce it before handing it over.
     request = build_supervised_implementer_request(
         approved_plan=approved_plan,
         target_path=target_path,
-        current_text=original_text,
+        current_text=source.original_text,
         model=settings.model,
         max_output_tokens=settings.max_output_tokens,
         structured_output=settings.structured_output,
@@ -573,103 +724,18 @@ def run_supervised_implementer_offline(
             "no retry and no fallback was attempted.",
         ) from None
 
-    # 7. The reply is untrusted. Check what AIDO can observe, then parse strictly.
-    if response.model != settings.model:
-        raise SupervisedImplementerOutputRejected(
-            "model_substitution",
-            "the reply names a different model than the one requested. It was "
-            "rejected; no substitute is ever accepted.",
-        )
-    if response.finish_reason != "stop":
-        raise SupervisedImplementerOutputRejected(
-            "incomplete_reply",
-            f"the reply's finish_reason was {response.finish_reason!r}, not "
-            "'stop', so it may be truncated. It was rejected, not retried.",
-        )
-    output = parse_supervised_implementer_output(response.content)
-    proposed_text = output.content_text
-
-    # 8. AIDO assembles proposed-content.v1 itself. The path, change type and
-    #    prose come from AIDO; only content_text came from the model.
-    fixed = {"candidate": settings.candidate, "model": settings.model}
-    try:
-        proposed_content = ProposedContentInput.model_validate(
-            {
-                "schema_version": "proposed-content.v1",
-                "mode": "proposal-only",
-                "changes": [
-                    {
-                        "path": target_path,
-                        "change_type": "modify",
-                        "content_text": proposed_text,
-                        "rationale": _RATIONALE_TEMPLATE.format(**fixed),
-                        "risks": [_RISK_TEXT],
-                        "requires_human_review": True,
-                    }
-                ],
-                "assumptions": [_ASSUMPTION_TEMPLATE.format(**fixed)],
-                "risks": [],
-                "open_questions": [],
-                "requires_human_review": True,
-                "next_authorization_required": _NEXT_AUTHORIZATION,
-            }
-        )
-        packet = WorkspaceContentPacket.model_validate(
-            {
-                "mode": WORKSPACE_CONTENT_MODE,
-                "project": {
-                    "project_id": project.project_id,
-                    "repo": project.repo.github_repo,
-                },
-                "approved_plan": {
-                    "issue_number": approved_plan.issue_number,
-                    "title": approved_plan.plan.title,
-                },
-                "workspace_content": {
-                    "candidate_source": WORKSPACE_CONTENT_CANDIDATE_SOURCE,
-                    "file_contents_read": True,
-                    "directories_listed": False,
-                    "commands_run": False,
-                    "model_called": False,
-                    "diffs_generated": False,
-                    "files_edited": False,
-                    "items": [dict(item)],
-                },
-            }
-        )
-    except ValidationError as exc:
-        raise SupervisedImplementerOutputRejected(
-            "proposed_content_invalid", _summarize_validation_error(exc)
-        ) from None
-
-    # 9. The existing deterministic diff generator, with every 5E3 rule.
-    try:
-        diff_proposal = build_deterministic_diff_proposal(
-            approved_plan=approved_plan,
-            project=project,
-            workspace_content=packet,
-            proposed_content=proposed_content,
-        )
-    except DiffProposalGenerationError as exc:
-        raise SupervisedImplementerOutputRejected("diff_generation_refused", str(exc)) from None
-
-    proposed_sha256 = _sha256_of_utf8(proposed_text)
-    outcome = "diff_proposed" if diff_proposal.changes else "no_change_proposed"
-    if outcome == "diff_proposed":
-        _check_post_image_reachable(
-            ending=ending,
-            original_lines=original_lines,
-            unified_diff=diff_proposal.changes[0].unified_diff,
-            target_path=target_path,
-            post_image_sha256=diff_proposal.changes[0].post_image_sha256,
-        )
-    elif proposed_sha256 != source_sha256:
-        raise SupervisedImplementerOutputRejected(
-            "post_image_unreachable",
-            "the proposed content differs from the file only in its final newline "
-            "or line endings, which a unified diff cannot express. It was "
-            "rejected, not normalized.",
-        )
+    # 7-9. Strict parse, AIDO-assembled proposed content, the unchanged 5E3
+    #      generator and the in-memory reachability proof.
+    diff_proposal, outcome, proposed_sha256 = _proposal_from_reply(
+        response=response,
+        settings=settings,
+        project=project,
+        approved_plan=approved_plan,
+        source=source,
+        assumption_text=_ASSUMPTION_TEMPLATE.format(
+            candidate=settings.candidate, model=settings.model
+        ),
+    )
 
     # 10. Provenance, cross-checked against the diff on construction. STOP here.
     try:

@@ -8,13 +8,19 @@ writer may do anything.
 
 - Candidate ``SUP-D`` = ``qwen3.8-27b``. It is not in ``CANDIDATE_MODEL_IDS``
   and carries no qualification credit.
-- Offline only: the runner accepts exactly ``httpx.MockTransport`` and rejects
-  any other transport type, a guard against accidental live use, not a sandbox
-  (a mock handler is arbitrary trusted caller code). No CLI command exists, so
-  there is no authorized live invocation entry point.
+- ALPHA-P1A's library runner is offline: it accepts exactly
+  ``httpx.MockTransport`` and rejects any other transport type, a guard against
+  accidental live use, not a sandbox (a mock handler is arbitrary trusted
+  caller code). No CLI command reaches it.
+- ALPHA-P1B adds the live path in :mod:`.live`, reached only from
+  ``l2-supervised-implementer-prepare`` and ``l2-supervised-implementer-run``.
+  It needs ``live_transmission_enabled``, provider ``litellm``, an explicit wait
+  bound, and a human-completed, single-use, per-run authorization. It builds
+  its own bounded transport and never accepts one from a caller.
 - One request, zero retries, no fallback, a strict parser, no repair.
 
-See ``docs/PHASE_ALPHA_P1A_SUPERVISED_IMPLEMENTER_OFFLINE.md``.
+See ``docs/PHASE_ALPHA_P1A_SUPERVISED_IMPLEMENTER_OFFLINE.md`` and
+``docs/PHASE_ALPHA_P1B_SUPERVISED_IMPLEMENTER_LIVE.md``.
 """
 
 from ai_dev_orchestrator.supervised_implementer.identity import (
