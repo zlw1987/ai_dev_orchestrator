@@ -1,21 +1,29 @@
 # ALPHA-1A-FU1 — Reviewer Egress Authority Correction (Implementation Contract)
 
-> **IMPLEMENTED (uncommitted) — awaiting independent review.**
+> **ACCEPTED — committed and pushed.** FU1 is commit `5a38a67`; the FU2
+> correction is commit `44bf3be05195a4fc050de7f0cad2407795d7c9b8`. Independent
+> GitHub review accepted ALPHA-1A-FU1/FU2 at `44bf3be`, and no FU3 is needed
+> (recorded 2026-10-20). `44bf3be` is the source pin for ALPHA-1B
+> ([DEC-ALPHA1 §4.1](ALPHA_1A_DEC_ALPHA1_DECISION_PROPOSAL.md)).
 >
 > On 2026-10-19 the operator authorized A-1, A-2, A-3, A-4, A-5 and A-7 (§8).
 > FU1 was then implemented offline as specified; §11 is the implementation
 > record. A-6 (the narrow `CLAUDE.md` update) was authorized separately on
-> 2026-10-20 and applied. Only the endpoint value/authorization rule, the
-> `review-packet.v5` wording and the `network_transport_factory` injection
-> point changed. No model, network or live call was made, and nothing was
-> committed or pushed.
+> 2026-10-20 and is part of the committed history. Only the endpoint
+> value/authorization rule, the `review-packet.v5` wording and the
+> `network_transport_factory` injection point changed. No model, network or live
+> call was made by the implementation.
+>
+> *Status words in the body below that say "uncommitted", "IMPLEMENTED" or
+> "awaiting" are the original wording at the time they were written; this banner
+> supersedes them.*
 
 | | |
 |---|---|
 | Kind | Narrow implementation contract (additive) |
 | Recorded | 2026-10-19 |
 | Corrects | [DEC-ALPHA1](ALPHA_1A_DEC_ALPHA1_DECISION_PROPOSAL.md) D-5. Its procedural reviewer-destination control is **rejected** as a source-egress guarantee, and D-5 is resolved as IMPLEMENTATION_REQUIRED |
-| Baseline | `38081af…` (`src/` identical to `b8ac9ea`) |
+| Baseline | `38081af…` (`src/` identical to `b8ac9ea`) when written; accepted result `44bf3be…` |
 | Pattern reused | ALPHA-P1B `BoundedCountingTransport`: an outbound check on the actual `httpx.Request`, run before the network transport sees it. Only its URL/method idea is reused; nothing is shared or imported from it |
 
 ---
@@ -340,7 +348,7 @@ Stopping before implementation.
 
 ---
 
-## 11. Implementation record (2026-10-19, uncommitted on `38081af`)
+## 11. Implementation record (2026-10-19; written on `38081af`, since committed as `5a38a67` and `44bf3be`)
 
 **Source.**
 
@@ -381,11 +389,12 @@ Nothing in the suite opens a socket or reads a real credential. Every endpoint i
 
 The Alpha-0 helper and its tests were not touched.
 
-**Still open:**
-1. Independent review of FU1.
-2. A-6 is done (2026-10-20): the narrow `CLAUDE.md` update is applied and uncommitted.
-3. The user commits FU1 as `C_FU1` and pushes it.
-4. The DEC-ALPHA1 amendments in §10.
+**Status of the original open items (updated 2026-10-20):**
+1. Independent review of FU1/FU2: **done, accepted at `44bf3be`.**
+2. A-6 (narrow `CLAUDE.md` update): **done and committed** with FU1.
+3. `C_FU1` commit and push: **done.** The pin for ALPHA-1B is `44bf3be`, because FU2 changed `src/` after `5a38a67` (so `5a38a67` alone is not the source pin).
+4. The DEC-ALPHA1 amendments in §10: **applied** in the finalized
+   [DEC-ALPHA1 proposal](ALPHA_1A_DEC_ALPHA1_DECISION_PROPOSAL.md).
 
 ## FU2 amendment (ALPHA-1A-FU2): transport provenance is derived
 

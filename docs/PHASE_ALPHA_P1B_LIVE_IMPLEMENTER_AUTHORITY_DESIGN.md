@@ -1,5 +1,12 @@
 # ALPHA-P1B — Live Supervised Implementer Authority Design
 
+> **STATUS UPDATE (2026-10-20):** P1B and its FU1 ledger were committed as
+> `b8ac9ea` and were exercised by the ALPHA-P1C live pilot and the ALPHA-P1D
+> pilot (see the [DEC-ALPHA1 proposal](ALPHA_1A_DEC_ALPHA1_DECISION_PROPOSAL.md)).
+> The 2026-10-15 block below is kept as written; "still not authorized" in it
+> describes that date, not the present. The per-run authority for ALPHA-1B is
+> separate and is not granted by anything here.
+>
 > **CURRENT STATUS (2026-10-15, ALPHA-P1B-IMPL).** The operator adopted
 > decisions D-1 to D-10 and authorized the **offline implementation and
 > testing** of P1B. §11 records the adopted decisions and the two required

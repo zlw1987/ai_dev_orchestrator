@@ -1,6 +1,16 @@
 # ALPHA-P1C — First Qwen 3.8 Live Pilot Preparation
 
-> **PREPARED — AWAITING AUTH-PILOT HUMAN APPROVAL.**
+> **HISTORICAL (updated 2026-10-20).** This preparation was used for the
+> P1C live pilot and then P1D, which the
+> [DEC-ALPHA1 proposal](ALPHA_1A_DEC_ALPHA1_DECISION_PROPOSAL.md) records as
+> ACCEPTED, CLOSED. Its pins (`b8ac9ea`, clone HEAD, run01 paths) and its
+> AUTH-PILOT are **historical and authorize nothing now**. They do not authorize
+> the newer source `44bf3be`; ALPHA-1B has its own pin and authorization. The
+> run actually used `C:\aido_p1c_runs\run03` and the ledger
+> `C:\aido_p1c_ledger\supervised_implementer`; the `run01` and
+> `%LOCALAPPDATA%` paths below are historical.
+>
+> *Original banner:* **PREPARED — AWAITING AUTH-PILOT HUMAN APPROVAL.**
 >
 > This document prepares the first live supervised-implementer pilot. It
 > **authorizes nothing**. No model request was made, no source was transmitted,
@@ -548,4 +558,4 @@ change.
 ---
 
 **ALPHA-P1C PILOT PREPARED — AWAITING AUTH-PILOT HUMAN APPROVAL.** No model
-request was executed.
+request was executed. *(Original closing line; see the historical banner above.)*

@@ -1,6 +1,14 @@
 # ALPHA-P1B — Live Supervised Implementer (implementation record)
 
-> **IMPLEMENTED OFFLINE — AWAITING INDEPENDENT REVIEW. NOT ACCEPTED.**
+> **STATUS UPDATE (2026-10-20): committed as `b8ac9ea`** (ALPHA-P1B plus the
+> FU1 durable ledger). It has since been exercised as the accepted P1B commands
+> by the ALPHA-P1C live pilot and the ALPHA-P1D pilot, which the
+> [DEC-ALPHA1 proposal](ALPHA_1A_DEC_ALPHA1_DECISION_PROPOSAL.md) records as
+> ACCEPTED, CLOSED. The banner below is the original wording at implementation
+> time and is superseded on status. Its other content, including the offline
+> record, is unchanged.
+>
+> **IMPLEMENTED OFFLINE — AWAITING INDEPENDENT REVIEW. NOT ACCEPTED.** *(original, superseded)*
 >
 > **ALPHA-P1B-FU1 (2026-10-15):** the review returned CHANGES REQUIRED on one
 > blocker, B-1 (replay after run-directory deletion or evidence rotation). FU1

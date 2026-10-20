@@ -12,9 +12,12 @@
 > command, or a writer. **Qwen 3.8 has NOT passed Autonomous Implementer
 > Qualification.** `SUP-D` carries no qualification credit of any kind.
 >
-> **Status: independent review returned CHANGES REQUIRED (governance and
-> offline-claim wording only); ALPHA-P1A-FU1 corrections applied (§7);
-> uncommitted, awaiting independent recheck.**
+> **Status (updated 2026-10-20): ACCEPTED and committed as `12f728c`** (an
+> ancestor of the current history). The independent review had returned CHANGES
+> REQUIRED (governance and offline-claim wording only); the ALPHA-P1A-FU1
+> corrections (§7) were applied before that commit.
+>
+> *Superseded wording: "uncommitted, awaiting independent recheck".*
 
 | | |
 |---|---|
