@@ -105,6 +105,8 @@ from test_cli_l2_review_vllm_provider import (
     VLLM_HTTPS_BASE_URL,
     VLLM_HTTPS_HOST,
     VLLM_REVIEWER_MODEL,
+    _DEFAULT_ENDPOINT,
+    _endpoint_lines,
     _recording_factory,
     _vllm_env,
 )
@@ -131,6 +133,8 @@ def _structured_vllm_block(
     ]
     if structured is not None:
         lines.append(f"  vllm_structured_output: {str(structured).lower()}")
+    # ALPHA-1A-FU1: authorize the synthetic TLS endpoint _vllm_env() supplies.
+    lines.extend(_endpoint_lines(VLLM_HTTPS_BASE_URL))
     return "\n".join(lines) + "\n"
 
 
@@ -145,6 +149,9 @@ def _project(**review) -> ProjectConfig:
         },
     }
     if review:
+        # ALPHA-1A-FU1: an enabled block must authorize its reviewer endpoint.
+        if review.get("enabled") and "endpoint" not in review:
+            review = {**review, "endpoint": dict(_DEFAULT_ENDPOINT)}
         payload["controlled_review"] = review
     return ProjectConfig.model_validate(payload)
 
@@ -924,7 +931,10 @@ def test_a_structured_decoding_5xx_is_terminal_with_no_unstructured_retry(
     assert code == 4
     assert len(seen) == 1
     assert "response_format" in seen[0]
-    assert configs[0].max_retries == REVIEWER_TRANSPORT_MAX_RETRIES == 0
+    # A 503 is retryable under the generic client policy; exactly one request
+    # on the wire is the end-to-end proof of the forced zero (ALPHA-1A-FU1:
+    # there is no client configuration to inspect any more).
+    assert REVIEWER_TRANSPORT_MAX_RETRIES == 0
     assert capsys.readouterr().out == ""
 
 
@@ -1041,7 +1051,7 @@ def test_a_structured_timeout_remains_terminal_at_one_request(tmp_path, capsys):
 
 def test_the_current_schema_version_is_v4():
     """Requirement 25."""
-    assert REVIEW_PACKET_SCHEMA_VERSION == "review-packet.v4"
+    assert REVIEW_PACKET_SCHEMA_VERSION == "review-packet.v5"
 
 
 def test_v1_v2_and_v3_histories_remain_present_and_truthful():
@@ -1099,7 +1109,7 @@ def test_a_structured_vllm_packet_records_the_mode_and_schema_source(tmp_path, c
     assert code == 0
     packet = ReviewPacket.model_validate(_stdout_json(capsys))
 
-    assert packet.schema_version == "review-packet.v4"
+    assert packet.schema_version == "review-packet.v5"
     assert packet.reviewer.provider == "vllm"
     assert packet.reviewer.model == VLLM_REVIEWER_MODEL
     assert packet.reviewer.endpoint_host == VLLM_HTTPS_HOST
@@ -1157,7 +1167,7 @@ def test_an_ordinary_litellm_packet_reports_mode_none(tmp_path, capsys):
     assert code == 0
     packet = ReviewPacket.model_validate(_stdout_json(capsys))
 
-    assert packet.schema_version == "review-packet.v4"
+    assert packet.schema_version == "review-packet.v5"
     assert packet.reviewer.provider == "litellm"
     assert packet.reviewer.structured_output_mode == "none"
     assert packet.reviewer.structured_output_schema_source is None

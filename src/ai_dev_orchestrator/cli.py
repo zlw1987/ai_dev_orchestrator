@@ -497,10 +497,21 @@ def _read_reviewer_env(provider: str) -> dict[str, str]:
 
 
 def _build_real_llm_client(config):
-    """Construct the real, socket-capable client. The only such call site."""
+    """Construct the real, socket-capable client for the planner and smoke test."""
     from ai_dev_orchestrator.llm.client import LLMClient
 
     return LLMClient(config)
+
+
+def _build_reviewer_network_transport():
+    """The reviewer's real network transport (ALPHA-1A-FU1): direct, no proxy.
+
+    The review library wraps it in its egress-checking transport and builds the
+    client itself; this function only supplies the inner, socket-capable piece.
+    """
+    from ai_dev_orchestrator.review import build_reviewer_network_transport
+
+    return build_reviewer_network_transport()
 
 
 def _echo_real_smoke_banner(*, endpoint_host: str, model: str, project_id: str) -> None:
@@ -3756,6 +3767,11 @@ _REVIEWER_FAILURE_CATEGORIES: dict[str, str] = {
         "reviewer transport failure — the endpoint call failed under the LLM "
         "client's existing policy"
     ),
+    # ALPHA-1A-FU1. A destination mismatch is refused before any request.
+    "ReviewerEgressRefused": (
+        "reviewer-egress-refused — the reviewer destination did not match "
+        "project_config.controlled_review.endpoint, and no request was issued"
+    ),
     "ReviewParseError": (
         "reviewer parse failure — the reply was not exactly one strict JSON object"
     ),
@@ -3898,6 +3914,12 @@ def _echo_reviewer_banner(notice) -> None:
         "=== REAL REVIEWER MODEL CALL — a real network call is about to be made ===",
         f"Provider:      {notice.provider}",
         f"Endpoint host: {notice.endpoint_host}",
+        # ALPHA-1A-FU1. The AUTHORIZED destination the request already matched:
+        # scheme, host, effective port and base path from project config —
+        # never the environment's base URL, its userinfo or its query.
+        f"Endpoint:      scheme {notice.endpoint_scheme}, port "
+        f"{notice.endpoint_port}, base path {notice.endpoint_base_path or '(none)'}"
+        " — matches project-config authorization; inherited proxies disabled",
         f"Transport:     {_reviewer_transport_line(notice)}",
         f"Model:         {notice.model}",
         # Phase 5F2E-V2. The MODE token only — never the schema document, the
@@ -3939,15 +3961,21 @@ def _run_l2_review_approved_file_edit(
     verify_approved_file_edit_flag: bool,
     real_reviewer: bool,
     read_env=_read_reviewer_env,
-    client_factory=_build_real_llm_client,
+    network_transport_factory=_build_reviewer_network_transport,
 ) -> None:
     """Verify one applied approved change, then review it. Extracted for tests.
 
-    ``read_env`` and ``client_factory`` are injection points: the CLI wrapper
-    supplies the real environment reader and the real client builder, while tests
-    supply a literal mapping and an ``httpx.MockTransport``-backed client, so the
-    test suite never reads a real value or opens a real socket. ``read_env`` is
-    called as ``read_env(provider)``.
+    ``read_env`` and ``network_transport_factory`` are injection points: the CLI
+    wrapper supplies the real environment reader and the production reviewer
+    network transport (direct, no inherited proxy), while tests supply a literal
+    mapping and an ``httpx.MockTransport``, so the test suite never reads a real
+    value or opens a real socket. ``read_env`` is called as
+    ``read_env(provider)``.
+
+    ALPHA-1A-FU1: there is no client injection point any more. The review
+    library builds the reviewer client itself, around an egress transport that
+    checks every request against ``controlled_review.endpoint`` before it
+    reaches the injected network transport.
 
     Ordering is the safety property, and the credential ordering in particular is
     load-bearing. In sequence: both ``--verify-approved-file-edit`` and
@@ -3972,7 +4000,13 @@ def _run_l2_review_approved_file_edit(
     exactly and case-sensitively, and an unsupported provider still refuses here
     before any workspace access, process launch, environment read, or model
     contact. There is no new flag and no new command; provider selection is
-    project-config only and the endpoint is environment-only.
+    project-config only and the endpoint value is environment-only.
+
+    ALPHA-1A-FU1 adds one gate step: an enabled ``controlled_review`` block must
+    carry ``endpoint``, the project-config AUTHORIZATION of the one reviewer
+    destination, refused before verification when absent. After verification
+    the environment's base URL must match it, and every outbound request is
+    re-checked at the transport (exit 4, ``reviewer-egress-refused``).
     """
     from ai_dev_orchestrator.config_loader import ConfigError, load_project_config
     from ai_dev_orchestrator.file_editing import (
@@ -4128,7 +4162,7 @@ def _run_l2_review_approved_file_edit(
             approved_diff=artifact,
             project=project,
             read_env=read_env,
-            client_factory=client_factory,
+            network_transport_factory=network_transport_factory,
             on_before_model_call=_echo_reviewer_banner,
             on_supervision_event=_echo_supervision_event,
         )
@@ -4276,8 +4310,9 @@ def l2_review_approved_file_edit(
         readable=True,
         help="Path to the project config YAML the approved diff must match. Its "
         "controlled_verification block must be enabled, and its "
-        "controlled_review block must be enabled and name the exact reviewer "
-        "model.",
+        "controlled_review block must be enabled, name the exact reviewer "
+        "model, and authorize the one reviewer endpoint "
+        "(controlled_review.endpoint).",
     ),
     approved_diff_proposal: Path = typer.Option(
         ...,
@@ -4412,7 +4447,7 @@ def l2_review_approved_file_edit(
         verify_approved_file_edit_flag=verify_approved_file_edit_flag,
         real_reviewer=real_reviewer,
         read_env=_read_reviewer_env,
-        client_factory=_build_real_llm_client,
+        network_transport_factory=_build_reviewer_network_transport,
     )
 
 

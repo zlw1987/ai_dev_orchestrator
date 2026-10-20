@@ -74,7 +74,8 @@ before doing any work here.
   `response_format` produced one bare JSON object the *unmodified* parser
   accepted. **The reasoning was never the failure — the envelope was.** So V2
   adds one **generation constraint** and changes the parser not at all. The
-  output artifact is now **`review-packet.v4`**.
+  output artifact became **`review-packet.v4`**. ALPHA-1A-FU1 later bumped it
+  to **`review-packet.v5`** (see "Which reviewer backend" below).
 - **ALPHA-P1B (DEC-SUP-LIVE) implemented the live supervised, proposal-only
   implementer** (two commands; it awaits independent review). It sends ONE
   approved file to `SUP-D` once under a human-completed, single-use, per-run
@@ -208,6 +209,23 @@ calls the accepted 5F2D library path.
   model comes **only** from `controlled_review.model` — no CLI `--model`, no
   environment default of either provider, no glob or case-folded matching.
   `real_model_planning` does **not** authorize review;
+- **the reviewer destination is AIDO-enforced (ALPHA-1A-FU1).** An enabled
+  `controlled_review` block must carry `endpoint` (scheme, host, explicit port,
+  base path). If it is absent, the review is refused before verification. The
+  environment's base URL must match it exactly, as httpx parses the actual
+  request. It is checked once before any client exists and again on **every**
+  outbound request by `ReviewerEgressTransport`, before the network transport
+  sees it. A mismatch exits 4 with `reviewer-egress-refused` and sends nothing.
+  The reviewer transport is direct (`trust_env=False`, explicit transport), so
+  no environment or Windows-registry proxy is inherited.
+
+  `run_controlled_review` takes a `network_transport_factory` (the CLI passes
+  the production transport; tests pass `httpx.MockTransport`) and builds the
+  client itself. There is **no** client injection point: do not reintroduce
+  `client_factory` there.
+
+  The host is authorized as text: DNS and routing are not observed, and none
+  of this is a sandbox against in-process code;
 - the reviewer receives **only**: trusted identity, selected approved-plan prose,
   the **one** approved unified diff, and the freshly produced verification facts
   with their already-bounded, redacted output. Never the full target file, never
@@ -240,10 +258,12 @@ those here.
   `project_config.controlled_review.model` only. The vLLM path deliberately has
   **no** `AIDO_VLLM_DEFAULT_MODEL`, and the LiteLLM path still overrides
   `AIDO_LITELLM_DEFAULT_MODEL`;
-- **the endpoint is environment-only, never project config.** vLLM requires
+- **the endpoint VALUE is environment-only. The endpoint AUTHORIZATION is
+  project config (ALPHA-1A-FU1), and the two must match.** vLLM requires
   `AIDO_VLLM_BASE_URL`; `AIDO_VLLM_API_KEY` is optional. **No** `AIDO_LITELLM_*`
   variable is required, read, or accepted for a vLLM reviewer, and the reverse
-  holds too;
+  holds too. `controlled_review.endpoint` holds no base URL string and no
+  credential; it only authorizes the environment's value;
 - **only the configured provider's names are ever read** (5F2E-V1-FU1). The
   reader is handed the provider and resolves it to an exact name tuple **before**
   it touches the process environment, so the other family is never looked up at
@@ -277,23 +297,32 @@ those here.
 - **no CLI surface change.** `l2-review-approved-file-edit` keeps its exact
   option set: no new command, no `--provider`, `--model`, `--endpoint`,
   `--base-url`, `--api-key`, or `--allow-insecure-http`. Provider selection is
-  project-config only; endpoint selection is environment-only;
+  project-config only. The endpoint value is environment-only and must match
+  `controlled_review.endpoint`;
 - **RS1 applies identically to both providers.** A vLLM timeout is still
   `review_stalled`, still terminal, and still gets no retry; the only second
   request remains the accepted completed-but-unusable compact retry. Do not add a
   provider-specific retry, timeout, or backoff.
 
-The output artifact is now **`review-packet.v4`** (Phase 5F2E-V2 bumped it from
-V1's `v3`), whose reviewer provenance carries `provider`, `model`,
-`model_source`, `endpoint_host`, `endpoint_scheme`, `transport_tls`,
-`structured_output_mode` and `structured_output_schema_source` — and still never
-a base URL, credential, header, full path, query, fragment, or workspace absolute
-path. **`v1`, `v2` and `v3` keep their original meanings**: `v1` and `v2` were
-LiteLLM-only and reported no transport scheme, so an archived `v2` packet must
-never be reinterpreted as though it may have come from vLLM; and **none of the
-three recorded structured-generation provenance**, so no archived `v1`, `v2` or
-`v3` packet may be read as proving whether `response_format`/`json_schema` was
-used.
+The output artifact is now **`review-packet.v5`**. Phase 5F2E-V2 bumped V1's
+`v3` to `v4`, and ALPHA-1A-FU1 bumped `v4` to `v5`.
+
+Its reviewer provenance carries `provider`, `model`, `model_source`,
+`endpoint_host`, `endpoint_scheme`, `transport_tls`, `structured_output_mode`
+and `structured_output_schema_source`. Since `v5` it also carries
+`endpoint_port`, `endpoint_base_path`, `endpoint_authority_source`,
+`endpoint_matched_authority_before_each_request` and `transport_proxy_mode`. It
+still never carries a base URL, credential, header, full path, query, fragment,
+or workspace absolute path.
+
+**`v1` to `v4` keep their original meanings:**
+- `v1` and `v2` were LiteLLM-only and reported no transport scheme, so an
+  archived `v2` packet must never be reinterpreted as though it may have come
+  from vLLM.
+- **None of `v1`, `v2` or `v3` recorded structured-generation provenance**, so
+  none of them may be read as proving whether `response_format`/`json_schema`
+  was used.
+- **No `v1`–`v4` packet records endpoint authorization or proxy isolation.**
 
 ### Structured vLLM reviewer output (5F2E-V2)
 
@@ -461,8 +490,10 @@ exactly:
 - the packet carries a `reviewer_supervision` block. It was
   **`review-packet.v2`** when RS1 shipped; Phase 5F2E-V1 bumped it to
   **`review-packet.v3`** for reviewer provenance only, and Phase 5F2E-V2 bumped
-  it again to **`review-packet.v4`** for structured-generation provenance only —
-  each time leaving every RS1 supervision field and meaning exactly as accepted.
+  it again to **`review-packet.v4`** for structured-generation provenance only,
+  and ALPHA-1A-FU1 bumped it to **`review-packet.v5`** for reviewer
+  egress-authority provenance only. Each bump left every RS1 supervision field
+  and meaning exactly as accepted.
 
 > **Do not describe RS1 as a hard wall-clock kill.** `attempt_timeout_seconds`
 > bounds AIDO's *wait*, via AIDO's own monotonic deadline. **Never claim the

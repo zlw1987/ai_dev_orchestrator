@@ -239,7 +239,7 @@ def test_a_vllm_review_never_reads_a_litellm_variable_end_to_end(tmp_path, monke
         approved_diff_proposal=artifact,
         verify_approved_file_edit_flag=True,
         real_reviewer=True,
-        client_factory=_recording_factory(configs, seen),
+        network_transport_factory=_recording_factory(configs, seen),
     )
 
     assert code is None  # exit 0 raises nothing
@@ -272,7 +272,7 @@ def test_a_litellm_review_never_reads_a_vllm_variable_end_to_end(
         approved_diff_proposal=artifact,
         verify_approved_file_edit_flag=True,
         real_reviewer=True,
-        client_factory=_recording_factory(configs, seen),
+        network_transport_factory=_recording_factory(configs, seen),
     )
 
     assert code is None
@@ -427,7 +427,7 @@ def test_a_missing_vllm_base_url_is_reported_without_blaming_litellm(
         forbidden=set(LITELLM_REVIEWER_ENV_NAMES),
     )
 
-    def forbidden_client(config):
+    def forbidden_client():
         raise AssertionError("a client was built without a configured endpoint")
 
     calls: list[str] = []
@@ -488,7 +488,7 @@ def test_an_unauthorized_http_vllm_endpoint_uses_the_same_neutral_category(
         forbidden=set(LITELLM_REVIEWER_ENV_NAMES),
     )
 
-    def forbidden_client(config):
+    def forbidden_client():
         raise AssertionError("a client was built for a refused transport")
 
     code = _run(

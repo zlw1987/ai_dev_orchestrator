@@ -1007,6 +1007,12 @@ def run_supervised_review(
 ) -> SupervisedReviewOutcome:
     """Issue at most two supervised semantic reviewer requests.
 
+    **Not an egress-authority boundary (ALPHA-1A-FU1).** It sends with the
+    caller's ``client`` and holds no endpoint authority. The authorized path is
+    :func:`~ai_dev_orchestrator.review.reviewer.run_controlled_review`, which
+    hands this function a client built around
+    :class:`~ai_dev_orchestrator.review.egress.ReviewerEgressTransport`.
+
     Attempt 1 is the accepted Phase 5F2E full request, unchanged except for the
     optional configured ``max_tokens``. Attempt 2 exists only when the project enabled it
     **and** attempt 1 returned a **completed but unusable response** — an

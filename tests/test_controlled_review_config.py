@@ -30,6 +30,16 @@ BASE = {
 }
 
 
+# ALPHA-1A-FU1: a synthetic authorized reviewer endpoint. ``.invalid`` never
+# resolves, and no real endpoint appears in this file.
+ENDPOINT = {
+    "scheme": "https",
+    "host": "reviewer.invalid",
+    "port": 443,
+    "base_path": "/v1",
+}
+
+
 def _project(**review) -> ProjectConfig:
     payload = dict(BASE)
     if review:
@@ -61,6 +71,8 @@ def test_the_block_rejects_unknown_fields():
     for extra in (
         {"api_key": "sk-not-a-real-key"},
         {"base_url": "http://endpoint.invalid"},
+        # ALPHA-1A-FU1 added a structured ``endpoint`` AUTHORIZATION; a URL
+        # string is still not accepted in its place.
         {"endpoint": "http://endpoint.invalid"},
         {"api_key_env": "AIDO_LITELLM_API_KEY"},
         {"prompt_template": "review this"},
@@ -104,7 +116,7 @@ def test_an_unsupported_provider_still_loads_so_other_commands_are_unaffected():
 
 def test_the_gate_returns_the_exact_configured_provider_and_model():
     authority = check_controlled_review_gate(
-        _project(enabled=True, model="qwen3-coder-next")
+        _project(enabled=True, model="qwen3-coder-next", endpoint=ENDPOINT)
     )
 
     assert authority.model == "qwen3-coder-next"
@@ -162,7 +174,11 @@ def test_the_review_gate_ignores_the_planning_allowlist_entirely():
         "allowed_models": ["planner-only-model"],
         "allow_prompt_audit_files": False,
     }
-    payload["controlled_review"] = {"enabled": True, "model": "reviewer-only-model"}
+    payload["controlled_review"] = {
+        "enabled": True,
+        "model": "reviewer-only-model",
+        "endpoint": ENDPOINT,
+    }
     project = ProjectConfig.model_validate(payload)
 
     assert check_controlled_review_gate(project).model == "reviewer-only-model"
@@ -178,4 +194,146 @@ def test_the_gate_reads_no_environment_variable(monkeypatch):
     monkeypatch.setattr(os.environ, "get", boom)
     monkeypatch.setattr(os.environ.__class__, "__getitem__", lambda self, key: boom())
 
-    assert check_controlled_review_gate(_project(enabled=True, model="m")).model == "m"
+    assert (
+        check_controlled_review_gate(
+            _project(enabled=True, model="m", endpoint=ENDPOINT)
+        ).model
+        == "m"
+    )
+
+
+# =============================================================================
+# ALPHA-1A-FU1 — controlled_review.endpoint (the reviewer egress authority)
+# =============================================================================
+
+
+def test_an_enabled_block_without_an_endpoint_loads_but_the_gate_refuses():
+    project = _project(enabled=True, model="m")
+
+    assert project.controlled_review.endpoint is None
+    with pytest.raises(ReviewRefusedError) as excinfo:
+        check_controlled_review_gate(project)
+
+    message = str(excinfo.value)
+    assert "endpoint authorization error" in message
+    assert "controlled_review.endpoint" in message
+
+
+def test_the_gate_returns_a_frozen_copy_of_the_endpoint_authority():
+    from ai_dev_orchestrator.review import ReviewerEndpointAuthority
+
+    authority = check_controlled_review_gate(
+        _project(enabled=True, model="m", endpoint=ENDPOINT)
+    )
+
+    assert authority.endpoint == ReviewerEndpointAuthority(**ENDPOINT)
+    with pytest.raises(Exception):
+        authority.endpoint.port = 1  # type: ignore[misc]
+
+
+def test_a_disabled_block_needs_no_endpoint():
+    assert _project(enabled=False, model="m").controlled_review.endpoint is None
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        ENDPOINT,
+        {**ENDPOINT, "scheme": "http", "port": 8000},
+        {**ENDPOINT, "base_path": ""},
+        {**ENDPOINT, "base_path": "/openai/v1"},
+        {**ENDPOINT, "host": "10.0.0.7"},
+        {**ENDPOINT, "host": "a-b.c-d.invalid"},
+        {**ENDPOINT, "port": 1},
+        {**ENDPOINT, "port": 65535},
+    ],
+)
+def test_a_well_formed_endpoint_loads(endpoint):
+    project = _project(enabled=True, model="m", endpoint=endpoint)
+    assert project.controlled_review.endpoint.model_dump() == endpoint
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("scheme", "HTTP"),
+        ("scheme", "ftp"),
+        ("scheme", ""),
+        ("host", ""),
+        ("host", "Reviewer.invalid"),
+        ("host", "reviewer.invalid."),
+        ("host", "-reviewer.invalid"),
+        ("host", "reviewer-.invalid"),
+        ("host", "re viewer.invalid"),
+        ("host", "reviewer.invalid:443"),
+        ("host", "user@reviewer.invalid"),
+        ("host", "reviewer.invalid/v1"),
+        ("host", "reviewer%2einvalid"),
+        ("host", "xn--bcher-kva.invalid"),
+        ("host", "bücher.invalid"),
+        ("host", "::1"),
+        ("host", "[::1]"),
+        ("host", "127.1"),
+        ("host", "2130706433"),
+        ("host", "010.0.0.1"),
+        ("host", "256.0.0.1"),
+        ("host", "a" * 64 + ".invalid"),
+        ("port", 0),
+        ("port", 65536),
+        ("port", -1),
+        ("port", "443"),
+        ("port", True),
+        ("port", 443.0),
+        ("port", None),
+        ("base_path", "v1"),
+        ("base_path", "/"),
+        ("base_path", "/v1/"),
+        ("base_path", "//v1"),
+        ("base_path", "/v1//x"),
+        ("base_path", "/./v1"),
+        ("base_path", "/v1/.."),
+        ("base_path", "/v1%2f"),
+        ("base_path", "/v1?x=1"),
+        ("base_path", "/v1#f"),
+        ("base_path", "/v1\\x"),
+        ("base_path", "/v 1"),
+        ("base_path", None),
+    ],
+)
+def test_a_malformed_endpoint_is_refused_at_load(field, value):
+    with pytest.raises(ValidationError):
+        _project(enabled=True, model="m", endpoint={**ENDPOINT, field: value})
+
+
+@pytest.mark.parametrize("missing", ["scheme", "host", "port", "base_path"])
+def test_every_endpoint_field_is_required(missing):
+    endpoint = {key: value for key, value in ENDPOINT.items() if key != missing}
+    with pytest.raises(ValidationError):
+        _project(enabled=True, model="m", endpoint=endpoint)
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"url": "https://reviewer.invalid/v1"},
+        {"base_url": "https://reviewer.invalid/v1"},
+        {"api_key": "sk-not-a-real-key"},
+        {"api_key_env": "AIDO_VLLM_API_KEY"},
+        {"proxy": "http://proxy.invalid:3128"},
+        {"query": "x=1"},
+    ],
+)
+def test_the_endpoint_block_rejects_unknown_fields(extra):
+    with pytest.raises(ValidationError):
+        _project(enabled=True, model="m", endpoint={**ENDPOINT, **extra})
+
+
+def test_the_endpoint_authority_is_checked_after_the_earlier_gate_rules():
+    """An unsupported provider or missing model still names its own error."""
+    with pytest.raises(ReviewRefusedError) as excinfo:
+        check_controlled_review_gate(_project(enabled=True, provider="openai", model="m"))
+    assert "provider error" in str(excinfo.value)
+
+    with pytest.raises(ReviewRefusedError) as excinfo:
+        check_controlled_review_gate(_project(enabled=True))
+    assert "model error" in str(excinfo.value)

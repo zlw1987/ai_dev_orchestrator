@@ -111,6 +111,24 @@ The opt-in applies to ``provider: "vllm"`` only. Setting it with any other
 provider is **refused at the gate**, never silently ignored. LiteLLM sends no
 ``response_format`` from this feature at all.
 
+Reviewer egress authority (ALPHA-1A-FU1)
+-----------------------------------------
+
+``controlled_review.endpoint`` is the one destination — scheme, host, explicit
+port, base path — this project authorizes. It is **mandatory** for an enabled
+block and is captured by the gate before verification as a frozen
+:class:`~ai_dev_orchestrator.review.egress.ReviewerEndpointAuthority`. After
+verification and the environment read, the URL the client will request is
+checked against it as ``httpx`` parses it; then AIDO builds the reviewer
+``LLMClient`` itself around
+:class:`~ai_dev_orchestrator.review.egress.ReviewerEgressTransport`, which
+re-checks **every** outbound request before the caller-supplied network
+transport sees it. Because that client is handed an explicit transport, no
+inherited proxy (environment or Windows registry) is mounted. A mismatch raises
+:class:`~ai_dev_orchestrator.review.models.ReviewerEgressRefused` and sends
+nothing. The endpoint VALUE remains environment-only; the config only
+authorizes it.
+
 Reviewer failure semantics
 --------------------------
 
@@ -159,6 +177,7 @@ from urllib.parse import urlsplit
 from pydantic import ValidationError
 
 from ai_dev_orchestrator.file_editing.models import ApprovedDiffProposalArtifact
+from ai_dev_orchestrator.llm.client import LLMClient
 from ai_dev_orchestrator.llm.config import LLMConfigError, load_llm_client_config_from_env
 from ai_dev_orchestrator.llm.models import (
     LLMClientConfig,
@@ -168,6 +187,13 @@ from ai_dev_orchestrator.models import ProjectConfig
 from ai_dev_orchestrator.plan.real_model_gate import (
     RealModelPlanningGateError,
     endpoint_host_from_base_url,
+)
+from ai_dev_orchestrator.review.egress import (
+    ReviewerEgressTransport,
+    ReviewerEndpointAuthority,
+    check_reviewer_destination,
+    effective_port,
+    reviewer_request_url,
 )
 from ai_dev_orchestrator.review.models import (
     ModelReviewResult,
@@ -198,9 +224,14 @@ from ai_dev_orchestrator.verification import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, never imported at runtime.
-    # Annotation-only. This module is *handed* a client factory; it must never be
-    # able to build a real client itself, so the import stays out of globals.
-    from ai_dev_orchestrator.llm.client import LLMClient
+    import httpx
+
+# ALPHA-1A-FU1: this module now builds the reviewer ``LLMClient`` itself, around
+# AIDO's own ReviewerEgressTransport. It still never builds a *network*
+# transport: the inner transport is handed in by the caller (the CLI passes
+# :func:`~ai_dev_orchestrator.review.egress.build_reviewer_network_transport`;
+# tests pass an ``httpx.MockTransport``), and every request passes the egress
+# check before it reaches it.
 
 # The two supported reviewer providers, matched with ``==`` — no alias, no case
 # folding, no prefix, no glob, no registry, and no plugin lookup. Phase 5F2E-V1
@@ -315,6 +346,12 @@ class ReviewerCallNotice:
     ``"json_schema"``) and never the schema document, so nothing large or
     surprising can reach the terminal through it.
 
+    ALPHA-1A-FU1 added ``endpoint_port`` (always the effective port) and
+    ``endpoint_base_path`` (the authorized base path). By the time a notice
+    exists, the destination has already matched
+    ``project_config.controlled_review.endpoint``; both values are the
+    authorized ones, never read from the base URL's userinfo or query.
+
     That is a statement about *provenance*, not about validation. ``RepoConfig``
     does **not** currently enforce an ``owner/repo`` shape, and ``ProjectConfig``
     does not constrain ``project_id`` beyond requiring the field; an earlier
@@ -330,6 +367,8 @@ class ReviewerCallNotice:
         "endpoint_host",
         "endpoint_scheme",
         "transport_tls",
+        "endpoint_port",
+        "endpoint_base_path",
         "structured_output_mode",
         "project_id",
         "repo",
@@ -344,6 +383,8 @@ class ReviewerCallNotice:
         endpoint_host: str,
         endpoint_scheme: str,
         transport_tls: bool,
+        endpoint_port: int,
+        endpoint_base_path: str,
         structured_output_mode: str = STRUCTURED_OUTPUT_MODE_NONE,
         project_id: str,
         repo: str,
@@ -354,6 +395,8 @@ class ReviewerCallNotice:
         self.endpoint_host = endpoint_host
         self.endpoint_scheme = endpoint_scheme
         self.transport_tls = transport_tls
+        self.endpoint_port = endpoint_port
+        self.endpoint_base_path = endpoint_base_path
         self.structured_output_mode = structured_output_mode
         self.project_id = project_id
         self.repo = repo
@@ -400,19 +443,27 @@ class ReviewerAuthority:
     :data:`~ai_dev_orchestrator.review.request.STRUCTURED_OUTPUT_MODE_JSON_SCHEMA`.
     It is **orchestrator-owned provenance**, derived here from trusted project
     config alone — never from model output, an environment value, or a CLI flag.
+
+    ``endpoint`` (ALPHA-1A-FU1) is the frozen
+    :class:`~ai_dev_orchestrator.review.egress.ReviewerEndpointAuthority` copied
+    from ``controlled_review.endpoint`` here, before verification. It is an
+    authorization only — it is not an endpoint *value*, and no environment value
+    has been read when it is created.
     """
 
-    __slots__ = ("provider", "model", "structured_output_mode")
+    __slots__ = ("provider", "model", "structured_output_mode", "endpoint")
 
     def __init__(
         self,
         *,
         provider: str,
         model: str,
+        endpoint: ReviewerEndpointAuthority,
         structured_output_mode: str = STRUCTURED_OUTPUT_MODE_NONE,
     ) -> None:
         self.provider = provider
         self.model = model
+        self.endpoint = endpoint
         self.structured_output_mode = structured_output_mode
 
 
@@ -427,6 +478,10 @@ def check_controlled_review_gate(project: ProjectConfig) -> ReviewerAuthority:
     Provider matching is exact and **case-sensitive**. ``"LiteLLM"``, ``"VLLM"``,
     ``"openai"`` and ``"openai_compatible"`` are all refused: this phase
     dispatches two specifically named backends, not a family of compatible ones.
+
+    ALPHA-1A-FU1: an enabled block must also carry ``controlled_review.endpoint``
+    — the one reviewer destination this project authorizes. It is mandatory and
+    refused here, before verification, when absent.
 
     Reads **no** environment variable, builds no client, touches no workspace, and
     contacts nothing. ``real_model_planning`` is never consulted: planning
@@ -487,9 +542,25 @@ def check_controlled_review_gate(project: ProjectConfig) -> ReviewerAuthority:
             )
         structured_output_mode = STRUCTURED_OUTPUT_MODE_JSON_SCHEMA
 
+    # ALPHA-1A-FU1. The reviewer destination must be authorized by this
+    # human-reviewed config before anything runs. Mandatory: there is no legacy
+    # "absent means unchecked" mode, because an optional egress check is not an
+    # egress guarantee. Only the AUTHORIZATION is read here; the endpoint VALUE
+    # still comes from the environment, and only after verification passes.
+    if settings.endpoint is None:
+        raise ReviewRefusedError(
+            f"endpoint authorization error: project {project.project_id!r} "
+            "enables controlled review but names no "
+            "controlled_review.endpoint (scheme, host, port, base_path). "
+            "Source-derived material may be sent only to a destination this "
+            "project config explicitly authorizes. No verification process was "
+            "started, no environment value was read, and nothing was contacted."
+        )
+
     return ReviewerAuthority(
         provider=settings.provider,
         model=model,
+        endpoint=ReviewerEndpointAuthority.from_config(settings.endpoint),
         structured_output_mode=structured_output_mode,
     )
 
@@ -808,6 +879,12 @@ def request_model_review(
     :func:`~ai_dev_orchestrator.review.supervision.run_supervised_review`, which
     owns the bounded two-attempt policy.
 
+    **Not an egress-authority boundary (ALPHA-1A-FU1).** This primitive sends
+    with whatever client the caller built; it reads no environment, runs no
+    verification, and holds no endpoint authority. The authorized reviewer path
+    is :func:`run_controlled_review`, which builds its own client around
+    :class:`~ai_dev_orchestrator.review.egress.ReviewerEgressTransport`.
+
     The client is always supplied by the caller: this module constructs none, and
     imports no transport. Exactly one :meth:`chat` call is made here — and,
     because a reviewer client is built with ``max_retries=0``, exactly one
@@ -848,7 +925,7 @@ def run_controlled_review(
     approved_diff: ApprovedDiffProposalArtifact,
     project: ProjectConfig,
     read_env: Callable[[str], Mapping[str, str]],
-    client_factory: Callable[[LLMClientConfig], "LLMClient"],
+    network_transport_factory: Callable[[], "httpx.BaseTransport"],
     on_before_model_call: Callable[[ReviewerCallNotice], None] | None = None,
     on_supervision_event: Callable[[ReviewSupervisionEvent], None] | None = None,
     monotonic: Callable[[], float] | None = None,
@@ -869,8 +946,18 @@ def run_controlled_review(
             :func:`reviewer_env_names_for_provider` **before** touching any
             environment, so the unconfigured provider's names are never read at
             all — not read-then-discarded.
-        client_factory: **Injected** builder for the chat client. The only thing
-            in this flow that can reach a socket.
+        network_transport_factory: **Injected** zero-argument builder of the
+            INNER network transport (ALPHA-1A-FU1). The CLI passes
+            :func:`~ai_dev_orchestrator.review.egress.build_reviewer_network_transport`;
+            tests pass an ``httpx.MockTransport``. It is called at most once,
+            only after verification passed, the environment was read and the
+            pre-client destination check passed. This function builds the
+            ``LLMClient`` itself around
+            :class:`~ai_dev_orchestrator.review.egress.ReviewerEgressTransport`,
+            so every request is checked against
+            ``controlled_review.endpoint`` before it reaches this transport.
+            There is deliberately no parameter through which a caller can
+            supply a client.
         on_before_model_call: Optional callback invoked with a
             :class:`ReviewerCallNotice` immediately before the real reviewer
             call, so a CLI can warn on stderr while the socket still does not
@@ -895,6 +982,9 @@ def run_controlled_review(
             Nothing was verified, read, or contacted.
         VerificationRefusedError: Propagated unchanged from Phase 5F2D — a gate
             failed and no project process was started.
+        ReviewerEgressRefused: Verification passed, but the configured
+            provider's base URL — or a later outbound request — did not match
+            ``controlled_review.endpoint``. Nothing reached a network transport.
         ReviewerStageError: Verification passed but the reviewer stage failed.
             Model output was never repaired, and nothing in the workspace was
             restored. AIDO may have issued the one authorized compact second
@@ -907,6 +997,8 @@ def run_controlled_review(
     authority = check_controlled_review_gate(project)
     provider = authority.provider
     model = authority.model
+    # ALPHA-1A-FU1. Frozen before verification; nothing later can widen it.
+    endpoint_authority = authority.endpoint
     # Phase 5F2E-V2, orchestrator-owned provenance: which generation constraint
     # trusted project config authorized. Resolved here, before verification, so
     # a provider/opt-in contradiction refuses before anything runs.
@@ -949,6 +1041,14 @@ def run_controlled_review(
     endpoint_scheme = endpoint_scheme_from_base_url(config.base_url)
     transport_tls = endpoint_scheme == "https"
 
+    # ALPHA-1A-FU1, the pre-client gate. Check the exact URL the client will
+    # request, as httpx parses it, against the project-config authorization —
+    # before any notice, client or request. The transport re-checks every real
+    # request; this check exists so a mismatch fails before a client exists.
+    request_url = reviewer_request_url(config.base_url)
+    check_reviewer_destination(request_url, endpoint_authority)
+    endpoint_port = effective_port(request_url)
+
     # Defensive: the config builder pins the model to the project-configured one.
     # If that ever stops holding, fail closed rather than review with a model the
     # project never named.
@@ -972,6 +1072,8 @@ def run_controlled_review(
                 endpoint_host=endpoint_host,
                 endpoint_scheme=endpoint_scheme,
                 transport_tls=transport_tls,
+                endpoint_port=endpoint_port,
+                endpoint_base_path=endpoint_authority.base_path,
                 structured_output_mode=structured_output_mode,
                 project_id=verification.project_id,
                 repo=verification.repo,
@@ -993,7 +1095,15 @@ def run_controlled_review(
         if structured_output_mode == STRUCTURED_OUTPUT_MODE_JSON_SCHEMA
         else None
     )
-    client = client_factory(config)
+    # ALPHA-1A-FU1. AIDO builds the client, around its own egress transport.
+    # ``LLMClient(config, transport=...)`` hands httpx an EXPLICIT transport, so
+    # httpx mounts no inherited (environment or registry) proxy at all.
+    client = LLMClient(
+        config,
+        transport=ReviewerEgressTransport(
+            network_transport_factory(), authority=endpoint_authority
+        ),
+    )
     supervised: SupervisedReviewOutcome = run_supervised_review(
         context,
         client=client,
@@ -1016,6 +1126,8 @@ def run_controlled_review(
         model=model,
         endpoint_host=endpoint_host,
         endpoint_scheme=endpoint_scheme,
+        endpoint_port=endpoint_port,
+        endpoint_base_path=endpoint_authority.base_path,
         structured_output_mode=structured_output_mode,
         usage=supervised.usage,
         supervision=supervised.supervision,

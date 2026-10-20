@@ -47,6 +47,18 @@ Importing this package contacts nothing, reads no environment variable, builds n
 client, and touches no workspace.
 """
 
+from ai_dev_orchestrator.review.egress import (
+    CHAT_COMPLETIONS_SUFFIX,
+    ENDPOINT_AUTHORITY_SOURCE,
+    TRANSPORT_NOTE,
+    TRANSPORT_PROXY_MODE_DIRECT,
+    ReviewerEgressTransport,
+    ReviewerEndpointAuthority,
+    build_reviewer_network_transport,
+    check_reviewer_destination,
+    effective_port,
+    reviewer_request_url,
+)
 from ai_dev_orchestrator.review.models import (
     BLOCKING_SEVERITIES,
     MAX_REVIEW_FINDINGS,
@@ -62,6 +74,7 @@ from ai_dev_orchestrator.review.models import (
     ReviewRefusedError,
     ReviewValidationError,
     ReviewerAttemptExhaustedError,
+    ReviewerEgressRefused,
     ReviewerEnvironmentError,
     ReviewerStageError,
     ReviewerTransportError,
@@ -79,6 +92,8 @@ from ai_dev_orchestrator.review.packet import (
     REVIEW_PACKET_SCHEMA_VERSION_V2_SEMANTICS,
     REVIEW_PACKET_SCHEMA_VERSION_V3,
     REVIEW_PACKET_SCHEMA_VERSION_V3_SEMANTICS,
+    REVIEW_PACKET_SCHEMA_VERSION_V4,
+    REVIEW_PACKET_SCHEMA_VERSION_V4_SEMANTICS,
     VERIFICATION_CHILD_PROCESS_NOTE,
     ReviewCapabilityBoundaries,
     ReviewPacket,
@@ -156,6 +171,16 @@ from ai_dev_orchestrator.review.supervision import (
 )
 
 __all__ = [
+    "CHAT_COMPLETIONS_SUFFIX",
+    "ENDPOINT_AUTHORITY_SOURCE",
+    "TRANSPORT_NOTE",
+    "TRANSPORT_PROXY_MODE_DIRECT",
+    "ReviewerEgressTransport",
+    "ReviewerEndpointAuthority",
+    "build_reviewer_network_transport",
+    "check_reviewer_destination",
+    "effective_port",
+    "reviewer_request_url",
     "ABANDONED_WORKER_LIFETIME_IF_DEADLINE_EXPIRES",
     "ATTEMPT_OUTCOME_LABELS",
     "ATTEMPT_WAIT_BOUND",
@@ -190,6 +215,8 @@ __all__ = [
     "REVIEW_PACKET_SCHEMA_VERSION_V2_SEMANTICS",
     "REVIEW_PACKET_SCHEMA_VERSION_V3",
     "REVIEW_PACKET_SCHEMA_VERSION_V3_SEMANTICS",
+    "REVIEW_PACKET_SCHEMA_VERSION_V4",
+    "REVIEW_PACKET_SCHEMA_VERSION_V4_SEMANTICS",
     "REVIEW_PROVIDER_LITELLM",
     "REVIEW_PROVIDER_VLLM",
     "REVIEW_RESPONSE_FORMAT_NAME",
@@ -210,6 +237,7 @@ __all__ = [
     "ReviewerAttemptExhaustedError",
     "ReviewerAuthority",
     "ReviewerCallNotice",
+    "ReviewerEgressRefused",
     "ReviewerEnvironmentError",
     "ReviewerProvenanceBlock",
     "ReviewerStageError",

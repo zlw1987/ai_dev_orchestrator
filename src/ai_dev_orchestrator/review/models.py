@@ -159,6 +159,31 @@ class ReviewerTransportError(ReviewerStageError):
     """The reviewer call failed under the existing LLM client's own policy."""
 
 
+class ReviewerEgressRefused(ReviewerStageError):
+    """A reviewer request's destination did not match the authorized endpoint.
+
+    ALPHA-1A-FU1. Raised before the request reaches any network transport —
+    either at the pre-client gate or at the reviewer transport itself — so no
+    source-derived byte, header or credential was sent. The message names only
+    the mismatched URL **component** (``scheme``, ``host``, ``port``, ``path``,
+    ``userinfo``, ``query``, ``fragment``, ``method`` or ``url``); it never
+    carries the URL, the observed host, a header, or a credential.
+
+    Deliberately **not** an ``httpx`` error and not an
+    :class:`~ai_dev_orchestrator.llm.client.LLMClientError`, so neither the LLM
+    client nor the RS1 supervisor can swallow, classify or retry it.
+    """
+
+    def __init__(self, component: str) -> None:
+        super().__init__(
+            f"reviewer egress refused: the reviewer request's {component} does "
+            "not match project_config.controlled_review.endpoint. No request was "
+            "issued, and nothing was sent to any network transport. The URL is "
+            "not echoed."
+        )
+        self.component = component
+
+
 class ReviewParseError(ReviewerStageError):
     """The reply was not exactly one strict JSON object."""
 

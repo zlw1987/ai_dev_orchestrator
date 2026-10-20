@@ -75,6 +75,7 @@ from ai_dev_orchestrator.review.reviewer import reviewer_env_names_for_provider
 
 from review_fixtures import approved_diff_artifact, verification_report
 from test_cli_l2_review_approved_file_edit import (
+    ENDPOINT_LINES,
     REVIEWER_MODEL,
     VALID_REVIEW_JSON,
     _env,
@@ -93,6 +94,7 @@ from test_cli_l2_review_supervision import (
     _sent_text,
 )
 from test_cli_l2_review_vllm_provider import (
+    VLLM_ENDPOINT_LINES,
     VLLM_REVIEWER_MODEL,
     _recording_factory,
     _vllm_env,
@@ -116,7 +118,7 @@ controlled_review:
   model: "{REVIEWER_MODEL}"
   attempt_timeout_seconds: 30
   compact_retry_on_unusable_output: true
-"""
+{ENDPOINT_LINES}"""
 
 FINITE_LITELLM_BLOCK = f"""\
 controlled_review:
@@ -126,7 +128,7 @@ controlled_review:
   attempt_timeout_seconds: 30
   max_output_tokens: {EXPLICIT_CAP}
   compact_retry_on_unusable_output: true
-"""
+{ENDPOINT_LINES}"""
 
 NULL_LITELLM_BLOCK = f"""\
 controlled_review:
@@ -136,7 +138,7 @@ controlled_review:
   attempt_timeout_seconds: 30
   max_output_tokens: null
   compact_retry_on_unusable_output: true
-"""
+{ENDPOINT_LINES}"""
 
 UNLIMITED_FAST_DEADLINE_BLOCK = f"""\
 controlled_review:
@@ -145,7 +147,7 @@ controlled_review:
   model: "{REVIEWER_MODEL}"
   attempt_timeout_seconds: 0.3
   compact_retry_on_unusable_output: true
-"""
+{ENDPOINT_LINES}"""
 
 STRUCTURED_VLLM_BLOCK = f"""\
 controlled_review:
@@ -154,7 +156,7 @@ controlled_review:
   model: "{VLLM_REVIEWER_MODEL}"
   attempt_timeout_seconds: 30
   vllm_structured_output: true
-"""
+{VLLM_ENDPOINT_LINES}"""
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -743,7 +745,7 @@ def test_verification_still_runs_before_any_reviewer_environment_read(tmp_path):
             "reviewer environment was read before verification passed"
         )
 
-    def _forbidden_factory(_config):
+    def _forbidden_factory():
         raise AssertionError("a reviewer client was built before verification passed")
 
     code = _run(

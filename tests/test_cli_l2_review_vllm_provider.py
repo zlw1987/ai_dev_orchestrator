@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import json
 import socket
+from urllib.parse import urlsplit
 
 import httpx
 import pytest
@@ -102,6 +103,25 @@ VLLM_API_KEY = "fake-vllm-key-not-a-real-secret"
 VLLM_REVIEWER_MODEL = "fake-vllm-reviewer-27b"
 
 
+def _endpoint_lines(base_url: str) -> list[str]:
+    """ALPHA-1A-FU1: the ``controlled_review.endpoint`` lines authorizing ``base_url``."""
+    split = urlsplit(base_url)
+    port = split.port or (443 if split.scheme == "https" else 80)
+    return [
+        "  endpoint:",
+        f'    scheme: "{split.scheme}"',
+        f'    host: "{split.hostname}"',
+        f"    port: {port}",
+        f'    base_path: "{split.path.rstrip("/")}"',
+    ]
+
+
+#: ALPHA-1A-FU1: the endpoint lines authorizing the default (TLS) test URL.
+VLLM_ENDPOINT_LINES = "".join(
+    line + "\n" for line in _endpoint_lines(VLLM_HTTPS_BASE_URL)
+)
+
+
 def _vllm_block(
     *,
     model: str = VLLM_REVIEWER_MODEL,
@@ -109,13 +129,20 @@ def _vllm_block(
     compact_retry: bool = False,
     attempt_timeout_seconds: float | None = None,
     provider: str = "vllm",
+    endpoint_url: str | None = None,
 ) -> str:
+    # ALPHA-1A-FU1. The authorized endpoint defaults to the synthetic URL the
+    # test environment will supply: the plaintext one when the project opted in
+    # to plaintext HTTP, the TLS one otherwise.
+    if endpoint_url is None:
+        endpoint_url = VLLM_HTTP_BASE_URL if allow_insecure_http else VLLM_HTTPS_BASE_URL
     lines = [
         "controlled_review:",
         "  enabled: true",
         f'  provider: "{provider}"',
         f'  model: "{model}"',
         f"  compact_retry_on_unusable_output: {str(compact_retry).lower()}",
+        *_endpoint_lines(endpoint_url),
     ]
     if attempt_timeout_seconds is not None:
         lines.append(f"  attempt_timeout_seconds: {attempt_timeout_seconds}")
@@ -144,9 +171,15 @@ def _recording_factory(
     content: str = VALID_REVIEW_JSON,
     action=None,
 ):
-    """A MockTransport-backed factory that records configs and counts requests."""
+    """A network-transport factory (ALPHA-1A-FU1) that records what was SENT.
+
+    ``configs`` now receives one :class:`_ObservedRequest` per outbound request,
+    read from the real request the egress transport let through, rather than
+    the client configuration a client factory used to be handed.
+    """
 
     def handler(request: httpx.Request) -> httpx.Response:
+        configs.append(_ObservedRequest(request))
         seen.append(json.loads(request.content.decode("utf-8")))
         if action is not None:
             return action(request)
@@ -168,13 +201,29 @@ def _recording_factory(
             },
         )
 
-    def factory(config):
-        configs.append(config)
-        return LLMClient(
-            config, transport=httpx.MockTransport(handler), sleep=lambda _: None
-        )
+    def factory():
+        return httpx.MockTransport(handler)
 
     return factory
+
+
+class _ObservedRequest:
+    """What one outbound reviewer request actually carried (ALPHA-1A-FU1).
+
+    Attribute names mirror the ``LLMClientConfig`` fields earlier tests asserted
+    on, but every value is observed on the wire: the base URL is the request URL
+    without the fixed ``/chat/completions`` suffix, the key is the bearer token,
+    the model is the payload's ``model``, and the timeout is httpx's read
+    timeout for the request.
+    """
+
+    def __init__(self, request: httpx.Request) -> None:
+        url = str(request.url)
+        assert url.endswith("/chat/completions"), "unexpected request path"
+        self.base_url = url[: -len("/chat/completions")]
+        self.api_key = request.headers["authorization"].removeprefix("Bearer ")
+        self.default_model = json.loads(request.content.decode("utf-8"))["model"]
+        self.timeout_seconds = request.extensions["timeout"]["read"]
 
 
 def _project(**review) -> ProjectConfig:
@@ -188,8 +237,19 @@ def _project(**review) -> ProjectConfig:
         },
     }
     if review:
+        # ALPHA-1A-FU1: an enabled block must authorize its reviewer endpoint.
+        if review.get("enabled") and "endpoint" not in review:
+            review = {**review, "endpoint": dict(_DEFAULT_ENDPOINT)}
         payload["controlled_review"] = review
     return ProjectConfig.model_validate(payload)
+
+
+_DEFAULT_ENDPOINT = {
+    "scheme": "https",
+    "host": "fake-vllm.invalid",
+    "port": 443,
+    "base_path": "/v1",
+}
 
 
 # =============================================================================
@@ -738,7 +798,7 @@ def test_an_https_vllm_review_succeeds_and_records_tls_truthfully(tmp_path, caps
     assert len(seen) == 1
 
     packet = ReviewPacket.model_validate(_stdout_json(capsys))
-    assert packet.schema_version == "review-packet.v4"
+    assert packet.schema_version == "review-packet.v5"
     assert packet.reviewer.provider == "vllm"
     assert packet.reviewer.model == VLLM_REVIEWER_MODEL
     assert packet.reviewer.endpoint_host == VLLM_HTTPS_HOST
@@ -894,7 +954,7 @@ def test_a_litellm_review_now_records_provider_and_scheme_truthfully(
 
     assert code == 0
     packet = ReviewPacket.model_validate(_stdout_json(capsys))
-    assert packet.schema_version == "review-packet.v4"
+    assert packet.schema_version == "review-packet.v5"
     assert packet.reviewer.provider == "litellm"
     assert packet.reviewer.model == REVIEWER_MODEL
     assert packet.reviewer.endpoint_scheme == "http"
@@ -1039,15 +1099,18 @@ def test_the_rs1_retry_policy_itself_is_unchanged():
 # =============================================================================
 
 
-def test_the_current_schema_version_is_v4():
-    """Requirement 34, as moved on by Phase 5F2E-V2.
+def test_the_current_schema_version_is_v5():
+    """Requirement 34, as moved on by Phase 5F2E-V2 and then ALPHA-1A-FU1.
+
+    ALPHA-1A-FU1 bumped ``v4`` to ``v5`` for reviewer egress-authority
+    provenance only.
 
     V1 shipped ``review-packet.v3``. Phase 5F2E-V2 bumped it to ``v4`` for
     structured-generation provenance only, leaving every V1 provider/transport
     field and every RS1 supervision field exactly as accepted — which the
     assertions further down this file still prove.
     """
-    assert REVIEW_PACKET_SCHEMA_VERSION == "review-packet.v4"
+    assert REVIEW_PACKET_SCHEMA_VERSION == "review-packet.v5"
 
 
 def test_v1_v2_and_v3_semantics_remain_present_and_truthful():
@@ -1124,7 +1187,7 @@ def test_a_forged_provider_in_the_reply_does_not_reach_the_packet(tmp_path, caps
     assert code == 0
     packet = ReviewPacket.model_validate(_stdout_json(capsys))
     assert packet.reviewer.provider == "vllm"
-    assert packet.schema_version == "review-packet.v4"
+    assert packet.schema_version == "review-packet.v5"
 
 
 # =============================================================================

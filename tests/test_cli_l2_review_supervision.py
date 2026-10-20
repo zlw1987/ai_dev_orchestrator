@@ -36,7 +36,6 @@ import time
 import httpx
 import pytest
 
-from ai_dev_orchestrator.llm.client import LLMClient
 from ai_dev_orchestrator.review import (
     COMPACT_RETRY_MAX_FINDINGS,
     MAX_SEMANTIC_REVIEW_ATTEMPTS,
@@ -46,6 +45,7 @@ from ai_dev_orchestrator.review import (
 from review_fixtures import DIFF_MARKER, TARGET, UNCHANGED_MARKER, UNRELATED_MARKER
 from test_cli_l2_review_approved_file_edit import (
     CHANGES_REQUESTED_JSON,
+    ENDPOINT_LINES,
     FAKE_API_KEY,
     FAKE_BASE_URL,
     NEEDS_HUMAN_JSON,
@@ -70,7 +70,7 @@ controlled_review:
   attempt_timeout_seconds: 30
   max_output_tokens: 1536
   compact_retry_on_unusable_output: true
-"""
+{ENDPOINT_LINES}"""
 
 NO_RETRY_REVIEW_BLOCK = f"""\
 controlled_review:
@@ -80,7 +80,7 @@ controlled_review:
   attempt_timeout_seconds: 30
   max_output_tokens: 1536
   compact_retry_on_unusable_output: false
-"""
+{ENDPOINT_LINES}"""
 
 # A deliberately tiny AIDO-side deadline, with the compact retry ENABLED, so the
 # FU2 tests prove the deadline is terminal rather than merely reachable.
@@ -92,7 +92,7 @@ controlled_review:
   attempt_timeout_seconds: 0.3
   max_output_tokens: 1536
   compact_retry_on_unusable_output: true
-"""
+{ENDPOINT_LINES}"""
 
 # The unaccepted RS1 draft name. It must fail to load rather than silently
 # retaining the old, now-wrong semantics.
@@ -140,7 +140,7 @@ def _status(code: int):
 
 
 def _scripted_factory(script: list, seen: list[dict]):
-    """A client factory whose transport follows ``script`` and counts requests.
+    """A network-transport factory that follows ``script`` and counts requests.
 
     An unscripted request fails the test loudly: these suites exist to prove that
     no hidden request is made.
@@ -155,13 +155,11 @@ def _scripted_factory(script: list, seen: list[dict]):
             )
         return script[len(seen) - 1](request)
 
-    def factory(config):
-        # The config the command built: this is where the forced max_retries=0
-        # actually takes effect, so the count below is an end-to-end fact.
-        assert config.max_retries == 0, config.max_retries
-        return LLMClient(
-            config, transport=httpx.MockTransport(handler), sleep=lambda _: None
-        )
+    def factory():
+        # ALPHA-1A-FU1: the command builds the client itself, around its egress
+        # transport, with the forced max_retries=0. The request COUNT below is
+        # therefore the end-to-end proof of that override.
+        return httpx.MockTransport(handler)
 
     return factory
 
@@ -292,26 +290,35 @@ def test_the_stale_draft_config_field_fails_to_load(tmp_path, capsys):
 @windows_only
 @git_required
 def test_the_command_builds_a_reviewer_client_with_zero_transport_retries(tmp_path):
-    """Asserted inside the factory, against the config the command produced."""
-    seen_configs: list = []
+    """Asserted on the wire (ALPHA-1A-FU1: there is no client injection point).
 
-    repo, config, artifact = _setup(tmp_path, review_block=SUPERVISED_REVIEW_BLOCK)
+    A 503 is retryable under the generic client policy, and the environment asks
+    for two transport retries. Exactly ONE request proves the reviewer's forced
+    ``max_retries=0``; the request's own timeout and payload prove the project's
+    reviewer budget and model were used.
+    """
+    requests: list[httpx.Request] = []
 
-    def factory(client_config):
-        seen_configs.append(client_config)
-        return LLMClient(
-            client_config,
-            transport=httpx.MockTransport(_ok(VALID_REVIEW_JSON)),
-            sleep=lambda _: None,
+    repo, config, artifact = _setup(tmp_path, review_block=NO_RETRY_REVIEW_BLOCK)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(503, json={"error": "synthetic"})
+
+    assert (
+        _run(
+            config,
+            artifact,
+            read_env=_retry_env,
+            client_factory=lambda: httpx.MockTransport(handler),
         )
+        == 4
+    )
 
-    assert _run(config, artifact, read_env=_retry_env, client_factory=factory) == 0
-
-    assert len(seen_configs) == 1
-    assert seen_configs[0].max_retries == 0
+    assert len(requests) == 1
     # The project's reviewer budget, not the generic AIDO_LITELLM_TIMEOUT_SECONDS.
-    assert seen_configs[0].timeout_seconds == 30.0
-    assert seen_configs[0].default_model == REVIEWER_MODEL
+    assert requests[0].extensions["timeout"]["read"] == 30.0
+    assert json.loads(requests[0].content)["model"] == REVIEWER_MODEL
 
 
 # =============================================================================
@@ -648,7 +655,7 @@ def test_the_packet_validates_as_v3_and_records_the_attempt_history(
 
     # Phase 5F2E-V1 bumped the version for reviewer provenance only; the RS1
     # attempt history this test asserts is unchanged.
-    assert packet.schema_version == "review-packet.v4"
+    assert packet.schema_version == "review-packet.v5"
     assert packet.reviewer.provider == "litellm"
     supervision = packet.reviewer_supervision
 
@@ -803,8 +810,8 @@ def test_the_command_stops_waiting_at_its_own_deadline_with_no_httpx_timeout(
 ):
     """The FU2 blocker, end to end.
 
-    The injected client never raises ``LLMTimeoutError`` — it has no transport at
-    all. It simply does not return. The command must still stop waiting, classify
+    The injected network transport never raises and never returns, so no
+    ``LLMTimeoutError`` can occur — there is no network operation to time out. The command must still stop waiting, classify
     the attempt ``review_stalled``, issue no compact retry even though the project
     enabled one, and exit 4 reporting **one** attempt used.
 
@@ -815,8 +822,11 @@ def test_the_command_stops_waiting_at_its_own_deadline_with_no_httpx_timeout(
     entered = threading.Event()
     calls: list[int] = []
 
-    class _BlockingClient:
-        def chat(self, request):
+    class _BlockingTransport(httpx.BaseTransport):
+        # ALPHA-1A-FU1: the egress transport passes the request on, and
+        # this inner transport simply never returns. No httpx timeout fires
+        # because no network operation exists.
+        def handle_request(self, request):
             calls.append(1)
             entered.set()
             release.wait(timeout=30)
@@ -829,7 +839,7 @@ def test_the_command_stops_waiting_at_its_own_deadline_with_no_httpx_timeout(
             config,
             artifact,
             read_env=_retry_env,
-            client_factory=lambda client_config: _BlockingClient(),
+            client_factory=lambda: _BlockingTransport(),
         )
         waited = time.monotonic() - started
 
@@ -856,8 +866,11 @@ def test_the_abandoned_worker_does_not_keep_the_command_alive(tmp_path):
     release = threading.Event()
     entered = threading.Event()
 
-    class _BlockingClient:
-        def chat(self, request):
+    class _BlockingTransport(httpx.BaseTransport):
+        # ALPHA-1A-FU1: the egress transport passes the request on, and
+        # this inner transport simply never returns. No httpx timeout fires
+        # because no network operation exists.
+        def handle_request(self, request):
             entered.set()
             release.wait(timeout=30)
             raise AssertionError("the blocked worker was released mid-test")
@@ -869,7 +882,7 @@ def test_the_abandoned_worker_does_not_keep_the_command_alive(tmp_path):
                 config,
                 artifact,
                 read_env=_retry_env,
-                client_factory=lambda client_config: _BlockingClient(),
+                client_factory=lambda: _BlockingTransport(),
             )
             == 4
         )

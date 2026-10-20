@@ -8,6 +8,9 @@ secrets — provider connection details are referenced by environment-variable
 
 from __future__ import annotations
 
+import re
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
@@ -441,6 +444,107 @@ class ControlledVerificationConfig(_Strict):
         return values
 
 
+_ENDPOINT_HOST_LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+_ENDPOINT_BASE_PATH_SEGMENT_RE = re.compile(r"^[A-Za-z0-9._~-]+$")
+
+
+class ControlledReviewEndpointConfig(BaseModel):
+    """The ONE reviewer destination a project authorizes (ALPHA-1A-FU1).
+
+    This is an **authorization**, not a connection setting. The base URL the
+    reviewer actually uses still comes only from the configured provider's
+    environment (``AIDO_LITELLM_BASE_URL`` / ``AIDO_VLLM_BASE_URL``), read only
+    after verification has passed. AIDO requires that URL, as ``httpx`` parses
+    the exact request it sends, to match this block on scheme, host, effective
+    port and path — and refuses before any source-derived byte leaves otherwise.
+
+    Structured fields rather than a URL string, so the authority itself is never
+    subject to URL-parser ambiguity. Every rule fails closed; an unusual but
+    legitimate endpoint is refused rather than guessed at:
+
+    - ``host`` is lowercase ASCII LDH labels or a canonical dotted-quad IPv4
+      address. No IDNA/punycode, no IPv6 (not yet supported), no trailing dot,
+      and no all-numeric name that is not a canonical IPv4 address (``127.1``);
+    - ``port`` is always explicit — there is no default and nothing is inferred
+      from the scheme;
+    - ``base_path`` is ``""`` or ``/seg[/seg]*`` with unreserved characters only:
+      no ``.``/``..`` segment, no empty segment, no trailing ``/``, no ``%``,
+      ``?``, ``#`` or ``\\``. It must never carry a secret: secrets come only
+      from the environment.
+
+    It carries no credential, no base URL string, and no environment-variable
+    name. It is project policy, like ``model`` — not a per-run consent.
+    """
+
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+    scheme: Literal["http", "https"] = Field(
+        description="The authorized transport scheme, exactly 'http' or 'https'. "
+        "'http' is never a security claim."
+    )
+    host: str = Field(
+        description="The authorized host as text: lowercase ASCII LDH labels or a "
+        "canonical dotted-quad IPv4 address. Name resolution is not observed."
+    )
+    port: int = Field(
+        description="The authorized TCP port, 1..65535. Required; never inferred."
+    )
+    base_path: str = Field(
+        description="The authorized OpenAI-compatible base path, '' or "
+        "'/seg[/seg]*'. AIDO requests exactly <base_path>/chat/completions."
+    )
+
+    @field_validator("host")
+    @classmethod
+    def _check_host(cls, value: str) -> str:
+        message = (
+            "controlled_review.endpoint.host must be lowercase ASCII LDH labels "
+            "or a canonical dotted-quad IPv4 address (no IDNA, IPv6, trailing "
+            "dot, port, path or userinfo)"
+        )
+        if not value or len(value) > 253 or not value.isascii():
+            raise ValueError(message)
+        labels = value.split(".")
+        if not all(_ENDPOINT_HOST_LABEL_RE.fullmatch(label) for label in labels):
+            raise ValueError(message)
+        if any(label.startswith("xn--") for label in labels):
+            raise ValueError(message)
+        if all(label.isdigit() for label in labels):
+            canonical = len(labels) == 4 and all(
+                str(int(label)) == label and int(label) <= 255 for label in labels
+            )
+            if not canonical:
+                raise ValueError(message)
+        return value
+
+    @field_validator("port")
+    @classmethod
+    def _check_port(cls, value: int) -> int:
+        if not 1 <= value <= 65535:
+            raise ValueError("controlled_review.endpoint.port must be 1..65535")
+        return value
+
+    @field_validator("base_path")
+    @classmethod
+    def _check_base_path(cls, value: str) -> str:
+        if value == "":
+            return value
+        message = (
+            "controlled_review.endpoint.base_path must be '' or '/seg[/seg]*' "
+            "with unreserved characters only (no '.', '..' or empty segment, no "
+            "trailing '/', no '%', '?', '#' or backslash)"
+        )
+        if not value.startswith("/"):
+            raise ValueError(message)
+        segments = value[1:].split("/")
+        for segment in segments:
+            if segment in (".", "..") or not _ENDPOINT_BASE_PATH_SEGMENT_RE.fullmatch(
+                segment
+            ):
+                raise ValueError(message)
+        return value
+
+
 class ControlledReviewConfig(_Strict):
     """Per-project opt-in for the **controlled reviewer slice** (Phase 5F2E).
 
@@ -458,12 +562,14 @@ class ControlledReviewConfig(_Strict):
     It fails closed by construction — an absent block is identical to an
     explicitly disabled one — and it deliberately has **no field** for any of:
 
-    - an ``api_key``, ``base_url``, endpoint, credential, or
+    - an ``api_key``, ``base_url``, endpoint *value*, credential, or
       environment-variable *name* — connection details come from the
       **configured provider's** environment names, and only after verification
       has passed: the five ``AIDO_LITELLM_*`` names for ``provider: "litellm"``,
       or ``AIDO_VLLM_BASE_URL`` plus the optional ``AIDO_VLLM_API_KEY`` for
-      ``provider: "vllm"``. Only the configured provider's names are read;
+      ``provider: "vllm"``. Only the configured provider's names are read.
+      (ALPHA-1A-FU1's ``endpoint`` block is an AUTHORIZATION the environment's
+      value must match, not a connection setting);
     - a prompt template, system-prompt override, or arbitrary header;
     - a *transport* retry count — Phase 5F2E-RS1 forces the reviewer client's
       ``max_retries`` to ``0``, so one semantic attempt is exactly one
@@ -489,7 +595,8 @@ class ControlledReviewConfig(_Strict):
     applies to the vLLM provider only, ships ``false``, and is an
     acknowledgement of unencrypted transport rather than any claim that the
     transport is secure. There is still no provider list, provider priority,
-    failover, registry, or endpoint field here.
+    failover, or registry here (V1 added no endpoint field; ALPHA-1A-FU1 later
+    added the ``endpoint`` authorization described below).
 
     Phase 5F2E-V2 — structured vLLM reviewer output
     -----------------------------------------------
@@ -521,12 +628,30 @@ class ControlledReviewConfig(_Strict):
     They are deliberately **not** a generic resource-policy framework: there is
     no attempt count, no backoff curve, no per-role budget, no fallback model,
     no reviewer chain, and no CLI override for any of them.
+
+    ALPHA-1A-FU1 — reviewer egress authority
+    ----------------------------------------
+
+    ``endpoint`` (:class:`ControlledReviewEndpointConfig`) names the ONE
+    destination — scheme, host, explicit port, base path — that this project
+    authorizes reviewer requests to go to. It is **required** whenever
+    ``enabled`` is true: the review gate refuses an enabled block without it
+    before verification runs. It is an authorization only: the endpoint VALUE
+    still comes exclusively from the configured provider's environment, read only
+    after verification passes, and AIDO refuses any request whose effective
+    destination does not match it. It holds no credential and no base URL.
     """
 
     enabled: bool = Field(
         default=False,
         description="Whether this project's approved change may be sent to a "
         "reviewer model at all. Absent or false means no model call.",
+    )
+    endpoint: ControlledReviewEndpointConfig | None = Field(
+        default=None,
+        description="ALPHA-1A-FU1. The one reviewer destination this project "
+        "authorizes (scheme, host, explicit port, base path). Required when "
+        "enabled; the environment-supplied base URL must match it exactly.",
     )
     provider: str = Field(
         default="litellm",

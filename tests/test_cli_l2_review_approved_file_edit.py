@@ -41,7 +41,6 @@ from typer.testing import CliRunner
 
 from ai_dev_orchestrator import cli
 from ai_dev_orchestrator.cli import app
-from ai_dev_orchestrator.llm.client import LLMClient
 from ai_dev_orchestrator.review import (
     REVIEW_PACKET_MODE,
     REVIEW_PACKET_SCHEMA_VERSION,
@@ -113,12 +112,21 @@ forbidden_paths:
   - "secrets/**"
 """
 
+# ALPHA-1A-FU1: the authorized reviewer destination, matching FAKE_BASE_URL.
+ENDPOINT_LINES = """\
+  endpoint:
+    scheme: "http"
+    host: "fake-litellm.invalid"
+    port: 80
+    base_path: "/v1"
+"""
+
 ENABLED_REVIEW_BLOCK = f"""\
 controlled_review:
   enabled: true
   provider: "litellm"
   model: "{REVIEWER_MODEL}"
-"""
+{ENDPOINT_LINES}"""
 
 DISABLED_REVIEW_BLOCK = f"""\
 controlled_review:
@@ -355,7 +363,12 @@ def _mock_client_factory(
     *,
     raise_transport: bool = False,
 ):
-    """Build a client factory returning a MockTransport-backed client."""
+    """Build a network-transport factory returning a MockTransport (FU1).
+
+    The name is kept so call sites read as before. It no longer builds a
+    client: the review library builds the client itself, around its egress
+    transport.
+    """
 
     def handler(request: httpx.Request) -> httpx.Response:
         if seen is not None:
@@ -380,10 +393,8 @@ def _mock_client_factory(
             },
         )
 
-    def factory(config):
-        return LLMClient(
-            config, transport=httpx.MockTransport(handler), sleep=lambda _: None
-        )
+    def factory():
+        return httpx.MockTransport(handler)
 
     return factory
 
@@ -398,8 +409,8 @@ def _forbidden_env():
 
 
 def _forbidden_client():
-    def factory(config):
-        raise AssertionError("a reviewer client was built when it must not be")
+    def factory():
+        raise AssertionError("a reviewer transport was built when it must not be")
 
     return factory
 
@@ -421,7 +432,7 @@ def _run(
             verify_approved_file_edit_flag=verify_flag,
             real_reviewer=real_reviewer,
             read_env=read_env if read_env is not None else _forbidden_env(),
-            client_factory=(
+            network_transport_factory=(
                 client_factory if client_factory is not None else _forbidden_client()
             ),
         )
@@ -1296,6 +1307,8 @@ def test_the_reviewer_call_notice_carries_no_title_field():
             model="m",
             endpoint_host="h",
             endpoint_scheme="https",
+            endpoint_port=443,
+            endpoint_base_path="/v1",
             transport_tls=True,
             project_id="p",
             repo="o/r",

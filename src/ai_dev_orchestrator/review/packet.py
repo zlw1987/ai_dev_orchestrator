@@ -1,4 +1,4 @@
-"""The human-facing review packet (``review-packet.v4``) — 5F2E / RS1 / V1 / V2.
+"""The human-facing review packet (``review-packet.v5``) — 5F2E / RS1 / V1 / V2 / ALPHA-1A-FU1.
 
 One structured artifact per successful controlled review, assembled from five
 sources that are kept strictly separate:
@@ -135,6 +135,32 @@ request JSON, the prompt, the raw model response, and the provider's separate
 ``message.reasoning`` field, which this phase does not read, log, transmit,
 parse, store, or expose.
 
+Why this is now ``v5`` and not a redefined ``v4`` (ALPHA-1A-FU1)
+-----------------------------------------------------------------
+
+ALPHA-1A-FU1 made the reviewer's **destination** an AIDO-enforced authority:
+``controlled_review.endpoint`` names the one scheme, host, explicit port and
+base path a review may be sent to, every outbound request is checked against it
+before it reaches the network transport, and the reviewer transport inherits no
+environment or platform proxy. A reader materially needs that fact — a packet
+from an enforced destination and one from an unchecked, possibly proxied
+destination are not the same evidence — and no ``v1``–``v4`` packet records it.
+
+Keeping ``v4`` would have made packets with the same schema string mean
+different things depending on which AIDO revision wrote them. So the version
+was bumped. ``v4``'s meaning is preserved verbatim in
+:data:`REVIEW_PACKET_SCHEMA_VERSION_V4_SEMANTICS`.
+
+**Nothing else changed.** ``endpoint_host``, ``endpoint_scheme`` and
+``transport_tls`` keep their exact ``v4`` meanings, and the RS1 supervision and
+V2 structured-output provenance are untouched. The additions are
+``endpoint_port`` (always the effective port), ``endpoint_base_path``,
+``endpoint_authority_source``,
+``endpoint_matched_authority_before_each_request``, ``transport_proxy_mode`` and
+``transport_note``. A mismatch produces no packet at all, which is why the
+"matched" field is a fixed ``True``. The host is authorized as **text**: DNS,
+the hosts file and routing are not observed, and ``transport_note`` says so.
+
 Why the optional output cap did NOT bump the version
 -----------------------------------------------------
 
@@ -162,6 +188,11 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from ai_dev_orchestrator.llm.models import LLMUsage
+from ai_dev_orchestrator.review.egress import (
+    ENDPOINT_AUTHORITY_SOURCE,
+    TRANSPORT_NOTE,
+    TRANSPORT_PROXY_MODE_DIRECT,
+)
 from ai_dev_orchestrator.review.models import (
     ModelReviewResult,
     ReviewerStageError,
@@ -183,7 +214,7 @@ from ai_dev_orchestrator.review.supervision import (
 )
 from ai_dev_orchestrator.verification import VerificationResultReport
 
-REVIEW_PACKET_SCHEMA_VERSION = "review-packet.v4"
+REVIEW_PACKET_SCHEMA_VERSION = "review-packet.v5"
 REVIEW_PACKET_MODE = "controlled-review"
 
 # The superseded versions, kept so an archived packet's meaning stays legible.
@@ -238,6 +269,21 @@ REVIEW_PACKET_SCHEMA_VERSION_V3_SEMANTICS = (
     "unchanged."
 )
 
+REVIEW_PACKET_SCHEMA_VERSION_V4 = "review-packet.v4"
+REVIEW_PACKET_SCHEMA_VERSION_V4_SEMANTICS = (
+    "review-packet.v4 (Phase 5F2E-V2) recorded the same accepted RS1 "
+    "supervision and V1 provider/transport provenance as v3, plus "
+    "structured-generation provenance (structured_output_mode and "
+    "structured_output_schema_source). It carried NO reviewer egress "
+    "authority: it has no endpoint_port, endpoint_base_path, "
+    "endpoint_authority_source or transport_proxy_mode field, and an archived "
+    "v4 packet must NOT be read as proving that its destination was checked "
+    "against an authorized endpoint, or that no inherited environment or "
+    "platform proxy was used. review-packet.v5 (ALPHA-1A-FU1) supersedes it "
+    "for new runs, retaining every accepted v4, V2, V1 and RS1 semantic "
+    "unchanged."
+)
+
 REVIEW_PACKET_SCHEMA_VERSION_HISTORY = (
     "review-packet.v1 = original Phase 5F2E semantics: exactly one semantic "
     "reviewer attempt, unreported generic transport retries, no attempt "
@@ -258,7 +304,14 @@ REVIEW_PACKET_SCHEMA_VERSION_HISTORY = (
     "provenance (structured_output_mode and structured_output_schema_source). "
     "The version was bumped rather than v3 redefined, so no archived v1, v2 or "
     "v3 packet may be read as recording whether a response_format/json_schema "
-    "constraint was used — none of them carried that fact."
+    "constraint was used — none of them carried that fact. "
+    "review-packet.v5 = the SAME accepted RS1, V1 and V2 semantics as v4, plus "
+    "reviewer egress authority (ALPHA-1A-FU1): endpoint_port, "
+    "endpoint_base_path, endpoint_authority_source, "
+    "endpoint_matched_authority_before_each_request and transport_proxy_mode. "
+    "The version was bumped rather than v4 redefined, so no archived v1, v2, v3 "
+    "or v4 packet may be read as recording endpoint authorization or proxy "
+    "isolation — none of them carried either fact."
 )
 
 # What the reviewer request policy actually is, stated exactly.
@@ -393,6 +446,13 @@ class ReviewerProvenanceBlock(_Strict):
     endpoint_host: str
     endpoint_scheme: Literal["http", "https"]
     transport_tls: bool
+    # ALPHA-1A-FU1 (v5). Orchestrator-owned: the authorized, matched values.
+    endpoint_port: int
+    endpoint_base_path: str
+    endpoint_authority_source: Literal[ENDPOINT_AUTHORITY_SOURCE]  # type: ignore[valid-type]
+    endpoint_matched_authority_before_each_request: Literal[True]
+    transport_proxy_mode: Literal[TRANSPORT_PROXY_MODE_DIRECT]  # type: ignore[valid-type]
+    transport_note: str
     structured_output_mode: Literal[
         STRUCTURED_OUTPUT_MODE_NONE, STRUCTURED_OUTPUT_MODE_JSON_SCHEMA  # type: ignore[valid-type]
     ]
@@ -555,6 +615,8 @@ def build_review_packet(
     model: str,
     endpoint_host: str,
     endpoint_scheme: str,
+    endpoint_port: int,
+    endpoint_base_path: str,
     structured_output_mode: str,
     usage: LLMUsage | None,
     supervision: ReviewSupervisionBlock,
@@ -583,6 +645,10 @@ def build_review_packet(
     rather than passed, so the two can never disagree — a ``"json_schema"``
     packet always names the one generating class, and a ``"none"`` packet always
     reports ``None``.
+
+    ``endpoint_port`` and ``endpoint_base_path`` are required at ``v5``
+    (ALPHA-1A-FU1) for the same reason: they are the authorized destination the
+    reviewer requests matched, and a ``v5`` packet may not omit them.
 
     Raises:
         ReviewerStageError: The assembled packet failed its own validation. That
@@ -623,6 +689,16 @@ def build_review_packet(
             "endpoint_host": endpoint_host,
             "endpoint_scheme": endpoint_scheme,
             "transport_tls": endpoint_scheme == "https",
+            # ALPHA-1A-FU1 (v5). The authorized destination every request
+            # matched. A mismatch raises before any packet exists, so the
+            # "matched" field is a fixed True rather than an observation that
+            # could be False.
+            "endpoint_port": endpoint_port,
+            "endpoint_base_path": endpoint_base_path,
+            "endpoint_authority_source": ENDPOINT_AUTHORITY_SOURCE,
+            "endpoint_matched_authority_before_each_request": True,
+            "transport_proxy_mode": TRANSPORT_PROXY_MODE_DIRECT,
+            "transport_note": TRANSPORT_NOTE,
             # Phase 5F2E-V2 provenance. Orchestrator-owned: it comes from the
             # review gate's reading of trusted project config, and the strict
             # reviewer schema has no field a model could forge it with. The
