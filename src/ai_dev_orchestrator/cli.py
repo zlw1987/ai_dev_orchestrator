@@ -3767,10 +3767,12 @@ _REVIEWER_FAILURE_CATEGORIES: dict[str, str] = {
         "reviewer transport failure — the endpoint call failed under the LLM "
         "client's existing policy"
     ),
-    # ALPHA-1A-FU1. A destination mismatch is refused before any request.
+    # ALPHA-1A-FU1. A destination mismatch is refused before the request reaches
+    # any network transport (FU2 wording: "no request was issued" overstated it).
     "ReviewerEgressRefused": (
-        "reviewer-egress-refused — the reviewer destination did not match "
-        "project_config.controlled_review.endpoint, and no request was issued"
+        "reviewer-egress-refused — the reviewer request was refused before it "
+        "reached any network transport (destination or method not authorized by "
+        "project_config.controlled_review.endpoint)"
     ),
     "ReviewParseError": (
         "reviewer parse failure — the reply was not exactly one strict JSON object"
@@ -3879,12 +3881,39 @@ def _reviewer_transport_line(notice) -> str:
     endpoint happens to sit: an internal, colleague-hosted, or same-network HTTP
     endpoint is not private, and this line must never imply that it is.
     """
+    from ai_dev_orchestrator.review import TRANSPORT_PROXY_MODE_DIRECT
+
     if notice.transport_tls:
+        if notice.transport_proxy_mode != TRANSPORT_PROXY_MODE_DIRECT:
+            # ALPHA-1A-FU2. A caller-supplied transport: AIDO knows the URL
+            # scheme, not that the transport verifies certificates or encrypts.
+            return (
+                f"{notice.endpoint_scheme.upper()} URL — TLS/certificate "
+                "verification NOT established (caller-supplied transport)"
+            )
         return f"{notice.endpoint_scheme.upper()} — TLS-encrypted"
     return (
         f"{notice.endpoint_scheme.upper()} — NOT TLS-ENCRYPTED. Source-derived "
         "code will be sent UNENCRYPTED over this network path. Being internal, "
         "colleague-hosted, or on a particular network does NOT make it private."
+    )
+
+
+def _reviewer_network_path_line(notice) -> str:
+    """Whether AIDO knows the reviewer's inner transport inherits no proxy.
+
+    ALPHA-1A-FU2. Derived from ``notice.transport_proxy_mode``, which the review
+    library computed from the transport object it will actually use. Only
+    AIDO's production transport is announced as direct; anything else is
+    announced as NOT established rather than assumed.
+    """
+    from ai_dev_orchestrator.review import TRANSPORT_PROXY_MODE_DIRECT
+
+    if notice.transport_proxy_mode == TRANSPORT_PROXY_MODE_DIRECT:
+        return "direct; no environment or platform proxy inherited"
+    return (
+        "NOT ESTABLISHED — caller-supplied network transport; proxy, TLS "
+        "trust and routing are unverified by AIDO"
     )
 
 
@@ -3919,7 +3948,9 @@ def _echo_reviewer_banner(notice) -> None:
         # never the environment's base URL, its userinfo or its query.
         f"Endpoint:      scheme {notice.endpoint_scheme}, port "
         f"{notice.endpoint_port}, base path {notice.endpoint_base_path or '(none)'}"
-        " — matches project-config authorization; inherited proxies disabled",
+        " — matches project-config authorization",
+        # ALPHA-1A-FU2. Derived from the inner transport actually in use.
+        f"Network path:  {_reviewer_network_path_line(notice)}",
         f"Transport:     {_reviewer_transport_line(notice)}",
         f"Model:         {notice.model}",
         # Phase 5F2E-V2. The MODE token only — never the schema document, the

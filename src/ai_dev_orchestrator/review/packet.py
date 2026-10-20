@@ -140,9 +140,11 @@ Why this is now ``v5`` and not a redefined ``v4`` (ALPHA-1A-FU1)
 
 ALPHA-1A-FU1 made the reviewer's **destination** an AIDO-enforced authority:
 ``controlled_review.endpoint`` names the one scheme, host, explicit port and
-base path a review may be sent to, every outbound request is checked against it
-before it reaches the network transport, and the reviewer transport inherits no
-environment or platform proxy. A reader materially needs that fact — a packet
+base path a review may be sent to, and every outbound request is checked against
+it before it reaches the inner network transport. For AIDO's production
+transport, which inherits no environment or platform proxy, that is recorded as
+``direct_no_inherited_proxy`` (but see ALPHA-1A-FU2 below). A reader materially
+needs that fact — a packet
 from an enforced destination and one from an unchecked, possibly proxied
 destination are not the same evidence — and no ``v1``–``v4`` packet records it.
 
@@ -160,6 +162,30 @@ V2 structured-output provenance are untouched. The additions are
 ``transport_note``. A mismatch produces no packet at all, which is why the
 "matched" field is a fixed ``True``. The host is authorized as **text**: DNS,
 the hosts file and routing are not observed, and ``transport_note`` says so.
+
+ALPHA-1A-FU2: ``transport_proxy_mode`` is derived, not fixed
+-------------------------------------------------------------
+
+FU1 first wrote ``transport_proxy_mode`` as the constant
+``direct_no_inherited_proxy``. That was true of the production CLI transport but
+not established for a transport a library caller injects through
+``run_controlled_review(network_transport_factory=...)``, which may be a mock or
+any other ``httpx.BaseTransport``. A packet must not assert a transport property
+AIDO has not established, so the field now takes one of two values, derived from
+the inner transport actually used:
+
+- ``direct_no_inherited_proxy`` — only when it is exactly AIDO's production
+  :class:`~ai_dev_orchestrator.review.egress.ReviewerDirectNetworkTransport`;
+- ``injected_transport_not_established`` — every other transport. The endpoint
+  check still ran on every request, but AIDO makes no claim about proxies, TLS
+  trust or encryption of that inner transport, and ``transport_note`` says so.
+
+The schema version stays ``v5``: the field keeps its meaning and its value set
+was only widened by one token. Disclosed limitation: a ``v5`` packet written by
+the FU1 revision (commit 5a38a67) from an INJECTED transport carried the
+unestablished ``direct_no_inherited_proxy`` claim; production-CLI packets from
+that revision were accurate. Residual limitation: the exact-type check proves
+how the transport was built, not that in-process code left it alone.
 
 Why the optional output cap did NOT bump the version
 -----------------------------------------------------
@@ -190,8 +216,10 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from ai_dev_orchestrator.llm.models import LLMUsage
 from ai_dev_orchestrator.review.egress import (
     ENDPOINT_AUTHORITY_SOURCE,
-    TRANSPORT_NOTE,
     TRANSPORT_PROXY_MODE_DIRECT,
+    TRANSPORT_PROXY_MODE_INJECTED_UNVERIFIED,
+    TRANSPORT_PROXY_MODES,
+    transport_note_for,
 )
 from ai_dev_orchestrator.review.models import (
     ModelReviewResult,
@@ -451,7 +479,12 @@ class ReviewerProvenanceBlock(_Strict):
     endpoint_base_path: str
     endpoint_authority_source: Literal[ENDPOINT_AUTHORITY_SOURCE]  # type: ignore[valid-type]
     endpoint_matched_authority_before_each_request: Literal[True]
-    transport_proxy_mode: Literal[TRANSPORT_PROXY_MODE_DIRECT]  # type: ignore[valid-type]
+    # ALPHA-1A-FU2. Derived from the inner transport actually used, never
+    # asserted: ``direct_no_inherited_proxy`` only for AIDO's production
+    # transport; any injected transport is ``injected_transport_not_established``.
+    transport_proxy_mode: Literal[
+        TRANSPORT_PROXY_MODE_DIRECT, TRANSPORT_PROXY_MODE_INJECTED_UNVERIFIED  # type: ignore[valid-type]
+    ]
     transport_note: str
     structured_output_mode: Literal[
         STRUCTURED_OUTPUT_MODE_NONE, STRUCTURED_OUTPUT_MODE_JSON_SCHEMA  # type: ignore[valid-type]
@@ -617,6 +650,7 @@ def build_review_packet(
     endpoint_scheme: str,
     endpoint_port: int,
     endpoint_base_path: str,
+    transport_proxy_mode: str,
     structured_output_mode: str,
     usage: LLMUsage | None,
     supervision: ReviewSupervisionBlock,
@@ -650,6 +684,13 @@ def build_review_packet(
     (ALPHA-1A-FU1) for the same reason: they are the authorized destination the
     reviewer requests matched, and a ``v5`` packet may not omit them.
 
+    ``transport_proxy_mode`` is required and is **observed, not assumed**
+    (ALPHA-1A-FU2): the caller derives it from the inner network transport it
+    actually used, via
+    :func:`~ai_dev_orchestrator.review.egress.transport_proxy_mode_of`. This
+    builder never defaults it to the direct mode, and ``transport_note`` is
+    derived from it so the two cannot disagree.
+
     Raises:
         ReviewerStageError: The assembled packet failed its own validation. That
             is defensive — reaching it would mean this function built something
@@ -662,6 +703,14 @@ def build_review_packet(
         raise ReviewerStageError(
             "packet error: unknown structured output mode; the packet records "
             "only orchestrator-owned provenance and refuses to invent one."
+        )
+
+    if transport_proxy_mode not in TRANSPORT_PROXY_MODES:
+        # Defensive, like the check above: only the two derived tokens exist, and
+        # an unrecognized one must not be written into a provenance record.
+        raise ReviewerStageError(
+            "packet error: unknown transport proxy mode; the packet records "
+            "only orchestrator-derived provenance and refuses to invent one."
         )
 
     payload = {
@@ -697,8 +746,8 @@ def build_review_packet(
             "endpoint_base_path": endpoint_base_path,
             "endpoint_authority_source": ENDPOINT_AUTHORITY_SOURCE,
             "endpoint_matched_authority_before_each_request": True,
-            "transport_proxy_mode": TRANSPORT_PROXY_MODE_DIRECT,
-            "transport_note": TRANSPORT_NOTE,
+            "transport_proxy_mode": transport_proxy_mode,
+            "transport_note": transport_note_for(transport_proxy_mode),
             # Phase 5F2E-V2 provenance. Orchestrator-owned: it comes from the
             # review gate's reading of trusted project config, and the strict
             # reviewer schema has no field a model could forge it with. The

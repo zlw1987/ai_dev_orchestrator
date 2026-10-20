@@ -35,8 +35,11 @@ from ai_dev_orchestrator.llm.models import LLMClientConfig
 from ai_dev_orchestrator.models import ControlledReviewEndpointConfig
 from ai_dev_orchestrator.review import (
     ENDPOINT_AUTHORITY_SOURCE,
-    TRANSPORT_NOTE,
+    TRANSPORT_NOTE_DIRECT,
+    TRANSPORT_NOTE_INJECTED_UNVERIFIED,
     TRANSPORT_PROXY_MODE_DIRECT,
+    TRANSPORT_PROXY_MODE_INJECTED_UNVERIFIED,
+    ReviewerDirectNetworkTransport,
     ReviewerEgressRefused,
     ReviewerEgressTransport,
     ReviewerEndpointAuthority,
@@ -450,7 +453,7 @@ def test_a_mismatched_environment_url_is_refused_after_verification(
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "reviewer-egress-refused" in captured.err
-    assert "No request was issued" in captured.err
+    assert "refused before it reached any network transport" in captured.err
     assert base_url not in captured.err
     assert "REAL REVIEWER MODEL CALL — a real network call" not in captured.err
 
@@ -630,8 +633,10 @@ def test_the_v5_packet_and_banner_record_the_authorized_destination(tmp_path, ca
     assert reviewer["endpoint_base_path"] == "/v1"
     assert reviewer["endpoint_authority_source"] == ENDPOINT_AUTHORITY_SOURCE
     assert reviewer["endpoint_matched_authority_before_each_request"] is True
-    assert reviewer["transport_proxy_mode"] == TRANSPORT_PROXY_MODE_DIRECT
-    assert reviewer["transport_note"] == TRANSPORT_NOTE
+    # ALPHA-1A-FU2: _mock_client_factory injects an httpx.MockTransport, which
+    # AIDO did not build, so no direct-transport claim may be made for it.
+    assert reviewer["transport_proxy_mode"] == TRANSPORT_PROXY_MODE_INJECTED_UNVERIFIED
+    assert reviewer["transport_note"] == TRANSPORT_NOTE_INJECTED_UNVERIFIED
     assert "not observed" in reviewer["transport_note"]
     # v4 meanings unchanged.
     assert reviewer["endpoint_host"] == "fake-litellm.invalid"
@@ -642,11 +647,195 @@ def test_the_v5_packet_and_banner_record_the_authorized_destination(tmp_path, ca
 
     assert (
         "Endpoint:      scheme http, port 80, base path /v1 — matches "
-        "project-config authorization; inherited proxies disabled"
+        "project-config authorization\n"
     ) in captured.err
+    assert "Network path:  NOT ESTABLISHED — caller-supplied network transport" in (
+        captured.err
+    )
+    assert "inherited proxies disabled" not in captured.err
+    assert "no environment or platform proxy inherited" not in captured.err
     assert FAKE_BASE_URL not in captured.err
     assert FAKE_API_KEY not in captured.err
     assert FAKE_API_KEY not in captured.out
+
+
+# =============================================================================
+# 7. ALPHA-1A-FU2: transport provenance is derived, never asserted
+# =============================================================================
+
+
+def test_only_the_exact_production_transport_type_is_certified_direct():
+    from ai_dev_orchestrator.review import transport_proxy_mode_of
+
+    production = build_reviewer_network_transport()
+    try:
+        assert type(production) is ReviewerDirectNetworkTransport
+        assert transport_proxy_mode_of(production) == TRANSPORT_PROXY_MODE_DIRECT
+    finally:
+        production.close()
+
+    class _Lookalike(ReviewerDirectNetworkTransport):
+        pass
+
+    plain = httpx.HTTPTransport(retries=0, trust_env=False)
+    proxied = httpx.HTTPTransport(proxy="http://proxy.invalid:3128")
+    lookalike = _Lookalike()
+    try:
+        for other in (
+            httpx.MockTransport(lambda _r: httpx.Response(200)),
+            plain,  # even a correctly configured bare HTTPTransport
+            proxied,
+            lookalike,  # a subclass is not the type AIDO built
+        ):
+            assert (
+                transport_proxy_mode_of(other)
+                == TRANSPORT_PROXY_MODE_INJECTED_UNVERIFIED
+            )
+    finally:
+        plain.close()
+        proxied.close()
+        lookalike.close()
+
+
+def test_the_production_transport_class_takes_no_arguments():
+    """No argument can reach it, so no proxy/trust_env/retries can be injected."""
+    parameters = inspect.signature(ReviewerDirectNetworkTransport).parameters
+    assert list(parameters) == []
+    with pytest.raises(TypeError):
+        ReviewerDirectNetworkTransport(proxy="http://proxy.invalid:3128")  # type: ignore[call-arg]
+
+
+def test_the_two_notes_differ_and_the_injected_one_claims_no_transport_property():
+    assert TRANSPORT_NOTE_DIRECT != TRANSPORT_NOTE_INJECTED_UNVERIFIED
+    injected = TRANSPORT_NOTE_INJECTED_UNVERIFIED.lower()
+    assert "did not establish" in injected
+    # The injected note must not contain the production-only assertions.
+    assert "certificate is verified" not in injected
+    assert "which is direct" not in injected
+    assert "are not consulted" not in injected
+    assert "production reviewer transport" not in injected.replace(
+        "not built by aido's production reviewer transport factory", ""
+    )
+    # Both keep the facts that hold for either transport.
+    for note in (TRANSPORT_NOTE_DIRECT, TRANSPORT_NOTE_INJECTED_UNVERIFIED):
+        assert "checked, before it reached the inner network transport" in note
+        assert "not observed" in note
+
+
+def test_the_packet_builder_requires_and_validates_the_proxy_mode():
+    from ai_dev_orchestrator.review import build_review_packet
+
+    parameters = inspect.signature(build_review_packet).parameters
+    assert parameters["transport_proxy_mode"].default is inspect.Parameter.empty
+
+
+@windows_only
+@git_required
+def test_the_production_cli_transport_records_the_direct_mode(
+    tmp_path, capsys, monkeypatch
+):
+    """The CLI's default factory yields AIDO's transport; the facts say direct.
+
+    The real class is used, so the exact-type derivation is what is exercised.
+    Only ``handle_request`` is replaced, so no socket is opened.
+    """
+    from ai_dev_orchestrator import cli
+
+    _, config, artifact = _setup(tmp_path)
+    reached: list[httpx.Request] = []
+
+    def canned(self, request):
+        reached.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "model": REVIEWER_MODEL,
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": VALID_REVIEW_JSON},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+        )
+
+    monkeypatch.setattr(ReviewerDirectNetworkTransport, "handle_request", canned)
+
+    # No ``network_transport_factory``: the helper's default is the production one.
+    cli._run_l2_review_approved_file_edit(
+        project_config=config,
+        approved_diff_proposal=artifact,
+        verify_approved_file_edit_flag=True,
+        real_reviewer=True,
+        read_env=lambda _p: _env(),
+    )
+
+    captured = capsys.readouterr()
+    reviewer = json.loads(captured.out)["reviewer"]
+    assert len(reached) == 1
+    assert reviewer["transport_proxy_mode"] == TRANSPORT_PROXY_MODE_DIRECT
+    assert reviewer["transport_note"] == TRANSPORT_NOTE_DIRECT
+    assert reviewer["endpoint_matched_authority_before_each_request"] is True
+    assert (
+        "Network path:  direct; no environment or platform proxy inherited"
+        in captured.err
+    )
+    assert "NOT ESTABLISHED" not in captured.err
+
+
+@windows_only
+@git_required
+def test_the_cli_default_transport_factory_builds_the_production_type():
+    from ai_dev_orchestrator import cli
+
+    transport = cli._build_reviewer_network_transport()
+    try:
+        assert type(transport) is ReviewerDirectNetworkTransport
+    finally:
+        transport.close()
+
+
+@windows_only
+@git_required
+def test_an_https_injected_transport_is_not_announced_as_tls_verified(
+    tmp_path, capsys
+):
+    """transport_tls stays scheme-derived, but the banner claims no more than that."""
+    from ai_dev_orchestrator.review import ReviewerCallNotice
+    from ai_dev_orchestrator import cli
+
+    notice = ReviewerCallNotice(
+        provider="litellm",
+        model="m",
+        endpoint_host="h.invalid",
+        endpoint_scheme="https",
+        transport_tls=True,
+        endpoint_port=443,
+        endpoint_base_path="/v1",
+        transport_proxy_mode=TRANSPORT_PROXY_MODE_INJECTED_UNVERIFIED,
+        project_id="p",
+        repo="o/r",
+        issue_number=1,
+    )
+    cli._echo_reviewer_banner(notice)
+    err = capsys.readouterr().err
+    assert "TLS/certificate verification NOT established" in err
+    assert "— TLS-encrypted" not in err
+
+
+def test_the_egress_refusal_messages_do_not_misdescribe_method_or_url():
+    method = str(ReviewerEgressRefused("method"))
+    url = str(ReviewerEgressRefused("url"))
+    host = str(ReviewerEgressRefused("host"))
+
+    assert "method is not POST" in method
+    assert "does not match" not in method
+    assert "could not be parsed" in url
+    assert "does not match" not in url
+    assert "host does not match project_config.controlled_review.endpoint" in host
+    for message in (method, url, host):
+        assert "No request was issued" not in message
+        assert "refused before it reached any network transport" in message
 
 
 @windows_only

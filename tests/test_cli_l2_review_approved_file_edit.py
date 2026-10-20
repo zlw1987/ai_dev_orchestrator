@@ -1309,6 +1309,7 @@ def test_the_reviewer_call_notice_carries_no_title_field():
             endpoint_scheme="https",
             endpoint_port=443,
             endpoint_base_path="/v1",
+            transport_proxy_mode="injected_transport_not_established",
             transport_tls=True,
             project_id="p",
             repo="o/r",

@@ -175,11 +175,27 @@ class ReviewerEgressRefused(ReviewerStageError):
     """
 
     def __init__(self, component: str) -> None:
+        # ``method`` and ``url`` are not endpoint-config components, so saying
+        # they "do not match controlled_review.endpoint" would misdescribe them.
+        if component == "method":
+            reason = (
+                "the reviewer request's method is not POST, the only method "
+                "the reviewer path may use"
+            )
+        elif component == "url":
+            reason = (
+                "the reviewer request URL could not be parsed, so it cannot be "
+                "matched against project_config.controlled_review.endpoint"
+            )
+        else:
+            reason = (
+                f"the reviewer request's {component} does not match "
+                "project_config.controlled_review.endpoint"
+            )
         super().__init__(
-            f"reviewer egress refused: the reviewer request's {component} does "
-            "not match project_config.controlled_review.endpoint. No request was "
-            "issued, and nothing was sent to any network transport. The URL is "
-            "not echoed."
+            f"reviewer egress refused: {reason}. The request was refused before "
+            "it reached any network transport, so no source-derived byte, header "
+            "or credential was handed to one. The URL is not echoed."
         )
         self.component = component
 

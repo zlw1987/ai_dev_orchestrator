@@ -108,8 +108,8 @@ It runs at two points:
 
 | Caller | After FU1 |
 |---|---|
-| CLI `l2-review-approved-file-edit` | **Enforced.** It passes `network_transport_factory=build_reviewer_network_transport`, which returns `httpx.HTTPTransport(retries=0, trust_env=False)` |
-| Library `run_controlled_review(...)` | **Enforced.** `client_factory` is **replaced** by a required `network_transport_factory: Callable[[], httpx.BaseTransport]`. `run_controlled_review` itself builds `LLMClient(config, transport=ReviewerEgressTransport(inner=network_transport_factory(), authority=…))`. The caller supplies only the inner transport (tests: `httpx.MockTransport`), and every request passes the check before reaching it |
+| CLI `l2-review-approved-file-edit` | **Enforced.** It passes `network_transport_factory=build_reviewer_network_transport`, which returns a `ReviewerDirectNetworkTransport` (an argument-less `httpx.HTTPTransport` subclass fixed to `retries=0, trust_env=False`). This is the only transport the packet records as `direct_no_inherited_proxy` (FU2) |
+| Library `run_controlled_review(...)` | **Enforced.** `client_factory` is **replaced** by a required `network_transport_factory: Callable[[], httpx.BaseTransport]`. `run_controlled_review` itself builds `LLMClient(config, transport=ReviewerEgressTransport(inner=network_transport_factory(), authority=…))`. The caller supplies only the inner transport (tests: `httpx.MockTransport`), and every request passes the check before reaching it. **FU2:** the packet records `injected_transport_not_established` for any inner transport that is not exactly a `ReviewerDirectNetworkTransport`, and claims nothing about its proxy, TLS trust or encryption |
 | `request_model_review`, `run_supervised_review` (lower-level primitives with a caller-built client) | **Not an authority boundary, and not claimed to be one.** They read no environment, run no verification and hold no endpoint authority. Their docstrings must say so. No product path calls them except `run_controlled_review` |
 | Planner, smoke test, P1B | Unchanged. `_build_real_llm_client`, `LLMClient`, `AIDO_LITELLM_MAX_RETRIES` and the timeout semantics are untouched |
 
@@ -136,7 +136,7 @@ an acknowledgement (`vllm_allow_insecure_http`), never a security claim.
 | `src/ai_dev_orchestrator/review/reviewer.py` | The gate requires `endpoint` and returns the frozen authority; `run_controlled_review` replaces `client_factory` with `network_transport_factory`, runs the pre-client check, builds the wrapped `LLMClient`; `ReviewerCallNotice` gains `endpoint_port` and `endpoint_base_path` |
 | `src/ai_dev_orchestrator/review/packet.py` | `review-packet.v5` (§5) |
 | `src/ai_dev_orchestrator/review/__init__.py` | Exports |
-| `src/ai_dev_orchestrator/cli.py` | Review command only: the injection point is renamed, the production factory is wired in, and the banner gains a line: `endpoint: <scheme>://<host>:<port><base_path> — matches project-config authorization; inherited proxies disabled`. The `reviewer-egress-refused` category exits 4 with "No request was issued" |
+| `src/ai_dev_orchestrator/cli.py` | Review command only: the injection point is renamed, the production factory is wired in, and the banner gains a line: `endpoint: <scheme>://<host>:<port><base_path> — matches project-config authorization`, and (FU2) a `Network path:` line derived from the transport actually used (`direct; no environment or platform proxy inherited`, or `NOT ESTABLISHED — caller-supplied network transport …`). The `reviewer-egress-refused` category exits 4 with "refused before it reached any network transport" (FU2 corrected the earlier "No request was issued") |
 | `src/ai_dev_orchestrator/llm/client.py` | **No change** |
 
 Tests (§6): one new file, `tests/test_review_egress.py`, plus mechanical
@@ -181,8 +181,8 @@ The `reviewer` block gains:
 | `endpoint_base_path` | the authorized `base_path` |
 | `endpoint_authority_source` | `Literal["project_config.controlled_review.endpoint"]` |
 | `endpoint_matched_authority_before_each_request` | `Literal[True]`. A mismatch produces no packet |
-| `transport_proxy_mode` | `Literal["direct_no_inherited_proxy"]` |
-| `transport_note` | fixed text: the name is resolved by the system resolver, which is not observed; `http` is unauthenticated |
+| `transport_proxy_mode` | `Literal["direct_no_inherited_proxy", "injected_transport_not_established"]`. **FU2:** derived from the inner transport actually used, not fixed. The first value only for an exact `ReviewerDirectNetworkTransport` |
+| `transport_note` | text selected by `transport_proxy_mode`. Both: every request was checked against the endpoint; the name is resolved by the system resolver, which is not observed. Direct mode adds the proxy/`SSL_CERT_*`/certificate/`http` statements; injected mode instead says AIDO did not establish them |
 
 `endpoint_host`, `endpoint_scheme` and `transport_tls` keep their exact v4
 meanings. The superseded-version note says that **no v1–v4 packet records
@@ -270,7 +270,7 @@ assert on the observed request.
 | Ambiguous parsing (`\@`, `#@`, userinfo) | The check uses httpx's parse of the request URL, which is the parse that opens the socket. A differential with `urlsplit` cannot widen the authority |
 | Query, fragment or path substitution | `raw_path`, `query` and `fragment` are compared exactly, and the authorized `base_path` is canonical by construction |
 | IDNA or homograph | ASCII LDH only, compared on `raw_host`. Punycode and non-ASCII are refused |
-| Proxy inheritance (environment or registry) | An explicit transport means no inherited mounts, and the transport is direct |
+| Proxy inheritance (environment or registry) | An explicit transport means the client mounts no inherited proxy. The production transport is direct; an injected one is recorded as `injected_transport_not_established` (FU2) |
 | Mismatched provider | Only the configured provider's variables are read. The URL must still match the single authority. A missing variable is the existing refusal |
 | Stale approval or stale config | The authority sits in the pinned per-run config. A changed file stops the helper snapshots, and a different file is visible in the packet (endpoint fields, model). It is project policy, not single-use consent; per-run consent remains the human H9 act |
 | Injected client factory | Removed. The only injection point sits behind the check |
@@ -347,13 +347,13 @@ Stopping before implementation.
 | File | What changed |
 |---|---|
 | `models.py` | `ControlledReviewEndpointConfig` (strict, frozen, `extra="forbid"`, the §2.1 rules), plus `ControlledReviewConfig.endpoint`. Docstrings state the field is an authorization, not an endpoint value |
-| `review/egress.py` (new) | `ReviewerEndpointAuthority`, `check_reviewer_destination`, `reviewer_request_url`, `effective_port`, `ReviewerEgressTransport`, `build_reviewer_network_transport` (`HTTPTransport(retries=0, trust_env=False)`), and the packet constants. It imports no `os`, `subprocess` or `socket` |
+| `review/egress.py` (new) | `ReviewerEndpointAuthority`, `check_reviewer_destination`, `reviewer_request_url`, `effective_port`, `ReviewerEgressTransport`, `build_reviewer_network_transport` (returns `ReviewerDirectNetworkTransport`, fixed to `retries=0, trust_env=False`), `transport_proxy_mode_of`, and the packet constants. It imports no `os`, `subprocess` or `socket` |
 | `review/models.py` | `ReviewerEgressRefused(ReviewerStageError)` with fixed, component-only text |
 | `review/reviewer.py` | The gate requires `endpoint`; `ReviewerAuthority.endpoint`; `ReviewerCallNotice.endpoint_port`/`endpoint_base_path`; `run_controlled_review(network_transport_factory=…)` with the pre-client check; the client is built internally around the egress transport. `request_model_review` is documented as not an authority boundary |
 | `review/supervision.py` | Docstring only: `run_supervised_review` is not an authority boundary |
 | `review/packet.py` | `review-packet.v5` with the six §5 fields; v4 meaning preserved in `REVIEW_PACKET_SCHEMA_VERSION_V4_SEMANTICS` |
 | `review/__init__.py` | Exports |
-| `cli.py` | The review command passes `_build_reviewer_network_transport`. Banner line: `Endpoint: scheme …, port …, base path … — matches project-config authorization; inherited proxies disabled`. Failure category `reviewer-egress-refused` (exit 4). `--project-config` help names `controlled_review.endpoint`. **The option set is unchanged.** The planner and smoke-test `client_factory` paths and `LLMClient` are untouched |
+| `cli.py` | The review command passes `_build_reviewer_network_transport`. Banner lines: `Endpoint: scheme …, port …, base path … — matches project-config authorization` and `Network path: …` (FU2). Failure category `reviewer-egress-refused` (exit 4). `--project-config` help names `controlled_review.endpoint`. **The option set is unchanged.** The planner and smoke-test `client_factory` paths and `LLMClient` are untouched |
 
 **Tests.**
 
@@ -386,3 +386,14 @@ The Alpha-0 helper and its tests were not touched.
 2. A-6 is done (2026-10-20): the narrow `CLAUDE.md` update is applied and uncommitted.
 3. The user commits FU1 as `C_FU1` and pushes it.
 4. The DEC-ALPHA1 amendments in §10.
+
+## FU2 amendment (ALPHA-1A-FU2): transport provenance is derived
+
+Independent review (finding R-1) found that `review-packet.v5` claimed `direct_no_inherited_proxy` unconditionally, although `run_controlled_review` accepts an injected `network_transport_factory`. That was true of the production CLI transport but not established for an injected one.
+
+- `transport_proxy_mode` is derived from the inner transport object actually used: `direct_no_inherited_proxy` only for an exact `ReviewerDirectNetworkTransport`; `injected_transport_not_established` for everything else, including a bare `httpx.HTTPTransport`, a proxied transport, a subclass and `httpx.MockTransport`.
+- The inner transport is now built after the destination check and the review context, and immediately before the notice; it opens no socket. Endpoint authorization, the per-request check, verification-before-credentials ordering, RS1 supervision and retry semantics are unchanged.
+- The banner and `transport_note` follow the same value. For an injected transport with an `https` URL the banner no longer says `TLS-encrypted`.
+- `ReviewerEgressRefused` wording: `method` and `url` are no longer described as not matching the endpoint configuration, and "No request was issued" became "refused before it reached any network transport".
+- The version stays `review-packet.v5`. Disclosed: a `v5` packet from commit 5a38a67 produced through an injected transport carried the unestablished direct claim; production-CLI packets from it were accurate. `v1`–`v4` are untouched.
+- **Residual:** the exact-type check shows how the transport was built, not that in-process code left it alone; DNS, routing and the hosts file remain unobserved.

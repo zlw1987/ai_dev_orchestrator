@@ -1222,6 +1222,8 @@ def _packet(script: list, *, compact: bool = True):
         # ALPHA-1A-FU1 (v5): the authorized, matched destination.
         endpoint_port=80,
         endpoint_base_path="/v1",
+        # ALPHA-1A-FU2: derived from the transport used; here a mock.
+        transport_proxy_mode="injected_transport_not_established",
         # Phase 5F2E-V2: LiteLLM never carries the generation constraint.
         structured_output_mode="none",
         usage=outcome.usage,

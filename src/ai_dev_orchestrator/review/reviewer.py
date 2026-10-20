@@ -123,8 +123,10 @@ checked against it as ``httpx`` parses it; then AIDO builds the reviewer
 ``LLMClient`` itself around
 :class:`~ai_dev_orchestrator.review.egress.ReviewerEgressTransport`, which
 re-checks **every** outbound request before the caller-supplied network
-transport sees it. Because that client is handed an explicit transport, no
-inherited proxy (environment or Windows registry) is mounted. A mismatch raises
+transport sees it. Because that client is handed an explicit transport, the
+client itself mounts no inherited proxy (environment or Windows registry). Only
+AIDO's production transport is additionally known to be direct; an injected one
+is recorded as not established (ALPHA-1A-FU2). A mismatch raises
 :class:`~ai_dev_orchestrator.review.models.ReviewerEgressRefused` and sends
 nothing. The endpoint VALUE remains environment-only; the config only
 authorizes it.
@@ -194,6 +196,7 @@ from ai_dev_orchestrator.review.egress import (
     check_reviewer_destination,
     effective_port,
     reviewer_request_url,
+    transport_proxy_mode_of,
 )
 from ai_dev_orchestrator.review.models import (
     ModelReviewResult,
@@ -352,6 +355,11 @@ class ReviewerCallNotice:
     ``project_config.controlled_review.endpoint``; both values are the
     authorized ones, never read from the base URL's userinfo or query.
 
+    ALPHA-1A-FU2 added ``transport_proxy_mode`` (required, no default): the mode
+    :func:`~ai_dev_orchestrator.review.egress.transport_proxy_mode_of` derived
+    from the inner network transport that will actually be used, so a banner
+    cannot say "inherited proxies disabled" about a transport AIDO did not build.
+
     That is a statement about *provenance*, not about validation. ``RepoConfig``
     does **not** currently enforce an ``owner/repo`` shape, and ``ProjectConfig``
     does not constrain ``project_id`` beyond requiring the field; an earlier
@@ -369,6 +377,7 @@ class ReviewerCallNotice:
         "transport_tls",
         "endpoint_port",
         "endpoint_base_path",
+        "transport_proxy_mode",
         "structured_output_mode",
         "project_id",
         "repo",
@@ -385,6 +394,7 @@ class ReviewerCallNotice:
         transport_tls: bool,
         endpoint_port: int,
         endpoint_base_path: str,
+        transport_proxy_mode: str,
         structured_output_mode: str = STRUCTURED_OUTPUT_MODE_NONE,
         project_id: str,
         repo: str,
@@ -397,6 +407,7 @@ class ReviewerCallNotice:
         self.transport_tls = transport_tls
         self.endpoint_port = endpoint_port
         self.endpoint_base_path = endpoint_base_path
+        self.transport_proxy_mode = transport_proxy_mode
         self.structured_output_mode = structured_output_mode
         self.project_id = project_id
         self.repo = repo
@@ -950,8 +961,14 @@ def run_controlled_review(
             INNER network transport (ALPHA-1A-FU1). The CLI passes
             :func:`~ai_dev_orchestrator.review.egress.build_reviewer_network_transport`;
             tests pass an ``httpx.MockTransport``. It is called at most once,
-            only after verification passed, the environment was read and the
-            pre-client destination check passed. This function builds the
+            only after verification passed, the environment was read, the
+            pre-client destination check passed and the review context was
+            built. The packet records ``direct_no_inherited_proxy`` ONLY when
+            the returned object is exactly AIDO's production
+            :class:`~ai_dev_orchestrator.review.egress.ReviewerDirectNetworkTransport`;
+            any other transport is recorded as
+            ``injected_transport_not_established`` and AIDO claims nothing about
+            how it reaches the network (ALPHA-1A-FU2). This function builds the
             ``LLMClient`` itself around
             :class:`~ai_dev_orchestrator.review.egress.ReviewerEgressTransport`,
             so every request is checked against
@@ -1064,6 +1081,14 @@ def run_controlled_review(
         approved_diff=approved_diff, verification=verification
     )
 
+    # ALPHA-1A-FU2. The inner network transport is built here — still after
+    # verification, the environment read, the destination check and the
+    # redaction, and still before any notice or request — so the proxy mode the
+    # notice and the packet record is derived from the object that will carry
+    # the request, not asserted. Constructing a transport opens no socket.
+    inner_transport = network_transport_factory()
+    transport_proxy_mode = transport_proxy_mode_of(inner_transport)
+
     if on_before_model_call is not None:
         on_before_model_call(
             ReviewerCallNotice(
@@ -1074,6 +1099,7 @@ def run_controlled_review(
                 transport_tls=transport_tls,
                 endpoint_port=endpoint_port,
                 endpoint_base_path=endpoint_authority.base_path,
+                transport_proxy_mode=transport_proxy_mode,
                 structured_output_mode=structured_output_mode,
                 project_id=verification.project_id,
                 repo=verification.repo,
@@ -1097,11 +1123,13 @@ def run_controlled_review(
     )
     # ALPHA-1A-FU1. AIDO builds the client, around its own egress transport.
     # ``LLMClient(config, transport=...)`` hands httpx an EXPLICIT transport, so
-    # httpx mounts no inherited (environment or registry) proxy at all.
+    # the CLIENT mounts no inherited (environment or registry) proxy. That says
+    # nothing about how the inner transport reaches the network, which is why
+    # the recorded proxy mode comes from ``transport_proxy_mode_of`` (FU2).
     client = LLMClient(
         config,
         transport=ReviewerEgressTransport(
-            network_transport_factory(), authority=endpoint_authority
+            inner_transport, authority=endpoint_authority
         ),
     )
     supervised: SupervisedReviewOutcome = run_supervised_review(
@@ -1128,6 +1156,7 @@ def run_controlled_review(
         endpoint_scheme=endpoint_scheme,
         endpoint_port=endpoint_port,
         endpoint_base_path=endpoint_authority.base_path,
+        transport_proxy_mode=transport_proxy_mode,
         structured_output_mode=structured_output_mode,
         usage=supervised.usage,
         supervision=supervised.supervision,
