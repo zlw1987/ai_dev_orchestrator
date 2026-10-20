@@ -477,6 +477,151 @@ def test_opposite_line_ending_proposal_is_refused(r, capsys):
 
 
 # --------------------------------------------------------------------------
+# 5b. ALPHA-1A: review result classification (v4 and v5 only)
+# --------------------------------------------------------------------------
+
+def review_packet(version="review-packet.v5", **override):
+    packet = {
+        "schema_version": version,
+        "verification": {"outcome": "verified"},
+        "target": {"path": TARGET},
+        "human_decision_required": True,
+        "review": {"verdict": "approve"},
+    }
+    packet.update(override)
+    return packet
+
+
+def report_result(r, capsys, name, kind, rc, stdout_obj=None, stderr_text=""):
+    """Run helper `report` on synthetic stdout/stderr files; return (rc, output, class)."""
+    out_path = r.p("artifacts", name + ".json")
+    err_path = r.p("logs", name + ".stderr.txt")
+    with open(out_path, "w", encoding="utf-8", newline="\n") as handle:
+        if stdout_obj is not None:
+            handle.write(json.dumps(stdout_obj))
+    with open(err_path, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(stderr_text)
+    code, text = r.a0(capsys, "report", "--run-dir", r.run, "--step", name, "--kind", kind, "--rc", str(rc),
+                      "--stdout", out_path, "--stderr", err_path)
+    cls = next((line.split()[2] for line in text.splitlines() if line.startswith("A0 RESULT:")), None)
+    return code, text, cls
+
+
+def test_review_packet_schema_constant_is_exactly_v4_and_v5():
+    assert H.REVIEW_PACKET_SCHEMAS == ("review-packet.v4", "review-packet.v5")
+
+
+@pytest.mark.parametrize("version", ["review-packet.v4", "review-packet.v5"])
+def test_valid_v4_and_v5_review_packets_are_reviewed(r, capsys, version):
+    code, text, cls = report_result(r, capsys, "09a", "review", 0, review_packet(version))
+    assert code == 0 and cls == "REVIEWED" and "verdict=approve" in text
+
+
+@pytest.mark.parametrize("verdict", ["approve", "changes_requested", "needs_human_review"])
+def test_reviewed_verdict_detail_is_unchanged(r, capsys, verdict):
+    packet = review_packet(review={"verdict": verdict})
+    code, text, cls = report_result(r, capsys, "09a", "review", 0, packet)
+    assert code == 0 and cls == "REVIEWED" and f"verdict={verdict}" in text
+
+
+@pytest.mark.parametrize("version", [
+    "review-packet.v3", "review-packet.v6", "review-packet.v45", "review-packet.v", "review-packet.V5",
+    "review-packet.v5 ", " review-packet.v5", "review-packet.v5.1", "review-packet.v4.0", "",
+    None, 5, ["review-packet.v5"], {"v": "review-packet.v5"},
+])
+def test_unknown_or_spoofed_versions_are_unexpected_stop(r, capsys, version):
+    code, text, cls = report_result(r, capsys, "09a", "review", 0, review_packet(version))
+    assert code == 1 and cls == "UNEXPECTED_STOP" and "REVIEWED" not in text
+
+
+def test_missing_schema_version_is_unexpected_stop(r, capsys):
+    packet = review_packet()
+    del packet["schema_version"]
+    code, text, cls = report_result(r, capsys, "09a", "review", 0, packet)
+    assert code == 1 and cls == "UNEXPECTED_STOP"
+
+
+@pytest.mark.parametrize("version", ["review-packet.v4", "review-packet.v5"])
+@pytest.mark.parametrize("case", [
+    "verification_not_verified", "verification_missing_outcome", "wrong_target", "target_missing_path",
+    "human_decision_false", "human_decision_missing", "human_decision_truthy_string",
+])
+def test_review_packet_with_a_failed_success_condition_is_unexpected_stop(r, capsys, version, case):
+    packet = review_packet(version)
+    if case == "verification_not_verified":
+        packet["verification"] = {"outcome": "verification-failed"}
+    elif case == "verification_missing_outcome":
+        packet["verification"] = {}
+    elif case == "wrong_target":
+        packet["target"] = {"path": "src/other.txt"}
+    elif case == "target_missing_path":
+        packet["target"] = {}
+    elif case == "human_decision_false":
+        packet["human_decision_required"] = False
+    elif case == "human_decision_missing":
+        del packet["human_decision_required"]
+    elif case == "human_decision_truthy_string":
+        packet["human_decision_required"] = "true"
+    code, text, cls = report_result(r, capsys, "09a", "review", 0, packet)
+    assert code == 1 and cls == "UNEXPECTED_STOP" and "REVIEWED" not in text
+
+
+@pytest.mark.parametrize("version", ["review-packet.v4", "review-packet.v5"])
+def test_a_valid_packet_with_a_nonzero_rc_is_never_reviewed(r, capsys, version):
+    for rc in (1, 2, 3, 4):
+        code, text, cls = report_result(r, capsys, f"09r{rc}", "review", rc, review_packet(version))
+        assert code == 1 and cls != "REVIEWED"
+
+
+def test_empty_or_unparseable_review_stdout_never_reads_as_reviewed(r, capsys):
+    code, _t, cls = report_result(r, capsys, "09e", "review", 0, None)
+    assert code == 1 and cls == "UNEXPECTED_STOP"
+    out_path = r.p("artifacts", "09u.json")
+    with open(out_path, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write("not json")
+    err_path = r.p("logs", "09u.stderr.txt")
+    with open(err_path, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write("")
+    code, text = r.a0(capsys, "report", "--run-dir", r.run, "--step", "09u", "--kind", "review", "--rc", "0",
+                      "--stdout", out_path, "--stderr", err_path)
+    assert code == 1 and "REVIEWED" not in text and "UNEXPECTED_STOP" in text
+
+
+def test_existing_review_failure_classes_are_unchanged(r, capsys):
+    failed = {"outcome": "verification-failed"}
+    untrusted = {"outcome": "workspace-state-untrusted"}
+    assert report_result(r, capsys, "a", "review", 2, failed)[2] == "VERIFICATION_FAILED"
+    assert report_result(r, capsys, "b", "review", 3, untrusted)[2] == "WORKSPACE_UNTRUSTED_STOP"
+    assert report_result(r, capsys, "c", "review", 1, None)[2] == "REFUSED_BEFORE_EXECUTION"
+    assert report_result(r, capsys, "d", "review", 4, None)[2] == "REVIEWER_STAGE_FAILED"
+    assert report_result(r, capsys, "e", "review", 2, None, "Usage: x\nNo such option: --y")[2] == "USAGE_ERROR"
+    for step, rc in (("a", 2), ("b", 3), ("c", 1), ("d", 4)):
+        # every non-success class still exits 1 (different step names: the ledger is append-only)
+        assert report_result(r, capsys, step + "x", "review", rc, None if rc in (1, 4) else
+                             (failed if rc == 2 else untrusted))[0] == 1
+
+
+def test_existing_write_and_verify_classes_are_unchanged(r, capsys):
+    target = r.state()["target"]
+    write_ok = {"schema_version": "workspace-write-result.v1", "outcome": "written-and-verified",
+                "files_edited": 1, "target": {"path": target}, "git": {"dirty_paths_after_write": [target]}}
+    code, _t, cls = report_result(r, capsys, "w1", "write", 0, write_ok)
+    assert code == 0 and cls == "WRITTEN"
+    assert report_result(r, capsys, "w2", "write", 0, dict(write_ok, files_edited=2))[2] == "UNEXPECTED_STOP"
+    assert report_result(r, capsys, "w3", "write", 1, None)[2] == "WRITE_REFUSED"
+    assert report_result(r, capsys, "w4", "write", 3, None)[2] == "WRITE_INDETERMINATE_STOP"
+    verify_ok = {"outcome": "verified", "target": {"path": target},
+                 "workspace_postcondition": {"head_unchanged": True, "only_approved_target_git_dirty": True}}
+    code, _t, cls = report_result(r, capsys, "v1", "verify", 0, verify_ok)
+    assert code == 0 and cls == "VERIFIED"
+    bad = dict(verify_ok, workspace_postcondition={"head_unchanged": False, "only_approved_target_git_dirty": True})
+    assert report_result(r, capsys, "v2", "verify", 0, bad)[2] == "UNEXPECTED_STOP"
+    assert report_result(r, capsys, "v3", "verify", 2, {"outcome": "verification-failed"})[2] == "VERIFICATION_FAILED"
+    # A review-shaped packet reported under the verify kind is not a verification success.
+    assert report_result(r, capsys, "v4", "verify", 0, review_packet("review-packet.v5"))[2] == "UNEXPECTED_STOP"
+
+
+# --------------------------------------------------------------------------
 # 6. No credential value is printed, stored or written
 # --------------------------------------------------------------------------
 

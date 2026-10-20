@@ -30,6 +30,14 @@
 >   D-5 control, re-pins the source baseline, and reconciles ALPHA-1B with the
 >   existing Alpha-0 helper and preflight (§4). That reconciliation found one
 >   material blocker (B-1, §4.3). Nothing else was reopened.
+> - **2026-10-20, final helper compatibility and closure correction.** The
+>   operator approved OD-2. An independent review of `dc807f4` found three narrow
+>   issues, all closed here and in `docs/alpha0/`: **B-1** the helper now
+>   recognizes exactly `review-packet.v4` and `review-packet.v5` (helper and tests
+>   only); **B-2** S12 now writes the closure record **before** `inventory`, and
+>   `inventory` is the last writer to the run directory (§5.3); **B-3** this
+>   pilot allows exactly **one** H9 review-command invocation (D-9, §6.2).
+>   DEC-ALPHA1 is still a proposal. OD-1 and OD-3..OD-6 are not decided.
 
 | | |
 |---|---|
@@ -38,7 +46,7 @@
 | AIDO source pin (`aido_source_commit`) | `44bf3be05195a4fc050de7f0cad2407795d7c9b8` (ALPHA-1A-FU1 `5a38a67` + FU2 `44bf3be`). Applies to `src/` and `pyproject.toml`. **Subject to a fresh exact-HEAD and source-pin check at S0** (§4.1) |
 | Preceded by | ALPHA-P1D Write-and-Verify Pilot (ACCEPTED, CLOSED); the ALPHA-1 readiness assessment (directionally accepted, scope not approved); ALPHA-1A-FU1/FU2 (ACCEPTED) |
 | Readiness assessment | Not present in this repository. It is addressed through the corrections listed in the ALPHA-1A brief |
-| Verdict | **READY_FOR_HUMAN_DECISION**, with one pre-S0 blocker (B-1) that needs operator authorization (§11, §12) |
+| Verdict | **READY_FOR_HUMAN_DECISION**. B-1, B-2 and B-3 are closed (§4.3, §5.3, D-9). No material blocker remains (§11) |
 
 ALPHA-1B would be **one separately authorized, human-supervised pilot**. It does
 not complete M4, M5A, M5 or M6, and it does not make AIDO v1 complete.
@@ -91,7 +99,7 @@ Each row needs an explicit answer (§12). The recommended option is listed first
 | D-6 | **Reviewer identity** *(amended per FU1 §10)* | The operator names provider `P_R` ∈ {`litellm`, `vllm`}, model `M_R` and endpoint (scheme, host, port, base path) in AUTH-ALPHA1B. **They are written into the per-run config** (`controlled_review.provider`, `.model`, `.endpoint`), outside this repository, and reviewed at H0. They are never written into this repository. `M_R` must not be `qwen3.8-27b`, nor that string under case or whitespace folding. To the operator's knowledge, it must not serve the same weights. A different model family is preferred. A shared gateway with the implementer is **allowed**, but the run is labelled `+SHARED_GATEWAY` (§6.1) | Require a different host from the implementer. This is stronger on deployment separation, but proves nothing more about the weights |
 | D-7 | **Verification argv** | AIDO's own venv interpreter, run as `-I -B -c <program>`. The program puts the clone's `src` first on `sys.path`. It fails unless `issue_parser` was imported from the clone. It then checks one operator-written acceptance assertion (the fence case) and runs `tests/test_issue_parser.py` under `-p no:cacheprovider` (§7). If P1D's accepted argv already proves import origin, it may be reused instead | A separate verification venv that does not have AIDO installed. A wrong import then fails closed, but the operator must install packages, which is a separate download decision |
 | D-8 | **Reviewer settings** | `attempt_timeout_seconds: 300`, `compact_retry_on_unusable_output: false`, no `max_output_tokens`. For `vllm`: `vllm_structured_output: true` (V2 evidence). `vllm_allow_insecure_http` is true only if the reviewer endpoint is http (and then `endpoint.scheme: http` is required as well, never instead), and it is never a security claim | Compact retry `true`. Allowed, but it cannot fix an envelope problem, and it adds a second semantic request |
-| D-9 | **Review re-invocation** *(amended)* | At most **two** review-command invocations per run. A second one is allowed only if the first produced no packet **and** its stderr names `ReviewerEnvironmentError` or `reviewer-egress-refused` — both refused before any network transport — **and** the cause is correctable in window B2 (the environment), with a fresh H9 line. A destination that the *config* does not authorize cannot be fixed in this run: the config is pinned, so the run ends. Never after `REVIEW STALLED`. Never after a request was issued and failed | Exactly one invocation. Simpler, but a typo in the reviewer environment then costs a whole new run |
+| D-9 | **Review invocation** *(amended twice; supersedes the two-invocation rule)* | Exactly **one** `l2-review-approved-file-edit` invocation per run, covered by exactly **one** H9 consent. There is no second invocation and no second H9 record. If H9 is refused, fails verification, ends in `reviewer-egress-refused`, `ReviewerEnvironmentError`, a stall (`REVIEW STALLED`), unusable output, or any other non-success, **the review is over for this run**: do not re-run it, do not write another H9 consent, do not use a `09b_…` step. Preserve the failure evidence and close by the frozen runbook outcome for that `report` class (§8.2). A command-line usage error also consumes the invocation, so the exact command text is checked against runbook 9.2 and the S0 option-set re-check **before** it is run. **Do not confuse this with RS1.** One CLI invocation may contain up to two *internal* semantic attempts only when the project enabled `compact_retry_on_unusable_output` (D-8 keeps it `false`); those are RS1 supervision inside the one invocation, they are unchanged, and they are not a second H9 | Two invocations. Rejected: it contradicts the frozen runbook's "at a stop, do not retry" rule and lets a failed attempt be bypassed by a new consent |
 | D-10 | **What counts as success** | `ALPHA1B_COMPLETED_COMMITTED` requires a valid review packet (any verdict) and H10 COMMIT. A COMMIT after `changes_requested` or `needs_human_review` requires a written reason, and the label carries `+HUMAN_OVERRODE_VERDICT` | Success requires `approve`. Stricter, but it makes an advisory verdict decisive, which conflicts with "verdict is advisory" |
 | D-11 | **H10 scope** | COMMIT or RESTORE in the disposable clone only, with hooks disabled. Push, branch and PR are outside ALPHA-1B. A later push of the fix to `origin` is a separate human action and is not ALPHA-1B evidence | — |
 | D-12 | **Retention and cleanup** | Keep the clone until a human has reviewed closure. Keep the run directory, the evidence and the ledger. Close windows B1 and B2 right after use. Delete nothing that holds a tombstone | — |
@@ -119,15 +127,15 @@ post-image" cannot be supported.
 > |---|---|
 > | AIDO source pin | `44bf3be05195a4fc050de7f0cad2407795d7c9b8`. `src/` and `pyproject.toml` at the runtime HEAD are byte-identical to it |
 > | AIDO runtime | `C:\dev\ai_dev_orchestrator` at `<HEAD>` (a descendant of the pin), clean |
-> | Helper | `docs/alpha0/a0_helper.py` at git blob `<HELPER_BLOB>`, copied unchanged into the run directory (its SHA-256 is pinned at preflight) |
+> | Helper | `docs/alpha0/a0_helper.py` at git blob `<HELPER_BLOB>`, **recorded at S0** (the helper changed after the source pin, so its blob is separate from it), copied unchanged into the run directory (its SHA-256 is pinned at preflight) |
 > | Repository / clone / HEAD | `zlw1987/ai_dev_orchestrator` → `C:\aido_alpha1b_ws\r01` at `<HEAD>`. Any other value: STOP |
 > | Target / task | `src/ai_dev_orchestrator/github/issue_parser.py` (blob and SHA-256 recorded at preflight); task 9101, P1C §2.1 body |
 > | `project_id` | `aido-alpha1b-r01` (never used before) |
 > | Implementer | `SUP-D` / `qwen3.8-27b` / `litellm`; endpoint scheme, host and port typed at H4S; one P1B transmission |
 > | Reviewer | provider `<P_R>`, model `<M_R>`, endpoint `<scheme>://<host>:<port><base_path>`, all written into `controlled_review` in the per-run config (never into this repository) |
 > | Verification | §7 argv, run twice (H8 and inside the review) |
-> | Grants | Each listed command at most as often as §5 allows, against this clone and target only |
-> | Does not grant | A second implementer request; a review after a stall; any other file, repository or clone; push, branch or PR; a fixer or review/fix loop; a fallback or second reviewer; reuse of any P1C/P1D approval or consent; any qualification credit |
+> | Grants | Each listed command at most as often as §5 allows (the review command exactly once, D-9), against this clone and target only |
+> | Does not grant | A second implementer request; a second H9 or review-command invocation, or a review after any failure or stall; any other file, repository or clone; push, branch or PR; a fixer or review/fix loop; a fallback or second reviewer; reuse of any P1C/P1D approval or consent; any qualification credit |
 >
 > **Approval:** `I approve AUTH-ALPHA1B-01` — `<OPERATOR_NAME>`, `<ISO-8601 with offset>`
 
@@ -144,7 +152,7 @@ post-image" cannot be supported.
 | `l2-apply-approved-file-edit` | H7 write | runbook step 7 |
 | `l2-verify-approved-file-edit` | H8 verification | runbook step 8 |
 | `l2-review-approved-file-edit` | H9 review (verification runs again internally) | runbook step 9, with §6.2 replacing 9.1 |
-| Helper `preflight`, `plan-draft`, `approval-check`, `packet-check`, `proposed-assemble`, `proposed-check`, `diff-draft`, `report`, `snapshot`, `inventory` | pins, state proofs, closure | runbook; `docs/alpha0/a0_helper.py`, copied unchanged into the run directory (**subject to B-1, §4.3**) |
+| Helper `preflight`, `plan-draft`, `approval-check`, `packet-check`, `proposed-assemble`, `proposed-check`, `diff-draft`, `report`, `snapshot`, `inventory` | pins, state proofs, closure | runbook; `docs/alpha0/a0_helper.py`, copied unchanged into the run directory (v4/v5 recognition in `report`: B-1, closed, §4.3) |
 | P1D implementer-to-helper hand-off (H4′) | turning the accepted P1B reply into `proposed-content.v1` | §5 S5 |
 
 Variable names. The ALPHA-1B environment file defines the runbook's `A0_*`
@@ -236,21 +244,28 @@ clone, nothing sent.
 ### 4.3 Reconciliation findings against the frozen helper and runbook
 
 Reconciliation was done by inspection of `docs/alpha0/a0_helper.py`, the runbook
-and the shipped CLI at the pin, plus the helper's own offline test suite (73
-passed). The Alpha-0 helper and runbook are **not modified** by this document.
+and the shipped CLI at the pin, plus the helper's own offline test suite. The
+only helper change is the B-1 fix below (its suite is now 152 tests, up from
+73). The runbook is **not modified**.
 
 | # | Finding | Effect | Disposition |
 |---|---|---|---|
-| **B-1** | **Material blocker.** `cmd_report` classifies a review result as `REVIEWED` only if `schema_version == "review-packet.v4"` (`docs/alpha0/a0_helper.py:1017`). The pinned source writes **`review-packet.v5`**. The helper has no test for this branch | At S10 a successful review would be classified `UNEXPECTED_STOP`, `report` would exit 1, and every helper STOP ends the run. The pilot could not close | Needs a minimal helper amendment: accept exactly `review-packet.v5` there, plus one test. No other change; `src/` and the source pin are unaffected. It is a separate, operator-authorized step (§12, OD-2) and is **not** done by this document. The helper blob in AUTH is then the amended one |
+| **B-1** *(closed 2026-10-20)* | `cmd_report` classified a review result as `REVIEWED` only if `schema_version == "review-packet.v4"`, while the pinned source writes **`review-packet.v5`** | Without a fix, a successful review would be classified `UNEXPECTED_STOP` at S10 and the run could not close | **Fixed (OD-2 approved).** `cmd_report` now accepts the exact members of `REVIEW_PACKET_SCHEMAS = ("review-packet.v4", "review-packet.v5")`, no prefix test, and still requires rc 0, embedded verification `verified`, the state's target path and `human_decision_required is True`. Unknown, missing or malformed versions and every other classification are unchanged. 79 new offline regression tests cover it. `src/` and the source pin are untouched; the new helper blob is recorded at S0 |
 | R-1 | Runbook Appendix A has no `controlled_review.endpoint` | The review gate refuses before verification | Covered by §4.2 item 2 |
 | R-2 | Runbook step 9.1 uses `a0_env.cmd review` and a procedural destination check | Superseded by FU1/FU2 | §6.2 replaces step 9.1. `a1_env.cmd` has no `review` mode |
 | R-3 | Runbook step 9 table and Appendix text say `review-packet.v4` | Stale for the pinned source | The packet is `v5`; E-4 uses `v5` (§8). The runbook text is not edited |
-| R-4 | Runbook step 9 re-run rule predates the egress category | Re-run rule differs | D-9 governs |
+| R-4 | Runbook 9.2 allows a re-run with the next suffix after `REVIEWER_STAGE_FAILED` or `USAGE_ERROR` | Stricter for this pilot | D-9 governs: exactly one invocation. Runbook 9.2's re-run rows do **not** apply to ALPHA-1B |
 | R-5 | Runbook header says it was verified against `39d81ba` | True for Alpha-0 | Unchanged. ALPHA-1B passes `--verified-commit` explicitly |
 
 No other conflict was found: the helper checks no `controlled_review` content,
 no endpoint value, and no packet field other than `schema_version`, the embedded
 verification outcome, the target path and `human_decision_required`.
+
+**B-2 and B-3 were found by independent review of `dc807f4`** and are closed in
+§5.3 and D-9 respectively. B-2: `inventory` hashes every run file and then closes
+the run, so a closure record written after it is not covered by the hashes. B-3:
+the frozen runbook says that at a stop one does not retry, so a second H9 after a
+failed one contradicted it.
 
 ## 5. ALPHA-1B execution sequence
 
@@ -273,9 +288,9 @@ window **B2** only for S10. Every helper `STOP` ends the run (runbook Appendix C
 | S7 | **H6** | Runbook 6.2–6.3 | `APPROVAL_CONSISTENT kind=diff`, preview rc 0, `SNAPSHOT_OK` |
 | S8 | **H7** | Runbook 7.1–7.3 | `WRITTEN`; snapshot `--expect written` OK |
 | S9 | **H8** | Runbook step 8 | `VERIFIED`; snapshot `--expect written` OK |
-| S10 | **H9** (B2) | §6.2 procedure | `REVIEWED verdict=…` (needs B-1 resolved); snapshot `--expect written` OK; X-4 and E-5 hold |
+| S10 | **H9** (B2) | §6.2 procedure. **One invocation only** (D-9) | `REVIEWED verdict=…` (the helper recognizes `review-packet.v4` and `v5`); snapshot `--expect written` OK; X-4 and E-5 hold. Any other result: no second invocation; close per §8.2 |
 | S11 | **H10** | Repeat the S2 `.git` baseline commands into `logs\10_git_check.txt` and compare them. Then COMMIT (§5.2) or RESTORE (runbook 10.2) | final snapshot `--expect committed` or `restored` OK |
-| S12 | — | `inventory`; write `logs\12_closure.txt` holding the §8 label and the X-1..X-4 values | `final_state: LAST_SNAPSHOT_OK` |
+| S12 | — | §5.3, in order S12a..S12e. `inventory` (S12d) is the **last** writer to the run directory | S12a..S12c complete before S12d; S12e reads only |
 
 ### 5.1 S5 extraction (window A)
 
@@ -304,6 +319,34 @@ set "A0_RC=%ERRORLEVEL%"
 If S11's `.git` comparison shows a change, **do not commit**. Restore by hand
 only after a human has inspected the clone. Label the run
 `FINAL_STATE_UNPROVEN` or `COMPLETED_RESTORED`, as appropriate.
+
+### 5.3 S12 closure order (B-2)
+
+`inventory` hashes every other file in the run directory and its existence closes
+the run: after it, every helper command refuses, and any file written afterwards
+is **not covered** by the recorded hashes. So nothing may be written into the run
+directory after it.
+
+| Step | Action | Rule |
+|---|---|---|
+| S12a | Complete the X-1..X-4 comparisons and the E-2..E-6 checks | Reads only, except the writes of S12b |
+| S12b | Determine the terminal label (§8.2) and write `logs\12_closure.txt` **once**: the label, the X-1..X-4 values, and the line `inventory: NOT YET RUN` | The record **must not** claim that `inventory` ran or succeeded, and must not state a `final_state` or an inventory hash. It cannot be edited later |
+| S12c | Verify every intended run artifact exists and is final: `dir /s /b "%A0_RUN%"`, and `type` of the ledger. Expected: `01_git_baseline.txt`, `04_supplier.txt`, `09_consent.txt`, `10_git_check.txt`, `10_decision.txt`, `12_closure.txt`, the helper outputs, and `09_incident.txt` if one was recorded | Anything missing or wrong is fixed **now**, before S12d. After S12d nothing can be fixed |
+| S12d | `"%AIDO_PY%" "%A0_H%" inventory --run-dir "%A0_RUN%"` | The **last** writer. Console output only: never redirect its output into the run directory (the file would be created before the hashing and change the tree). Run nothing else that writes into the run directory afterwards |
+| S12e | Read-only confirmation (below) | Reads only. Notes, if any, go **outside** the run directory |
+
+```bat
+"%AIDO_PY%" -I -B -c "import json,hashlib,sys; r=sys.argv[1]; i=json.load(open(r+'\\logs\\99_inventory.json','rb')); l=open(r+'\\logs\\a0_ledger.jsonl','rb').read(); print('final_state', i['final_state']); print('files', len(i['files'])); print('ledger_hash_matches', i['files'].get('logs/a0_ledger.jsonl')==hashlib.sha256(l).hexdigest()); print('last_ledger_step', json.loads(l.splitlines()[-1].decode('utf-8')).get('step'))" "%A0_RUN%"
+```
+
+Required: the S12d console shows `A0 RESULT: INVENTORY_WRITTEN`; `final_state
+LAST_SNAPSHOT_OK`; `ledger_hash_matches True`; `last_ledger_step 99-inventory`.
+`LAST_SNAPSHOT_OK` only describes the last snapshot, as in runbook step 10.4; it
+is not a proof about the clone.
+
+If S12e fails or `final_state` is anything else, the run directory is already
+closed and is **not** amended. The pre-inventory label is superseded and the
+operator records `FINAL_STATE_UNPROVEN` **outside** the run directory.
 
 ## 6. Reviewer independence and destination authority
 
@@ -344,7 +387,9 @@ at H6 and H10.
    not required because the effective port is compared). For `litellm`, set
    `AIDO_LITELLM_DEFAULT_MODEL` to `<M_R>` (the value is required but ignored).
    Never use `set AIDO_` to inspect the variables, because it prints the key.
-3. **Review** (runbook 9.2). Read the banner. Its provider, endpoint line
+3. **Review** (runbook 9.2, step suffix `09a` only). This is the **only** review-command
+   invocation of the run (D-9): there is no `09b`, no second H9 record and no
+   re-run after any failure. Read the banner. Its provider, endpoint line
    (scheme, host, port, base path), `Network path:` line, TLS line, model and
    structured mode must equal the H9 record. The expected network line is
    `direct; no environment or platform proxy inherited`.
@@ -377,7 +422,7 @@ path. G-3..G-7 are unchanged and listed below.
 | R-D | A library caller that injects a non-production transport gets `injected_transport_not_established` in the packet | A non-CLI caller | The CLI path is always the direct transport | Not applicable to the pilot; E-5 requires `direct_no_inherited_proxy` |
 | G-3 | The helper cannot see which `--project-config` a CLI call used. Pins detect a **modified** pinned file, not use of **another** file | Operator error | Every report carries `project_id`/`repo`; the packet carries the reviewer identity and endpoint authority; a write to another workspace leaves this clone at baseline (snapshot STOP) | Control: one `%A0_CFG%` variable, plus report cross-checks at S12 |
 | G-4 | AIDO does not compare `controlled_review.model` with `supervised_implementer.model` | Config error | H0 checks it; the preflight pins it; the packet confirms it | Accepted; BL-4 |
-| G-5 | AIDO keeps no memory of a stall across invocations | A re-run of the review command | Every invocation is a separate helper `report` step (`09a`, `09b`, …) in the ledger, so a violation is visible | D-9; a packet produced after a stall is labelled not countable |
+| G-5 | AIDO keeps no memory of a stall or failure across invocations | A re-run of the review command (D-9 forbids it) | Every invocation is a separate helper `report` step in the ledger. More than one `kind=review` entry, or any `09b`, is a visible protocol violation | A run with a second review invocation cannot carry a success label |
 | G-6 | The verification postcondition does not see ignored files, `.git` internals or paths outside the clone | The unsandboxed verification child, run twice | HEAD, the status and the target bytes are proven | S2/S11 `.git` comparison plus hooks-disabled commit (HB-4); other effects are outside the claim |
 | G-7 | A new P1B `prepare` after a spent or failed run is mechanically possible | A supported caller | The ledger records every issuance and consumption | D-4: one transmission per run; S12 confirms exactly one record family since H0 |
 
@@ -423,13 +468,13 @@ controlled_verification:
 
 | # | Evidence | Where |
 |---|---|---|
-| E-1 | Preflight PASS with `--verified-commit 44bf3be…`. Every snapshot `SNAPSHOT_OK`. The last snapshot is `10-final-commit expect=committed`. `inventory` reports `final_state: LAST_SNAPSHOT_OK` | `logs\a0_ledger.jsonl`, `logs\99_inventory.json` |
+| E-1 | Preflight PASS with `--verified-commit 44bf3be…`. Every snapshot `SNAPSHOT_OK`. The last snapshot is `10-final-commit expect=committed`. After S12d, `inventory` reports `final_state: LAST_SNAPSHOT_OK` and S12e's read-only checks pass. This is the **only** evidence that is confirmed after the closure record was written | `logs\a0_ledger.jsonl`, `logs\99_inventory.json` (S12e) |
 | E-2 | P1B rc 0 with outcome `diff_proposed`. The evidence set is complete. The ledger holds `<run_id>.consumed.json` and no issued record, and that is the only family created since H0 | evidence dir; ledger listing |
 | E-3 | Write rc 0 (`written-and-verified`); verification rc 0 (`verified`) | `07_…`, `08_…` |
-| E-4 | Review rc 0, **`review-packet.v5`**, embedded verification `verified`, no stall, verdict recorded | `09a_…` (or `09b_…` under D-9) |
+| E-4 | Review rc 0, **`review-packet.v5`**, embedded verification `verified`, no stall, verdict recorded | `09a_…` (the only review step, D-9) |
 | E-5 | The packet's v5 reviewer fields equal the H9 record and show `endpoint_authority_source` = `project_config.controlled_review.endpoint`, `endpoint_matched_authority_before_each_request` = `true` and `transport_proxy_mode` = `direct_no_inherited_proxy` (§6.2 step 4) | `09_consent.txt`, packet |
 | E-6 | The `.git` comparison is unchanged; the H10 decision is COMMIT with a reason | `10_git_check.txt`, `10_decision.txt` |
-| E-7 | The cross-run bindings X-1..X-4 hold | `12_closure.txt` |
+| E-7 | The cross-run bindings X-1..X-4 hold, recorded in `12_closure.txt` **before** inventory (S12b). The record states that inventory had not yet run | `12_closure.txt` |
 
 **Cross-run bindings.** These are the only comparisons between the P1B evidence
 and the helper chain. They compare semantic bindings, never whole files: the
@@ -449,18 +494,19 @@ diffs differ while X-2 and X-3 hold, record it as an anomaly. It does not block.
 
 ### 8.2 Labels
 
-Exactly one terminal label is written to `12_closure.txt`.
+Exactly one terminal label is written to `12_closure.txt`, before `inventory` (§5.3). The same
+order holds when the run ends early: write the record, verify (S12c), then `inventory`.
 
 | Label | When | Truthful scope |
 |---|---|---|
-| `ALPHA1B_COMPLETED_COMMITTED[+HUMAN_OVERRODE_VERDICT][+SHARED_GATEWAY]` | E-1..E-7 hold | One supervised, human-approved change, proposed by SUP-D, was written, passed the configured verification, received an advisory review from the requested reviewer model, and was committed by a human in a disposable clone |
+| `ALPHA1B_COMPLETED_COMMITTED[+HUMAN_OVERRODE_VERDICT][+SHARED_GATEWAY]` | E-2..E-7 hold at S12b. E-1's inventory part is confirmed at S12e; if it fails the label is superseded (§5.3) | One supervised, human-approved change, proposed by SUP-D, was written, passed the configured verification, received an advisory review from the requested reviewer model, and was committed by a human in a disposable clone |
 | `ALPHA1B_COMPLETED_RESTORED` | A valid review, then H10 RESTORE, then snapshot `restored` OK | The chain ran end to end, and the change was not adopted |
 | `STOPPED_BEFORE_TRANSMISSION` | A STOP before S4c | Nothing was sent |
 | `IMPLEMENTER_NO_PROPOSAL` | P1B rc 0 `no_change_proposed`, or rc 4/5 | The source was sent (on rc 4/5). There was no proposal. No second request |
 | `STOPPED_AT_H6` | The human declined the diff | The workspace was never written |
 | `WRITE_REFUSED` / `WRITE_INDETERMINATE` | Writer rc 1 / rc 3 | As in runbook 7.3 |
 | `VERIFICATION_FAILED` / `WORKSPACE_UNTRUSTED` | Verifier rc 2 / rc 3, at S9 or inside S10 | No reviewer contact when verification fails |
-| `REVIEW_UNAVAILABLE` | Review rc 4 that is not retryable under D-9, including `REVIEW STALLED` and a `reviewer-egress-refused` the run cannot correct | AIDO stopped waiting, or refused before the request reached any network transport. After a stall the request, the worker and backend inference were **not** observed to stop |
+| `REVIEW_UNAVAILABLE` | The single review invocation (D-9) ended with rc 4 (reviewer-stage failure of any kind, including `REVIEW STALLED`, a refused environment or `reviewer-egress-refused`), rc 1 (refused), or a usage error | No retry, no second H9. AIDO stopped waiting or refused before any network transport. After a stall the request, the worker and backend inference were **not** observed to stop. The runbook outcome that applies (runbook 9.2 table) decides whether the human may go on to step 10; COMMIT is not available without a valid review (D-10), so only RESTORE or hand inspection |
 | `REVIEW_DESTINATION_MISMATCH` | E-5 fails: the packet's endpoint fields differ from the H9 record | The destination AIDO used was the one the config authorized, but not the one the human consented to at H9. An incident; the run cannot be labelled successful |
 | `FINAL_STATE_UNPROVEN` | Any `STOP_STATE_*`, a `.git` comparison failure, or a missing final snapshot | The clone is inspected by hand. Nothing is claimed |
 
@@ -508,9 +554,8 @@ were implemented by ALPHA-1A-FU1/FU2. Note that BL-1 shipped as project
 - a generic closure framework, state database, lifecycle abstraction or
   execution framework;
 - process-tree management, sandboxing or child-effect auditing;
-- changes to `src/`, the runbook or `CLAUDE.md` (the only permitted
-  pre-ALPHA-1B change is the minimal helper amendment of B-1, and only if the
-  operator authorizes it);
+- changes to `src/`, the runbook or `CLAUDE.md` (the only helper change is the
+  B-1 v4/v5 recognition and its tests, authorized by OD-2 and done);
 - the M5A authority model, or any change to a frozen roadmap dependency.
 
 ## 10. Adversarial analysis: summary
@@ -522,30 +567,30 @@ were implemented by ALPHA-1A-FU1/FU2. Note that BL-1 shipped as project
 | Implementer/reviewer identity mismatch, or alias | H0, pin, packet (G-4). The weights are unobservable, so they are not claimed | Covered within the stated claim |
 | Reviewer endpoint substitution, or proxy inheritance | `controlled_review.endpoint` authority, pre-client check, per-request check, direct transport; mismatch exits 4 with no packet and nothing sent | Hard blocker → **closed in code (FU1/FU2, accepted)**; R-B and R-C stated |
 | Source baseline drift | The helper requires `src/` and `pyproject.toml` to equal the pin and be clean; S0 repeats it; AUTH is void on any difference | Covered |
-| Helper cannot recognize the shipped packet version | B-1: the `v4`-only check would stop the run at S10 | **Material blocker** → needs the minimal helper amendment (OD-2) |
+| Helper cannot recognize the shipped packet version, or recognizes the wrong one | B-1: exact `v4`/`v5` membership; v3, v6, prefixes, wrong types and malformed packets stay `UNEXPECTED_STOP` | Closed and tested |
+| Artifact written after the final inventory | §5.3: the closure record precedes `inventory`; `inventory` is the last writer; S12e only reads | Closed (B-2) |
+| Review retried after a failure, or second consent | D-9: exactly one invocation and one H9; a second `kind=review` ledger entry voids the success label | Closed (B-3) |
+| RS1 internal attempt mistaken for a second H9 | D-9 names the difference; the compact retry stays off in D-8 and is unchanged | Covered |
 | Server-reported model differs from the request | Implementer: rejected (`model_substitution`), but an absent field cannot be seen. Reviewer: not observed (BL-3) | Deferrable; the labels do not claim it |
-| Missing or failed review | No success label. D-9 limits re-invocation | Covered |
+| Missing or failed review | No success label. D-9: no re-invocation | Covered |
 | Verification changes the workspace | AIDO exit 3 for HEAD, status and target; G-6 for the rest; HB-4 at H10 | Covered within scope, plus operating control |
 | Verification tests the wrong code | HB-1, D-7 argv guard | Hard blocker → closed by D-7 |
-| Repeated consent, or retry after a terminal stall | P1B ledger single use, D-4; reviewer D-9 and G-5 | Covered (procedural for the reviewer re-run count) |
+| Repeated consent, or retry after a terminal stall | P1B ledger single use, D-4; reviewer D-9 (one invocation) and G-5 | Covered (procedural for the reviewer invocation count) |
 | Invalid final commit or incomplete cleanup | Snapshot `committed` (one parent = baseline, exactly the target, blob = post-image, tree clean); `inventory`; hooks disabled | Covered |
 
 ## 11. Verdict
 
 **READY_FOR_HUMAN_DECISION.**
 
-The shipped, independently accepted commands, the frozen helper and the accepted
-P1C/P1D operating pattern suffice for one human-supervised end-to-end ALPHA-1B,
-with **one** pre-S0 condition:
-
-- **B-1** (§4.3): the frozen helper accepts only `review-packet.v4` at its
-  `report` step, while the pinned source writes `v5`. Without a one-line helper
-  amendment and a test, the run would stop at S10. Authorizing that amendment is
-  decision OD-2. It touches neither `src/` nor the source pin.
+The shipped, independently accepted commands, the Alpha-0 helper (now recognizing
+`review-packet.v4` and `v5`) and the accepted P1C/P1D operating pattern suffice
+for one human-supervised end-to-end ALPHA-1B. The three issues found by review of
+`dc807f4` are closed: **B-1** the helper's v4/v5 recognition, **B-2** the
+inventory-last closure order (§5.3), **B-3** the single H9 invocation (D-9). No
+material blocker remains, and no new architecture is proposed.
 
 HB-1, HB-3 and HB-4 are closed by operating controls. HB-2 is closed in
-accepted code. No other code change is needed, and no new architecture is
-proposed.
+accepted code.
 
 Stopping here. Nothing is authorized and nothing was executed.
 
@@ -556,12 +601,12 @@ defaults are proposed, not applied.
 
 | # | Decision | Safe default (proposed) | What the operator must supply |
 |---|---|---|---|
-| OD-1 | **Approve DEC-ALPHA1 as finalized**, including D-1..D-12 as amended and the §6.3 residuals | Approve every recommended option; override a row only by naming it | `I approve DEC-ALPHA1 (finalized 2026-10-20)` with name and ISO-8601 time, or per-row overrides |
-| OD-2 | **Authorize the minimal helper amendment for B-1.** Scope: in `docs/alpha0/a0_helper.py` accept exactly `review-packet.v5` where it now accepts `v4`, plus one offline test for the `review` branch. Nothing else in the helper, nothing in `src/`, the runbook or `CLAUDE.md`. It is committed and pushed before S0, so S0 records the amended blob | Authorize | Yes / No. If No, ALPHA-1B cannot close S10 (any STOP ends the run); there is no safe workaround inside the helper's rules |
+| OD-1 | **Approve DEC-ALPHA1 as finalized**, including D-1..D-12 as amended (D-9: exactly one review invocation) and the §6.3 residuals | Approve every recommended option; override a row only by naming it | `I approve DEC-ALPHA1 (finalized 2026-10-20)` with name and ISO-8601 time, or per-row overrides |
+| OD-2 | **Helper amendment for B-1.** *Approved by the operator on 2026-10-20 and implemented.* Scope as approved: `docs/alpha0/a0_helper.py` recognizes exactly `review-packet.v4` and `review-packet.v5` in the review success classifier, plus offline regression tests; nothing else in the helper, nothing in `src/`, the runbook or `CLAUDE.md` | Done | Nothing further. S0 records the resulting helper blob |
 | OD-3 | **Reviewer identity and endpoint:** `P_R`, `M_R` (not `qwen3.8-27b`), `scheme`, `host`, `port`, `base_path`, whether the endpoint is http and `vllm_allow_insecure_http` (an acknowledgement only), `vllm_structured_output` for `vllm`, and whether it shares a gateway with the implementer | No safe default for the values. Defaults for the settings follow D-8 | The values, typed into the per-run config and the H9 record only. Never into this repository |
 | OD-4 | **Implementer endpoint facts:** scheme, host and effective port are known to the operator; the endpoint accepts the model id `qwen3.8-27b` exactly as written; a key is or is not required; if http, the plaintext acknowledgement | Confirm only | A yes, and the values typed at H4S in S4b/S4c. Not in this repository |
 | OD-5 | **Layout and identity:** `project_id` `aido-alpha1b-r01` never used; clone `C:\aido_alpha1b_ws\r01` and run directory `C:\aido_alpha1b_runs\r01` do not yet exist; ledger `C:\aido_p1c_ledger\supervised_implementer` exists and is kept | Accept D-2 | A yes, or replacement paths and id |
-| OD-6 | **When to sign AUTH-ALPHA1B-01:** only after OD-1..OD-5 are answered, OD-2's commit is pushed, and the S0 checks pass in the same sitting. The authorization is void if the HEAD, source pin, helper blob or config hash differs from the filled values | Sign no earlier than that; one run only; void at the end of the same calendar day unless the operator writes an expiry | The filled approval line of §2.3 |
+| OD-6 | **When to sign AUTH-ALPHA1B-01:** only after OD-1..OD-5 are answered, and the S0 checks pass (including the recorded helper blob) in the same sitting. The authorization is void if the HEAD, source pin, helper blob or config hash differs from the filled values | Sign no earlier than that; one run only; void at the end of the same calendar day unless the operator writes an expiry | The filled approval line of §2.3 |
 
 **Not decisions now, and not decided by this document:** the per-run human acts.
 H0 (config review), H2 (plan approval), H4S (transmission consent), H4 (content

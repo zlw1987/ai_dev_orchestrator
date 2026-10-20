@@ -104,6 +104,11 @@ ORDINARY_BLOB_MODES = ("100644", "100755")  # file_editing/writer.py
 # file_editing/windows_write.py: ARCHIVE | NORMAL | NOT_CONTENT_INDEXED.
 SUPPORTED_FILE_ATTRIBUTE_MASK = 0x00000020 | 0x00000080 | 0x00002000
 
+# The only review-packet versions a successful review is recognized as. v4 is
+# the Alpha-0 original; v5 (ALPHA-1A-FU1) adds reviewer endpoint-authority
+# provenance only. Exact members: never a prefix test, never a v3/v6.
+REVIEW_PACKET_SCHEMAS = ("review-packet.v4", "review-packet.v5")
+
 # Reviewer environment NAMES (review/reviewer.py). Checked for presence only.
 REVIEWER_ENV_PREFIXES = ("AIDO_LITELLM_", "AIDO_VLLM_")
 
@@ -1014,7 +1019,7 @@ def cmd_report(a) -> None:
     elif kind in ("verify", "review"):
         report = out
         if kind == "review" and rc == 0 and isinstance(out, dict):
-            good = (out.get("schema_version") == "review-packet.v4"
+            good = (out.get("schema_version") in REVIEW_PACKET_SCHEMAS
                     and out.get("verification", {}).get("outcome") == "verified"
                     and out.get("target", {}).get("path") == target
                     and out.get("human_decision_required") is True)
