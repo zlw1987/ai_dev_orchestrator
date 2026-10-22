@@ -1,14 +1,15 @@
 """DL-1 — injected role ports for the future inner and outer loops.
 
 These are interfaces only. DL-1 ships **no implementation** of any of them:
-the test suite injects fakes, and no code in this package calls a port. Wiring
+the test suite injects fakes, and the only code in this package that calls a
+port is the DL-2 offline inner loop (:mod:`.inner_loop`). Wiring
 a real role (a model-backed Planner, a Pi Implementer, the 5F2D verifier, the
 5F2E reviewer) is later, separately authorized work, and each such adapter
 inherits that role's existing authority contract unchanged.
 
 Every port returns a typed **proposal**. None returns a state, and none is
 handed the store, so no role can persist anything or cause a transition: the
-loop that DL-2 adds will pass a port's output into a
+DL-2 inner loop passes a port's output into a
 :class:`~ai_dev_orchestrator.control_plane.transitions.StepTransitionRequest`,
 and the validator decides. The one exception in kind is :class:`VerifierPort`,
 whose :class:`~ai_dev_orchestrator.control_plane.models.VerificationObservation`
