@@ -26,11 +26,14 @@ else:
   continuing past a FAILED, HUMAN_REQUIRED or RECOVERY_REQUIRED step, so the loop
   schedules nothing further and, while the project is still ACTIVE, records a
   DL-1 ``escalate`` (HUMAN_REQUIRED). Nothing is ever resolved automatically.
-- **A run executes only its own plan, and only while that plan is current.** A
-  run's plan is fixed at creation (DL-1 ``run_bindings``). If a later version of
-  that plan has been recorded, the run is on superseded authority: the loop
-  escalates instead of scheduling. DL-3 never records, activates or substitutes
-  a plan, and never creates a run or a step run.
+- **A run executes only its own plan, and only while no successor is recorded.**
+  A run's plan is fixed at creation (DL-1 ``run_bindings``). Recording a later
+  version proves its structure and chain, not that anyone authorized it, so a
+  recorded plan is not an activated plan. A recorded successor is therefore a
+  *pending supersession conflict*: the loop stops scheduling, writes nothing and
+  leaves the run's state as it is. It never escalates, invalidates or
+  supersedes the run because a successor exists. DL-3 never records, activates
+  or substitutes a plan, and never creates a run or a step run.
 - **Completion is assessed, not claimed.** :func:`assess_project_completion`
   separates "every recorded step run is COMPLETE", "the plan's work is
   complete", "the Project Contract's acceptance criteria are satisfied" and
@@ -89,10 +92,10 @@ BLOCKED_STEP_STATES = frozenset(
 #: Planner asked for a different plan. Reported only; never acted on.
 _REPLAN_RULES = frozenset({"planner_recommend_replan", "planner_plan_conflict"})
 
-EscalationCode = Literal["step_blocked", "plan_superseded"]
+EscalationCode = Literal["step_blocked"]
 CompletionBlocker = Literal[
     "project_not_active",
-    "plan_superseded",
+    "plan_supersession_pending",
     "step_run_missing",
     "step_not_complete",
     "step_blocked",
@@ -112,7 +115,7 @@ class OuterLoopStop(str, Enum):
 
     PROJECT_NOT_ACTIVE = "project_not_active"
     STEP_BLOCKED = "step_blocked"
-    PLAN_SUPERSEDED = "plan_superseded"
+    PLAN_SUPERSESSION_PENDING = "plan_supersession_pending"
     PLAN_WORK_COMPLETE = "plan_work_complete_integration_gate_unavailable"
     NO_SCHEDULABLE_STEP = "no_schedulable_step"
     STEP_NOT_SETTLED = "step_not_settled"
@@ -232,7 +235,7 @@ def _assess(
     if project.state is not ProjectState.ACTIVE:
         blockers.append("project_not_active")
     if not plan_is_latest:
-        blockers.append("plan_superseded")
+        blockers.append("plan_supersession_pending")
     if missing:
         blockers.append("step_run_missing")
     if incomplete:
@@ -300,10 +303,15 @@ def _next_action(
             return _Action("inner_loop", step=step)
     if project.state is not ProjectState.ACTIVE:
         return _Action("stop", OuterLoopStop.PROJECT_NOT_ACTIVE)
-    if not plan_is_latest:
-        return _Action("escalate", OuterLoopStop.PLAN_SUPERSEDED, escalation="plan_superseded")
+    # A blocked step is a reason to escalate that does not depend on the plan
+    # chain, so it keeps its escalation whether or not a successor is recorded.
     if any(step.state in BLOCKED_STEP_STATES for step in present):
         return _Action("escalate", OuterLoopStop.STEP_BLOCKED, escalation="step_blocked")
+    # A recorded successor is not an activated one: nothing authorized it to
+    # replace this run's plan, and nothing authorizes ignoring it. Stop before
+    # any scheduling, and write nothing, so the run's lifecycle is unchanged.
+    if not plan_is_latest:
+        return _Action("stop", OuterLoopStop.PLAN_SUPERSESSION_PENDING)
 
     # Resume work already scheduled before starting new work.
     for step in present:
@@ -547,21 +555,14 @@ class _Drive:
         self, project: ProjectRun, steps: tuple[StepRun, ...], action: _Action
     ) -> OuterLoopStop:
         code = action.escalation
-        if code == "plan_superseded":
-            reason = (
-                f"DL-3: execution plan version {project.execution_plan_version} has been "
-                "superseded by a recorded later version; DL-3 has no authority to activate a "
-                "plan, so this run is not scheduled further."
-            )
-        else:
-            blocked = [s for s in steps if s.state in BLOCKED_STEP_STATES]
-            listed = ", ".join(f"{s.step_id}={s.state.value}" for s in blocked[:_MAX_LISTED_STEPS])
-            if len(blocked) > _MAX_LISTED_STEPS:
-                listed += f" and {len(blocked) - _MAX_LISTED_STEPS} more"
-            reason = (
-                f"DL-3: blocked step run(s) {listed}; no recorded policy authorizes further "
-                "scheduling or completion."
-            )
+        blocked = [s for s in steps if s.state in BLOCKED_STEP_STATES]
+        listed = ", ".join(f"{s.step_id}={s.state.value}" for s in blocked[:_MAX_LISTED_STEPS])
+        if len(blocked) > _MAX_LISTED_STEPS:
+            listed += f" and {len(blocked) - _MAX_LISTED_STEPS} more"
+        reason = (
+            f"DL-3: blocked step run(s) {listed}; no recorded policy authorizes further "
+            "scheduling or completion."
+        )
         request = ProjectTransitionRequest(
             request_id=outer_request_id(
                 self.project_run_id, project.state_version, f"escalate:{code}"
@@ -588,9 +589,7 @@ class _Drive:
         plan = self.store.get_execution_plan(project.execution_plan_sha256)
         completion = _assess(project, plan, _plan_is_latest(self.store, project), steps)
         stop = halt
-        if project.state is not ProjectState.ACTIVE and halt not in (
-            OuterLoopStop.STEP_BLOCKED, OuterLoopStop.PLAN_SUPERSEDED
-        ):
+        if project.state is not ProjectState.ACTIVE and halt is not OuterLoopStop.STEP_BLOCKED:
             stop = OuterLoopStop.PROJECT_NOT_ACTIVE
         replan = tuple(
             step.step_id

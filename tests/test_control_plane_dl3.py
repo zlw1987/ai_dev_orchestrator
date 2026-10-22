@@ -16,6 +16,8 @@ The suite covers, in order:
 - replayed scheduling and project transitions;
 - caller objects that do not describe one recorded run;
 - plan versions, supersession and re-planning;
+- DL-3 FU1: a recorded successor plan is a pending conflict, never an
+  escalation;
 - the completion gate and what it cannot prove;
 - bounds under refusal and inconsistent stores;
 - adversarial cases from the DL-3 self-review;
@@ -601,7 +603,7 @@ def test_an_in_flight_step_behind_an_escalated_project_is_reduced_not_stranded(m
     assert outcome.stop is OuterLoopStop.PROJECT_NOT_ACTIVE
 
 
-def test_an_in_flight_step_is_reduced_before_a_supersession_escalation(make) -> None:
+def test_an_in_flight_step_is_reduced_even_when_a_successor_is_recorded(make) -> None:
     w = make(implement={"step-a": [SimulatedCrash()]})
     with pytest.raises(SimulatedCrash):
         w.run()
@@ -609,9 +611,14 @@ def test_an_in_flight_step_is_reduced_before_a_supersession_escalation(make) -> 
                                             supersedes=w.plan.sha256))
     outcome = w.run()
     assert w.state("step-a") is StepState.RECOVERY_REQUIRED
+    # DL-2's reduction is the independent reason for the project's state; DL-3
+    # added no escalation of its own because of the successor.
     assert outcome.project_run.state is ProjectState.RECOVERY_REQUIRED
+    assert outcome.escalation is None
+    assert outcome.invocations[0].role_dispatch_count == 0
     assert outcome.completion.plan_is_latest_recorded is False
     assert w.implemented() == ["step-a"]
+    assert no_plan_escalation_was_recorded(w)
 
 
 def test_a_reopened_store_is_not_consumed_before_recovery(make) -> None:
@@ -815,26 +822,116 @@ def test_a_planner_replan_recommendation_installs_nothing(make) -> None:
     assert w.state("step-c") is StepState.PLANNED
 
 
-def test_a_recorded_successor_plan_halts_the_superseded_run(make) -> None:
+def plan_v2_of(w: World, steps=INDEPENDENT) -> ExecutionPlan:
+    return make_plan(w.pc, steps, version=2, supersedes=w.plan.sha256)
+
+
+def no_plan_escalation_was_recorded(w: World) -> bool:
+    """No transition in the store carries a pre-FU1 ``escalate:plan_superseded``
+    id, at any project version."""
+    pid = w.project.project_run_id
+    forbidden = {outer_request_id(pid, version, "escalate:plan_superseded")
+                 for version in range(32)}
+    return not any(rec.request_id in forbidden for rec in w.all_records())
+
+
+def test_recording_a_successor_plan_changes_nothing_about_the_run(make) -> None:
     w = make()
-    plan_v2 = make_plan(w.pc, (("step-x", ()),), version=2, supersedes=w.plan.sha256)
-    w.store.record_execution_plan(plan_v2)
+    before_run = w.store.get_project_run(w.project.project_run_id)
+    before_records = w.all_records()
+    w.store.record_execution_plan(plan_v2_of(w))
+    after_run = w.store.get_project_run(w.project.project_run_id)
+    assert after_run == before_run
+    assert after_run.state is ProjectState.ACTIVE
+    assert w.all_records() == before_records
+
+
+def test_a_recorded_successor_plan_is_a_pending_conflict_not_an_escalation(make) -> None:
+    w = make()
+    w.store.record_execution_plan(plan_v2_of(w, (("step-x", ()),)))
+    before_run = w.store.get_project_run(w.project.project_run_id)
+    before_records = w.all_records()
     outcome = w.run()
-    assert outcome.stop is OuterLoopStop.PLAN_SUPERSEDED
-    assert outcome.escalation == "plan_superseded"
-    assert outcome.project_run.state is ProjectState.HUMAN_REQUIRED
-    assert outcome.project_run.execution_plan_sha256 == w.plan.sha256  # never substituted
-    assert w.log == [] and outcome.marked_ready == ()
+    assert outcome.stop is OuterLoopStop.PLAN_SUPERSESSION_PENDING
+    assert outcome.escalation is None and outcome.refusal_code is None
+    # The run's lifecycle and its creation-bound plan are exactly as they were.
+    assert outcome.project_run == before_run
+    assert outcome.project_run.state is ProjectState.ACTIVE
+    assert outcome.project_run.execution_plan_sha256 == w.plan.sha256
+    assert outcome.project_run.execution_plan_version == 1
+    assert w.all_records() == before_records
+    # Nothing was scheduled or launched.
+    assert w.log == [] and outcome.marked_ready == () and outcome.invocations == ()
+    assert all(s.state is StepState.PLANNED for s in outcome.step_runs)
     assert outcome.completion.plan_is_latest_recorded is False
-    assert "plan_superseded" in outcome.completion.blockers
+    assert "plan_supersession_pending" in outcome.completion.blockers
+    assert no_plan_escalation_was_recorded(w)
+
+
+def test_repeated_invocations_on_a_pending_conflict_stay_bounded_and_unescalated(make) -> None:
+    w = make(steps=CHAIN)
+    w.run(max_steps=1)
+    w.store.record_execution_plan(plan_v2_of(w))
+    before_run = w.store.get_project_run(w.project.project_run_id)
+    before_records = w.all_records()
+    w.log.clear()
+    for _ in range(5):
+        outcome = w.run()
+        assert outcome.stop is OuterLoopStop.PLAN_SUPERSESSION_PENDING
+        assert outcome.escalation is None
+    # And across a reopen and the caller's explicit recovery.
+    w.reopen()
+    report = w.store.recover(w.project.project_run_id)
+    assert report.integrity_ok and report.recovered_step_run_ids == ()
+    outcome = w.run()
+    assert outcome.stop is OuterLoopStop.PLAN_SUPERSESSION_PENDING
+    assert w.log == []
+    assert w.store.get_project_run(w.project.project_run_id) == before_run
+    assert w.all_records() == before_records
+    assert w.state("step-a") is StepState.COMPLETE
+    assert w.state("step-b") is StepState.PLANNED
+    assert no_plan_escalation_was_recorded(w)
+
+
+def _leave_step_a_ready(w: World) -> None:
+    a = w.store.get_step_run(w.runs["step-a"].step_run_id)
+    w.store.apply_step_transition(a.step_run_id, StepTransitionRequest(
+        request_id=new_request_id(), expected_state_version=a.state_version,
+        event=StepEvent.MARK_READY))
+
+
+def _leave_step_a_at_acceptance(w: World) -> None:
+    w.ports = w.make_ports(decide={"step-a": [SimulatedCrash()]})
+    with pytest.raises(SimulatedCrash):
+        w.run()
+    assert w.state("step-a") is StepState.ACCEPTANCE
+    w.ports = w.make_ports()
+
+
+@pytest.mark.parametrize("setup", ["ready", "acceptance", "schedulable_planned"])
+def test_a_pending_conflict_launches_no_step_in_any_schedulable_state(make, setup) -> None:
+    w = make()
+    if setup == "ready":
+        _leave_step_a_ready(w)
+    elif setup == "acceptance":
+        _leave_step_a_at_acceptance(w)
+    w.store.record_execution_plan(plan_v2_of(w))
+    state_before = w.state("step-a")
+    before_records = w.all_records()
+    w.log.clear()
+    outcome = w.run()
+    assert outcome.stop is OuterLoopStop.PLAN_SUPERSESSION_PENDING
+    assert w.log == [] and outcome.invocations == () and outcome.marked_ready == ()
+    assert w.state("step-a") is state_before
+    assert w.project_state() is ProjectState.ACTIVE
+    assert w.all_records() == before_records
 
 
 def test_a_successor_plan_recorded_mid_run_stops_further_scheduling(make) -> None:
     w = make()
 
     def record_successor(contract, attempt):
-        w.store.record_execution_plan(make_plan(w.pc, INDEPENDENT, version=2,
-                                                supersedes=w.plan.sha256))
+        w.store.record_execution_plan(plan_v2_of(w))
         return ImplementationReport(step_contract_sha256=contract.sha256, attempt=attempt,
                                     summary="Fake.")
 
@@ -843,7 +940,115 @@ def test_a_successor_plan_recorded_mid_run_stops_further_scheduling(make) -> Non
     assert w.implemented() == ["step-a"]
     assert w.state("step-a") is StepState.COMPLETE
     assert w.state("step-b") is StepState.PLANNED
-    assert outcome.stop is OuterLoopStop.PLAN_SUPERSEDED
+    assert outcome.stop is OuterLoopStop.PLAN_SUPERSESSION_PENDING
+    assert outcome.escalation is None
+    assert outcome.project_run.state is ProjectState.ACTIVE
+    assert no_plan_escalation_was_recorded(w)
+
+
+def test_a_blocked_step_still_escalates_when_a_successor_is_recorded(make) -> None:
+    w = make(policies={"step-a": {"max_attempts": 1}},
+             verify={"step-a": ["verification-failed"]}, decide={"step-a": [RETRY]})
+
+    def record_successor(contract, attempt):
+        w.store.record_execution_plan(plan_v2_of(w))
+        return ImplementationReport(step_contract_sha256=contract.sha256, attempt=attempt,
+                                    summary="Fake.")
+
+    w.ports.implementer.scripts["step-a"] = [record_successor]
+    outcome = w.run()
+    assert w.state("step-a") is StepState.FAILED
+    assert outcome.stop is OuterLoopStop.STEP_BLOCKED
+    assert outcome.escalation == "step_blocked"
+    assert outcome.project_run.state is ProjectState.HUMAN_REQUIRED
+    escalations = [r for r in w.store.transitions_for(w.project.project_run_id)
+                   if r.event == "escalate"]
+    assert [r.request_id for r in escalations] == [
+        outer_request_id(w.project.project_run_id, 0, "escalate:step_blocked")]
+    assert {"plan_supersession_pending", "step_blocked"} <= set(outcome.completion.blockers)
+    assert no_plan_escalation_was_recorded(w)
+
+
+def test_a_step_blocked_before_the_successor_still_escalates_as_blocked(make) -> None:
+    w = make(policies={"step-a": {"max_attempts": 1}},
+             verify={"step-a": ["verification-failed"]}, decide={"step-a": [RETRY]})
+    _leave_step_a_ready(w)
+    a = w.store.get_step_run(w.runs["step-a"].step_run_id)
+    cp.StepInnerLoop(w.store, w.ports).run(
+        project_run=w.store.get_project_run(w.project.project_run_id), step_run=a,
+        project_contract=w.pc, execution_plan=w.plan, step_contract=w.contracts["step-a"])
+    assert w.state("step-a") is StepState.FAILED
+    assert w.project_state() is ProjectState.ACTIVE
+    w.store.record_execution_plan(plan_v2_of(w))
+    outcome = w.run()
+    assert outcome.stop is OuterLoopStop.STEP_BLOCKED
+    assert outcome.escalation == "step_blocked"
+    assert outcome.project_run.state is ProjectState.HUMAN_REQUIRED
+    assert no_plan_escalation_was_recorded(w)
+
+
+def test_completed_plan_work_with_a_recorded_successor_is_not_completion(make) -> None:
+    w = make()
+    w.run()
+    w.store.record_execution_plan(plan_v2_of(w))
+    before_records = w.all_records()
+    outcome = w.run()
+    assert outcome.stop is OuterLoopStop.PLAN_SUPERSESSION_PENDING
+    c = outcome.completion
+    assert c.plan_work_complete is True and c.complete_authorized is False
+    assert c.acceptance_criteria_satisfied is False
+    assert "plan_supersession_pending" in c.blockers
+    assert assess_project_completion(w.store, w.project.project_run_id) == c
+    assert w.all_records() == before_records
+    with pytest.raises(TransitionRefused) as caught:
+        request_complete(w)
+    assert caught.value.code is RefusalCode.UNSUPPORTED_IN_DL1
+    assert w.project_state() is ProjectState.ACTIVE
+
+
+def test_a_run_on_an_intermediate_plan_is_also_only_pending(make) -> None:
+    w = make()
+    plan_v2 = plan_v2_of(w, (("step-x", ()),))
+    w.store.record_execution_plan(plan_v2)
+    contract_x = issue(w.pc, plan_v2, "step-x")
+    w.store.record_step_contract(contract_x)
+    run_v2 = w.store.create_project_run(project_contract_sha256=w.pc.sha256,
+                                        execution_plan_sha256=plan_v2.sha256)
+    w.store.create_step_run(project_run_id=run_v2.project_run_id,
+                            step_contract_sha256=contract_x.sha256)
+    w.store.record_execution_plan(make_plan(w.pc, (("step-y", ()),), version=3,
+                                            supersedes=plan_v2.sha256))
+    first = w.run()
+    second = w.loop().run(project_run=run_v2, project_contract=w.pc, execution_plan=plan_v2)
+    assert first.stop is OuterLoopStop.PLAN_SUPERSESSION_PENDING
+    assert second.stop is OuterLoopStop.PLAN_SUPERSESSION_PENDING
+    assert w.log == []
+    assert w.project_state() is ProjectState.ACTIVE
+    assert w.store.get_project_run(run_v2.project_run_id).state is ProjectState.ACTIVE
+    assert not [r for r in w.store.transitions_for(run_v2.project_run_id)
+                if r.event == "escalate"]
+
+
+def test_a_tampered_successor_is_untrusted_not_pending(make) -> None:
+    w = make()
+    plan_v2 = plan_v2_of(w)
+    w.store.record_execution_plan(plan_v2)
+    before_records = w.all_records()
+    w.store._conn.execute("UPDATE contracts SET version = 9 WHERE sha256 = ?",
+                          (plan_v2.sha256,))
+    with pytest.raises(StateUntrustedError):
+        w.run()
+    with pytest.raises(StateUntrustedError):
+        assess_project_completion(w.store, w.project.project_run_id)
+    assert w.log == [] and w.all_records() == before_records
+
+
+def test_dl3_can_no_longer_express_a_plan_escalation() -> None:
+    assert "PLAN_SUPERSEDED" not in OuterLoopStop.__members__
+    assert "plan_superseded" not in {stop.value for stop in OuterLoopStop}
+    source = Path(cp.outer_loop.__file__).read_text(encoding="utf-8")
+    assert "escalate:plan_superseded" not in source
+    assert '"plan_superseded"' not in source
 
 
 def test_a_run_on_the_current_plan_proceeds_with_its_own_steps_only(make) -> None:
