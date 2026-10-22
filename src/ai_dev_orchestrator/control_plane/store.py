@@ -543,6 +543,40 @@ class ControlPlaneStore:
     def get_step_contract(self, sha256: str) -> StepContract:
         return self._load_contract(sha256, "step_contract")
 
+    def list_execution_plans(self, project_contract_sha256: str) -> tuple[ExecutionPlan, ...]:
+        """Every recorded plan version of one Project Contract, oldest first.
+
+        Added for DL-3, read-only. Each plan is re-proven like any contract
+        load, and the set must be the unbroken chain ``record_execution_plan``
+        builds — versions 1..N, each superseding the one before — or the read
+        raises :class:`StateUntrustedError`. Recording a plan authorizes
+        nothing, so this is a statement of what is *recorded*, never of which
+        plan any run may execute: a project run executes only the plan it was
+        created with.
+        """
+        rows = self._conn.execute(
+            "SELECT sha256, project_id, version FROM contracts "
+            "WHERE kind = 'execution_plan' AND scope_sha256 = ? ORDER BY version",
+            (project_contract_sha256,),
+        ).fetchall()
+        plans: list[ExecutionPlan] = []
+        for row in rows:
+            plan = self._load_contract(row["sha256"], "execution_plan")
+            previous = plans[-1] if plans else None
+            if (
+                plan.project_contract_sha256 != project_contract_sha256
+                or plan.project_id != row["project_id"]
+                or plan.plan_version != row["version"]
+                or plan.plan_version != len(plans) + 1
+                or plan.supersedes_sha256 != (previous.sha256 if previous else None)
+            ):
+                raise StateUntrustedError(
+                    "the recorded execution plans of this project contract are not one "
+                    "unbroken version chain."
+                )
+            plans.append(plan)
+        return tuple(plans)
+
     @staticmethod
     def _revalidated_contract(model_type: type[_M], contract: object) -> _M:
         try:
