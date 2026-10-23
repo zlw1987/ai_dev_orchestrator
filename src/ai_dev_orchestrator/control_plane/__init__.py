@@ -4,14 +4,43 @@ Typed contracts and runs (:mod:`.models`), AIDO issuance of Step Contracts
 (:mod:`.contracts`), the deterministic transition validator
 (:mod:`.transitions`), SQLite persistence and recovery (:mod:`.store`), and
 injected role ports (:mod:`.ports`), the DL-2 offline single-Step inner loop
-(:mod:`.inner_loop`), and the DL-3 offline project outer loop (:mod:`.outer_loop`).
+(:mod:`.inner_loop`), the DL-3 offline project outer loop (:mod:`.outer_loop`),
+and the DL-4A authority foundation: authority records (:mod:`.authority`), the
+AIDO state root and containment (:mod:`.containment`) and the authority session
+(:mod:`.authority_session`).
 
 Offline only. Nothing here calls a model, launches a process, opens a socket,
-reads an environment variable, or touches a target workspace, and no CLI
+reads an environment variable, or writes to a target workspace, and no CLI
 command reaches it. See ``docs/DL1_CONTROL_PLANE_FOUNDATION.md``,
-``docs/DL2_OFFLINE_INNER_LOOP.md`` and ``docs/DL3_OFFLINE_OUTER_LOOP.md``.
+``docs/DL2_OFFLINE_INNER_LOOP.md``, ``docs/DL3_OFFLINE_OUTER_LOOP.md`` and
+``docs/DL4A_REAL_INTEGRATION_AUTHORITY.md``.
 """
 
+from ai_dev_orchestrator.control_plane.authority import (
+    ApprovalChallenge,
+    ApprovalSubjectKind,
+    AuthorityRefusedError,
+    BoundRoleOutput,
+    DispatchTicket,
+    EvidenceRefusedError,
+    ExecutionPolicy,
+    HumanAttestation,
+    HumanAttestationVerifier,
+    UnavailableHumanAttestationVerifier,
+    VerificationEvidenceReceipt,
+    bind_role_output,
+    verification_outcome_from_evidence,
+)
+from ai_dev_orchestrator.control_plane.authority_session import (
+    AuthoritySession,
+    VerificationEvidenceRecorder,
+    open_authority_session,
+)
+from ai_dev_orchestrator.control_plane.containment import (
+    AidoStateRoot,
+    ContainmentError,
+    WorkspaceIdentity,
+)
 from ai_dev_orchestrator.control_plane.contracts import (
     ContractRefusedError,
     issue_step_contract,
@@ -55,6 +84,10 @@ from ai_dev_orchestrator.control_plane.outer_loop import (
     assess_project_completion,
 )
 from ai_dev_orchestrator.control_plane.ports import (
+    BoundImplementerPort,
+    BoundPlannerPort,
+    BoundReviewerPort,
+    BoundVerifierPort,
     ImplementerPort,
     PlannerPort,
     ReviewerPort,
@@ -87,10 +120,26 @@ from ai_dev_orchestrator.control_plane.transitions import (
 )
 
 __all__ = [
+    "AidoStateRoot",
     "AppliedTransition",
+    "ApprovalChallenge",
+    "ApprovalSubjectKind",
+    "AuthorityRefusedError",
+    "AuthoritySession",
+    "BoundImplementerPort",
+    "BoundPlannerPort",
+    "BoundReviewerPort",
+    "BoundRoleOutput",
+    "BoundVerifierPort",
+    "ContainmentError",
     "ContractRefusedError",
     "ControlPlaneStore",
+    "DispatchTicket",
+    "EvidenceRefusedError",
     "ExecutionPlan",
+    "ExecutionPolicy",
+    "HumanAttestation",
+    "HumanAttestationVerifier",
     "HumanStepAcceptance",
     "ImplementationReport",
     "ImplementerPort",
@@ -137,13 +186,20 @@ __all__ = [
     "TesterPort",
     "TransitionRecord",
     "TransitionRefused",
+    "UnavailableHumanAttestationVerifier",
     "UnverifiedRunRow",
+    "VerificationEvidenceReceipt",
+    "VerificationEvidenceRecorder",
     "VerificationObservation",
     "VerifierPort",
+    "WorkspaceIdentity",
     "assess_project_completion",
+    "bind_role_output",
     "decide_project_transition",
     "decide_step_transition",
     "issue_step_contract",
     "new_request_id",
+    "open_authority_session",
     "validate_step_contract",
+    "verification_outcome_from_evidence",
 ]

@@ -34,11 +34,21 @@ using injected role ports and DL-1's store. It is a driver and nothing else:
   :class:`~ai_dev_orchestrator.control_plane.models.HumanStepAcceptance`. A step
   whose contract requires one escalates to HUMAN_REQUIRED instead of completing.
 
+- **DL-4A: bound dispatch in an authority store.** When the store is a DL-4A
+  authority store, every role call is preceded by a persisted
+  :class:`~ai_dev_orchestrator.control_plane.authority.DispatchTicket` (at most
+  one per step version and role, by anyone), the port receives it as
+  ``dispatch=``, and must return a
+  :class:`~ai_dev_orchestrator.control_plane.authority.BoundRoleOutput` naming
+  it. The envelope goes to the store with the payload, which consumes the
+  ticket. A refused ticket is treated like any other failed dispatch. Offline
+  stores are driven exactly as before.
+
 Offline only. Nothing here calls a model, launches a process, opens a socket,
 reads an environment variable, or touches a workspace, and no CLI command
-reaches it. Verification provenance, human-approval provenance, policy-issuance
-provenance and workspace containment remain unproven hard gates before any real
-adapter is wired (DL-4); see ``docs/DL2_OFFLINE_INNER_LOOP.md``.
+reaches it. See ``docs/DL2_OFFLINE_INNER_LOOP.md`` and
+``docs/DL4A_REAL_INTEGRATION_AUTHORITY.md`` for which provenance gates DL-4A
+closes and which remain open.
 """
 
 from __future__ import annotations
@@ -49,6 +59,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+from ai_dev_orchestrator.control_plane.authority import BoundRoleOutput, DispatchTicket
 from ai_dev_orchestrator.control_plane.models import (
     IN_FLIGHT_STEP_STATES,
     TERMINAL_STEP_STATES,
@@ -80,11 +91,12 @@ from ai_dev_orchestrator.control_plane.transitions import (
 )
 
 Role = Literal["implementer", "verifier", "reviewer", "planner"]
-DispatchResult = Literal["valid", "raised", "malformed", "misbound"]
+DispatchResult = Literal["valid", "raised", "malformed", "misbound", "ticket_refused"]
 InnerLoopCause = Literal[
     "role_raised",
     "role_output_malformed",
     "role_output_misbound",
+    "dispatch_ticket_refused",
     "result_not_recorded",
     "human_acceptance_unavailable",
     "in_flight_not_dispatched_here",
@@ -96,6 +108,7 @@ _FAILURE_CAUSE: dict[str, InnerLoopCause] = {
     "raised": "role_raised",
     "malformed": "role_output_malformed",
     "misbound": "role_output_misbound",
+    "ticket_refused": "dispatch_ticket_refused",
 }
 
 
@@ -211,6 +224,33 @@ def _role_output(
     except Exception:  # noqa: BLE001 - any failure means it never validated
         return None, "malformed"
     if copy.step_contract_sha256 != contract.sha256 or copy.attempt != attempt:
+        return None, "misbound"
+    return copy, "valid"
+
+
+def _bound_role_output(
+    model_type: type[BaseModel], value: object, contract: StepContract, ticket: DispatchTicket
+) -> tuple[BoundRoleOutput | None, DispatchResult]:
+    """DL-4A: the re-validated envelope answering exactly ``ticket``, or why not.
+
+    A pre-check only. The authority store re-proves every field against its own
+    persisted ticket before anything is recorded.
+    """
+    if type(value) is not BoundRoleOutput:
+        return None, "malformed"
+    try:
+        copy = BoundRoleOutput.model_validate_json(value.model_dump_json(warnings=False))
+    except Exception:  # noqa: BLE001 - any failure means it never validated
+        return None, "malformed"
+    if type(copy.output) is not model_type:
+        return None, "malformed"
+    if (
+        copy.ticket_id, copy.project_run_id, copy.step_run_id, copy.step_contract_sha256,
+        copy.attempt, copy.role,
+    ) != (
+        ticket.ticket_id, ticket.project_run_id, ticket.step_run_id, contract.sha256,
+        ticket.attempt, ticket.role,
+    ):
         return None, "misbound"
     return copy, "valid"
 
@@ -366,12 +406,12 @@ class _Run:
             self._reduce(step, "the project left ACTIVE before the role was dispatched")
             return
         role, model_type, event, field = _IN_FLIGHT_ROLES[step.state]
-        output, result = self._dispatch(role, model_type, step)
+        output, bound, result = self._dispatch(role, model_type, step)
         if output is None:
             self._note(_FAILURE_CAUSE[result], role)
             self._reduce(step, f"the {role} {result}; its requested effect is unproven")
             return
-        applied = self._apply(step, event, **{field: output})
+        applied = self._apply(step, event, role_output=bound, **{field: output})
         if applied is None:
             # Refused: the next read sees an in-flight step this call no longer
             # owns, and reduces it. The role is not called again.
@@ -392,14 +432,15 @@ class _Run:
         return None
 
     def _decide(self, step: StepRun) -> InnerLoopStop | None:
-        decision, result = self._dispatch("planner", PlannerDecision, step)
+        decision, bound, result = self._dispatch("planner", PlannerDecision, step)
         if decision is None:
             self._note(_FAILURE_CAUSE[result], "planner")
             return self._escalate(step, f"the planner {result}; no decision was recorded")
         try:
             applied = self.store.apply_step_transition(
-                self.step_run_id, self._request(step, StepEvent.DECIDE_ACCEPTANCE,
-                                                planner_decision=decision)
+                self.step_run_id,
+                self._request(step, StepEvent.DECIDE_ACCEPTANCE, planner_decision=decision),
+                **self._binding(bound),
             )
         except TransitionRefused as exc:
             self.refusal_code = exc.code
@@ -417,32 +458,60 @@ class _Run:
 
     def _dispatch(
         self, role: Role, model_type: type[BaseModel], step: StepRun
-    ) -> tuple[BaseModel | None, DispatchResult]:
+    ) -> tuple[BaseModel | None, BoundRoleOutput | None, DispatchResult]:
+        ticket = None
+        if self.store.authority_mode:
+            try:
+                ticket = self.store.issue_dispatch_ticket(
+                    self.step_run_id, role=role, expected_state_version=step.state_version
+                )
+            except TransitionRefused as exc:
+                # No ticket, no dispatch: the role is never called.
+                self.refusal_code = exc.code
+                return None, None, "ticket_refused"
+        bound = None
         try:
-            value = self._call_port(role, step)
+            value = self._call_port(role, step, ticket)
         except Exception:  # noqa: BLE001 - a BaseException is a crash and propagates
             output, result = None, "raised"
         else:
-            output, result = _role_output(model_type, value, self.contract, step.attempt)
+            if ticket is None:
+                output, result = _role_output(model_type, value, self.contract, step.attempt)
+            else:
+                bound, result = _bound_role_output(model_type, value, self.contract, ticket)
+                output = None if bound is None else bound.output
         self.dispatches.append(RoleDispatch(
             role=role, attempt=step.attempt, step_state_version=step.state_version, result=result
         ))
-        return output, result
+        return output, bound, result
 
-    def _call_port(self, role: Role, step: StepRun) -> object:
+    def _call_port(self, role: Role, step: StepRun, ticket: DispatchTicket | None) -> object:
         # Ports get fresh copies of the store's contract and snapshot, never the
         # store and never an object this call later decides with: a "frozen"
         # model can still be changed with object.__setattr__.
         contract = StepContract.model_validate_json(self.contract.model_dump_json())
         attempt = step.attempt
+        bound = (
+            {} if ticket is None
+            else {"dispatch": DispatchTicket.model_validate_json(ticket.model_dump_json())}
+        )
         if role == "planner":
             snapshot = StepRun.model_validate_json(step.model_dump_json())
-            return self.ports.planner.decide_step(step_contract=contract, step_run=snapshot)
+            return self.ports.planner.decide_step(
+                step_contract=contract, step_run=snapshot, **bound
+            )
         if role == "implementer":
-            return self.ports.implementer.implement(step_contract=contract, attempt=attempt)
+            return self.ports.implementer.implement(
+                step_contract=contract, attempt=attempt, **bound
+            )
         if role == "verifier":
-            return self.ports.verifier.verify(step_contract=contract, attempt=attempt)
-        return self.ports.reviewer.review(step_contract=contract, attempt=attempt)
+            return self.ports.verifier.verify(step_contract=contract, attempt=attempt, **bound)
+        return self.ports.reviewer.review(step_contract=contract, attempt=attempt, **bound)
+
+    @staticmethod
+    def _binding(bound: BoundRoleOutput | None) -> dict[str, BoundRoleOutput]:
+        # Passed only when present, so an offline store sees the DL-2 call shape.
+        return {} if bound is None else {"role_output": bound}
 
     def _request(self, step: StepRun, event: StepEvent, **payload) -> StepTransitionRequest:
         return StepTransitionRequest(
@@ -452,10 +521,18 @@ class _Run:
             **payload,
         )
 
-    def _apply(self, step: StepRun, event: StepEvent, **payload) -> AppliedTransition | None:
+    def _apply(
+        self,
+        step: StepRun,
+        event: StepEvent,
+        *,
+        role_output: BoundRoleOutput | None = None,
+        **payload,
+    ) -> AppliedTransition | None:
         try:
             applied = self.store.apply_step_transition(
-                self.step_run_id, self._request(step, event, **payload)
+                self.step_run_id, self._request(step, event, **payload),
+                **self._binding(role_output),
             )
         except TransitionRefused as exc:
             self.refusal_code = exc.code

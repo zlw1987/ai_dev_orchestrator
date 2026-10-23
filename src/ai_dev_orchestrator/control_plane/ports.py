@@ -18,6 +18,17 @@ verification may implement it, never a model.
 
 There is deliberately no Tester-authority issuer and no port that accepts a
 proposal back as authority.
+
+DL-4A: against an authority store, DL-2 calls each port with one more keyword,
+``dispatch``, the persisted
+:class:`~ai_dev_orchestrator.control_plane.authority.DispatchTicket` for this
+call, and requires a
+:class:`~ai_dev_orchestrator.control_plane.authority.BoundRoleOutput` naming it
+back (the ``Bound*Port`` protocols below). That is what makes a role output
+specific to one Project Run, Step Run, attempt and version. In an authority
+store the Verifier's observation is not authoritative by type any more: the
+store accepts it only when it matches AIDO-recorded ``verification-result.v1``
+evidence for that exact dispatch.
 """
 
 from __future__ import annotations
@@ -25,6 +36,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
+from ai_dev_orchestrator.control_plane.authority import BoundRoleOutput, DispatchTicket
 from ai_dev_orchestrator.control_plane.models import (
     ExecutionPlan,
     ImplementationReport,
@@ -63,6 +75,30 @@ class VerifierPort(Protocol):
 
 class ReviewerPort(Protocol):
     def review(self, *, step_contract: StepContract, attempt: int) -> ReviewProposal: ...
+
+
+class BoundPlannerPort(Protocol):
+    def decide_step(
+        self, *, step_contract: StepContract, step_run: StepRun, dispatch: DispatchTicket
+    ) -> BoundRoleOutput: ...
+
+
+class BoundImplementerPort(Protocol):
+    def implement(
+        self, *, step_contract: StepContract, attempt: int, dispatch: DispatchTicket
+    ) -> BoundRoleOutput: ...
+
+
+class BoundVerifierPort(Protocol):
+    def verify(
+        self, *, step_contract: StepContract, attempt: int, dispatch: DispatchTicket
+    ) -> BoundRoleOutput: ...
+
+
+class BoundReviewerPort(Protocol):
+    def review(
+        self, *, step_contract: StepContract, attempt: int, dispatch: DispatchTicket
+    ) -> BoundRoleOutput: ...
 
 
 @dataclass(frozen=True)

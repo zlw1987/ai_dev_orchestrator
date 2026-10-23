@@ -58,6 +58,20 @@ Properties this module provides, each tested offline:
   whether its effect happened. Any proof failure above escalates to
   HUMAN_REQUIRED.
 
+**DL-4A authority mode.** A store opened through an AIDO state root
+(:func:`~ai_dev_orchestrator.control_plane.authority_session.open_authority_session`)
+carries a different schema version (``store.v3``) with five more tables, and
+adds provenance to every proof above: an approved Project Contract needs a
+consumed human approval challenge; a plan needs a human-approved activation of
+it, its execution policy and its target workspace; a Step Contract needs an
+issuance under that policy; every role-output transition needs a consumed,
+version-bound dispatch ticket; every verification needs persisted, re-hashed,
+self-consistent ``verification-result.v1`` evidence; and a human acceptance
+needs a consumed, subject-bound approval. The unissued ``record_*`` methods are
+refused there, an offline store refuses to open an authority store, and an
+authority store refuses an offline file. Offline (``store.v2``) behavior is
+unchanged. See ``docs/DL4A_REAL_INTEGRATION_AUTHORITY.md``.
+
 What it does not provide: durability across power loss beyond what SQLite's
 ``synchronous=FULL`` gives (Windows has no directory fsync); defense against a
 deliberate *consistent* rewrite of a row together with its transition log and
@@ -84,8 +98,34 @@ from typing import Any, Literal, NamedTuple, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
+from ai_dev_orchestrator.control_plane.authority import (
+    APPROVAL_CHALLENGE_SCHEMA_VERSION,
+    APPROVAL_CHALLENGE_TTL,
+    APPROVAL_TEXT,
+    DISPATCH_TICKET_SCHEMA_VERSION,
+    MAX_VERIFICATION_EVIDENCE_BYTES,
+    ROLE_STATE,
+    ApprovalChallenge,
+    ApprovalSubjectKind,
+    AuthorityRefusedError,
+    BoundRoleOutput,
+    DispatchTicket,
+    EvidenceRefusedError,
+    ExecutionPolicy,
+    HumanAttestation,
+    VerificationEvidenceReceipt,
+    plan_activation_subject_sha256,
+    step_acceptance_subject_sha256,
+    verification_outcome_from_evidence,
+)
+from ai_dev_orchestrator.control_plane.containment import (
+    AidoStateRoot,
+    ContainmentError,
+    WorkspaceIdentity,
+)
 from ai_dev_orchestrator.control_plane.contracts import (
     ContractRefusedError,
+    issue_step_contract,
     validate_plan_against_contract,
     validate_step_contract,
 )
@@ -94,9 +134,11 @@ from ai_dev_orchestrator.control_plane.models import (
     TERMINAL_STEP_STATES,
     ExecutionPlan,
     ProjectContract,
+    ProjectContractContent,
     ProjectRun,
     ProjectState,
     StepContract,
+    StepContractProposal,
     StepRun,
     StepState,
     _Strict,
@@ -209,6 +251,106 @@ CREATE INDEX transitions_by_subject ON transitions (subject_kind, subject_id, se
 _TABLES = frozenset(
     {"store_meta", "contracts", "project_runs", "step_runs", "run_bindings", "transitions"}
 )
+
+#: DL-4A. The authority store's schema is the offline schema plus these tables,
+#: under its own version, so neither kind of store can be opened as the other.
+STORE_AUTHORITY_SCHEMA_VERSION = "aido-control-plane-store.v3"
+_ROLES = _in_list(ROLE_STATE)
+_SUBJECT_KINDS = _in_list(kind.value for kind in ApprovalSubjectKind)
+_AUTHORITY_SCHEMA = f"""
+CREATE TABLE approval_challenges (
+    challenge_id TEXT PRIMARY KEY,
+    subject_kind TEXT NOT NULL CHECK (subject_kind IN ({_SUBJECT_KINDS})),
+    subject_sha256 TEXT NOT NULL,
+    issued_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    consumed_by TEXT UNIQUE,
+    attestation TEXT,
+    attestation_sha256 TEXT
+);
+CREATE TABLE plan_issuances (
+    execution_plan_sha256 TEXT PRIMARY KEY REFERENCES contracts (sha256),
+    project_contract_sha256 TEXT NOT NULL REFERENCES contracts (sha256),
+    policy TEXT NOT NULL,
+    policy_sha256 TEXT NOT NULL,
+    target_workspace TEXT NOT NULL,
+    target_workspace_sha256 TEXT NOT NULL,
+    challenge_id TEXT NOT NULL UNIQUE REFERENCES approval_challenges (challenge_id),
+    issued_at TEXT NOT NULL
+);
+CREATE TABLE step_contract_issuances (
+    step_contract_sha256 TEXT PRIMARY KEY REFERENCES contracts (sha256),
+    execution_plan_sha256 TEXT NOT NULL REFERENCES plan_issuances (execution_plan_sha256),
+    policy_sha256 TEXT NOT NULL,
+    issued_at TEXT NOT NULL
+);
+CREATE TABLE dispatch_tickets (
+    ticket_id TEXT PRIMARY KEY,
+    project_run_id TEXT NOT NULL,
+    step_run_id TEXT NOT NULL REFERENCES step_runs (step_run_id),
+    step_contract_sha256 TEXT NOT NULL,
+    attempt INTEGER NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ({_ROLES})),
+    step_state TEXT NOT NULL,
+    state_version INTEGER NOT NULL,
+    issued_at TEXT NOT NULL,
+    consumed_request_id TEXT UNIQUE,
+    UNIQUE (step_run_id, state_version, role)
+);
+CREATE TABLE verification_evidence (
+    ticket_id TEXT PRIMARY KEY REFERENCES dispatch_tickets (ticket_id),
+    step_run_id TEXT NOT NULL,
+    attempt INTEGER NOT NULL,
+    evidence_sha256 TEXT NOT NULL,
+    outcome TEXT NOT NULL,
+    recorded_at TEXT NOT NULL
+);
+"""
+_AUTHORITY_TABLES = _TABLES | {
+    "approval_challenges",
+    "plan_issuances",
+    "step_contract_issuances",
+    "dispatch_tickets",
+    "verification_evidence",
+}
+
+# Which role answers each role-output event, and the request field it fills.
+_EVENT_ROLE: dict[StepEvent, str] = {
+    StepEvent.IMPLEMENTATION_RETURNED: "implementer",
+    StepEvent.VERIFICATION_OBSERVED: "verifier",
+    StepEvent.REVIEW_OBSERVED: "reviewer",
+    StepEvent.DECIDE_ACCEPTANCE: "planner",
+}
+_EVENT_FIELD: dict[StepEvent, str] = {
+    StepEvent.IMPLEMENTATION_RETURNED: "implementation",
+    StepEvent.VERIFICATION_OBSERVED: "verification",
+    StepEvent.REVIEW_OBSERVED: "review",
+    StepEvent.DECIDE_ACCEPTANCE: "planner_decision",
+}
+_LOGGED_EVENT_ROLE = {event.value: role for event, role in _EVENT_ROLE.items()}
+
+
+class _AuthorityContext(NamedTuple):
+    """What an authority store was opened with. Built only by
+    :func:`~ai_dev_orchestrator.control_plane.authority_session.open_authority_session`."""
+
+    root: AidoStateRoot
+    verifier: object
+    recorder_key: object
+
+
+class _PlanIssuance(NamedTuple):
+    project_contract_sha256: str
+    policy: ExecutionPolicy
+    target_workspace: str
+    target_workspace_sha256: str
+    challenge_id: str
+
+
+class _Consumption(NamedTuple):
+    ticket_id: str
+    challenge_id: str | None
+    attestation: HumanAttestation | None
 
 # Only :meth:`ControlPlaneStore.open` holds this, so a store cannot be built
 # around a connection that skipped the ownership lock and the schema check.
@@ -372,6 +514,8 @@ class ControlPlaneStore:
         # recover() here. Deliberately in memory only, so every open starts
         # empty and an earlier session's state is never trusted by default.
         self._proven_runs: set[str] = set()
+        # DL-4A: set only by _open() for a store opened through a state root.
+        self._authority: _AuthorityContext | None = None
 
     # --- lifecycle -------------------------------------------------------
 
@@ -385,7 +529,33 @@ class ControlPlaneStore:
         that is not this store's schema as untrusted, and a store another
         connection owns as locked. Creates no directory. Every run already in
         the file must be re-proven with :meth:`recover` before it is consumed.
+        A DL-4A authority store is refused: it opens only through its state root.
         """
+        return cls._open(path, clock, None)
+
+    @classmethod
+    def _open_authority(
+        cls, context: _AuthorityContext, clock: Callable[[], datetime] | None
+    ) -> ControlPlaneStore:
+        """Open the authority store of one verified state root (DL-4A)."""
+        if type(context) is not _AuthorityContext or type(context.root) is not AidoStateRoot:
+            raise StoreError("an authority store is opened only through an AIDO state root.")
+        if not callable(getattr(context.verifier, "verify", None)):
+            raise StoreError("the human attestation verifier has no callable verify().")
+        context.root.verify()
+        return cls._open(context.root.store_path, clock, context)
+
+    @classmethod
+    def _open(
+        cls,
+        path: str | PathLike[str],
+        clock: Callable[[], datetime] | None,
+        authority: _AuthorityContext | None,
+    ) -> ControlPlaneStore:
+        expected_tables = _TABLES if authority is None else _AUTHORITY_TABLES
+        expected_version = (
+            STORE_SCHEMA_VERSION if authority is None else STORE_AUTHORITY_SCHEMA_VERSION
+        )
         db_path = Path(path)
         if not db_path.is_absolute():
             raise StoreError("the store path must be absolute.")
@@ -414,13 +584,19 @@ class ControlPlaneStore:
                 )
             }
             if not tables:
-                for statement in _SCHEMA.split(";"):
+                schema = _SCHEMA if authority is None else _SCHEMA + _AUTHORITY_SCHEMA
+                for statement in schema.split(";"):
                     if statement.strip():
                         connection.execute(statement)
                 connection.execute(
                     "INSERT INTO store_meta (key, value) VALUES ('schema_version', ?)",
-                    (STORE_SCHEMA_VERSION,),
+                    (expected_version,),
                 )
+                if authority is not None:
+                    connection.execute(
+                        "INSERT INTO store_meta (key, value) VALUES ('state_root_id', ?)",
+                        (authority.root.root_id,),
+                    )
             else:
                 row = (
                     connection.execute(
@@ -429,10 +605,23 @@ class ControlPlaneStore:
                     if "store_meta" in tables
                     else None
                 )
-                if tables != _TABLES or row is None or row[0] != STORE_SCHEMA_VERSION:
+                if authority is None and row is not None and row[0] == STORE_AUTHORITY_SCHEMA_VERSION:
+                    raise StateUntrustedError(
+                        "this is a DL-4A authority store; it is opened only through its AIDO "
+                        "state root."
+                    )
+                if tables != expected_tables or row is None or row[0] != expected_version:
                     raise StateUntrustedError(
                         "the store file does not carry this store's schema version."
                     )
+                if authority is not None:
+                    root_row = connection.execute(
+                        "SELECT value FROM store_meta WHERE key = 'state_root_id'"
+                    ).fetchone()
+                    if root_row is None or root_row[0] != authority.root.root_id:
+                        raise StateUntrustedError(
+                            "the authority store belongs to a different state root."
+                        )
             connection.execute("COMMIT")
         except BaseException as exc:
             if connection.in_transaction:
@@ -441,7 +630,9 @@ class ControlPlaneStore:
             if isinstance(exc, sqlite3.DatabaseError):
                 raise StateUntrustedError("the store file is not a readable database.") from exc
             raise
-        return cls(connection, clock or _utc_now, _open_token=_OPEN_TOKEN)
+        store = cls(connection, clock or _utc_now, _open_token=_OPEN_TOKEN)
+        store._authority = authority
+        return store
 
     def close(self) -> None:
         """Release ownership. Committed state is already durable."""
@@ -466,7 +657,12 @@ class ControlPlaneStore:
     # --- contracts -------------------------------------------------------
 
     def record_project_contract(self, contract: ProjectContract) -> str:
-        """Persist an approved Project Contract; returns its identity."""
+        """Persist an approved Project Contract; returns its identity.
+
+        Offline stores only. An authority store refuses it: its contracts are
+        recorded only by :meth:`record_approved_project_contract`.
+        """
+        self._refuse_unissued("record_project_contract", "record_approved_project_contract")
         contract = self._revalidated_contract(ProjectContract, contract)
         with self._transaction():
             self._insert_contract(
@@ -475,23 +671,19 @@ class ControlPlaneStore:
         return contract.sha256
 
     def record_execution_plan(self, plan: ExecutionPlan) -> str:
-        """Persist one plan version. Version N must supersede stored version N-1."""
+        """Persist one plan version. Version N must supersede stored version N-1.
+
+        Offline stores only. An authority store refuses it: its plans are
+        recorded only by :meth:`issue_execution_plan`.
+        """
+        self._refuse_unissued("record_execution_plan", "issue_execution_plan")
         plan = self._revalidated_contract(ExecutionPlan, plan)
         with self._transaction():
             project_contract = self._load_contract(
                 plan.project_contract_sha256, "project_contract"
             )
             validate_plan_against_contract(plan, project_contract)
-            if plan.supersedes_sha256 is not None:
-                previous = self._load_contract(plan.supersedes_sha256, "execution_plan")
-                if (
-                    previous.project_contract_sha256 != plan.project_contract_sha256
-                    or previous.plan_version != plan.plan_version - 1
-                ):
-                    raise ContractRefusedError(
-                        "execution plan does not supersede the previous version of this "
-                        "project contract's plan."
-                    )
+            self._check_plan_supersession(plan)
             self._insert_contract(
                 "execution_plan",
                 plan,
@@ -502,8 +694,26 @@ class ControlPlaneStore:
             )
         return plan.sha256
 
+    def _check_plan_supersession(self, plan: ExecutionPlan) -> None:
+        if plan.supersedes_sha256 is not None:
+            previous = self._load_contract(plan.supersedes_sha256, "execution_plan")
+            if (
+                previous.project_contract_sha256 != plan.project_contract_sha256
+                or previous.plan_version != plan.plan_version - 1
+            ):
+                raise ContractRefusedError(
+                    "execution plan does not supersede the previous version of this "
+                    "project contract's plan."
+                )
+
     def record_step_contract(self, contract: StepContract) -> str:
-        """Persist a Step Contract after re-running every issuance rule."""
+        """Persist a Step Contract after re-running every issuance rule.
+
+        Offline stores only. An authority store refuses it: there a caller may
+        not choose a contract's policy, so contracts are recorded only by
+        :meth:`issue_authorized_step_contract`.
+        """
+        self._refuse_unissued("record_step_contract", "issue_authorized_step_contract")
         contract = self._revalidated_contract(StepContract, contract)
         with self._transaction():
             project_contract = self._load_contract(
@@ -643,6 +853,8 @@ class ControlPlaneStore:
             project_contract = self._load_contract(project_contract_sha256, "project_contract")
             plan = self._load_contract(execution_plan_sha256, "execution_plan")
             validate_plan_against_contract(plan, project_contract)
+            if self._authority is not None:
+                self._require_run_authority(project_contract, plan)
             run = ProjectRun(
                 project_run_id=uuid.uuid4().hex,
                 project_id=project_contract.project_id,
@@ -684,6 +896,10 @@ class ControlPlaneStore:
                     "step contract binds a different project contract or execution plan than "
                     f"the project run: {exc}"
                 ) from exc
+            if self._authority is not None and (
+                issue := self._step_issuance_issue(contract, project)
+            ) is not None:
+                raise AuthorityRefusedError(issue)
             step = StepRun(
                 step_run_id=uuid.uuid4().hex,
                 project_run_id=project.project_run_id,
@@ -899,6 +1115,11 @@ class ControlPlaneStore:
                 f"project {project.project_run_id}: run does not match its project contract "
                 "and plan."
             )
+        if self._authority is not None:
+            issues.extend(
+                f"project {project.project_run_id}: {issue}"
+                for issue in self._authority_project_issues(project_contract, plan)
+            )
         return issues, _ProjectContext(project_contract, plan)
 
     def _step_issues(
@@ -931,6 +1152,11 @@ class ControlPlaneStore:
                 )
             except ContractRefusedError as exc:
                 issues.append(f"step {step.step_run_id}: contract binds another run: {exc}")
+            if self._authority is not None:
+                issues.extend(
+                    f"step {step.step_run_id}: {issue}"
+                    for issue in self._authority_step_issues(step, contract, project)
+                )
         return issues, contract
 
     def _binding_issue(self, subject_kind: str, run: ProjectRun | StepRun) -> str | None:
@@ -953,7 +1179,12 @@ class ControlPlaneStore:
     # --- transitions -----------------------------------------------------
 
     def apply_step_transition(
-        self, step_run_id: str, request: StepTransitionRequest
+        self,
+        step_run_id: str,
+        request: StepTransitionRequest,
+        *,
+        role_output: BoundRoleOutput | None = None,
+        human_attestation: HumanAttestation | None = None,
     ) -> AppliedTransition:
         """Decide one step event with the validator and persist it atomically.
 
@@ -963,8 +1194,26 @@ class ControlPlaneStore:
         first) or :class:`StateUntrustedError` (nothing changed; run
         :meth:`recover`). The step is re-proven before anything else, a replay
         included.
+
+        DL-4A: in an authority store, a role-output event additionally requires
+        ``role_output``, the :class:`BoundRoleOutput` answering an unconsumed
+        dispatch ticket for exactly this step version, and a human acceptance
+        requires ``human_attestation``. Both are consumed in this transaction.
+        An offline store refuses either argument.
         """
         request = self._revalidated_request(StepTransitionRequest, request)
+        if self._authority is None:
+            if role_output is not None or human_attestation is not None:
+                raise TransitionRefused(
+                    RefusalCode.INVALID_REQUEST,
+                    "role-output bindings and human attestations exist only in a DL-4A "
+                    "authority store.",
+                )
+        else:
+            if role_output is not None:
+                role_output = self._revalidated_authority(BoundRoleOutput, role_output)
+            if human_attestation is not None:
+                human_attestation = self._revalidated_authority(HumanAttestation, human_attestation)
         with self._transaction():
             step, contract, (project, context) = self._proven_step_by_id(step_run_id)
             replay = self._replayed(request.request_id, request.request_sha256, "step", step_run_id)
@@ -974,6 +1223,11 @@ class ControlPlaneStore:
                     duplicate=True,
                     current_state=step.state.value,
                     current_state_version=step.state_version,
+                )
+            consumption = None
+            if self._authority is not None:
+                consumption = self._authorize_step_request(
+                    step, request, role_output, human_attestation
                 )
             decision = decide_step_transition(
                 step=step,
@@ -987,6 +1241,8 @@ class ControlPlaneStore:
             record = self._write_step(step, decision, request.request_id,
                                       request.request_sha256, request.event.value)
             self._propagate(project, decision, request.request_id, request.request_sha256)
+            if consumption is not None:
+                self._consume_step_authority(consumption, request.request_id)
         return AppliedTransition(
             record=record,
             duplicate=False,
@@ -1308,3 +1564,803 @@ class ControlPlaneStore:
         # whose escalation left an unexplained row stays unconsumable.
         self._proven_runs.add(project_run_id)
         return report
+
+    # --- DL-4A authority mode ---------------------------------------------
+    #
+    # Everything below is reachable only in a store opened through an AIDO
+    # state root. Each issuance writes its provenance in the same transaction
+    # as the record it authorizes, and every proof above re-checks that
+    # provenance, so an authority record is never trusted because a caller, a
+    # helper or a role says so.
+
+    @property
+    def authority_mode(self) -> bool:
+        """``True`` for a DL-4A authority store, ``False`` for an offline store."""
+        return self._authority is not None
+
+    def _require_authority(self) -> _AuthorityContext:
+        if self._authority is None:
+            raise AuthorityRefusedError(
+                "this is an offline store; DL-4A authority exists only in a store opened "
+                "through an AIDO state root."
+            )
+        return self._authority
+
+    def _refuse_unissued(self, method: str, replacement: str) -> None:
+        if self._authority is not None:
+            raise AuthorityRefusedError(
+                f"{method}() records without issuance provenance; an authority store accepts "
+                f"only {replacement}()."
+            )
+
+    def _now(self) -> datetime:
+        return self._clock().astimezone(timezone.utc)
+
+    @staticmethod
+    def _revalidated_authority(model_type: type[_M], value: object) -> _M:
+        """An authority input of *exactly* ``model_type``, re-parsed, or a refusal."""
+        if type(value) is not model_type:
+            raise AuthorityRefusedError(f"expected exactly a {model_type.__name__}.")
+        try:
+            return model_type.model_validate_json(value.model_dump_json(warnings=False))
+        except Exception as exc:  # noqa: BLE001 - any failure means it never validated
+            raise AuthorityRefusedError(
+                f"the {model_type.__name__} does not validate; a model built without "
+                "validation is never authority."
+            ) from exc
+
+    # --- human approval: challenges and attestations ----------------------
+
+    def request_project_contract_approval(
+        self, content: ProjectContractContent
+    ) -> ApprovalChallenge:
+        """Issue a challenge a human answers to approve this contract content."""
+        self._require_authority()
+        content = self._revalidated_authority(ProjectContractContent, content)
+        with self._transaction():
+            return self._insert_challenge(ApprovalSubjectKind.PROJECT_CONTRACT, content.sha256)
+
+    def request_plan_activation(
+        self,
+        *,
+        execution_plan: ExecutionPlan,
+        execution_policy: ExecutionPolicy,
+        target_workspace: str | PathLike[str],
+    ) -> ApprovalChallenge:
+        """Issue a challenge a human answers to activate this plan, under this
+        policy, against this target workspace. The project contract must
+        already be approved; the workspace must pass containment now."""
+        authority = self._require_authority()
+        plan = self._revalidated_authority(ExecutionPlan, execution_plan)
+        policy = self._revalidated_authority(ExecutionPolicy, execution_policy)
+        workspace = authority.root.authorize_target_workspace(target_workspace)
+        with self._transaction():
+            project_contract = self._approved_project_contract(plan.project_contract_sha256)
+            validate_plan_against_contract(plan, project_contract)
+            subject = plan_activation_subject_sha256(
+                project_contract_sha256=project_contract.sha256,
+                execution_plan_sha256=plan.sha256,
+                execution_policy_sha256=policy.sha256,
+                target_workspace_sha256=workspace.sha256,
+            )
+            return self._insert_challenge(ApprovalSubjectKind.PLAN_ACTIVATION, subject)
+
+    def request_step_acceptance(self, step_run_id: str) -> ApprovalChallenge:
+        """Issue a challenge a human answers to accept the step's current
+        attempt, at its current version, with its recorded verification evidence."""
+        self._require_authority()
+        with self._transaction():
+            step, _, _ = self._proven_step_by_id(step_run_id)
+            if step.state is not StepState.ACCEPTANCE:
+                raise AuthorityRefusedError("a step acceptance is requested only at ACCEPTANCE.")
+            subject = self._step_acceptance_subject(step)
+            return self._insert_challenge(ApprovalSubjectKind.STEP_ACCEPTANCE, subject)
+
+    def _insert_challenge(self, kind: ApprovalSubjectKind, subject: str) -> ApprovalChallenge:
+        now = self._now()
+        challenge = ApprovalChallenge(
+            schema_version=APPROVAL_CHALLENGE_SCHEMA_VERSION,
+            challenge_id=uuid.uuid4().hex,
+            subject_kind=kind,
+            subject_sha256=subject,
+            issued_at=now,
+            expires_at=now + APPROVAL_CHALLENGE_TTL,
+            required_approval_text=APPROVAL_TEXT[kind],
+        )
+        self._conn.execute(
+            "INSERT INTO approval_challenges (challenge_id, subject_kind, subject_sha256, "
+            "issued_at, expires_at) VALUES (?, ?, ?, ?, ?)",
+            (challenge.challenge_id, kind.value, subject, challenge.issued_at.isoformat(),
+             challenge.expires_at.isoformat()),
+        )
+        return challenge
+
+    @staticmethod
+    def _challenge_from_row(row: sqlite3.Row) -> ApprovalChallenge:
+        try:
+            kind = ApprovalSubjectKind(row["subject_kind"])
+            return ApprovalChallenge(
+                schema_version=APPROVAL_CHALLENGE_SCHEMA_VERSION,
+                challenge_id=row["challenge_id"],
+                subject_kind=kind,
+                subject_sha256=row["subject_sha256"],
+                issued_at=datetime.fromisoformat(row["issued_at"]),
+                expires_at=datetime.fromisoformat(row["expires_at"]),
+                required_approval_text=APPROVAL_TEXT[kind],
+            )
+        except (ValueError, ValidationError) as exc:
+            raise StateUntrustedError("a stored approval challenge no longer validates.") from exc
+
+    def _check_attestation(
+        self, attestation: HumanAttestation, kind: ApprovalSubjectKind, subject: str
+    ) -> str:
+        """The challenge ``attestation`` validly answers for ``subject``, or a refusal.
+
+        Reads only. The external verifier is consulted last, with fresh copies,
+        and only an exact ``True`` is accepted.
+        """
+        if attestation.subject_kind is not kind or attestation.subject_sha256 != subject:
+            raise AuthorityRefusedError("the human attestation names a different subject.")
+        row = self._conn.execute(
+            "SELECT * FROM approval_challenges WHERE challenge_id = ?", (attestation.challenge_id,)
+        ).fetchone()
+        if row is None:
+            raise AuthorityRefusedError("the human attestation answers no challenge AIDO issued.")
+        challenge = self._challenge_from_row(row)
+        if challenge.subject_kind is not kind or challenge.subject_sha256 != subject:
+            raise AuthorityRefusedError("the challenge was issued for a different subject.")
+        if row["consumed_by"] is not None:
+            raise AuthorityRefusedError("the challenge was already answered; approval is single-use.")
+        now = self._now()
+        if now >= challenge.expires_at:
+            raise AuthorityRefusedError("the challenge expired before it was answered.")
+        if not challenge.issued_at <= attestation.attested_at <= now:
+            raise AuthorityRefusedError("the attestation is dated outside its challenge's window.")
+        try:
+            verdict = self._require_authority().verifier.verify(
+                challenge=ApprovalChallenge.model_validate_json(challenge.model_dump_json()),
+                attestation=HumanAttestation.model_validate_json(attestation.model_dump_json()),
+            )
+        except Exception:  # noqa: BLE001 - a verifier failure is a refusal, never approval
+            verdict = None
+        if verdict is not True:
+            raise AuthorityRefusedError(
+                "the human attestation source did not confirm this approval."
+            )
+        return challenge.challenge_id
+
+    @staticmethod
+    def _check_approval_matches(
+        approved_by: str, approved_at: datetime, attestation: HumanAttestation
+    ) -> None:
+        if approved_by != attestation.approver_id or approved_at != attestation.attested_at:
+            raise AuthorityRefusedError(
+                "the approval block does not record the attested approver and time."
+            )
+
+    def _consume_challenge(
+        self, challenge_id: str, consumed_by: str, attestation: HumanAttestation
+    ) -> None:
+        try:
+            updated = self._conn.execute(
+                "UPDATE approval_challenges SET consumed_by = ?, attestation = ?, "
+                "attestation_sha256 = ? WHERE challenge_id = ? AND consumed_by IS NULL",
+                (consumed_by, attestation.model_dump_json(), attestation.sha256, challenge_id),
+            ).rowcount
+        except sqlite3.IntegrityError as exc:
+            raise AuthorityRefusedError("this subject was already approved.") from exc
+        if updated != 1:
+            raise AuthorityRefusedError("the challenge was already answered; approval is single-use.")
+
+    def _consumed_approval(
+        self, consumed_by: str, kind: ApprovalSubjectKind, subject: str
+    ) -> tuple[HumanAttestation | None, str | None]:
+        """The recorded attestation that approved ``subject``, or why there is none."""
+        row = self._conn.execute(
+            "SELECT * FROM approval_challenges WHERE consumed_by = ?", (consumed_by,)
+        ).fetchone()
+        if row is None:
+            return None, f"no recorded human approval for {kind.value}."
+        try:
+            attestation = HumanAttestation.model_validate_json(row["attestation"] or "")
+        except ValidationError:
+            return None, f"the recorded {kind.value} attestation no longer validates."
+        if (
+            row["subject_kind"] != kind.value
+            or row["subject_sha256"] != subject
+            or attestation.sha256 != row["attestation_sha256"]
+            or attestation.challenge_id != row["challenge_id"]
+            or attestation.subject_kind is not kind
+            or attestation.subject_sha256 != subject
+        ):
+            return None, f"the recorded {kind.value} approval does not match its subject."
+        return attestation, None
+
+    def _approved_project_contract(self, sha256: str) -> ProjectContract:
+        contract = self._load_contract(sha256, "project_contract")
+        issue = self._contract_approval_issue(contract)
+        if issue is not None:
+            raise AuthorityRefusedError(issue)
+        return contract
+
+    def _contract_approval_issue(self, contract: ProjectContract) -> str | None:
+        attestation, issue = self._consumed_approval(
+            f"project_contract:{contract.sha256}",
+            ApprovalSubjectKind.PROJECT_CONTRACT,
+            contract.sha256,
+        )
+        if issue is not None:
+            return issue
+        if (
+            contract.approval.approved_by != attestation.approver_id
+            or contract.approval.approved_at != attestation.attested_at
+        ):
+            return "the project contract's approval block is not the attested approval."
+        return None
+
+    def record_approved_project_contract(
+        self, contract: ProjectContract, attestation: HumanAttestation
+    ) -> str:
+        """Record a Project Contract a human approved through a challenge.
+
+        The attestation must answer an unexpired, unconsumed challenge for this
+        content digest, be confirmed by the external verifier, and match the
+        contract's approval block. The challenge is consumed with the record.
+        """
+        self._require_authority()
+        contract = self._revalidated_authority(ProjectContract, contract)
+        attestation = self._revalidated_authority(HumanAttestation, attestation)
+        consumed_by = f"project_contract:{contract.sha256}"
+        with self._transaction():
+            existing = self._conn.execute(
+                "SELECT challenge_id, attestation_sha256 FROM approval_challenges "
+                "WHERE consumed_by = ?", (consumed_by,)
+            ).fetchone()
+            if existing is not None:
+                if (existing["challenge_id"], existing["attestation_sha256"]) == (
+                    attestation.challenge_id, attestation.sha256
+                ):
+                    return contract.sha256  # a receipt for the identical approval
+                raise AuthorityRefusedError("this project contract is already approved.")
+            challenge_id = self._check_attestation(
+                attestation, ApprovalSubjectKind.PROJECT_CONTRACT, contract.sha256
+            )
+            self._check_approval_matches(
+                contract.approval.approved_by, contract.approval.approved_at, attestation
+            )
+            self._insert_contract(
+                "project_contract", contract, contract.project_id, contract.sha256, "", 1
+            )
+            self._consume_challenge(challenge_id, consumed_by, attestation)
+        return contract.sha256
+
+    # --- policy issuance --------------------------------------------------
+
+    def issue_execution_plan(
+        self,
+        execution_plan: ExecutionPlan,
+        *,
+        execution_policy: ExecutionPolicy,
+        target_workspace: str | PathLike[str],
+        attestation: HumanAttestation,
+    ) -> str:
+        """Record a plan, its execution policy and its target workspace, as one
+        human-approved activation. Nothing about the policy comes from the
+        caller of :meth:`issue_authorized_step_contract`."""
+        authority = self._require_authority()
+        plan = self._revalidated_authority(ExecutionPlan, execution_plan)
+        policy = self._revalidated_authority(ExecutionPolicy, execution_policy)
+        attestation = self._revalidated_authority(HumanAttestation, attestation)
+        workspace = authority.root.authorize_target_workspace(target_workspace)
+        consumed_by = f"execution_plan:{plan.sha256}"
+        with self._transaction():
+            project_contract = self._approved_project_contract(plan.project_contract_sha256)
+            validate_plan_against_contract(plan, project_contract)
+            existing = self._conn.execute(
+                "SELECT challenge_id FROM plan_issuances WHERE execution_plan_sha256 = ?",
+                (plan.sha256,),
+            ).fetchone()
+            if existing is not None:
+                if existing["challenge_id"] == attestation.challenge_id:
+                    return plan.sha256  # a receipt for the identical activation
+                raise AuthorityRefusedError("this execution plan is already issued.")
+            self._check_plan_supersession(plan)
+            subject = plan_activation_subject_sha256(
+                project_contract_sha256=project_contract.sha256,
+                execution_plan_sha256=plan.sha256,
+                execution_policy_sha256=policy.sha256,
+                target_workspace_sha256=workspace.sha256,
+            )
+            challenge_id = self._check_attestation(
+                attestation, ApprovalSubjectKind.PLAN_ACTIVATION, subject
+            )
+            self._insert_contract(
+                "execution_plan", plan, plan.project_id, plan.project_contract_sha256, "",
+                plan.plan_version,
+            )
+            self._conn.execute(
+                "INSERT INTO plan_issuances (execution_plan_sha256, project_contract_sha256, "
+                "policy, policy_sha256, target_workspace, target_workspace_sha256, challenge_id, "
+                "issued_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (plan.sha256, project_contract.sha256, policy.model_dump_json(), policy.sha256,
+                 workspace.path, workspace.sha256, challenge_id, self._now().isoformat()),
+            )
+            self._consume_challenge(challenge_id, consumed_by, attestation)
+        return plan.sha256
+
+    def _load_plan_issuance(self, plan_sha256: str) -> _PlanIssuance:
+        row = self._conn.execute(
+            "SELECT * FROM plan_issuances WHERE execution_plan_sha256 = ?", (plan_sha256,)
+        ).fetchone()
+        if row is None:
+            raise AuthorityRefusedError("the execution plan was never issued.")
+        try:
+            policy = ExecutionPolicy.model_validate_json(row["policy"])
+        except ValidationError as exc:
+            raise StateUntrustedError("a stored execution policy no longer validates.") from exc
+        if policy.sha256 != row["policy_sha256"]:
+            raise StateUntrustedError("a stored execution policy no longer hashes to its identity.")
+        return _PlanIssuance(
+            project_contract_sha256=row["project_contract_sha256"],
+            policy=policy,
+            target_workspace=row["target_workspace"],
+            target_workspace_sha256=row["target_workspace_sha256"],
+            challenge_id=row["challenge_id"],
+        )
+
+    def _plan_issuance_issue(
+        self, plan: ExecutionPlan, project_contract_sha256: str
+    ) -> tuple[_PlanIssuance | None, str | None]:
+        try:
+            issuance = self._load_plan_issuance(plan.sha256)
+        except (AuthorityRefusedError, StateUntrustedError) as exc:
+            return None, str(exc)
+        if issuance.project_contract_sha256 != project_contract_sha256:
+            return None, "the plan was issued under another project contract."
+        subject = plan_activation_subject_sha256(
+            project_contract_sha256=project_contract_sha256,
+            execution_plan_sha256=plan.sha256,
+            execution_policy_sha256=issuance.policy.sha256,
+            target_workspace_sha256=issuance.target_workspace_sha256,
+        )
+        attestation, issue = self._consumed_approval(
+            f"execution_plan:{plan.sha256}", ApprovalSubjectKind.PLAN_ACTIVATION, subject
+        )
+        if issue is not None:
+            return None, issue
+        if attestation.challenge_id != issuance.challenge_id:
+            return None, "the plan issuance names a different approval."
+        return issuance, None
+
+    def issue_authorized_step_contract(
+        self, proposal: StepContractProposal, *, execution_plan_sha256: str
+    ) -> StepContract:
+        """Issue a Step Contract from a Planner proposal under an issued plan.
+
+        Every policy value (review, human acceptance, attempt budget) is the
+        plan's human-approved :class:`ExecutionPolicy`; the caller cannot name
+        any. Re-issuing the identical contract is a receipt.
+        """
+        self._require_authority()
+        proposal = self._revalidated_authority(StepContractProposal, proposal)
+        with self._transaction():
+            plan = self._load_contract(execution_plan_sha256, "execution_plan")
+            project_contract = self._approved_project_contract(plan.project_contract_sha256)
+            issuance, issue = self._plan_issuance_issue(plan, project_contract.sha256)
+            if issue is not None:
+                raise AuthorityRefusedError(issue)
+            contract = issue_step_contract(
+                proposal,
+                project_contract=project_contract,
+                execution_plan=plan,
+                review_required=issuance.policy.review_required,
+                human_acceptance_required=issuance.policy.human_acceptance_required,
+                max_attempts=issuance.policy.max_attempts,
+            )
+            if self._conn.execute(
+                "SELECT 1 FROM step_contract_issuances WHERE step_contract_sha256 = ?",
+                (contract.sha256,),
+            ).fetchone() is not None:
+                return contract
+            self._insert_contract(
+                "step_contract", contract, contract.project_id, contract.execution_plan_sha256,
+                contract.step_id, contract.step_contract_version,
+            )
+            self._conn.execute(
+                "INSERT INTO step_contract_issuances (step_contract_sha256, "
+                "execution_plan_sha256, policy_sha256, issued_at) VALUES (?, ?, ?, ?)",
+                (contract.sha256, plan.sha256, issuance.policy.sha256, self._now().isoformat()),
+            )
+        return contract
+
+    def _step_issuance_issue(self, contract: StepContract, project: ProjectRun) -> str | None:
+        row = self._conn.execute(
+            "SELECT * FROM step_contract_issuances WHERE step_contract_sha256 = ?",
+            (contract.sha256,),
+        ).fetchone()
+        if row is None:
+            return "the step contract was never issued."
+        if row["execution_plan_sha256"] != project.execution_plan_sha256:
+            return "the step contract was issued under another plan."
+        try:
+            policy = self._load_plan_issuance(project.execution_plan_sha256).policy
+        except (AuthorityRefusedError, StateUntrustedError) as exc:
+            return str(exc)
+        if row["policy_sha256"] != policy.sha256 or (
+            contract.review_required,
+            contract.human_acceptance_required,
+            contract.max_attempts,
+        ) != (policy.review_required, policy.human_acceptance_required, policy.max_attempts):
+            return "the step contract's policy is not its plan's approved policy."
+        return None
+
+    def _require_run_authority(self, project_contract: ProjectContract, plan: ExecutionPlan) -> None:
+        if (issue := self._contract_approval_issue(project_contract)) is not None:
+            raise AuthorityRefusedError(issue)
+        issuance, issue = self._plan_issuance_issue(plan, project_contract.sha256)
+        if issue is not None:
+            raise AuthorityRefusedError(issue)
+        self._require_authority().root.reverify_target_workspace(
+            issuance.target_workspace, issuance.target_workspace_sha256
+        )
+
+    def _authority_project_issues(
+        self, project_contract: ProjectContract, plan: ExecutionPlan
+    ) -> list[str]:
+        issues = []
+        if (issue := self._contract_approval_issue(project_contract)) is not None:
+            issues.append(issue)
+        _, issue = self._plan_issuance_issue(plan, project_contract.sha256)
+        if issue is not None:
+            issues.append(issue)
+        return issues
+
+    def authorized_target_workspace(self, project_run_id: str) -> WorkspaceIdentity:
+        """The target workspace a human authorized for this run, re-proven now.
+
+        Real adapters must take the workspace from here and nowhere else. A
+        workspace that moved, was replaced, or now overlaps the state root is
+        refused (:class:`ContainmentError`). DL-4A writes nothing to it.
+        """
+        authority = self._require_authority()
+        with self._transaction():
+            project, _ = self._proven_project(project_run_id)
+            issuance = self._load_plan_issuance(project.execution_plan_sha256)
+        return authority.root.reverify_target_workspace(
+            issuance.target_workspace, issuance.target_workspace_sha256
+        )
+
+    # --- role-output identity binding --------------------------------------
+
+    def issue_dispatch_ticket(
+        self, step_run_id: str, *, role: str, expected_state_version: int
+    ) -> DispatchTicket:
+        """Persist AIDO's permission to dispatch ``role`` once for this step version.
+
+        At most one ticket exists per ``(step_run_id, state_version, role)``, so a
+        persisted intent is dispatched at most once by anyone, not only by DL-2.
+        """
+        self._require_authority()
+        if role not in ROLE_STATE:
+            raise AuthorityRefusedError("no such dispatchable role.")
+        if type(expected_state_version) is not int:
+            raise AuthorityRefusedError("expected_state_version must be an int.")
+        with self._transaction():
+            step, _, (project, _) = self._proven_step_by_id(step_run_id)
+            if project.state is not ProjectState.ACTIVE:
+                raise TransitionRefused(
+                    RefusalCode.PROJECT_NOT_ACTIVE, f"project is {project.state.value}."
+                )
+            if step.state_version != expected_state_version:
+                raise TransitionRefused(
+                    RefusalCode.STALE_STATE_VERSION, "the step moved since that version."
+                )
+            if step.state is not ROLE_STATE[role]:
+                raise TransitionRefused(
+                    RefusalCode.OUT_OF_ORDER,
+                    f"a {role} is dispatched only from {ROLE_STATE[role].value}.",
+                )
+            ticket = DispatchTicket(
+                schema_version=DISPATCH_TICKET_SCHEMA_VERSION,
+                ticket_id=uuid.uuid4().hex,
+                project_run_id=step.project_run_id,
+                step_run_id=step.step_run_id,
+                step_contract_sha256=step.step_contract_sha256,
+                attempt=step.attempt,
+                role=role,
+                step_state=step.state,
+                state_version=step.state_version,
+                issued_at=self._now(),
+            )
+            try:
+                self._conn.execute(
+                    "INSERT INTO dispatch_tickets (ticket_id, project_run_id, step_run_id, "
+                    "step_contract_sha256, attempt, role, step_state, state_version, issued_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (ticket.ticket_id, ticket.project_run_id, ticket.step_run_id,
+                     ticket.step_contract_sha256, ticket.attempt, ticket.role,
+                     ticket.step_state.value, ticket.state_version, ticket.issued_at.isoformat()),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise AuthorityRefusedError(
+                    "this step version was already dispatched to that role; a persisted intent "
+                    "is dispatched at most once."
+                ) from exc
+        return ticket
+
+    @staticmethod
+    def _ticket_from_row(row: sqlite3.Row) -> DispatchTicket:
+        try:
+            return DispatchTicket(
+                schema_version=DISPATCH_TICKET_SCHEMA_VERSION,
+                ticket_id=row["ticket_id"],
+                project_run_id=row["project_run_id"],
+                step_run_id=row["step_run_id"],
+                step_contract_sha256=row["step_contract_sha256"],
+                attempt=row["attempt"],
+                role=row["role"],
+                step_state=StepState(row["step_state"]),
+                state_version=row["state_version"],
+                issued_at=datetime.fromisoformat(row["issued_at"]),
+            )
+        except (ValueError, ValidationError) as exc:
+            raise StateUntrustedError("a stored dispatch ticket no longer validates.") from exc
+
+    def _authorize_step_request(
+        self,
+        step: StepRun,
+        request: StepTransitionRequest,
+        role_output: BoundRoleOutput | None,
+        attestation: HumanAttestation | None,
+    ) -> _Consumption | None:
+        """What an authority store requires before deciding ``request``. Reads only."""
+        role = _EVENT_ROLE.get(request.event)
+        if role is None:
+            if role_output is not None or attestation is not None:
+                raise AuthorityRefusedError(f"{request.event.value} carries no role output.")
+            return None
+        if role_output is None:
+            raise AuthorityRefusedError(
+                f"{request.event.value} requires the bound role output of an AIDO dispatch."
+            )
+        if role_output.role != role:
+            raise AuthorityRefusedError(f"{request.event.value} is answered by the {role}.")
+        payload = getattr(request, _EVENT_FIELD[request.event])
+        if canonical_json_bytes(payload.model_dump(mode="json")) != canonical_json_bytes(
+            role_output.output.model_dump(mode="json")
+        ):
+            raise AuthorityRefusedError("the request's payload is not the bound role output.")
+        if (
+            role_output.project_run_id, role_output.step_run_id,
+            role_output.step_contract_sha256, role_output.attempt,
+        ) != (step.project_run_id, step.step_run_id, step.step_contract_sha256, step.attempt):
+            raise AuthorityRefusedError(
+                "the role output is bound to another project run, step run, contract or attempt."
+            )
+        row = self._conn.execute(
+            "SELECT * FROM dispatch_tickets WHERE ticket_id = ?", (role_output.ticket_id,)
+        ).fetchone()
+        if row is None:
+            raise AuthorityRefusedError("the role output answers no dispatch AIDO issued.")
+        if row["consumed_request_id"] is not None:
+            raise AuthorityRefusedError("that dispatch was already answered; it answers once.")
+        ticket = self._ticket_from_row(row)
+        if (
+            ticket.project_run_id, ticket.step_run_id, ticket.step_contract_sha256,
+            ticket.attempt, ticket.role,
+        ) != (
+            role_output.project_run_id, role_output.step_run_id,
+            role_output.step_contract_sha256, role_output.attempt, role_output.role,
+        ):
+            raise AuthorityRefusedError("the role output differs from its dispatch ticket.")
+        if ticket.step_state is not step.state or ticket.state_version != step.state_version:
+            raise AuthorityRefusedError("the dispatch ticket is stale: it was for another version.")
+        if role == "verifier":
+            issue = self._evidence_issue(
+                ticket.ticket_id, step.step_run_id, step.attempt, request.verification.outcome,
+                request.verification.evidence_sha256,
+            )
+            if issue is not None:
+                raise AuthorityRefusedError(issue)
+        challenge_id = None
+        if request.human_acceptance is not None:
+            if attestation is None:
+                raise AuthorityRefusedError(
+                    "a human acceptance in an authority store requires a verified human "
+                    "attestation."
+                )
+            challenge_id = self._check_attestation(
+                attestation, ApprovalSubjectKind.STEP_ACCEPTANCE,
+                self._step_acceptance_subject(step),
+            )
+            self._check_approval_matches(
+                request.human_acceptance.approved_by, request.human_acceptance.approved_at,
+                attestation,
+            )
+        elif attestation is not None:
+            raise AuthorityRefusedError("a human attestation applies only to a human acceptance.")
+        return _Consumption(ticket.ticket_id, challenge_id, attestation)
+
+    def _consume_step_authority(self, consumption: _Consumption, request_id: str) -> None:
+        updated = self._conn.execute(
+            "UPDATE dispatch_tickets SET consumed_request_id = ? "
+            "WHERE ticket_id = ? AND consumed_request_id IS NULL",
+            (request_id, consumption.ticket_id),
+        ).rowcount
+        if updated != 1:
+            raise StateUntrustedError("a dispatch ticket changed underneath its own transaction.")
+        if consumption.challenge_id is not None:
+            self._consume_challenge(consumption.challenge_id, request_id, consumption.attestation)
+
+    # --- verification evidence ---------------------------------------------
+
+    def _record_verification_evidence(
+        self, recorder_key: object, ticket: DispatchTicket, data: bytes
+    ) -> VerificationEvidenceReceipt:
+        """Persist a ``verification-result.v1`` for one verifier dispatch.
+
+        Reachable only through the session's
+        :class:`~ai_dev_orchestrator.control_plane.authority_session.VerificationEvidenceRecorder`.
+        The outcome is derived from the bytes, never taken from a caller.
+        """
+        authority = self._require_authority()
+        if recorder_key is not authority.recorder_key:
+            raise AuthorityRefusedError(
+                "only this session's verification recorder records verification evidence."
+            )
+        ticket = self._revalidated_authority(DispatchTicket, ticket)
+        try:
+            outcome = verification_outcome_from_evidence(data)
+        except EvidenceRefusedError as exc:
+            raise AuthorityRefusedError(str(exc)) from exc
+        evidence_sha256 = hashlib.sha256(data).hexdigest()
+        with self._transaction():
+            step, _, _ = self._proven_step_by_id(ticket.step_run_id)
+            row = self._conn.execute(
+                "SELECT * FROM dispatch_tickets WHERE ticket_id = ?", (ticket.ticket_id,)
+            ).fetchone()
+            if row is None or self._ticket_from_row(row) != ticket:
+                raise AuthorityRefusedError("the ticket is not one AIDO issued.")
+            if ticket.role != "verifier" or row["consumed_request_id"] is not None:
+                raise AuthorityRefusedError("the ticket is not an unanswered verifier dispatch.")
+            if step.state is not StepState.VERIFYING or step.state_version != ticket.state_version:
+                raise AuthorityRefusedError("the verifier ticket is stale.")
+            if self._conn.execute(
+                "SELECT 1 FROM verification_evidence WHERE ticket_id = ?", (ticket.ticket_id,)
+            ).fetchone() is not None:
+                raise AuthorityRefusedError("this dispatch already has verification evidence.")
+            # Filesystem first: if publishing fails, no record names the bytes.
+            authority.root.write_verification_evidence(evidence_sha256, data)
+            self._conn.execute(
+                "INSERT INTO verification_evidence (ticket_id, step_run_id, attempt, "
+                "evidence_sha256, outcome, recorded_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (ticket.ticket_id, step.step_run_id, ticket.attempt, evidence_sha256, outcome,
+                 self._now().isoformat()),
+            )
+        return VerificationEvidenceReceipt(evidence_sha256=evidence_sha256, outcome=outcome)
+
+    def _evidence_issue(
+        self,
+        ticket_id: str,
+        step_run_id: str,
+        attempt: int,
+        outcome: str | None,
+        evidence_sha256: str | None = None,
+    ) -> str | None:
+        """Why a verifier dispatch's evidence does not prove ``outcome``, or ``None``."""
+        row = self._conn.execute(
+            "SELECT * FROM verification_evidence WHERE ticket_id = ?", (ticket_id,)
+        ).fetchone()
+        if row is None:
+            return "the verifier dispatch has no AIDO-recorded verification evidence."
+        if (
+            row["step_run_id"] != step_run_id
+            or row["attempt"] != attempt
+            or row["outcome"] != outcome
+            or (evidence_sha256 is not None and row["evidence_sha256"] != evidence_sha256)
+        ):
+            return "the verification observation is not its recorded evidence."
+        try:
+            data = self._require_authority().root.read_verification_evidence(
+                row["evidence_sha256"], MAX_VERIFICATION_EVIDENCE_BYTES
+            )
+            resolved = verification_outcome_from_evidence(data)
+        except (ContainmentError, EvidenceRefusedError, OSError) as exc:
+            return f"the verification evidence cannot be resolved: {exc}"
+        if resolved != row["outcome"]:
+            return "the verification evidence no longer proves its recorded outcome."
+        return None
+
+    def _attempt_evidence_sha256(self, step_run_id: str, attempt: int) -> str:
+        rows = self._conn.execute(
+            "SELECT e.evidence_sha256 FROM verification_evidence e "
+            "JOIN dispatch_tickets t ON t.ticket_id = e.ticket_id "
+            "WHERE t.step_run_id = ? AND t.attempt = ? AND t.consumed_request_id IS NOT NULL",
+            (step_run_id, attempt),
+        ).fetchall()
+        if len(rows) != 1:
+            raise AuthorityRefusedError(
+                "the attempt has no single recorded verification evidence to accept."
+            )
+        return rows[0]["evidence_sha256"]
+
+    def _step_acceptance_subject(self, step: StepRun) -> str:
+        return step_acceptance_subject_sha256(
+            project_run_id=step.project_run_id,
+            step_run_id=step.step_run_id,
+            step_contract_sha256=step.step_contract_sha256,
+            attempt=step.attempt,
+            state_version=step.state_version,
+            verification_evidence_sha256=self._attempt_evidence_sha256(
+                step.step_run_id, step.attempt
+            ),
+        )
+
+    # --- proof of a step's authority chain ----------------------------------
+
+    def _authority_step_issues(
+        self, step: StepRun, contract: StepContract, project: ProjectRun
+    ) -> list[str]:
+        """Every reason the step's recorded history lacks DL-4A provenance."""
+        issues = []
+        if (issue := self._step_issuance_issue(contract, project)) is not None:
+            issues.append(issue)
+        rows = self._conn.execute(
+            "SELECT * FROM transitions WHERE subject_kind = 'step' AND subject_id = ? ORDER BY seq",
+            (step.step_run_id,),
+        ).fetchall()
+        tickets = {
+            row["consumed_request_id"]: row
+            for row in self._conn.execute(
+                "SELECT * FROM dispatch_tickets WHERE step_run_id = ? "
+                "AND consumed_request_id IS NOT NULL",
+                (step.step_run_id,),
+            )
+        }
+        role_rows = [row for row in rows if row["event"] in _LOGGED_EVENT_ROLE]
+        if len(tickets) != len(role_rows):
+            issues.append("its consumed dispatch tickets are not its role-output transitions.")
+        for row in role_rows:
+            ticket = tickets.get(row["request_id"])
+            if ticket is None or (
+                ticket["role"], ticket["state_version"], ticket["attempt"], ticket["step_state"],
+                ticket["project_run_id"], ticket["step_contract_sha256"],
+            ) != (
+                _LOGGED_EVENT_ROLE[row["event"]], row["from_version"], row["attempt"],
+                row["from_state"], step.project_run_id, step.step_contract_sha256,
+            ):
+                issues.append(f"transition {row['seq']} was not bound to an AIDO dispatch.")
+                continue
+            if row["event"] == StepEvent.VERIFICATION_OBSERVED.value:
+                issue = self._evidence_issue(
+                    ticket["ticket_id"], step.step_run_id, row["attempt"],
+                    row["verification_outcome"],
+                )
+                if issue is not None:
+                    issues.append(f"transition {row['seq']}: {issue}")
+        if contract.human_acceptance_required:
+            for row in rows:
+                if (
+                    row["event"] != StepEvent.DECIDE_ACCEPTANCE.value
+                    or row["to_state"] != StepState.COMPLETE.value
+                ):
+                    continue
+                try:
+                    evidence = self._attempt_evidence_sha256(step.step_run_id, row["attempt"])
+                except AuthorityRefusedError as exc:
+                    issues.append(f"transition {row['seq']}: {exc}")
+                    continue
+                subject = step_acceptance_subject_sha256(
+                    project_run_id=step.project_run_id,
+                    step_run_id=step.step_run_id,
+                    step_contract_sha256=step.step_contract_sha256,
+                    attempt=row["attempt"],
+                    state_version=row["from_version"],
+                    verification_evidence_sha256=evidence,
+                )
+                _, issue = self._consumed_approval(
+                    row["request_id"], ApprovalSubjectKind.STEP_ACCEPTANCE, subject
+                )
+                if issue is not None:
+                    issues.append(f"transition {row['seq']}: {issue}")
+        return issues

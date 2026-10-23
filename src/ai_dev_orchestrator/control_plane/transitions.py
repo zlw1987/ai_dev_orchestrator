@@ -84,6 +84,8 @@ class RefusalCode(str, Enum):
     DUPLICATE_REQUEST_CONFLICT = "duplicate_request_conflict"
     INVALID_REQUEST = "invalid_request"
     UNSUPPORTED_IN_DL1 = "unsupported_in_dl1"
+    #: DL-4A: an authority store could not prove the provenance of an input.
+    AUTHORITY_UNPROVEN = "authority_unproven"
 
 
 class TransitionRefused(Exception):
