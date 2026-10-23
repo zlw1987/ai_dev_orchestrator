@@ -1199,7 +1199,10 @@ class ControlPlaneStore:
         ``role_output``, the :class:`BoundRoleOutput` answering an unconsumed
         dispatch ticket for exactly this step version, and a human acceptance
         requires ``human_attestation``. Both are consumed in this transaction.
-        An offline store refuses either argument.
+        Neither is ever ignored (DL-4A FU1): an event that consumes no such
+        authority refuses it, and a replay is a receipt only when it presents
+        exactly the authority its original transition consumed. An offline
+        store refuses either argument.
         """
         request = self._revalidated_request(StepTransitionRequest, request)
         if self._authority is None:
@@ -1218,6 +1221,8 @@ class ControlPlaneStore:
             step, contract, (project, context) = self._proven_step_by_id(step_run_id)
             replay = self._replayed(request.request_id, request.request_sha256, "step", step_run_id)
             if replay is not None:
+                if self._authority is not None:
+                    self._authorize_step_replay(request, role_output, human_attestation)
                 return AppliedTransition(
                     record=replay,
                     duplicate=True,
@@ -1820,7 +1825,13 @@ class ControlPlaneStore:
                 if (existing["challenge_id"], existing["attestation_sha256"]) == (
                     attestation.challenge_id, attestation.sha256
                 ):
-                    return contract.sha256  # a receipt for the identical approval
+                    # A receipt only for the identical approval: an approval
+                    # block naming anyone or any time else is refused, not ignored.
+                    self._check_approval_matches(
+                        contract.approval.approved_by, contract.approval.approved_at,
+                        attestation,
+                    )
+                    return contract.sha256
                 raise AuthorityRefusedError("this project contract is already approved.")
             challenge_id = self._check_attestation(
                 attestation, ApprovalSubjectKind.PROJECT_CONTRACT, contract.sha256
@@ -1857,12 +1868,21 @@ class ControlPlaneStore:
             project_contract = self._approved_project_contract(plan.project_contract_sha256)
             validate_plan_against_contract(plan, project_contract)
             existing = self._conn.execute(
-                "SELECT challenge_id FROM plan_issuances WHERE execution_plan_sha256 = ?",
-                (plan.sha256,),
+                "SELECT p.challenge_id, p.policy_sha256, p.target_workspace_sha256, "
+                "c.attestation_sha256 FROM plan_issuances p "
+                "LEFT JOIN approval_challenges c ON c.consumed_by = ? "
+                "WHERE p.execution_plan_sha256 = ?",
+                (consumed_by, plan.sha256),
             ).fetchone()
             if existing is not None:
-                if existing["challenge_id"] == attestation.challenge_id:
-                    return plan.sha256  # a receipt for the identical activation
+                # A receipt only for the identical activation: another policy,
+                # another workspace or another attestation is refused, not ignored.
+                if (
+                    existing["challenge_id"], existing["attestation_sha256"],
+                    existing["policy_sha256"], existing["target_workspace_sha256"],
+                ) == (attestation.challenge_id, attestation.sha256, policy.sha256,
+                      workspace.sha256):
+                    return plan.sha256
                 raise AuthorityRefusedError("this execution plan is already issued.")
             self._check_plan_supersession(plan)
             subject = plan_activation_subject_sha256(
@@ -2113,11 +2133,14 @@ class ControlPlaneStore:
         role_output: BoundRoleOutput | None,
         attestation: HumanAttestation | None,
     ) -> _Consumption | None:
-        """What an authority store requires before deciding ``request``. Reads only."""
+        """What an authority store requires before deciding ``request``. Reads only.
+
+        Every authority argument is either consumed for this event or refused;
+        none is ever ignored.
+        """
         role = _EVENT_ROLE.get(request.event)
         if role is None:
-            if role_output is not None or attestation is not None:
-                raise AuthorityRefusedError(f"{request.event.value} carries no role output.")
+            self._refuse_unconsumable_authority(request, role_output, attestation)
             return None
         if role_output is None:
             raise AuthorityRefusedError(
@@ -2125,10 +2148,7 @@ class ControlPlaneStore:
             )
         if role_output.role != role:
             raise AuthorityRefusedError(f"{request.event.value} is answered by the {role}.")
-        payload = getattr(request, _EVENT_FIELD[request.event])
-        if canonical_json_bytes(payload.model_dump(mode="json")) != canonical_json_bytes(
-            role_output.output.model_dump(mode="json")
-        ):
+        if not self._is_request_payload(request, role_output):
             raise AuthorityRefusedError("the request's payload is not the bound role output.")
         if (
             role_output.project_run_id, role_output.step_run_id,
@@ -2180,6 +2200,86 @@ class ControlPlaneStore:
         elif attestation is not None:
             raise AuthorityRefusedError("a human attestation applies only to a human acceptance.")
         return _Consumption(ticket.ticket_id, challenge_id, attestation)
+
+    def _authorize_step_replay(
+        self,
+        request: StepTransitionRequest,
+        role_output: BoundRoleOutput | None,
+        attestation: HumanAttestation | None,
+    ) -> None:
+        """A replay is a receipt only for the identical authorized call. Reads only.
+
+        The original transition consumed exactly the authority its request
+        needed, and the replay must present exactly that authority again — no
+        more and no less. So a receipt never accepts authority and then ignores
+        it, and it is never mistaken for new permission: what it presents was
+        already consumed, and nothing is consumed again.
+        """
+        if _EVENT_ROLE.get(request.event) is None:
+            self._refuse_unconsumable_authority(request, role_output, attestation)
+            return
+        if role_output is None:
+            raise AuthorityRefusedError(
+                "a replay must present the bound role output its original transition consumed."
+            )
+        row = self._conn.execute(
+            "SELECT * FROM dispatch_tickets WHERE consumed_request_id = ?", (request.request_id,)
+        ).fetchone()
+        if row is None:
+            raise AuthorityRefusedError("the replayed transition consumed no AIDO dispatch.")
+        ticket = self._ticket_from_row(row)
+        if (
+            role_output.ticket_id, role_output.project_run_id, role_output.step_run_id,
+            role_output.step_contract_sha256, role_output.attempt, role_output.role,
+        ) != (
+            ticket.ticket_id, ticket.project_run_id, ticket.step_run_id,
+            ticket.step_contract_sha256, ticket.attempt, ticket.role,
+        ) or not self._is_request_payload(request, role_output):
+            raise AuthorityRefusedError(
+                "the replay's role output is not the one its original transition consumed."
+            )
+        if request.human_acceptance is None:
+            if attestation is not None:
+                raise AuthorityRefusedError(
+                    "a human attestation applies only to a human acceptance."
+                )
+            return
+        if attestation is None:
+            raise AuthorityRefusedError(
+                "a replay must present the human attestation its original transition consumed."
+            )
+        row = self._conn.execute(
+            "SELECT attestation_sha256 FROM approval_challenges WHERE consumed_by = ?",
+            (request.request_id,),
+        ).fetchone()
+        if row is None or row["attestation_sha256"] != attestation.sha256:
+            raise AuthorityRefusedError(
+                "the replay's human attestation is not the one its original transition consumed."
+            )
+
+    @staticmethod
+    def _refuse_unconsumable_authority(
+        request: StepTransitionRequest,
+        role_output: BoundRoleOutput | None,
+        attestation: HumanAttestation | None,
+    ) -> None:
+        """An event that consumes no role output and no human acceptance accepts neither."""
+        if role_output is not None:
+            raise AuthorityRefusedError(
+                f"{request.event.value} answers no dispatch; it accepts no role output."
+            )
+        if attestation is not None:
+            raise AuthorityRefusedError(
+                f"{request.event.value} is not a human acceptance; it accepts no human "
+                "attestation."
+            )
+
+    @staticmethod
+    def _is_request_payload(request: StepTransitionRequest, role_output: BoundRoleOutput) -> bool:
+        payload = getattr(request, _EVENT_FIELD[request.event])
+        return canonical_json_bytes(payload.model_dump(mode="json")) == canonical_json_bytes(
+            role_output.output.model_dump(mode="json")
+        )
 
     def _consume_step_authority(self, consumption: _Consumption, request_id: str) -> None:
         updated = self._conn.execute(

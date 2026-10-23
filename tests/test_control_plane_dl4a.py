@@ -1779,3 +1779,364 @@ def test_a_planner_is_never_asked_twice_for_one_version_even_after_a_crash(
     assert outcome.cause == "dispatch_ticket_refused"
     assert outcome.step_run.state is StepState.HUMAN_REQUIRED
     world.session.close()
+
+
+# --- 12. FU1: the authority-parameter consumption boundary -----------------------------
+#
+# Every authority-bearing argument handed to apply_step_transition is either
+# validly consumed for that event or refused. Nothing is silently ignored: not
+# on an event that carries no role output, and not on a replay, which is a
+# receipt only for the identical authorized call.
+
+NO_ROLE_EVENTS = (StepEvent.MARK_READY, StepEvent.BEGIN_ATTEMPT, StepEvent.ESCALATE,
+                  StepEvent.RECOVER_INTERRUPTED)
+SUPPLIED = ("attestation", "role_output", "both")
+
+
+def authority_snapshot(store: ControlPlaneStore) -> tuple:
+    """Everything a refused transition must leave exactly as it was."""
+    def rows(sql: str) -> tuple:
+        return tuple(tuple(row) for row in store._conn.execute(sql).fetchall())
+
+    return (
+        rows("SELECT seq, request_id FROM transitions ORDER BY seq"),
+        rows("SELECT ticket_id, consumed_request_id FROM dispatch_tickets ORDER BY ticket_id"),
+        rows("SELECT challenge_id, consumed_by, attestation_sha256 FROM approval_challenges "
+             "ORDER BY challenge_id"),
+        rows("SELECT step_run_id, state, state_version, attempt FROM step_runs "
+             "ORDER BY step_run_id"),
+        rows("SELECT project_run_id, state, state_version FROM project_runs "
+             "ORDER BY project_run_id"),
+    )
+
+
+class Pending(typing.NamedTuple):
+    """Step a of the world's run at ACCEPTANCE, with everything a genuine human
+    acceptance needs: an unconsumed planner dispatch answered, and an unconsumed
+    step-acceptance challenge answered by the synthetic human."""
+
+    driver: Driver
+    challenge: ApprovalChallenge
+    decision: BoundRoleOutput
+    acceptance: HumanStepAcceptance
+    attestation: HumanAttestation
+
+    def request(self) -> StepTransitionRequest:
+        step = self.driver.step("step-a")
+        return StepTransitionRequest(
+            request_id=new_request_id(), expected_state_version=step.state_version,
+            event=StepEvent.DECIDE_ACCEPTANCE, planner_decision=self.decision.output,
+            human_acceptance=self.acceptance)
+
+    def accept(self, request: StepTransitionRequest | None = None):
+        store = self.driver.store
+        applied = store.apply_step_transition(
+            self.driver.step("step-a").step_run_id, request or self.request(),
+            role_output=self.decision, human_attestation=self.attestation)
+        assert applied.current_state == StepState.COMPLETE.value
+        assert count(store, "approval_challenges", "challenge_id = ? AND consumed_by = ?",
+                     (self.challenge.challenge_id, applied.record.request_id)) == 1
+        assert count(store, "dispatch_tickets", "ticket_id = ? AND consumed_request_id = ?",
+                     (self.decision.ticket_id, applied.record.request_id)) == 1
+        return applied
+
+
+def pending_acceptance(world: World) -> Pending:
+    driver = Driver(world)
+    driver.to_acceptance("step-a")
+    challenge = world.store.request_step_acceptance(driver.step("step-a").step_run_id)
+    return Pending(driver, challenge, driver.decision("step-a"),
+                   driver.acceptance("step-a", challenge), attest(challenge))
+
+
+def no_role_request(driver: Driver, step_id: str,
+                    event: StepEvent) -> tuple[str, StepTransitionRequest]:
+    """Bring ``step_id`` to where ``event`` is legal; the request for it."""
+    if event is not StepEvent.MARK_READY:
+        driver.plain(step_id, StepEvent.MARK_READY)
+    if event in (StepEvent.ESCALATE, StepEvent.RECOVER_INTERRUPTED):
+        driver.plain(step_id, StepEvent.BEGIN_ATTEMPT)
+    step = driver.step(step_id)
+    payload = ({"reason": "FU1 synthetic reason."}
+               if event in (StepEvent.ESCALATE, StepEvent.RECOVER_INTERRUPTED) else {})
+    return step.step_run_id, StepTransitionRequest(
+        request_id=new_request_id(), expected_state_version=step.state_version, event=event,
+        **payload)
+
+
+def extraneous(pending: Pending, supplied: str) -> dict:
+    """Genuine, unconsumed authority, handed to a transition it does not belong to."""
+    return {
+        "attestation": {"human_attestation": pending.attestation},
+        "role_output": {"role_output": pending.decision},
+        "both": {"human_attestation": pending.attestation, "role_output": pending.decision},
+    }[supplied]
+
+
+def stray_attestation(world: World) -> tuple[ProjectContractContent, ApprovalChallenge,
+                                             HumanAttestation]:
+    """A genuine, unconsumed attestation for an unrelated project contract."""
+    content = make_content(goal="An unrelated goal.")
+    challenge = world.store.request_project_contract_approval(content)
+    return content, challenge, attest(challenge)
+
+
+@pytest.mark.parametrize("supplied", SUPPLIED)
+@pytest.mark.parametrize("event", NO_ROLE_EVENTS, ids=lambda e: e.value)
+def test_a_no_role_event_refuses_extraneous_authority(human_world: World, event,
+                                                      supplied) -> None:
+    world = human_world
+    pending = pending_acceptance(world)
+    other = Driver(world, world.new_run())
+    step_run_id, request = no_role_request(other, "step-a", event)
+    before = authority_snapshot(world.store)
+    with refused():
+        world.store.apply_step_transition(step_run_id, request, **extraneous(pending, supplied))
+    assert authority_snapshot(world.store) == before
+    # Without the extraneous input the identical request is applied: the
+    # refusal was the input, not the event.
+    assert not world.store.apply_step_transition(step_run_id, request).duplicate
+    # Nothing was consumed: the genuine acceptance still completes with it.
+    pending.accept()
+
+
+def test_an_escalation_cannot_carry_away_the_steps_own_acceptance(human_world: World) -> None:
+    world = human_world
+    pending = pending_acceptance(world)
+    step = pending.driver.step("step-a")
+    request = StepTransitionRequest(request_id=new_request_id(),
+                                    expected_state_version=step.state_version,
+                                    event=StepEvent.ESCALATE, reason="FU1 synthetic reason.")
+    before = authority_snapshot(world.store)
+    for supplied in SUPPLIED:
+        with refused():
+            world.store.apply_step_transition(step.step_run_id, request,
+                                              **extraneous(pending, supplied))
+        assert authority_snapshot(world.store) == before
+    pending.accept()
+
+
+@pytest.mark.parametrize("supplied", SUPPLIED)
+@pytest.mark.parametrize("event", NO_ROLE_EVENTS, ids=lambda e: e.value)
+def test_a_replayed_no_role_event_refuses_extraneous_authority(human_world: World, event,
+                                                               supplied) -> None:
+    """A replay receipt is returned before the event is decided; it must not be
+    a place where authority is accepted and then ignored."""
+    world = human_world
+    pending = pending_acceptance(world)
+    other = Driver(world, world.new_run())
+    step_run_id, request = no_role_request(other, "step-a", event)
+    assert not world.store.apply_step_transition(step_run_id, request).duplicate
+    before = authority_snapshot(world.store)
+    with refused():
+        world.store.apply_step_transition(step_run_id, request, **extraneous(pending, supplied))
+    assert authority_snapshot(world.store) == before
+    assert world.store.apply_step_transition(step_run_id, request).duplicate
+    assert authority_snapshot(world.store) == before
+    pending.accept()
+
+
+def test_a_replayed_role_output_event_must_carry_its_own_consumed_binding(
+        world: World) -> None:
+    driver = Driver(world)
+    driver.to_executing("step-a")
+    envelope = driver.implementation("step-a")
+    step = driver.step("step-a")
+    request = StepTransitionRequest(request_id=new_request_id(),
+                                    expected_state_version=step.state_version,
+                                    event=StepEvent.IMPLEMENTATION_RETURNED,
+                                    implementation=envelope.output)
+    world.store.apply_step_transition(step.step_run_id, request, role_output=envelope)
+    # Another run's unconsumed dispatch, whose output is byte-identical.
+    other = Driver(world, world.new_run())
+    other.to_executing("step-a")
+    foreign = other.implementation("step-a")
+    assert canonical_json_bytes(foreign.output.model_dump(mode="json")) == canonical_json_bytes(
+        envelope.output.model_dump(mode="json"))
+    content, challenge, stray = stray_attestation(world)
+    before = authority_snapshot(world.store)
+    for arguments in (
+        {"role_output": foreign},
+        {},
+        {"role_output": envelope.model_copy(update={"ticket_id": foreign.ticket_id})},
+        {"role_output": envelope.model_copy(update={"step_run_id": foreign.step_run_id})},
+        {"role_output": envelope, "human_attestation": stray},
+        {"human_attestation": stray},
+    ):
+        with refused():
+            world.store.apply_step_transition(step.step_run_id, request, **arguments)
+        assert authority_snapshot(world.store) == before
+    # The identical authorized call is a receipt and consumes nothing new.
+    again = world.store.apply_step_transition(step.step_run_id, request, role_output=envelope)
+    assert again.duplicate
+    assert authority_snapshot(world.store) == before
+    # Everything refused above is unconsumed and still answers its own subject.
+    other.bound("step-a", StepEvent.IMPLEMENTATION_RETURNED, "implementation", foreign)
+    world.store.record_approved_project_contract(approved_contract(content, challenge), stray)
+
+
+def test_a_replayed_human_acceptance_is_a_receipt_only_with_its_own_attestation(
+        human_world: World) -> None:
+    world = human_world
+    pending = pending_acceptance(world)
+    request = pending.request()
+    step_run_id = pending.driver.step("step-a").step_run_id
+    pending.accept(request)
+    content, challenge, stray = stray_attestation(world)
+    resigned = attest(pending.challenge, at=pending.challenge.issued_at + timedelta(seconds=1))
+    before = authority_snapshot(world.store)
+    for arguments in (
+        {"role_output": pending.decision},
+        {"role_output": pending.decision, "human_attestation": stray},
+        {"role_output": pending.decision, "human_attestation": resigned},
+        {"human_attestation": pending.attestation},
+        {},
+    ):
+        with refused():
+            world.store.apply_step_transition(step_run_id, request, **arguments)
+        assert authority_snapshot(world.store) == before
+    again = world.store.apply_step_transition(step_run_id, request, role_output=pending.decision,
+                                              human_attestation=pending.attestation)
+    assert again.duplicate and again.current_state == StepState.COMPLETE.value
+    assert authority_snapshot(world.store) == before
+    # A receipt is not new permission: the consumed inputs answer nothing again.
+    with refused():
+        world.store.apply_step_transition(step_run_id, request.model_copy(
+            update={"request_id": new_request_id()}), role_output=pending.decision,
+            human_attestation=pending.attestation)
+    assert authority_snapshot(world.store) == before
+    world.store.record_approved_project_contract(approved_contract(content, challenge), stray)
+
+
+def test_a_legitimate_acceptance_still_needs_its_exact_unconsumed_attestation(
+        human_world: World) -> None:
+    world = human_world
+    pending = pending_acceptance(world)
+    step_run_id = pending.driver.step("step-a").step_run_id
+    candidates = (
+        None,
+        attest(pending.challenge, at=pending.challenge.issued_at + timedelta(seconds=1)),
+        attest(pending.challenge, approver="someone-else"),
+        attest(pending.challenge, key=b"guessed"),
+        stray_attestation(world)[2],
+    )
+    before = authority_snapshot(world.store)
+    for attestation in candidates:
+        with refused():
+            world.store.apply_step_transition(step_run_id, pending.request(),
+                                              role_output=pending.decision,
+                                              human_attestation=attestation)
+        assert authority_snapshot(world.store) == before
+    pending.accept()
+
+
+@pytest.mark.parametrize("replay", [False, True], ids=["fresh", "replay"])
+@pytest.mark.parametrize("make", [
+    lambda p: {"human_attestation": p.attestation.model_dump()},
+    lambda p: {"human_attestation": _AttestationSubclass(**p.attestation.model_dump())},
+    lambda p: {"human_attestation": HumanAttestation.model_construct(
+        **{**p.attestation.model_dump(), "challenge_id": "x"})},
+    lambda p: {"human_attestation": object()},
+    lambda p: {"role_output": p.decision.model_dump()},
+    lambda p: {"role_output": BoundRoleOutput.model_construct(
+        **{**dict(p.decision), "attempt": 0})},
+    lambda p: {"role_output": object()},
+], ids=["attestation-dict", "attestation-subclass", "attestation-construct",
+        "attestation-object", "output-dict", "output-construct", "output-object"])
+def test_malformed_authority_on_a_no_role_event_is_refused(human_world: World, make,
+                                                           replay) -> None:
+    world = human_world
+    pending = pending_acceptance(world)
+    other = Driver(world, world.new_run())
+    step_run_id, request = no_role_request(other, "step-a", StepEvent.MARK_READY)
+    if replay:
+        world.store.apply_step_transition(step_run_id, request)
+    before = authority_snapshot(world.store)
+    with refused():
+        world.store.apply_step_transition(step_run_id, request, **make(pending))
+    assert authority_snapshot(world.store) == before
+    pending.accept()
+
+
+def test_a_failure_while_consuming_rolls_back_every_consumption(human_world: World,
+                                                                monkeypatch) -> None:
+    world = human_world
+    pending = pending_acceptance(world)
+    before = authority_snapshot(world.store)
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("simulated failure after the dispatch ticket was consumed")
+
+    monkeypatch.setattr(ControlPlaneStore, "_consume_challenge", fail)
+    with pytest.raises(RuntimeError):
+        pending.accept()
+    monkeypatch.undo()
+    assert authority_snapshot(world.store) == before
+    pending.accept()
+    world.reopen()
+    assert world.store.recover(world.project.project_run_id).integrity_ok
+
+
+def _issuance_rows(store: ControlPlaneStore) -> tuple:
+    return (
+        tuple(tuple(r) for r in store._conn.execute(
+            "SELECT * FROM plan_issuances ORDER BY execution_plan_sha256").fetchall()),
+        authority_snapshot(store)[2],
+    )
+
+
+def test_an_activation_receipt_is_only_for_the_identical_activation(world: World) -> None:
+    """Second-review finding: the receipt compared only the challenge id, so a
+    replay naming another policy, another workspace or a forged proof was
+    answered as though it had been activated."""
+    row = world.store._conn.execute(
+        "SELECT attestation FROM approval_challenges WHERE consumed_by = ?",
+        (f"execution_plan:{world.plan.sha256}",)).fetchone()
+    original = HumanAttestation.model_validate_json(row["attestation"])
+    other_workspace = world.workspace.parent / "w-other-workspace"
+    other_workspace.mkdir()
+    before = _issuance_rows(world.store)
+    for policy, workspace, attestation in (
+        (make_policy(review=False), world.workspace, original),
+        (make_policy(max_attempts=1), world.workspace, original),
+        (world.policy, other_workspace, original),
+        (world.policy, world.workspace, original.model_copy(update={"proof": "0" * 64})),
+    ):
+        with refused():
+            world.store.issue_execution_plan(world.plan, execution_policy=policy,
+                                             target_workspace=workspace,
+                                             attestation=attestation)
+        assert _issuance_rows(world.store) == before
+    assert world.store.issue_execution_plan(
+        world.plan, execution_policy=world.policy, target_workspace=world.workspace,
+        attestation=original) == world.plan.sha256
+    assert _issuance_rows(world.store) == before
+
+
+def test_a_contract_receipt_is_only_for_the_identical_approval(world: World) -> None:
+    content = make_content(goal="Another goal.")
+    challenge = world.store.request_project_contract_approval(content)
+    attestation = attest(challenge)
+    world.store.record_approved_project_contract(approved_contract(content, challenge),
+                                                 attestation)
+    before = _issuance_rows(world.store)
+    for contract in (
+        approved_contract(content, challenge, approver="someone-else"),
+        approved_contract(content, challenge, at=challenge.issued_at + timedelta(seconds=1)),
+    ):
+        with refused():
+            world.store.record_approved_project_contract(contract, attestation)
+        assert _issuance_rows(world.store) == before
+    assert world.store.record_approved_project_contract(
+        approved_contract(content, challenge), attestation) == content.sha256
+
+
+def test_an_offline_store_refuses_a_human_attestation_too(tmp_path: Path) -> None:
+    store = ControlPlaneStore.open(tmp_path / "offline.sqlite3")
+    try:
+        with refused(RefusalCode.INVALID_REQUEST):
+            store.apply_step_transition("0" * 32, StepTransitionRequest(
+                request_id=new_request_id(), expected_state_version=0,
+                event=StepEvent.MARK_READY), human_attestation=object())
+    finally:
+        store.close()

@@ -2,6 +2,13 @@
 
 **Status: IMPLEMENTED — PENDING INDEPENDENT REVIEW.**
 
+> **DL-4A FU1 (on `67897a9`)** corrected one independent-review finding: the
+> authority-parameter consumption boundary of `apply_step_transition`. Every
+> `role_output` and `human_attestation` is now either validly consumed for its
+> event or refused; none is ignored, on a fresh request or on a replay. FU1
+> changes no frozen model, schema or accepted transition authority. See §13.
+> DL-4A is still **not accepted**.
+
 | | |
 |---|---|
 | Baseline | `main` at `2ea54f0` (DL-1, DL-2, DL-3 and DL-3 FU1, each independently accepted within its offline scope) |
@@ -331,6 +338,12 @@ At consumption the store requires all of the following:
 The ticket is consumed in the transition's transaction. Every proof requires
 exactly one consumed, matching ticket per role-output transition.
 
+An event that consumes no role output (`MARK_READY`, `BEGIN_ATTEMPT`,
+`ESCALATE`, `RECOVER_INTERRUPTED`) refuses a supplied `role_output` and a
+supplied `human_attestation`. A replay is a receipt only when it presents
+exactly the envelope and attestation its original transition consumed (FU1,
+§13).
+
 The frozen DL-1 outputs are unchanged and still required inside the envelope,
 so DL-1's own `(step_contract_sha256, attempt)` binding check still runs.
 
@@ -555,3 +568,138 @@ Every phase below needs its own authorization.
 7. **Abort rules.** Any refusal, RECOVERY_REQUIRED, HUMAN_REQUIRED,
    containment error or untrusted proof stops the Alpha with no retry, no
    repair and no cleanup beyond what DL-4A already allows.
+
+---
+
+## 13. DL-4A FU1 — authority-parameter consumption boundary
+
+**Status: IMPLEMENTED — PENDING INDEPENDENT REVIEW.** Baseline `67897a9`.
+
+### 13.1 Finding and root cause
+
+The independent review found that `_authorize_step_request()` could return
+without consuming or refusing a supplied `human_attestation`. The required
+invariant is that every authority-bearing argument handed to an
+authority-store transition is validly consumed for that event or explicitly
+refused.
+
+Probing the baseline located the silent path precisely:
+
+- **Fresh requests were already refused.** The no-role-output branch of
+  `_authorize_step_request()` refused a supplied `role_output` or
+  `human_attestation` for `MARK_READY`, `BEGIN_ATTEMPT`, `ESCALATE` and
+  `RECOVER_INTERRUPTED`. The new fresh-path regressions pass on the baseline,
+  and they are kept as pins.
+- **Replays were not.** `apply_step_transition()` returns a replay receipt
+  *before* `_authorize_step_request()` runs. So for an already-applied
+  `request_id`, any `role_output` and any `human_attestation` were accepted
+  and ignored, on every event. That included a genuine, unconsumed
+  attestation or dispatch envelope that belonged to another subject, an
+  envelope from another run's dispatch with byte-identical output, and a
+  replay of a human acceptance with a different or re-signed attestation, or
+  with none.
+
+Nothing was consumed on that path, so no authority was spent or widened. But
+authority-bearing input was silently ignored, and a caller could read the
+receipt as permission for what it had presented.
+
+### 13.2 Correction
+
+There is one rule on both paths: **an event's authority is consumed or
+refused, never ignored; a replay is a receipt only for the identical
+authorized call.**
+
+- `_refuse_unconsumable_authority()` holds the no-role-output refusal. It is
+  shared by the fresh and replay paths, and it names which input was refused.
+- `_authorize_step_replay()` runs inside the transaction before a step
+  receipt is returned, in an authority store only. It reads only.
+  - **A no-role-output event** must present no `role_output` and no
+    `human_attestation`.
+  - **A role-output event** must present exactly the envelope its original
+    transition consumed: the ticket whose `consumed_request_id` is this
+    request, the same project run, step run, contract, attempt and role, and
+    an output equal to the request payload.
+  - **A human acceptance** must present exactly the attestation its original
+    consumed, by `attestation_sha256` of the challenge whose `consumed_by` is
+    this request. A non-acceptance must present none.
+  - Omitting the consumed authority is refused too, so "identical replay"
+    means the identical call.
+- A receipt still consumes nothing, and it is never new permission. A consumed
+  attestation or envelope under a new `request_id` is refused, as before.
+
+Every refusal is an `AuthorityRefusedError` (`AUTHORITY_UNPROVEN`), raised
+inside the transaction before anything is written. So a refusal changes no
+state, consumes no ticket or challenge, and launches no role.
+
+**Unchanged.** The offline (`store.v2`) path, which already refused both
+arguments before any replay check; every frozen model and both store schemas;
+every DL-1 validator rule; DL-2 and DL-3, whose replays already pass exactly
+their own bound envelope; and the accepted DL-4A fresh-path checks.
+
+### 13.3 Second adversarial review (after the fix)
+
+| Finding | Material? | Resolution / regression |
+|---|---|---|
+| `issue_execution_plan`'s receipt compared only the `challenge_id`. A repeat activation of an issued plan that named **another policy**, **another target workspace** or a **forged proof** reusing that challenge id was answered as a receipt, and all three were ignored. | Yes, in this exact class. The stored issuance still governed, so no authority was widened, but authority-bearing input was ignored and answered as though activated. | The receipt now requires the identical activation: challenge id, consumed `attestation_sha256`, `policy_sha256` and `target_workspace_sha256`. `test_an_activation_receipt_is_only_for_the_identical_activation` |
+| `record_approved_project_contract`'s receipt matched the attestation but not the contract's approval block (`approved_by` / `approved_at`), because the contract identity is its content digest. | Yes, the same class, minor. | The receipt now re-runs `_check_approval_matches`. `test_a_contract_receipt_is_only_for_the_identical_approval` |
+| Malformed inputs (dict, subclass, `model_construct`, arbitrary object) on a no-role event, fresh or replayed | No. They are re-validated before the transaction, and so before the replay check. | `test_malformed_authority_on_a_no_role_event_is_refused` (×14) |
+| A failure after the ticket is consumed but before the challenge is consumed | No. Both are in one transaction. | `test_a_failure_while_consuming_rolls_back_every_consumption` |
+| Escalating the very step whose acceptance is pending, carrying its attestation or planner envelope | No. Refused, and the acceptance still completes afterwards. | `test_an_escalation_cannot_carry_away_the_steps_own_acceptance` |
+| A replay of a `recover()`-written `RECOVER_INTERRUPTED` | No. It is a no-role-output event, so the same refusal applies. | covered by the replay matrix |
+
+No other step-transition entry point accepts an authority argument.
+`apply_project_transition` and `recover()` take none.
+
+### 13.4 Tests
+
+There are 11 new test functions in `tests/test_control_plane_dl4a.py`, adding
+**46 cases** to the 116 already there, for 162 in total.
+
+- `test_a_no_role_event_refuses_extraneous_authority` (×12): four events ×
+  attestation / role output / both. Every case is a genuine, unconsumed
+  input; after it, the identical bare request applies and the genuine
+  acceptance still completes.
+- `test_an_escalation_cannot_carry_away_the_steps_own_acceptance`
+- `test_a_replayed_no_role_event_refuses_extraneous_authority` (×12)
+- `test_a_replayed_role_output_event_must_carry_its_own_consumed_binding`
+- `test_a_replayed_human_acceptance_is_a_receipt_only_with_its_own_attestation`
+- `test_a_legitimate_acceptance_still_needs_its_exact_unconsumed_attestation`
+- `test_malformed_authority_on_a_no_role_event_is_refused` (×14)
+- `test_a_failure_while_consuming_rolls_back_every_consumption`
+- `test_an_activation_receipt_is_only_for_the_identical_activation`
+- `test_a_contract_receipt_is_only_for_the_identical_approval`
+- `test_an_offline_store_refuses_a_human_attestation_too`
+
+Each refusal asserts an unchanged snapshot of the transitions, dispatch
+tickets, approval challenges, step runs and project runs.
+
+**Against the original `store.py`**, 16 cases fail: the 12 replay-matrix
+cases, the role-output replay, the human-acceptance replay, and the two
+second-review receipt tests. The other 30 pass, because the baseline
+fresh-path refusals were already correct. **With FU1**, all 162 pass.
+
+### 13.5 Validation
+
+Run on Windows with the project venv on 2026-10-22, on top of `67897a9`.
+
+| Command | Result |
+|---|---|
+| `.venv/Scripts/python.exe -m pytest tests/test_control_plane_dl1.py tests/test_control_plane_dl2.py tests/test_control_plane_dl3.py tests/test_control_plane_dl4a.py -q -p no:cacheprovider` | **439 passed**, 0 failed (DL-1/2/3 277, unchanged files; DL-4A 162) |
+| `.venv/Scripts/python.exe -m pytest -q -p no:cacheprovider` (`testpaths = ["tests"]`) | **4355 passed**, 0 failed, 1 warning, 583.4 s (DL-4A's 4309 + FU1's 46). The warning is the existing, unrelated Pydantic serializer warning recorded in §9 |
+
+### 13.6 Still open, documented separately (not FU1 scope)
+
+FU1 closes nothing below and does not expand into any of it.
+
+- **External human-verifier trust remains open (R-1).** An attestation is only
+  as authentic as the injected `HumanAttestationVerifier`. The default
+  verifier approves nothing.
+- **Real 5F2D evidence origin remains open (R-2).** The store proves that
+  evidence was recorded for the dispatch and re-derives its outcome. It does
+  not prove that the bytes came from a genuine 5F2D run.
+- **Role-output origin is not authenticated by a dispatch ticket (R-3).** A
+  ticket binds an output to one dispatch. It does not prove which component
+  produced it, and a caller that holds the store can mint and answer one.
+- **Filesystem containment is not a race-free sandbox (R-5).** The checks are
+  path and identity based, with no handle-relative OS API. A concurrent
+  actor between a check and the next system call is not excluded.
