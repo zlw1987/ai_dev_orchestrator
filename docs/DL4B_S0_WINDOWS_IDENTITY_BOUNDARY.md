@@ -5,6 +5,7 @@
 | | |
 |---|---|
 | Baseline | `main` at `67b60da6b095c745233597abbb2580a2f8299af0` (DL-4B AMEND1 design accepted for offline implementation) |
+| FU1 | On `a3183924c06e670c88ec9bb72044008bb953a892`: closes the three identity-boundary bypasses confirmed by independent review (F1 ancestor take-over, F2 foreign non-interactive window station, F3 reparse entries on `PATH`) and two found in the FU1 self-review — see §6 B-13 to B-15 and §11 |
 | Contract | `docs/DL4B_REAL_INTEGRATION_BOUNDARY_DESIGN.md` — FD-13, FD-14, FD-16 (§5.8), slice S0 (§11) |
 | Kind | Offline implementation. No integration session, model, verifier, writer, reviewer, Git operation, subprocess, network request, account, ACL, scheduled task or system-directory change |
 | Not authorized | Live Alpha, E-12 rehearsal, any other DL-4B slice |
@@ -76,13 +77,14 @@ permission or a supported caller?
 | **Ownership** | The owner is implicitly granted `READ_CONTROL \| WRITE_DAC` before any ACE is read; deny ACEs do not remove it | Evaluated. Authority objects must be owned by A (or by SYSTEM/Administrators/TrustedInstaller for anchors and code). X-owned objects (clone root, `.git`) must carry an effective `OWNER RIGHTS` ACE, which replaces the implicit grant |
 | **OWNER RIGHTS (`S-1-3-4`)** | Present and effective → replaces implicit owner rights, allow and deny | Evaluated in ACE order; inherit-only copies do not count. Clone root and `.git` must have one that is also inherited by new files and directories |
 | **DELETE vs DELETE_CHILD** | An object can be deleted or renamed with `DELETE` on it **or** `FILE_DELETE_CHILD` on its parent, whatever the child's DACL says (an explicit deny included); renaming then lets X recreate the name if it can add to the parent | Every component from the volume root to every declared object is checked for both routes, for X and O (and for A on anchors and install roots). A protected child DACL alone is never accepted |
+| **Ancestor take-over** (FU1) | `WRITE_DAC` on any ancestor lets X grant itself `DELETE` or `FILE_DELETE_CHILD` there; `WRITE_OWNER` lets it take ownership, and an owner holds `WRITE_DAC` implicitly | Every ancestor, the volume root included, must grant X and O neither right, and must not be owned by a SID they may hold unless an **effective** `OWNER RIGHTS` ACE removes the implicit grant (the X-owned clone root above `.git` is that case). The object itself is limited by its own FD-14 row |
 | **DACL inheritance** | Inherit-only ACEs are invisible on the directory itself but decide what every future child grants | Each authority and code directory's inheritance is simulated for a new file and a new directory (NTFS rules, `CREATOR OWNER` substitution, fallback to the creator's default DACL) |
 | **Group membership** | Any ACE naming a group X is in | X's and O's groups are computed by the OS (AuthZ, `AUTHZ_COMPUTE_PRIVILEGES`), not enumerated by convention |
 | **Logon-dependent SIDs** | `INTERACTIVE`, `NETWORK`, `BATCH`, `SERVICE`, `LOCAL`, logon session SIDs… are added by *how* a token logged on; AuthZ omits them; X can obtain more than one kind (e.g. a network token over loopback) | Added as **possibly held**. Allow ACEs match possible SIDs; deny ACEs match only SIDs **certainly** held. Every logon SID may match except A's own current one |
 | **Privileges** | Backup, restore, take-ownership, debug, impersonate, load-driver, manage-volume… bypass or subvert the DACL | A's token, and X's and O's OS-computed privileges, must be within a five-privilege standard-user allowlist (disabled ones count: a process can enable them). Administrative groups refused, including a deny-only `Administrators` in A's (UAC-filtered) token and a high-integrity AuthZ context |
-| **Reparse points, aliases** | Junctions, symlinks, mount points, short names, case and Unicode spellings redirect a path; Windows follows intermediate junctions even with `FILE_FLAG_OPEN_REPARSE_POINT` | Each component opened without following and refused if a reparse point; declared and code paths must equal the OS-reported final path |
+| **Reparse points, aliases** | Junctions, symlinks, mount points, short names, case and Unicode spellings redirect a path; Windows follows intermediate junctions even with `FILE_FLAG_OPEN_REPARSE_POINT` | Each component opened without following and refused if a reparse point; declared and code paths must equal the OS-reported final path. A reparse entry directly in a `PATH` or working directory is refused (FU1): a protected link says nothing about the image or DLL loaded through it |
 | **Process / thread / token** | `OpenProcess`, `CreateRemoteThread`, `WriteProcessMemory`, handle duplication, token duplication | X and O must be granted **nothing** on A's process, current thread and primary token, nor through the token's default DACL (which every later thread and object A creates receives) |
-| **Sessions** | A shared desktop allows input injection, hooks and window messages across accounts | A must be on its own interactive window station and desktop (both owned by its logon SID) or, for a Task Scheduler S4U launch, on a non-interactive one |
+| **Sessions** | A shared desktop allows input injection, hooks and window messages across accounts | A must be on its own interactive window station and desktop (both reporting its logon SID) or, for a Task Scheduler S4U launch, on the non-interactive station Windows creates for **A's own logon session**. In both cases X and O must neither own nor be granted anything on the station or the desktop (FU1) |
 | **Code loading** | A writable import directory, `.pth` file, module, DLL search directory or working directory runs X's code as A; `PYTHONPATH` and the user site are read at interpreter start, **before** any proof can run | All import locations inside declared, admin-owned install roots, walked in full; the interpreter must be isolated (`-I`); `PATH` directories, their files and the working directory checked; DLLs for S0 itself loaded from System32 only |
 | **Supported caller** | A caller builds facts, a proof, or skips the prover | Injected facts can never produce a production proof; the proof cannot be constructed, mutated, subclassed or copied; facts are type-checked and copied at consumption; nothing is cached |
 
@@ -109,12 +111,24 @@ permission or a supported caller?
    `SidTypeUser`; the process user is A; no account in an administrative
    group or holding a non-standard privilege; A shares no non-baseline group
    with X or O. Then the anchor's rights: A, X and O at most read on the file
-   and directory, on new files created there, and none can remove or rename
-   it or any ancestor.
-6. **Session** (step 3), per the declared launch mechanism.
+   and directory, on new files created there, and none can remove, rename,
+   re-permission or take over it or any ancestor.
+6. **Session** (step 3), per the declared launch mechanism:
+   - `interactive_session`: the visible `WinSta0`, station and desktop both
+     reporting A's current logon SID;
+   - `task_scheduler_s4u`: a non-interactive station other than `WinSta0`;
+     its reported SID, if any, is A's logon SID; its name is exactly
+     `Service-0x<high>-<low>$` for A's own logon session LUID (read from the
+     token's `TOKEN_STATISTICS.AuthenticationId`, compared folding ASCII only),
+     so a SID-less station that is SYSTEM's (`…-3e7$`), another service's or
+     another session's is refused; the desktop's SID, if any, is A's;
+   - in both cases the station's and the desktop's owners are not SIDs X or O
+     may hold, and their DACLs grant X and O nothing.
 7. **Process** (step 4).
 8. **FD-14 objects** (step 5), each also non-replaceable through every
-   ancestor for X and O:
+   ancestor for X and O (no `DELETE` on any component, no `FILE_DELETE_CHILD`
+   on any parent, and no `WRITE_DAC`, `WRITE_OWNER` or implicit owner
+   `WRITE_DAC` on any ancestor from the volume root down):
 
 | Object | Owner | Protected | X may hold | O may hold | Also |
 |---|---|---|---|---|---|
@@ -133,8 +147,11 @@ permission or a supported caller?
    root (a missing entry such as `python3XX.zip` is safe only there, where
    nobody can create it). Each `PATH` directory: X and O at most read, owner
    not held by X/O, new files grant them at most read, every file directly in
-   it likewise, not replaceable; a missing `PATH` entry must not be creatable
-   by X or O. The working directory is checked the same way. A's profile,
+   it likewise, no entry directly in it (file or directory) a reparse point,
+   not replaceable; a missing `PATH` entry must not be creatable by X or O,
+   which also means its nearest existing ancestor grants them neither add
+   rights nor `WRITE_DAC`/`WRITE_OWNER`. The working directory is checked the
+   same way. A's profile,
    `TEMP`, `TMP`, roaming and local app data: X and O nothing, owner not held
    by them, new children grant nothing, not replaceable.
 
@@ -178,11 +195,17 @@ environment variable that skips any step.
 | B-10 | **second review** | Full Unicode lowering equates names NTFS keeps apart (Kelvin sign vs `k`); per-directory case-sensitive folders make `INSTALL` ≠ `install`. Identity now folds ASCII only, overlap detection uses `casefold` (broader), install-root containment compares OS-reported spellings exactly | `test_b10_*` |
 | B-11 | second review | Python reads `PYTHONPATH`, the user site and the script directory at start-up, before any proof; an environment check after the fact is too late | `test_the_interpreter_must_be_isolated` |
 | B-12 | second review | A directory entry ending in a dot or space, or named like a device, is opened as a different object by Win32 path parsing | `test_an_entry_win32_cannot_address_exactly_refuses` |
+| B-13 | **FU1 review (F1)** | `WRITE_DAC` or `WRITE_OWNER` on an ancestor (or ownership of it without an effective `OWNER RIGHTS` ACE) lets X grant itself `DELETE`/`FILE_DELETE_CHILD` and rename a protected descendant away; only `DELETE` and `DELETE_CHILD` were checked. Minimum case: X holds `WRITE_DAC` on `C:\AIDO`, no delete right, state root protected | `test_b13_*`: the minimum case; `WRITE_OWNER`, O, group and logon-type SIDs, X/O ownership; every protected path (state, published, inbox, exchange, clone, install, anchor incl. the volume root, `PATH`, profile incl. an intermediate ancestor) moved under an ancestor of its own; the `OWNER RIGHTS` boundary; the leaf rights of 17 protected objects; the randomized search re-checks every ancestor of accepted worlds |
+| B-13a | **FU1 self-review** | The nearest existing ancestor of a missing `PATH` entry was checked only for add rights; `WRITE_DAC`/`WRITE_OWNER` on it grants them | `test_b13_a_missing_search_path_refuses_a_takeover_of_its_nearest_ancestor` |
+| B-14 | **FU1 review (F2)** | In the S4U branch, a non-interactive station merely had to not be `WinSta0`; its SID was never consumed, so A placed on X's station (with an absent or A-looking desktop SID) passed | `test_b14_a_foreign_non_interactive_window_station_refuses` (X logon SID, X user SID, SYSTEM; desktop SID absent or A's), `test_b14_a_sid_less_station_not_named_*` (SYSTEM's, LocalService's, another session's, padded, prefixed, long-s and other look-alike names), genuine S4U accepted, malformed LUID |
+| B-14a | **FU1 self-review** | The name binding alone would accept a SID-less station that someone else created under the name Windows gives A's; and nothing checked who could open the station or desktop in either mechanism | `test_b14_x_or_o_able_to_use_the_station_or_desktop_refuses` (squatted, group, foreign-logon and O-owned stations; hook-capable, Everyone and INTERACTIVE-owned desktops; both mechanisms) |
+| B-15 | **FU1 review (F3)** | A reparse file directly in a protected `PATH` directory was checked by its own descriptor only, while the DLL or executable loaded through it is its target (X-writable in the regression); directory entries were not examined at all | `test_b15_*` (`.dll`, `.exe` and directory links to an X-writable target; a Windows app execution alias; a reparse point reported by either the listing or the handle) |
+| B-15a | **FU1 self-review, on this host** | Not a bypass but a correction that would have broken every real proof: 13 subdirectories of the real `System32` (`config` among them), 9 of `Windows` and 1 of `Wbem` deny a standard user even `READ_CONTROL`. Subdirectories of a `PATH` directory are therefore classified from the listing (`DirectoryEntry.is_reparse_point`, from the find data, no open) and never opened | `test_b15_subdirectories_of_a_search_directory_are_classified_without_being_opened`, `test_real_facts_describe_a_junction_without_following_it` |
 | — | analysis | NULL/absent DACL grants everyone everything; conditional/object ACEs are evaluated against claims S0 cannot see; generic bits unmapped by AuthZ; short names; user-planted `ProgramData\AIDO`; `WRITE_ATTRIBUTES` turning an empty directory into a junction; `os.environ` vs the real environment block; `ctypes` DLL search | parser tests, `test_a_short_name_alias_*`, `test_a_user_planted_boundary_*`, `test_write_attributes_*`, static tests |
 
 ## 7. Tests
 
-`tests/test_dl4b_s0_identity_boundary.py`, 303 cases:
+`tests/test_dl4b_s0_identity_boundary.py`, 425 cases (303 before FU1):
 
 - descriptor, ACL and SID parsing, malformed and unsupported forms;
 - evaluator semantics (owner rights, `OWNER RIGHTS`, order, inherit-only,
@@ -245,8 +268,23 @@ These are within §10.1's latitude but constrain later slices or provisioning:
 8. **The exchange root is checked, not walked.** Per-ticket handoff and outbox
    directories are S3's.
 
+FU1 adds these provisioning prerequisites:
+
+9. **No ancestor of any declared, code, `PATH` or profile location** may grant
+   X or O `WRITE_DAC` or `WRITE_OWNER`, or be owned by them (or by a group
+   they belong to) without an effective `OWNER RIGHTS` ACE. Stock Windows
+   ACLs on `C:\`, `C:\ProgramData`, `C:\Users` and `C:\Windows` satisfy this.
+10. **A's `PATH` must hold no directory with a reparse entry directly in it.**
+    In particular `%LOCALAPPDATA%\Microsoft\WindowsApps` (app execution
+    aliases are reparse points) must be removed from the dedicated authority
+    account's user `PATH`. S0 refuses rather than following a link to prove
+    its target.
+11. **An S4U launch must run on the station Windows creates for A's own logon
+    session**, not on a shared or system station (no task configuration that
+    places A's process on another desktop).
+
 No frozen contract prevented a correct implementation; nothing frozen was
-changed.
+changed, in S0 or in FU1.
 
 ## 9. Platform limitations and residuals
 
@@ -277,6 +315,17 @@ changed.
 - **Upper bounds can over-refuse.** An ACE naming `PRINCIPAL SELF`, a
   logon-dependent SID or an unknown logon SID counts as X's. That is the
   intended direction.
+- **Reparse files on `PATH` are refused, never proven** (FU1). A host whose
+  `System32` holds WOF-compressed (CompactOS) or deduplicated files, which
+  are reparse points, therefore refuses. This development host's `System32`,
+  `Windows`, `Wbem` and `WindowsPowerShell\v1.0` hold none; its
+  `WindowsApps` holds 38 app execution aliases.
+- **The S4U station rule rests on Windows' naming of service window stations**
+  after the logon session LUID, and on `GetSecurityInfo` being able to read
+  the station and desktop descriptors from A's own handles. Neither was
+  observed for an S4U process here: a different name, or an unreadable
+  descriptor, refuses (fail closed). This host's interactive `WinSta0` and
+  `Default` are Administrators-owned and grant a non-administrator X nothing.
 
 ## 10. What E-12 must still establish (live, separately authorized)
 
@@ -297,5 +346,33 @@ must confirm:
    subtree) are attacked and fail.
 5. The frozen harnesses accept the detached HEAD and the read-only `.git` that
    S0 requires (design §5.8.8).
+6. (FU1) An S4U-launched A process reports the station
+   `Service-0x<high>-<low>$` for its own logon LUID, with readable station and
+   desktop descriptors that grant X and O nothing. A hostile X cannot create a
+   station under A's predicted name, cannot open A's station or desktop, and
+   cannot obtain `WRITE_DAC` or ownership of any ancestor on the provisioned
+   host.
+7. (FU1) The provisioned `System32` and every other `PATH` directory of A
+   hold no reparse entry, and `WindowsApps` is off A's `PATH`.
+8. (FU1) The documented behaviours §11 relies on hold against X: a non-empty
+   directory cannot become a reparse point, and changing per-directory case
+   sensitivity needs `FILE_DELETE_CHILD`.
+
+## 11. FU1 — adversarial analysis of the corrections
+
+| Route considered | Outcome |
+|---|---|
+| `WRITE_DAC`, `WRITE_OWNER`, owner-implicit `WRITE_DAC` on any ancestor, including the volume root and intermediate ancestors such as `AppData` below a checked profile | Refused for X and O (and A where A is checked) |
+| Those rights reached through a group, a logon-type SID, a foreign logon SID, a generic or `MAXIMUM_ALLOWED` bit, or an ACE that a deny for a logon-dependent SID does not bind | Refused: the same upper-bound evaluator (and AuthZ in production) is used |
+| An adversary-owned ancestor with an effective `OWNER RIGHTS` ACE (the clone root above `.git`) | Accepted: Windows then grants the owner only that ACE. An inherit-only `OWNER RIGHTS` ACE does not count, and one granting `WRITE_OWNER` refuses |
+| `WRITE_ATTRIBUTES` on an ancestor | Not a take-over: a non-empty directory cannot be made a reparse point, and enabling per-directory case sensitivity also requires `FILE_DELETE_CHILD`, which is already refused on every parent. Both are documented OS behaviour, not observed here; E-12 must attack them |
+| `ACCESS_SYSTEM_SECURITY`, take-ownership and restore privileges | Need a privilege; X and O hold only the standard-user allowlist |
+| A station reporting another logon session's, X's or SYSTEM's SID, with any desktop facts | Refused |
+| A SID-less station that is SYSTEM's, LocalService's or another session's, or a look-alike name (zero-padded, prefixed, no `$`, a Unicode letter that case-folds to ASCII) | Refused; names are compared folding ASCII only (B-10) |
+| A SID-less station with A's name created by someone else, or a station or desktop X or O can open (hook, input, clipboard, create desktop) | Refused by the owner and DACL check |
+| A reparse file or directory directly in a `PATH` or working directory, whatever its own descriptor; a directory link whose target is a file | Refused without following it |
+| A hard link, short name or alternate stream of a file in a `PATH` directory | Same file, same descriptor: checked |
+| Subdirectories of `PATH` directories | Never searched, never opened (B-15a); a reparse subdirectory entry is refused from the listing's own attributes. A walked authority, `.git` or install-root entry refuses if either the listing or its handle reports a reparse point |
+| New facts FU1 reads | `TOKEN_STATISTICS.AuthenticationId` of A's token; the owner and DACL of A's window station and desktop (`GetSecurityInfo`, `SE_WINDOW_OBJECT`); each listing entry's reparse attribute. All read-only; nothing is set, created or followed |
 
 **Final status: IMPLEMENTED — PENDING INDEPENDENT REVIEW.**

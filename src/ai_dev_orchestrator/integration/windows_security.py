@@ -3,7 +3,7 @@
 :class:`WindowsSecurityFacts` reads, and only reads:
 
 - the running process's primary token (user, groups, privileges, elevation,
-  integrity level, default DACL);
+  integrity level, default DACL, logon session LUID);
 - the security descriptors of the running process, its current thread and its
   token;
 - the owner, DACL, attributes, link count and final path of named file-system
@@ -12,7 +12,7 @@
 - an account's groups and privileges as AuthZ computes them from its SID
   (``AuthzInitializeContextFromSid`` with ``AUTHZ_COMPUTE_PRIVILEGES``), and its
   name and type from ``LookupAccountSid``;
-- the process's window station and desktop;
+- the process's window station and desktop, with their owners and DACLs;
 - environment variable **names** (never values, except ``PATH``, ``TEMP`` and
   ``TMP``, which are locations the proof must check).
 
@@ -71,6 +71,7 @@ _ERROR_BAD_LENGTH = 24
 _ERROR_INSUFFICIENT_BUFFER = 122
 _SE_FILE_OBJECT = 1
 _SE_KERNEL_OBJECT = 6
+_SE_WINDOW_OBJECT = 7
 _OWNER_SECURITY_INFORMATION = 0x1
 _DACL_SECURITY_INFORMATION = 0x4
 _TOKEN_QUERY = 0x0008
@@ -79,6 +80,7 @@ _TOKEN_USER = 1
 _TOKEN_GROUPS = 2
 _TOKEN_PRIVILEGES = 3
 _TOKEN_DEFAULT_DACL = 6
+_TOKEN_STATISTICS = 10
 _TOKEN_ELEVATION_TYPE = 18
 _TOKEN_ELEVATION = 20
 _TOKEN_INTEGRITY_LEVEL = 25
@@ -417,6 +419,10 @@ class WindowsSecurityFacts:
                 raise WindowsSecurityError("the token has no default DACL.")
             acl_size = ctypes.c_uint16.from_address(dacl_pointer + 2).value
             default_dacl = ctypes.string_at(dacl_pointer, acl_size)
+            # TOKEN_STATISTICS: TokenId (LUID), then AuthenticationId (LUID).
+            statistics = self._token_information(token, _TOKEN_STATISTICS)
+            logon = _LUID.from_buffer_copy(statistics, ctypes.sizeof(_LUID))
+            authentication_id = (logon.HighPart & 0xFFFF_FFFF) << 32 | logon.LowPart
         finally:
             self._kernel32.CloseHandle(token)
         return TokenFacts(
@@ -427,6 +433,7 @@ class WindowsSecurityFacts:
             elevation_type=int(elevation_type),
             integrity_rid=int(integrity_sid.rsplit("-", 1)[1]),
             default_dacl=default_dacl,
+            authentication_id=authentication_id,
         )
 
     def program_data_directory(self) -> str:
@@ -465,9 +472,16 @@ class WindowsSecurityFacts:
 
     def list_directory(self, path: str) -> tuple[DirectoryEntry, ...]:
         _require_windows()
+        # On Windows the not-following stat of a scandir entry comes from the
+        # find data already read: no entry is opened.
         with os.scandir(path) as entries:
             return tuple(
-                DirectoryEntry(entry.name, entry.is_dir(follow_symlinks=False)) for entry in entries
+                DirectoryEntry(
+                    entry.name,
+                    entry.is_dir(follow_symlinks=False),
+                    bool(entry.stat(follow_symlinks=False).st_file_attributes & _FILE_ATTRIBUTE_REPARSE_POINT),
+                )
+                for entry in entries
             )
 
     def principal(self, sid: str) -> PrincipalFacts:
@@ -546,6 +560,10 @@ class WindowsSecurityFacts:
             window_station_sid=self._object_sid(station),
             desktop=self._object_name(desktop),
             desktop_sid=self._object_sid(desktop),
+            window_station_descriptor=self._descriptor(
+                station, _SE_WINDOW_OBJECT, "GetSecurityInfo(window station)"
+            ),
+            desktop_descriptor=self._descriptor(desktop, _SE_WINDOW_OBJECT, "GetSecurityInfo(desktop)"),
         )
 
     def _object_name(self, handle: int) -> str:

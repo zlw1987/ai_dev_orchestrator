@@ -116,6 +116,8 @@ O = f"{DOMAIN}-1003"
 NONE_GROUP = f"{DOMAIN}-513"
 A_LOGON = "S-1-5-5-0-4242"
 X_LOGON = "S-1-5-5-0-7777"
+A_LUID = 0x4242  # A's logon session; its service window station is Service-0x0-4242$
+A_STATION = "Service-0x0-4242$"
 USERS = "S-1-5-32-545"
 AUTH = "S-1-5-11"
 INTERACTIVE = "S-1-5-4"
@@ -145,6 +147,21 @@ def allow(sid: str, mask: int, flags: int = 0) -> Ace:
 
 def deny(sid: str, mask: int, flags: int = 0) -> Ace:
     return Ace(1, flags, mask, sid)
+
+
+#: Shaped like this host's own WinSta0 and Default: admin-owned, granting the
+#: logon session, SYSTEM and Administrators.
+STATION_SD = build_security_descriptor(ADMINISTRATORS, [
+    allow(A_LOGON, 0xF037F), allow(LOCAL_SYSTEM, 0xF037F), allow(ADMINISTRATORS, 0x20166),
+], protected=False)
+DESKTOP_SD = build_security_descriptor(ADMINISTRATORS, [
+    allow(A_LOGON, 0xF01FF), allow(LOCAL_SYSTEM, 0xF01FF), allow(ADMINISTRATORS, 0x201C7),
+], protected=False)
+
+
+def session(station: str, visible: bool, station_sid: str | None, desktop: str, desktop_sid: str | None,
+            *, station_sd: bytes = STATION_SD, desktop_sd: bytes = DESKTOP_SD) -> SessionFacts:
+    return SessionFacts(station, visible, station_sid, desktop, desktop_sid, station_sd, desktop_sd)
 
 
 def inherited(aces: list[Ace], *, child_dir: bool) -> list[Ace]:
@@ -276,8 +293,9 @@ class World:
     def list_directory(self, path):
         entries = self.children.get(ntpath.normcase(path), {})
         return tuple(
-            DirectoryEntry(name, self.nodes[ntpath.normcase(ntpath.join(path, name))].is_dir)
+            DirectoryEntry(name, node.is_dir, node.reparse)
             for name in entries.values()
+            for node in (self.nodes[ntpath.normcase(ntpath.join(path, name))],)
         )
 
     def principal(self, sid):
@@ -425,6 +443,7 @@ def good_world() -> World:
         integrity_rid=0x2000,
         default_dacl=build_acl([allow(A, GENERIC_ALL), allow(LOCAL_SYSTEM, GENERIC_ALL),
                                 allow(A_LOGON, 0xA000_0000)]),
+        authentication_id=A_LUID,
     )
     base_groups = ((NONE_GROUP, 7), (EVERYONE, 7), (USERS, 7), (AUTH, 7), (THIS_ORG, 7), (MEDIUM, 0x60))
     for sid, name in ((A, "HOST\\aido-a"), (X, "HOST\\aido-x"), (O, "HOST\\human")):
@@ -432,7 +451,7 @@ def good_world() -> World:
             sid=sid, account_name=name, sid_type=1, is_local_account=True,
             groups=base_groups, privileges=STANDARD_PRIVILEGES,
         )
-    w.session_facts = SessionFacts("WinSta0", True, A_LOGON, "Default", A_LOGON)
+    w.session_facts = session("WinSta0", True, A_LOGON, "Default", A_LOGON)
     kernel = [allow(A, KERNEL_OBJECT_ALL_ACCESS), allow(LOCAL_SYSTEM, KERNEL_OBJECT_ALL_ACCESS),
               allow(A_LOGON, PROCESS_QUERY_LIMITED | SYNCH)]
     process_sd = build_security_descriptor(A, kernel, protected=False)
@@ -445,7 +464,7 @@ def good_world() -> World:
         import_paths=(INSTALL + "\\python\\python314.zip", INSTALL + "\\python\\DLLs",
                       INSTALL + "\\python\\Lib", INSTALL + "\\python", INSTALL + "\\venv",
                       INSTALL + "\\venv\\Lib\\site-packages"),
-        search_paths=(SYSTEM32, WINDOWSAPPS, ""),
+        search_paths=(SYSTEM32, ""),
         working_directory=INSTALL,
         package_directory=INSTALL + "\\venv\\Lib\\site-packages\\ai_dev_orchestrator",
         profile_directories=(PROFILE, PROFILE + "\\AppData\\Local\\Temp", PROFILE + "\\AppData\\Local\\Temp",
@@ -846,9 +865,9 @@ def test_the_bound_digest_must_match_when_given(world) -> None:
 def test_task_scheduler_launch_requires_a_non_interactive_window_station(world) -> None:
     world.boundary["launch_mechanism"] = "task_scheduler_s4u"
     refused(world, C.SESSION_FOREIGN, "non-interactive")
-    world.session_facts = SessionFacts("Service-0x0-3e7$", False, None, "Default", A_LOGON)
+    world.session_facts = session(A_STATION, False, None, "Default", A_LOGON)
     prove(world)
-    world.session_facts = SessionFacts("Service-0x0-3e7$", False, None, "Default", X_LOGON)
+    world.session_facts = session(A_STATION, False, None, "Default", X_LOGON)
     refused(world, C.SESSION_FOREIGN, "another logon session")
 
 
@@ -1008,10 +1027,10 @@ def test_a_custom_group_shared_by_authority_and_execution_refuses(world) -> None
 
 
 @pytest.mark.parametrize("session", [
-    SessionFacts("WinSta0", False, A_LOGON, "Default", A_LOGON),
-    SessionFacts("WinSta0", True, X_LOGON, "Default", X_LOGON),
-    SessionFacts("WinSta0", True, A_LOGON, "Default", X_LOGON),
-    SessionFacts("Service-0x0-3e7$", True, A_LOGON, "Default", A_LOGON),
+    session("WinSta0", False, A_LOGON, "Default", A_LOGON),
+    session("WinSta0", True, X_LOGON, "Default", X_LOGON),
+    session("WinSta0", True, A_LOGON, "Default", X_LOGON),
+    session("Service-0x0-3e7$", True, A_LOGON, "Default", A_LOGON),
 ])
 def test_a_foreign_session_refuses(world, session) -> None:
     world.session_facts = session
@@ -1145,7 +1164,7 @@ def test_the_interpreter_must_be_isolated(world) -> None:
 
 
 def test_a_search_path_with_a_trailing_backslash_names_the_same_directory(world) -> None:
-    world.code = replace(world.code, search_paths=(SYSTEM32 + "\\", WINDOWSAPPS))
+    world.code = replace(world.code, search_paths=(SYSTEM32 + "\\", "C:\\Windows\\"))
     prove(world)
     world.code = replace(world.code, search_paths=(SYSTEM32 + "\\\\",))
     refused(world, C.CODE_PATH_UNTRUSTED, "search_path[0]")
@@ -1164,8 +1183,10 @@ def test_an_entry_win32_cannot_address_exactly_refuses(world, name) -> None:
      C.OBJECT_RIGHTS, "kernel32.dll"),
     (lambda w: setattr(w.node(SYSTEM32 + "\\kernel32.dll"), "owner", X), C.OBJECT_OWNER, "kernel32.dll"),
     (lambda w: setattr(w.node(SYSTEM32), "owner", O), C.OBJECT_OWNER, "search_path[0]"),
-    (lambda w: w.node(WINDOWSAPPS + "\\winget.exe").aces.append(allow(X, FILE_WRITE_DATA)),
-     C.OBJECT_RIGHTS, "winget.exe"),
+    (lambda w: (setattr(w.node(WINDOWSAPPS + "\\winget.exe"), "reparse", False),
+                w.node(WINDOWSAPPS + "\\winget.exe").aces.append(allow(X, FILE_WRITE_DATA)),
+                setattr(w, "code", replace(w.code, search_paths=(SYSTEM32, WINDOWSAPPS)))),
+     C.OBJECT_RIGHTS, "search_path[1]\\winget.exe"),
     (lambda w: setattr(w, "code", replace(w.code, search_paths=("bin",))), C.CODE_PATH_UNTRUSTED, "search_path[0]"),
     (lambda w: setattr(w.node(INSTALL), "aces", [*ADMIN_FULL, allow(USERS, RX, OICI), allow(X, FILE_ADD_FILE)]),
      C.OBJECT_RIGHTS, "install_root[0]"),
@@ -1177,11 +1198,6 @@ def test_an_entry_win32_cannot_address_exactly_refuses(world, name) -> None:
 def test_search_directory_violations_refuse(world, mutate, category, match) -> None:
     mutate(world)
     refused(world, category, match)
-
-
-def test_reparse_children_of_a_search_directory_are_described_not_refused(world) -> None:
-    assert world.node(WINDOWSAPPS + "\\winget.exe").reparse
-    prove(world)
 
 
 @pytest.mark.parametrize("mutate, category, match", [
@@ -1363,6 +1379,301 @@ def test_b10_overlapping_declared_paths_are_detected_beyond_ascii() -> None:
         parse_identity_boundary(boundary_bytes(paths__state_root="C:\\AIDO\\\u00c9", paths__published="C:\\AIDO\\\u00e9\\p"))
 
 
+# -- FU1: bypasses confirmed by the independent review --------------------------------
+
+ISOLATED = "C:\\Iso"
+
+
+def relocate(w: World, old: str, new: str) -> None:
+    """Move ``old`` and everything below it to ``new``, keeping every
+    descriptor, and rewrite the boundary paths and code-load facts naming it."""
+    old_key = ntpath.normcase(old)
+
+    def moved(path: str) -> bool:
+        key = ntpath.normcase(path)
+        return key == old_key or key.startswith(old_key + "\\")
+
+    def rewrite(path: str) -> str:
+        return new + path[len(old):] if moved(path) else path
+
+    nodes = sorted((w.names[k], w.nodes[k]) for k in list(w.nodes) if moved(w.names[k]))
+    for path, _ in reversed(nodes):
+        w.remove(path)
+    for path, node in nodes:
+        w.put(rewrite(path), is_dir=node.is_dir, owner=node.owner, aces=node.aces, protected=node.protected,
+              reparse=node.reparse, links=node.links, final=node.final, raw=node.raw, target=node.target)
+    paths = w.boundary["paths"]
+    for name, value in paths.items():
+        paths[name] = [rewrite(v) for v in value] if isinstance(value, list) else rewrite(value)
+    w.code = replace(w.code, **{
+        name: tuple(rewrite(v) for v in value) if isinstance(value, tuple) else rewrite(value)
+        for name, value in w.code.__dict__.items() if name != "isolated_interpreter"
+    })
+
+
+def isolated_world(path: str) -> World:
+    """A correct world in which ``path`` sits under an ancestor of its own."""
+    w = good_world()
+    w.put(ISOLATED, is_dir=True, owner=ADMINISTRATORS, protected=True, aces=[*ADMIN_FULL, allow(USERS, RX)])
+    relocate(w, path, ISOLATED + "\\" + ntpath.basename(path))
+    return w
+
+
+def test_b13_write_dac_on_an_ancestor_refuses_a_protected_state_root(world) -> None:
+    """B-13 (FU1 F1). X holds WRITE_DAC on ``C:\\AIDO`` but neither DELETE nor
+    DELETE_CHILD there, and the state root itself is protected. X rewrites the
+    ancestor's DACL, grants itself DELETE_CHILD and renames the state root
+    away: the proof must refuse."""
+    world.node("C:\\AIDO").aces.append(allow(X, WRITE_DAC))
+    aido = parse_security_descriptor(world.node("C:\\AIDO").descriptor())
+    assert upper_bound_rights(aido, principal_x(), ObjectKind.DIRECTORY) & (DELETE | FILE_DELETE_CHILD) == 0
+    assert world.node(STATE).protected and world.node(STATE).owner == A
+    refused(world, C.OBJECT_REPLACEABLE, "an ancestor of state_root")
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda n: n.aces.append(allow(X, WRITE_OWNER)),
+    lambda n: n.aces.append(allow(O, WRITE_DAC)),
+    lambda n: n.aces.append(allow(USERS, WRITE_OWNER)),
+    lambda n: n.aces.append(allow(INTERACTIVE, WRITE_DAC)),
+    lambda n: setattr(n, "owner", X),
+    lambda n: setattr(n, "owner", O),
+], ids=["x-write-owner", "o-write-dac", "users-write-owner", "interactive-write-dac", "x-owner", "o-owner"])
+def test_b13_taking_over_an_ancestor_refuses(world, mutate) -> None:
+    """Ownership is an implicit WRITE_DAC; WRITE_OWNER takes ownership."""
+    mutate(world.node("C:\\AIDO"))
+    refused(world, C.OBJECT_REPLACEABLE, "an ancestor of state_root")
+
+
+@pytest.mark.parametrize("moved, label", [
+    (STATE, "state_root"), (PUBLISHED, "published"), (INBOX, "inbox"), (EXCHANGE, "exchange_root"),
+    (CLONES, "clone"), (INSTALL, "install_root[0]"),
+], ids=["state", "published", "inbox", "exchange", "clone", "install"])
+@pytest.mark.parametrize("right", [WRITE_DAC, WRITE_OWNER], ids=["write-dac", "write-owner"])
+def test_b13_every_protected_path_refuses_an_ancestor_takeover(moved, label, right) -> None:
+    w = isolated_world(moved)
+    prove(w)
+    w.node(ISOLATED).aces.append(allow(X, right))
+    refused(w, C.OBJECT_REPLACEABLE, f"an ancestor of {label}")
+
+
+@pytest.mark.parametrize("path", ["C:\\", "C:\\ProgramData"], ids=["volume-root", "programdata"])
+@pytest.mark.parametrize("right", [WRITE_DAC, WRITE_OWNER], ids=["write-dac", "write-owner"])
+def test_b13_the_anchor_refuses_an_ancestor_takeover(world, path, right) -> None:
+    world.node(path).aces.append(allow(X, right))
+    refused(world, C.BOUNDARY_UNPROTECTED, "an ancestor of the identity boundary")
+
+
+@pytest.mark.parametrize("path, label", [
+    ("C:\\Windows", "an ancestor of search_path[0]"),
+    ("C:\\Users", "an ancestor of profile[0]"),
+    (PROFILE + "\\AppData", "an ancestor of profile[1]"),
+], ids=["search-path", "profile", "profile-intermediate"])
+@pytest.mark.parametrize("right", [WRITE_DAC, WRITE_OWNER], ids=["write-dac", "write-owner"])
+def test_b13_code_and_profile_paths_refuse_an_ancestor_takeover(world, path, label, right) -> None:
+    world.node(path).aces.append(allow(X, right))
+    refused(world, C.OBJECT_REPLACEABLE, label)
+
+
+def test_b13_an_adversary_owned_ancestor_is_safe_only_under_an_effective_owner_rights_ace() -> None:
+    """The clone's ``.git`` sits below the X-owned clone root, so ownership
+    alone cannot refuse; what decides is whether the owner keeps the implicit
+    WRITE_DAC."""
+    w = isolated_world(STATE)
+    w.node(ISOLATED).owner = X
+    refused(w, C.OBJECT_REPLACEABLE, "WRITE_DAC")
+    w.node(ISOLATED).aces.insert(0, allow(OWNER_RIGHTS, READ_CONTROL))
+    prove(w)
+    w.node(ISOLATED).aces[0] = allow(OWNER_RIGHTS, READ_CONTROL, IO | OICI)  # inherit-only: not effective
+    refused(w, C.OBJECT_REPLACEABLE, "WRITE_DAC")
+    w.node(ISOLATED).aces[0] = allow(OWNER_RIGHTS, READ_CONTROL | WRITE_OWNER)
+    refused(w, C.OBJECT_REPLACEABLE, "WRITE_OWNER")
+
+
+def test_b13_a_missing_search_path_refuses_a_takeover_above_its_nearest_ancestor() -> None:
+    w = isolated_world(INSTALL)
+    w.put(ISOLATED + "\\tools", is_dir=True, owner=ADMINISTRATORS, protected=True,
+          aces=[*ADMIN_FULL, allow(USERS, RX)])
+    w.code = replace(w.code, search_paths=(ISOLATED + "\\tools\\bin",))
+    prove(w)
+    w.node(ISOLATED).aces.append(allow(X, WRITE_DAC))
+    refused(w, C.OBJECT_REPLACEABLE, "ancestor")
+
+
+@pytest.mark.parametrize("right", [WRITE_DAC, WRITE_OWNER], ids=["write-dac", "write-owner"])
+def test_b13_a_missing_search_path_refuses_a_takeover_of_its_nearest_ancestor(right) -> None:
+    """Found in the FU1 self-review: the nearest existing ancestor of a missing
+    PATH entry was checked only for add rights, but re-permissioning it grants
+    them."""
+    w = isolated_world(INSTALL)
+    w.put(ISOLATED + "\\tools", is_dir=True, owner=ADMINISTRATORS, protected=True,
+          aces=[*ADMIN_FULL, allow(USERS, RX), allow(X, right)])
+    w.code = replace(w.code, search_paths=(ISOLATED + "\\tools\\bin",))
+    refused(w, C.CODE_PATH_UNTRUSTED, "could create it")
+
+
+_PROTECTED_OBJECTS = [
+    (ANCHOR, C.BOUNDARY_UNPROTECTED), (ANCHOR_DIR, C.BOUNDARY_UNPROTECTED),
+    (STATE, C.OBJECT_RIGHTS), (STATE + "\\evidence", C.OBJECT_RIGHTS), (PUBLISHED, C.OBJECT_RIGHTS),
+    (INBOX, C.OBJECT_RIGHTS), (EXCHANGE, C.OBJECT_RIGHTS), (CLONES, C.OBJECT_REPLACEABLE),
+    (CLONE, C.OBJECT_RIGHTS), (GIT, C.OBJECT_RIGHTS), (GIT + "\\refs\\heads\\main", C.OBJECT_RIGHTS),
+    (INSTALL, C.OBJECT_RIGHTS), (INSTALL + "\\python\\Lib\\os.py", C.OBJECT_RIGHTS),
+    (SYSTEM32, C.OBJECT_RIGHTS), (SYSTEM32 + "\\kernel32.dll", C.OBJECT_RIGHTS),
+    (PROFILE, C.OBJECT_RIGHTS), (PROFILE + "\\AppData\\Local\\Temp", C.OBJECT_RIGHTS),
+]
+
+
+@pytest.mark.parametrize("path, category", _PROTECTED_OBJECTS, ids=[p for p, _ in _PROTECTED_OBJECTS])
+@pytest.mark.parametrize("right", [WRITE_DAC, WRITE_OWNER], ids=["write-dac", "write-owner"])
+def test_b13_a_takeover_right_on_any_protected_object_itself_refuses(world, path, category, right) -> None:
+    """The leaf half of B-13: each object's own limit excludes both rights."""
+    world.node(path).aces.insert(0, allow(X, right))
+    refused(world, category, {WRITE_DAC: "WRITE_DAC", WRITE_OWNER: "WRITE_OWNER"}[right])
+
+
+@pytest.mark.parametrize("desktop_sid", [None, A_LOGON], ids=["desktop-sid-absent", "desktop-sid-own"])
+@pytest.mark.parametrize("station_sid", [X_LOGON, X, LOCAL_SYSTEM], ids=["x-logon", "x-user", "system"])
+def test_b14_a_foreign_non_interactive_window_station_refuses(world, station_sid, desktop_sid) -> None:
+    """B-14 (FU1 F2). A non-interactive station that is not WinSta0 but
+    belongs to someone else does not isolate A, whatever the desktop says."""
+    world.boundary["launch_mechanism"] = "task_scheduler_s4u"
+    world.session_facts = session(A_STATION, False, station_sid, "Default", desktop_sid)
+    refused(world, C.SESSION_FOREIGN, "window station")
+
+
+@pytest.mark.parametrize("station_sid, desktop_sid", [
+    (None, None), (None, A_LOGON), (A_LOGON, None), (A_LOGON, A_LOGON),
+], ids=["sid-less", "sid-less-own-desktop", "own-station", "own-station-own-desktop"])
+def test_b14_the_station_of_as_own_logon_session_is_accepted(world, station_sid, desktop_sid) -> None:
+    """A genuine S4U launch: the station Windows created for A's logon session."""
+    world.boundary["launch_mechanism"] = "task_scheduler_s4u"
+    world.session_facts = session(A_STATION, False, station_sid, "Default", desktop_sid)
+    prove(world)
+    world.session_facts = session(A_STATION.upper(), False, station_sid, "Default", desktop_sid)
+    prove(world)
+    world.token = replace(world.token, authentication_id=(1 << 32) | A_LUID)
+    world.session_facts = session("Service-0x1-4242$", False, station_sid, "Default", desktop_sid)
+    prove(world)
+
+
+@pytest.mark.parametrize("station", [
+    "Service-0x0-3e7$",  # SYSTEM's: shared with every service in session 0
+    "Service-0x0-3e5$",  # LocalService's
+    "Service-0x0-7777$",  # another logon session's
+    "Service-0x0-04242$", "Service-0x00-4242$", "Service-0x0-4242", "xService-0x0-4242$",
+    "ſervice-0x0-4242$",  # LATIN SMALL LETTER LONG S casefolds to "s"
+    "Service-0x0-4242$\\Default",
+], ids=["system", "local-service", "other-session", "padded-low", "padded-high", "no-dollar",
+        "prefixed", "long-s", "with-desktop"])
+@pytest.mark.parametrize("desktop_sid", [None, A_LOGON], ids=["desktop-sid-absent", "desktop-sid-own"])
+def test_b14_a_sid_less_station_not_named_for_as_logon_session_refuses(world, station, desktop_sid) -> None:
+    """A station that reports no SID could be anyone's; only the name Windows
+    derives from A's own logon LUID binds it to A."""
+    world.boundary["launch_mechanism"] = "task_scheduler_s4u"
+    world.session_facts = session(station, False, None, "Default", desktop_sid)
+    refused(world, C.SESSION_FOREIGN, "own logon session")
+
+
+@pytest.mark.parametrize("value", [None, "0x4242", True, 0, -1, 1 << 64], ids=repr)
+def test_b14_a_malformed_logon_luid_refuses(world, value) -> None:
+    world.token = replace(world.token, authentication_id=value)
+    refused(world, C.SECURITY_FACT_UNAVAILABLE, "process token")
+
+
+_SQUATTED = build_security_descriptor(X, [allow(X, 0xF037F), allow(A_LOGON, 0xF037F)], protected=False)
+
+
+@pytest.mark.parametrize("mechanism", ["task_scheduler_s4u", "interactive_session"])
+@pytest.mark.parametrize("field_name, value, match", [
+    ("station_sd", _SQUATTED, "owned by"),
+    ("station_sd", build_security_descriptor(LOCAL_SYSTEM, [allow(A_LOGON, 0xF037F), allow(USERS, 0x2)],
+                                             protected=False), "WRITE"),
+    ("station_sd", build_security_descriptor(LOCAL_SYSTEM, [allow(X_LOGON, 0xF037F)], protected=False),
+     "execution"),
+    ("station_sd", build_security_descriptor(O, [allow(A_LOGON, 0xF037F)], protected=False), "operator"),
+    ("desktop_sd", build_security_descriptor(LOCAL_SYSTEM, [allow(A_LOGON, 0xF01FF), allow(X, 0x8)],
+                                             protected=False), "desktop"),  # DESKTOP_HOOKCONTROL
+    ("desktop_sd", build_security_descriptor(LOCAL_SYSTEM, [allow(EVERYONE, GENERIC_ALL)], protected=False),
+     "desktop"),
+    ("desktop_sd", build_security_descriptor(INTERACTIVE, [allow(A_LOGON, 0xF01FF)], protected=False),
+     "owned by"),
+], ids=["squatted-station", "users-on-station", "foreign-logon-on-station", "operator-owned-station",
+        "x-hook-desktop", "everyone-desktop", "interactive-owned-desktop"])
+def test_b14_x_or_o_able_to_use_the_station_or_desktop_refuses(world, mechanism, field_name, value, match) -> None:
+    """Found in the FU1 self-review: the S4U name binding alone accepts a
+    SID-less station that someone else created under A's name. What actually
+    isolates A is that X and O can neither own nor open its station and
+    desktop, so both are checked, for both launch mechanisms."""
+    world.boundary["launch_mechanism"] = mechanism
+    names = (A_STATION, False, None) if mechanism == "task_scheduler_s4u" else ("WinSta0", True, A_LOGON)
+    world.session_facts = session(*names, "Default", A_LOGON)
+    prove(world)
+    world.session_facts = session(*names, "Default", A_LOGON, **{field_name: value})
+    refused(world, C.SESSION_FOREIGN, match)
+
+
+def test_b14_a_malformed_station_descriptor_refuses(world) -> None:
+    world.session_facts = replace(world.session_facts, desktop_descriptor=b"\x01\x00")
+    refused(world, C.DESCRIPTOR_UNSUPPORTED, "desktop")
+    world.session_facts = replace(world.session_facts, desktop_descriptor="x")
+    refused(world, C.SECURITY_FACT_UNAVAILABLE, "window station")
+
+
+@pytest.mark.parametrize("name, is_dir", [
+    ("version.dll", False), ("tool.exe", False), ("helper.dll", True),
+], ids=["dll-file", "exe-file", "directory"])
+def test_b15_a_reparse_entry_in_a_search_directory_refuses(world, name, is_dir) -> None:
+    """B-15 (FU1 F3). The PATH directory is protected, but an entry directly
+    in it is a link whose target X can write. A protected link does not make
+    its target protected."""
+    world.put(CLONE + "\\payload", is_dir=is_dir, owner=X, aces=[allow(X, MODIFY | WRITE_DAC)])
+    link = world.put_child(SYSTEM32, name, is_dir=is_dir)
+    link.reparse, link.target = True, CLONE + "\\payload"
+    refused(world, C.OBJECT_REPARSE, name)
+
+
+def test_b15_subdirectories_of_a_search_directory_are_classified_without_being_opened(world) -> None:
+    """Found in the FU1 self-review, on this host: 13 subdirectories of the
+    real System32 (``config`` among them) deny a standard user even
+    READ_CONTROL. Opening every entry would refuse every real proof, so a
+    subdirectory's reparse status comes from the listing, and it is never
+    opened."""
+    world.put_child(SYSTEM32, "config", is_dir=True)
+    original = world.object_facts
+
+    def denied(path):
+        if ntpath.normcase(path) == ntpath.normcase(SYSTEM32 + "\\config"):
+            raise PermissionError(13, "Access is denied")
+        return original(path)
+
+    world.object_facts = denied
+    prove(world)
+    world.node(SYSTEM32 + "\\config").reparse = True
+    refused(world, C.OBJECT_REPARSE, "search_path[0]\\config")
+
+
+def test_b15_a_reparse_point_reported_by_either_the_listing_or_the_handle_refuses(world) -> None:
+    original = world.list_directory
+    world.list_directory = lambda path: tuple(
+        replace(e, is_reparse_point=True) if e.name in ("kernel32.dll", "abc.json") else e for e in original(path)
+    )
+    refused(world, C.OBJECT_REPARSE, "abc.json")  # a walked authority directory
+    world.list_directory = lambda path: tuple(
+        replace(e, is_reparse_point=True) if e.name == "kernel32.dll" else e for e in original(path)
+    )
+    refused(world, C.OBJECT_REPARSE, "kernel32.dll")  # a search directory
+    world.node(SYSTEM32 + "\\kernel32.dll").reparse = True  # the handle says so, the listing does not
+    world.list_directory = lambda path: tuple(replace(e, is_reparse_point=False) for e in original(path))
+    refused(world, C.OBJECT_REPARSE, "kernel32.dll")
+
+
+def test_b15_an_app_execution_alias_on_path_refuses(world) -> None:
+    """Windows' own ``WindowsApps`` aliases are reparse points too; the
+    dedicated authority account's PATH must not contain them."""
+    world.code = replace(world.code, search_paths=(SYSTEM32, WINDOWSAPPS))
+    refused(world, C.OBJECT_REPARSE, "winget.exe")
+
+
 @windows_only
 def test_b9_windows_follows_an_intermediate_junction_even_without_following_the_last(tmp_path) -> None:
     """The real API behaviour B-9 rests on."""
@@ -1433,6 +1744,16 @@ def test_random_mutations_refuse_cleanly_or_still_satisfy_fd14() -> None:
                     kind = ObjectKind.DIRECTORY if node.is_dir else ObjectKind.FILE
                     assert upper_bound_rights(sd, x, kind) & ~x_limit == 0, (w.names[key], sd)
                     assert upper_bound_rights(sd, o, kind) & ~o_limit == 0, (w.names[key], sd)
+        # FU1: no ancestor of a protected object can be re-permissioned, taken,
+        # deleted or emptied by X or O.
+        for root in (*_FD14_LIMITS, INBOX, EXCHANGE, CLONE, INSTALL, ANCHOR):
+            chain = ib._components(root)
+            for index, component in enumerate(chain[:-1]):
+                sd = parse_security_descriptor(w.node(component).descriptor())
+                for adversary in (x, o):
+                    held = upper_bound_rights(sd, adversary, ObjectKind.DIRECTORY)
+                    assert held & (WRITE_DAC | WRITE_OWNER | FILE_DELETE_CHILD) == 0, (component, root)
+                    assert index == 0 or held & DELETE == 0, (component, root)
     assert refused_count > 100 and accepted > 20  # the search exercised both outcomes
 
 
@@ -1489,10 +1810,11 @@ def test_an_object_facts_subclass_is_refused(world) -> None:
 
 
 @pytest.mark.parametrize("entries", [
-    [DirectoryEntry("x", False)],
-    (DirectoryEntry("..", True),),
-    (DirectoryEntry("a\\b", False),),
-    (DirectoryEntry("abc.json", False), DirectoryEntry("ABC.JSON", False)),
+    [DirectoryEntry("x", False, False)],
+    (DirectoryEntry("..", True, False),),
+    (DirectoryEntry("a\\b", False, False),),
+    (DirectoryEntry("abc.json", False, False), DirectoryEntry("ABC.JSON", False, False)),
+    (DirectoryEntry("abc.json", False, 0),),
     (("abc.json", False),),
 ])
 def test_malformed_listings_refuse(world, entries) -> None:
@@ -1507,7 +1829,7 @@ def test_malformed_listings_refuse(world, entries) -> None:
 def test_a_listing_disagreeing_with_the_handle_refuses(world) -> None:
     original = world.list_directory
     world.list_directory = lambda path: tuple(
-        DirectoryEntry(e.name, not e.is_dir) if ntpath.normcase(path) == ntpath.normcase(STATE) else e
+        DirectoryEntry(e.name, not e.is_dir, e.is_reparse_point) if ntpath.normcase(path) == ntpath.normcase(STATE) else e
         for e in original(path)
     )
     refused(world, C.SECURITY_FACT_UNAVAILABLE)
@@ -1560,7 +1882,7 @@ def test_nothing_is_cached_between_proofs(world) -> None:
 def test_each_proof_rereads_the_boundary(world) -> None:
     first = prove(world)
     world.boundary["launch_mechanism"] = "task_scheduler_s4u"
-    world.session_facts = SessionFacts("Service-0x0-3e7$", False, None, "Default", None)
+    world.session_facts = session(A_STATION, False, None, "Default", None)
     second = prove(world)
     assert first.boundary_sha256 != second.boundary_sha256
     refused(world, C.BOUNDARY_DIGEST_MISMATCH, expected_boundary_sha256=first.boundary_sha256)
@@ -1674,6 +1996,8 @@ def test_real_facts_describe_a_junction_without_following_it(tmp_path) -> None:
     _winapi.CreateJunction(str(target), str(link))
     info = WindowsSecurityFacts().object_facts(str(link))
     assert info.is_reparse_point is True and info.is_directory is True
+    listed = {e.name: (e.is_directory, e.is_reparse_point) for e in WindowsSecurityFacts().list_directory(str(tmp_path))}
+    assert listed == {"target": (True, False), "link": (True, True)}
 
 
 @windows_only
@@ -1685,12 +2009,15 @@ def test_real_token_process_and_session_facts_are_well_formed() -> None:
     canonical_sid(token.user_sid)
     parse_acl(token.default_dacl)
     assert token.elevation_type in (1, 2, 3)
+    assert type(token.authentication_id) is int and 0 < token.authentication_id < 2**64
     assert sum(1 for _, attrs in token.groups if attrs & 0xC0000000 == 0xC0000000) == 1
     process = facts.process()
     for raw in (process.process_descriptor, process.thread_descriptor, process.token_descriptor):
         assert parse_security_descriptor(raw).owner
     session = facts.session()
     assert session.window_station and session.desktop
+    for raw in (session.window_station_descriptor, session.desktop_descriptor):
+        assert parse_security_descriptor(raw).owner
     principal = facts.principal(token.user_sid)
     assert principal.sid == token.user_sid and principal.sid_type == 1
     assert ntpath.isabs(facts.program_data_directory())

@@ -30,7 +30,9 @@ What each check answers, and why it is shaped this way:
 - **An object is only as safe as its ancestors.** X can delete or rename an
   object if it has ``DELETE`` on it *or* ``FILE_DELETE_CHILD`` on its parent,
   whatever the object's own DACL says, and can then recreate it if it can add
-  to the parent. So every component from the volume root down is checked, and
+  to the parent. It can grant itself either right on any ancestor it can
+  re-permission or take over (``WRITE_DAC``, ``WRITE_OWNER``, ownership). So
+  every component from the volume root down is checked for all of these, and
   a protected child DACL alone is never accepted as protection.
 - **Inherit-only ACEs are invisible on the object itself** but decide what its
   future children grant, so each authority directory's inheritance is simulated
@@ -43,8 +45,12 @@ What each check answers, and why it is shaped this way:
   before any DACL result is used.
 - **Code is authority too.** Every location A's interpreter imports from must
   sit inside a declared, admin-owned install root that A, X and O can only read
-  and execute, walked in full. ``PATH`` directories, the working directory and
-  A's profile directories are checked as well.
+  and execute, walked in full. ``PATH`` directories (where any reparse entry
+  refuses: a link's own protection is not its target's), the working
+  directory and A's profile directories are checked as well.
+- **A session is isolated by who can use it.** The window station must be
+  A's own (its logon SID, or the station named after A's logon LUID for an
+  S4U launch), and X and O must neither own nor open the station or desktop.
 - **Nothing is cached across proofs.** Each call re-reads every fact, including
   the boundary file. A consumer must call the prover again; a proof object is
   a record of one successful run, not a capability that stays valid.
@@ -639,6 +645,7 @@ class _Run:
                 type(entry) is not DirectoryEntry
                 or type(entry.name) is not str
                 or type(entry.is_directory) is not bool
+                or type(entry.is_reparse_point) is not bool
                 or entry.name in ("", ".", "..")
                 or any(c in entry.name for c in "\\/:\x00")
                 or entry.name.casefold() in seen
@@ -787,8 +794,14 @@ class _Run:
     def not_replaceable(self, path: str, roles: tuple[str, ...], what: str,
                         category: IsolationCategory = _C.OBJECT_REPLACEABLE) -> None:
         """No role can delete or rename ``path`` or any ancestor (``DELETE`` on
-        the component, or ``FILE_DELETE_CHILD`` on its parent), and none is a
-        reparse point."""
+        the component, or ``FILE_DELETE_CHILD`` on its parent), none can obtain
+        either right by re-permissioning or taking over any ancestor from the
+        volume root down (``WRITE_DAC``, ``WRITE_OWNER``, or ownership without
+        an effective ``OWNER RIGHTS`` ACE), and none is a reparse point.
+
+        ``WRITE_DAC`` and ``WRITE_OWNER`` on ``path`` itself are each caller's
+        own per-object limit, checked there with its precise category; every
+        caller excludes both."""
         chain = _components(path)
         objects: list[_Object] = []
         for index, component in enumerate(chain):
@@ -801,9 +814,21 @@ class _Run:
             if index < len(chain) - 1 and not obj.facts.is_directory:
                 raise IdentityBoundaryError(_C.OBJECT_KIND, f"{label} is not a directory.")
             objects.append(obj)
-        for index in range(1, len(objects)):
-            label = what if index == len(objects) - 1 else f"an ancestor of {what}"
+        for index in range(len(objects)):
+            leaf = index == len(objects) - 1
+            label = what if leaf else f"an ancestor of {what}"
             for role in roles:
+                # Ownership is evaluated inside the rights: an owner holds
+                # WRITE_DAC implicitly unless OWNER RIGHTS replaces it.
+                takeover = 0 if leaf else self.rights_of(objects[index], role) & (WRITE_DAC | WRITE_OWNER)
+                if takeover:
+                    raise IdentityBoundaryError(
+                        category,
+                        f"the {role} identity could be granted {describe_rights(takeover)} on {label}, "
+                        "and so could grant itself the right to delete or rename what lies below it.",
+                    )
+                if index == 0:
+                    continue  # the volume root has no parent and cannot be renamed
                 if self.rights_of(objects[index], role) & DELETE:
                     raise IdentityBoundaryError(
                         category, f"the {role} identity could delete or rename {label}."
@@ -837,7 +862,7 @@ class _Run:
                     raise IdentityBoundaryError(
                         _C.SECURITY_FACT_UNAVAILABLE, f"{child_label} vanished while being examined."
                     )
-                if obj.facts.is_reparse_point:
+                if obj.facts.is_reparse_point or entry.is_reparse_point:
                     raise IdentityBoundaryError(_C.OBJECT_REPARSE, f"{child_label} is a reparse point.")
                 if obj.facts.is_directory != entry.is_directory:
                     raise self.malformed(f"the listing of {label}")
@@ -909,6 +934,8 @@ def _check_token(run: _Run) -> TokenFacts:
         or type(token.elevation_type) is not int
         or type(token.integrity_rid) is not int
         or type(token.default_dacl) is not bytes
+        or type(token.authentication_id) is not int
+        or not 0 < token.authentication_id < 2**64
     ):
         raise run.malformed("the process token")
     try:
@@ -1145,6 +1172,12 @@ def _check_anchor(run: _Run, path: str, directory: str) -> None:
     run.not_replaceable(path, _ALL, "the identity boundary", _C.BOUNDARY_UNPROTECTED)
 
 
+def _service_window_station(authentication_id: int) -> str:
+    """``Service-0x<high>-<low>$``: the name Windows gives the non-interactive
+    window station it creates for the logon session with this LUID."""
+    return f"Service-0x{authentication_id >> 32:x}-{authentication_id & 0xFFFF_FFFF:x}$"
+
+
 def _check_session(run: _Run, boundary: IdentityBoundary) -> None:
     session = run.call("the window station and desktop", run.facts.session)
     if (
@@ -1154,9 +1187,32 @@ def _check_session(run: _Run, boundary: IdentityBoundary) -> None:
         or type(session.desktop) is not str
         or not (session.window_station_sid is None or type(session.window_station_sid) is str)
         or not (session.desktop_sid is None or type(session.desktop_sid) is str)
+        or type(session.window_station_descriptor) is not bytes
+        or type(session.desktop_descriptor) is not bytes
     ):
         raise run.malformed("the window station and desktop")
     own = run.authority_logon_sid
+    _check_session_identity(run, boundary, session, own)
+    # Whatever the names and SIDs say, X and O must not be able to open or use
+    # the station or the desktop (hooks, input, window messages, clipboard),
+    # and must not own them. This also refuses a station someone else created
+    # under the name Windows would give A's.
+    for what, raw, kind in (
+        ("the authority window station", session.window_station_descriptor, ObjectKind.WINDOW_STATION),
+        ("the authority desktop", session.desktop_descriptor, ObjectKind.DESKTOP),
+    ):
+        descriptor = run.descriptor(bytes(raw), what)
+        for role in _ADVERSARIES:
+            if run.principals[role].may_hold(descriptor.owner):
+                raise IdentityBoundaryError(
+                    _C.SESSION_FOREIGN, f"{what} is owned by a SID the {role} identity may hold."
+                )
+        run.limit(descriptor, kind, {role: NO_ACCESS for role in _ADVERSARIES}, what, _C.SESSION_FOREIGN)
+
+
+def _check_session_identity(
+    run: _Run, boundary: IdentityBoundary, session: SessionFacts, own: str | None
+) -> None:
     if boundary.launch_mechanism == "interactive_session":
         if not (
             session.window_station_visible
@@ -1174,6 +1230,22 @@ def _check_session(run: _Run, boundary: IdentityBoundary) -> None:
             raise IdentityBoundaryError(
                 _C.SESSION_FOREIGN,
                 "a Task Scheduler (S4U) launch must run on a non-interactive window station.",
+            )
+        # Not being WinSta0 proves nothing about whose station it is. A station
+        # that reports a SID belongs to that logon session; one that reports
+        # none (as service stations, SYSTEM's included, may) is A's only if it
+        # is the station Windows names after A's own logon session LUID.
+        if session.window_station_sid is not None and session.window_station_sid != own:
+            raise IdentityBoundaryError(
+                _C.SESSION_FOREIGN,
+                "the authority process's window station belongs to another logon session.",
+            )
+        assert run.token is not None
+        if _key(session.window_station) != _key(_service_window_station(run.token.authentication_id)):
+            raise IdentityBoundaryError(
+                _C.SESSION_FOREIGN,
+                "the authority process's window station is not the one created for its own logon "
+                "session (a shared or system window station does not isolate it).",
             )
         if session.desktop_sid is not None and session.desktop_sid != own:
             raise IdentityBoundaryError(
@@ -1403,7 +1475,8 @@ def _check_code(run: _Run, boundary: IdentityBoundary) -> None:
 
 def _check_search_directory(run: _Run, raw: str, what: str, *, must_exist: bool) -> None:
     """A directory searched for executables or DLLs: X and O cannot add to it,
-    replace it, re-permission it, or modify a file directly in it."""
+    replace it, re-permission it, or modify a file directly in it, and no
+    entry directly in it is a reparse point."""
     canonical, exists = _canonical_code_path(run, raw, what)
     limits = {role: READ_ONLY for role in _ADVERSARIES}
     if not exists:
@@ -1411,7 +1484,8 @@ def _check_search_directory(run: _Run, raw: str, what: str, *, must_exist: bool)
             raise IdentityBoundaryError(_C.OBJECT_MISSING, f"{what} does not exist.")
         existing, _ = run.nearest_existing(canonical, what)
         for role in _ADVERSARIES:
-            if run.rights_of(existing, role) & (FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY):
+            # WRITE_DAC or WRITE_OWNER would let it grant itself the add rights.
+            if run.rights_of(existing, role) & (FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY | WRITE_DAC | WRITE_OWNER):
                 raise IdentityBoundaryError(
                     _C.CODE_PATH_UNTRUSTED,
                     f"{what} does not exist and the {role} identity could create it.",
@@ -1426,15 +1500,29 @@ def _check_search_directory(run: _Run, raw: str, what: str, *, must_exist: bool)
     run.owner_not_held_by(obj, _ADVERSARIES, what)
     run.limit_object(obj, limits, what)
     run.inheritance(obj, obj.descriptor.owner, limits, what, kinds=(ObjectKind.FILE,))
+    # A link is examined without following it, so its own protection says
+    # nothing about the image or DLL a search loads through it. No entry is
+    # followed and no target is proven: any reparse entry refuses, a directory
+    # one included (its attribute says nothing about what its target is).
+    unproven = "is a reparse point; what a search would load through it is not proven."
     for entry in run.listing(canonical, what):
-        if entry.is_directory:
-            continue  # only files directly in a search directory can be loaded from it
         label = f"{what}\\{entry.name}"
+        if entry.is_reparse_point:
+            raise IdentityBoundaryError(_C.OBJECT_REPARSE, f"{label} {unproven}")
+        if entry.is_directory:
+            # Only files directly in a search directory can be loaded from it.
+            # A subdirectory is not opened: some (System32\config, for one)
+            # deny a standard user even READ_CONTROL.
+            continue
         child = run.object(ntpath.join(canonical, entry.name), label)
         if child is None:
             raise IdentityBoundaryError(
                 _C.SECURITY_FACT_UNAVAILABLE, f"{label} vanished while being examined."
             )
+        if child.facts.is_reparse_point:
+            raise IdentityBoundaryError(_C.OBJECT_REPARSE, f"{label} {unproven}")
+        if child.facts.is_directory:
+            raise run.malformed(f"the listing of {what}")
         run.owner_not_held_by(child, _ADVERSARIES, label)
         run.limit_object(child, limits, label)
 

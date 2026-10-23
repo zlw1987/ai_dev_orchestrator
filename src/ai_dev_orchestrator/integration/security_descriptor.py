@@ -119,6 +119,8 @@ class ObjectKind(Enum):
     PROCESS = "process"
     THREAD = "thread"
     TOKEN = "token"
+    WINDOW_STATION = "window_station"
+    DESKTOP = "desktop"
 
 
 def map_generic(mask: int, kind: ObjectKind) -> int:

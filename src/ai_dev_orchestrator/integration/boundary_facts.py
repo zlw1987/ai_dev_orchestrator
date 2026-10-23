@@ -45,8 +45,13 @@ class ObjectFacts:
 
 @dataclass(frozen=True)
 class DirectoryEntry:
+    """One entry as the directory listing reports it, without opening it."""
+
     name: str
     is_directory: bool
+    #: ``FILE_ATTRIBUTE_REPARSE_POINT`` from the listing itself, so a
+    #: subdirectory that a standard user cannot open is still classified.
+    is_reparse_point: bool
 
 
 @dataclass(frozen=True)
@@ -67,6 +72,10 @@ class TokenFacts:
     #: The token's default DACL (applied to threads and objects it creates),
     #: as a bare ACL.
     default_dacl: bytes
+    #: The logon session's LUID (``TOKEN_STATISTICS.AuthenticationId``) as one
+    #: unsigned 64-bit number, high part first. A non-interactive window
+    #: station created for a logon session is named after it.
+    authentication_id: int
 
 
 @dataclass(frozen=True)
@@ -91,6 +100,10 @@ class SessionFacts:
     window_station_sid: str | None
     desktop: str
     desktop_sid: str | None
+    #: Self-relative descriptors (owner and DACL) of the process's window
+    #: station and of its thread's desktop: who else may open and use them.
+    window_station_descriptor: bytes
+    desktop_descriptor: bytes
 
 
 @dataclass(frozen=True)
