@@ -2036,8 +2036,12 @@ def _tree(name: str) -> ast.AST:
     return ast.parse((_PACKAGE / name).read_text(encoding="utf-8"))
 
 
+#: Added by DL-4B S1 (the attestation verifier); checked by its own suite.
+_S1_MODULES = ("sshsig.py", "approver_registry.py", "attestation_verifier.py")
+
+
 def test_the_package_has_exactly_the_s0_modules() -> None:
-    assert sorted(p.name for p in _PACKAGE.glob("*.py")) == sorted(_MODULES)
+    assert sorted(p.name for p in _PACKAGE.glob("*.py")) == sorted(_MODULES + _S1_MODULES)
 
 
 def test_no_execution_network_model_git_or_harness_surface() -> None:
