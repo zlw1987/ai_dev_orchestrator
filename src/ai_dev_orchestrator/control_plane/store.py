@@ -546,16 +546,33 @@ class ControlPlaneStore:
         return cls._open(context.root.store_path, clock, context)
 
     @classmethod
+    def _layout(cls, authority: object) -> tuple[str, frozenset[str], str]:
+        """The schema, table set and version this kind of store creates and
+        requires. A subclass with a schema of its own overrides it (DL-4B)."""
+        if authority is None:
+            return _SCHEMA, _TABLES, STORE_SCHEMA_VERSION
+        return _SCHEMA + _AUTHORITY_SCHEMA, _AUTHORITY_TABLES, STORE_AUTHORITY_SCHEMA_VERSION
+
+    @classmethod
+    def _meta(cls, authority: object) -> tuple[tuple[str, str], ...]:
+        """``store_meta`` entries written at creation and required on every open."""
+        if authority is None:
+            return ()
+        return (("state_root_id", authority.root.root_id),)
+
+    @classmethod
+    def _meta_refusal(cls, key: str) -> str:
+        return "the authority store belongs to a different state root."
+
+    @classmethod
     def _open(
         cls,
         path: str | PathLike[str],
         clock: Callable[[], datetime] | None,
         authority: _AuthorityContext | None,
     ) -> ControlPlaneStore:
-        expected_tables = _TABLES if authority is None else _AUTHORITY_TABLES
-        expected_version = (
-            STORE_SCHEMA_VERSION if authority is None else STORE_AUTHORITY_SCHEMA_VERSION
-        )
+        schema, expected_tables, expected_version = cls._layout(authority)
+        meta = cls._meta(authority)
         db_path = Path(path)
         if not db_path.is_absolute():
             raise StoreError("the store path must be absolute.")
@@ -584,7 +601,6 @@ class ControlPlaneStore:
                 )
             }
             if not tables:
-                schema = _SCHEMA if authority is None else _SCHEMA + _AUTHORITY_SCHEMA
                 for statement in schema.split(";"):
                     if statement.strip():
                         connection.execute(statement)
@@ -592,10 +608,9 @@ class ControlPlaneStore:
                     "INSERT INTO store_meta (key, value) VALUES ('schema_version', ?)",
                     (expected_version,),
                 )
-                if authority is not None:
+                for key, value in meta:
                     connection.execute(
-                        "INSERT INTO store_meta (key, value) VALUES ('state_root_id', ?)",
-                        (authority.root.root_id,),
+                        "INSERT INTO store_meta (key, value) VALUES (?, ?)", (key, value)
                     )
             else:
                 row = (
@@ -614,14 +629,12 @@ class ControlPlaneStore:
                     raise StateUntrustedError(
                         "the store file does not carry this store's schema version."
                     )
-                if authority is not None:
-                    root_row = connection.execute(
-                        "SELECT value FROM store_meta WHERE key = 'state_root_id'"
+                for key, value in meta:
+                    meta_row = connection.execute(
+                        "SELECT value FROM store_meta WHERE key = ?", (key,)
                     ).fetchone()
-                    if root_row is None or root_row[0] != authority.root.root_id:
-                        raise StateUntrustedError(
-                            "the authority store belongs to a different state root."
-                        )
+                    if meta_row is None or meta_row[0] != value:
+                        raise StateUntrustedError(cls._meta_refusal(key))
             connection.execute("COMMIT")
         except BaseException as exc:
             if connection.in_transaction:

@@ -10,6 +10,12 @@ OpenSSH security-key signature (:mod:`.sshsig`) over an AIDO-rebuilt statement
 against ``approver-registry.v1`` (:mod:`.approver_registry`), whose protection
 it proves with S0's machinery.
 
+S2 is the integration authority store: :mod:`.integration_store`
+(``aido-control-plane-store.v4``) re-runs the S0 proof at every consumption
+boundary and consumes S1-verified approvals, and :mod:`.integration_session`
+is the one way to open it. It mints no recorder and accepts no claim,
+observation or evidence bytes.
+
 Nothing in this package launches a process, opens a socket, calls a model,
 runs Git, reads a credential value, signs anything, or sets an ACL, and no CLI
 command reaches it. See ``docs/DL4B_S0_WINDOWS_IDENTITY_BOUNDARY.md`` and
