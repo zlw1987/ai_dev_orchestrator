@@ -242,6 +242,13 @@ def make_harness(tmp_path: Path) -> Harness:
     state_dir.mkdir()
     clone_dir.mkdir()
     (clone_dir / "greeting.py").write_text("print('hi')\n", encoding="utf-8")
+    # S3: activation records A's own Git-free observation of the clone's .git
+    # (detached HEAD at the scope's base_head_oid), so the clone has one.
+    git_dir = clone_dir / ".git"
+    git_dir.mkdir()
+    (git_dir / "HEAD").write_bytes(("ab" * 20 + "\n").encode("ascii"))
+    (git_dir / "config").write_bytes(b"[core]\n")
+    (git_dir / "index").write_bytes(b"DIRC")
     root = AidoStateRoot.create(state_dir)
     clone = os.path.realpath(clone_dir)
     return Harness(tmp_path, bound_world(root.path, clone), Clock(NOW), root, clone)
@@ -551,7 +558,7 @@ def test_a_library_session_is_never_production_and_says_so(h: Harness) -> None:
 @needs_windows_paths
 def test_the_session_exposes_no_recorder_and_cannot_be_altered(h: Harness) -> None:
     public = {name for name in dir(h.session) if not name.startswith("_")}
-    assert public == {"state_root", "store", "boundary_sha256", "is_production", "close"}
+    assert public == {"state_root", "store", "implementer", "boundary_sha256", "is_production", "close"}
     for name in public:
         value = getattr(h.session, name)
         assert "recorder" not in type(value).__name__.lower()
@@ -637,6 +644,8 @@ REPROVED = {
     "issue_authorized_step_contract", "request_project_contract_approval",
     "record_approved_project_contract", "request_plan_activation", "issue_execution_plan",
     "authorized_target_workspace",
+    # DL-4B S3
+    "request_exact_diff_approval", "record_exact_diff_approval",
 }
 REFUSED_ALWAYS = {"record_project_contract", "record_execution_plan", "record_step_contract",
                   "request_step_acceptance"}
@@ -690,6 +699,11 @@ def test_every_consumption_boundary_reproves_and_changes_nothing_when_it_fails(h
             make_plan(chain.pc, version=2, supersedes=chain.plan.sha256), execution_policy=make_policy(),
             write_scopes=(make_scope(),), attestation=att),
         "authorized_target_workspace": lambda: store.authorized_target_workspace(chain.project.project_run_id),
+        # DL-4B S3
+        "request_exact_diff_approval": lambda: store.request_exact_diff_approval(
+            execution_plan_sha256=chain.plan.sha256, step_id=STEP, artifact_name="a.json",
+            config_name="p.yaml"),
+        "record_exact_diff_approval": lambda: store.record_exact_diff_approval(att),
     }
     assert set(calls) == REPROVED
     break_boundary(h)

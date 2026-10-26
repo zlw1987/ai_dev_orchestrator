@@ -182,6 +182,40 @@ def write_scopes_sha256(scopes: tuple[WriteScopeV1, ...]) -> str:
     })).hexdigest()
 
 
+EXACT_DIFF_APPROVAL_SUBJECT_SCHEMA_VERSION = "exact-diff-approval-subject.v1"
+#: DL-4B S3. The fixed summary of the one ImplementationReport the write
+#: handoff adapter returns. It states what AIDO observed, never what the
+#: execution identity claimed, and the store accepts no other report.
+WRITE_HANDOFF_REPORT_SUMMARY = (
+    "AIDO observed exactly the approved single-file change (authority observations "
+    "M0 and M1); the 5F2C write report is an execution claim."
+)
+
+
+def exact_diff_approval_subject_v1_sha256(
+    *,
+    plan_activation_subject_sha256: str,
+    execution_plan_sha256: str,
+    step_id: str,
+    write_scope_sha256: str,
+    approved_diff_artifact_sha256: str,
+) -> str:
+    """``exact-diff-approval-subject.v1``: what a human signs to approve the
+    exact ``approved-diff-proposal.v2`` bytes (by digest) for one activated
+    step's write scope. The activation is named by its own signed v2 subject,
+    so the approval cannot be carried to another activation, plan, step,
+    scope, workspace, config or identity boundary."""
+    return hashlib.sha256(canonical_json_bytes({
+        "schema_version": EXACT_DIFF_APPROVAL_SUBJECT_SCHEMA_VERSION,
+        "kind": "exact_diff_approval",
+        "plan_activation_subject_sha256": plan_activation_subject_sha256,
+        "execution_plan_sha256": execution_plan_sha256,
+        "step_id": step_id,
+        "write_scope_sha256": write_scope_sha256,
+        "approved_diff_artifact_sha256": approved_diff_artifact_sha256,
+    })).hexdigest()
+
+
 def plan_activation_subject_v2_sha256(
     *,
     project_contract_sha256: str,

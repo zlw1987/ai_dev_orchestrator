@@ -2040,10 +2040,12 @@ def _tree(name: str) -> ast.AST:
 _S1_MODULES = ("sshsig.py", "approver_registry.py", "attestation_verifier.py")
 #: Added by DL-4B S2 (the integration store); checked by its own suite.
 _S2_MODULES = ("integration_store.py", "integration_session.py")
+_S3_MODULES = ("authority_files.py", "claim_readers.py", "claim_receiver.py", "exchange.py", "state_blobs.py",
+               "workspace_observation.py", "write_handoff.py")
 
 
 def test_the_package_has_exactly_the_s0_modules() -> None:
-    assert sorted(p.name for p in _PACKAGE.glob("*.py")) == sorted(_MODULES + _S1_MODULES + _S2_MODULES)
+    assert sorted(p.name for p in _PACKAGE.glob("*.py")) == sorted(_MODULES + _S1_MODULES + _S2_MODULES + _S3_MODULES)
 
 
 def test_no_execution_network_model_git_or_harness_surface() -> None:
