@@ -24,7 +24,9 @@ review-command stdout       (S4) what `l2-review-approved-file-edit` prints, rec
                             `workspace-state-untrusted` (exit 3). What A binds: the
                             shape, the outcome the report's own facts support, the
                             target path and size, approved_by / approved_at and the
-                            identity tuple
+                            identity tuple. (S5) For a packet, the review itself:
+                            exactly a shipped ModelReviewResult, whose verdict its
+                            own findings support
 ```
 
 Every reader is strict and **rejects, never repairs**: UTF-8 without a BOM,
@@ -117,6 +119,19 @@ REVIEW_PACKET_FIELDS = frozenset({
 REVIEW_TARGET_FIELDS = frozenset({"path", "change_type"})
 MODEL_REVIEW_FIELDS = frozenset({"verdict", "summary", "findings", "residual_risks", "human_notes"})
 REVIEW_VERDICTS = ("approve", "changes_requested", "needs_human_review")
+#: S5: the shipped ``ModelReviewResult`` / ``ReviewFinding`` rules, restated
+#: (pinned by test). ``line`` is the one finding field with a default.
+REVIEW_FINDING_FIELDS = frozenset({"severity", "category", "line", "message", "suggested_action"})
+REVIEW_FINDING_REQUIRED = REVIEW_FINDING_FIELDS - {"line"}
+REVIEW_SEVERITIES = ("blocker", "major", "minor", "nit")
+REVIEW_CATEGORIES = ("correctness", "security", "testing", "scope", "maintainability", "other")
+REVIEW_BLOCKING_SEVERITIES = ("blocker", "major")
+MAX_REVIEW_FINDINGS = 20
+MAX_REVIEW_SUMMARY_CHARS = 4_000
+MAX_REVIEW_MESSAGE_CHARS = 4_000
+MAX_REVIEW_SUGGESTED_ACTION_CHARS = 2_000
+MAX_REVIEW_NOTE_CHARS = 2_000
+MAX_REVIEW_NOTES = 20
 
 _HEX64 = re.compile(r"[0-9a-f]{64}")
 
@@ -183,6 +198,16 @@ class ReviewClaimFacts:
     approved_at: datetime
     identity: Identity
     verdict: str | None
+
+
+@dataclass(frozen=True)
+class ReviewVerdictFacts:
+    """The review verdict a ``review-packet`` claim *says* the model gave (S5).
+    Not a fact: advisory model output, received as an execution claim."""
+
+    claim: ReviewClaimFacts
+    verdict: str
+    finding_count: int
 
 
 @dataclass(frozen=True)
@@ -493,6 +518,64 @@ def read_review_claim(data: bytes) -> ReviewClaimFacts:
     if type(packet["superseded_schema_version_note"]) is not str:
         raise ClaimReadError("malformed", "superseded_schema_version_note is not a string.")
     return ReviewClaimFacts("review-packet", outcome, path, size, approved_by, approved_at, identity, verdict)
+
+
+def _review_text(value: object, what: str, limit: int) -> None:
+    _text(value, what)
+    if len(value) > limit:
+        raise ClaimReadError("malformed", f"{what} exceeds its shipped length bound.")
+
+
+def _review_finding(value: object, index: int) -> str:
+    what = f"review.findings[{index}]"
+    finding = _object(value, REVIEW_FINDING_FIELDS, what, required=REVIEW_FINDING_REQUIRED)
+    severity, category = finding["severity"], finding["category"]
+    if type(severity) is not str or severity not in REVIEW_SEVERITIES:
+        raise ClaimReadError("malformed", f"{what}.severity is not a shipped severity.")
+    if type(category) is not str or category not in REVIEW_CATEGORIES:
+        raise ClaimReadError("malformed", f"{what}.category is not a shipped category.")
+    line = finding.get("line")
+    if line is not None:
+        _positive(line, f"{what}.line")
+    _review_text(finding["message"], f"{what}.message", MAX_REVIEW_MESSAGE_CHARS)
+    _review_text(finding["suggested_action"], f"{what}.suggested_action", MAX_REVIEW_SUGGESTED_ACTION_CHARS)
+    return severity
+
+
+def read_review_verdict(data: bytes) -> ReviewVerdictFacts:
+    """Re-derive the review verdict from the review command's stdout bytes (S5), or refuse.
+
+    The bytes must classify as a ``review-packet`` exactly as
+    :func:`read_review_claim` classifies them for S4; a bare verification
+    report carries no review and is refused. The packet's ``review`` must then
+    be exactly a shipped ``ModelReviewResult``: its field and finding shapes,
+    its closed verdict, severity and category vocabularies, its non-blank and
+    length rules, its count bounds, and its verdict/finding consistency rules
+    (``changes_requested`` names a blocking finding; ``approve`` names none).
+    The frozen command prints no other review, so anything else is refused,
+    never repaired, normalized or reinterpreted. What it returns is still what
+    the execution identity **claims** the model said.
+    """
+    claim = read_review_claim(data)
+    if claim.shape != "review-packet":
+        raise ClaimReadError("unexpected_shape", "a bare verification report carries no review.")
+    review = strict_json_object(data, MAX_REVIEW_CLAIM_BYTES, "review claim")["review"]
+    verdict = review["verdict"]
+    _review_text(review["summary"], "review.summary", MAX_REVIEW_SUMMARY_CHARS)
+    findings = review["findings"]
+    if type(findings) is not list or len(findings) > MAX_REVIEW_FINDINGS:
+        raise ClaimReadError("malformed", "review.findings is not a bounded list.")
+    severities = [_review_finding(finding, index) for index, finding in enumerate(findings)]
+    for name in ("residual_risks", "human_notes"):
+        notes = review[name]
+        if type(notes) is not list or len(notes) > MAX_REVIEW_NOTES:
+            raise ClaimReadError("malformed", f"review.{name} is not a bounded list.")
+        for note in notes:
+            _review_text(note, f"review.{name} entries", MAX_REVIEW_NOTE_CHARS)
+    blocking = any(severity in REVIEW_BLOCKING_SEVERITIES for severity in severities)
+    if (verdict == "changes_requested" and not blocking) or (verdict == "approve" and blocking):
+        raise ClaimReadError("verdict_unsupported", "the review verdict is not one its own findings support.")
+    return ReviewVerdictFacts(claim, verdict, len(findings))
 
 
 def read_project_config(data: bytes) -> ProjectConfigFacts:

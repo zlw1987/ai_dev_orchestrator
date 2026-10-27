@@ -558,7 +558,7 @@ def test_a_library_session_is_never_production_and_says_so(h: Harness) -> None:
 @needs_windows_paths
 def test_the_session_exposes_no_recorder_and_cannot_be_altered(h: Harness) -> None:
     public = {name for name in dir(h.session) if not name.startswith("_")}
-    assert public == {"state_root", "store", "implementer", "verifier", "boundary_sha256", "is_production", "close"}
+    assert public == {"state_root", "store", "implementer", "verifier", "reviewer", "boundary_sha256", "is_production", "close"}
     for name in public:
         value = getattr(h.session, name)
         assert "recorder" not in type(value).__name__.lower()

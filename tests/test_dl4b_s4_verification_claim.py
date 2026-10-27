@@ -962,7 +962,7 @@ def test_the_adapter_and_session_expose_no_recorder() -> None:
     with pytest.raises(TypeError):
         type("Sub", (ExecutionClaimAdapter,), {})
     adapter = mint_execution_claim_adapter(object(), object())
-    assert {n for n in dir(adapter) if not n.startswith("_")} == {"verify"}
+    assert {n for n in dir(adapter) if not n.startswith("_")} == {"verify", "review"}  # S5 adds review
     with pytest.raises(AttributeError):
         adapter._recorder = None
     for copier in (lambda a: __import__("copy").copy(a), lambda a: __import__("pickle").dumps(a)):
@@ -1236,7 +1236,7 @@ class Ports:
 
     def review(self, **kwargs):
         self.calls.append("reviewer")
-        raise AssertionError("S5 does not exist: the reviewer has no adapter")
+        raise AssertionError("a stub reviewer: S5's adapter is exercised in test_dl4b_s5_review_evidence")
 
     def decide_step(self, **kwargs):
         self.calls.append("planner")
@@ -1278,7 +1278,7 @@ def test_the_orchestration_path_records_the_bound_verification_and_stops_at_revi
     assert StepEvent.IMPLEMENTATION_RETURNED.value in events and StepEvent.VERIFICATION_OBSERVED.value in events
     assert ports.calls == ["reviewer"]
     assert len(evidence(v)) == 1 and evidence(v)[0]["outcome"] == "verified"
-    assert v.store.get_step_run(chain.step.step_run_id).state is StepState.RECOVERY_REQUIRED  # S5 does not exist
+    assert v.store.get_step_run(chain.step.step_run_id).state is StepState.RECOVERY_REQUIRED  # stub reviewer
     assert v.reviewer.requests == 1
     dirs = v.handoff_dirs()
     again = Ports(v.session.implementer, v.session.verifier)

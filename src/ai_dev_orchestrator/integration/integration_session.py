@@ -23,7 +23,9 @@ observations, never a harness call) straight into the session's
 the store. S4 mints a second, distinct recorder the same way into the
 session's :class:`~.execution_claim.ExecutionClaimAdapter`, exposed as
 ``verifier``: it records the review command's execution claim and A's M2
-observation. A library session reads the real files through the default
+observation. S5 exposes that same adapter as ``reviewer``: it answers the
+reviewer dispatch from the claim already recorded, with no second recorder and
+no second execution surface. A library session reads the real files through the default
 :class:`~.authority_files.WindowsAuthorityFiles` unless the caller supplies
 ``files``, and waits with a caller-supplied ``waiter`` (tests); it is never
 production either way.
@@ -56,8 +58,8 @@ _SESSION_FIELDS = ("_state_root", "_store", "_implementer", "_verifier")
 class IntegrationSession:
     """An open integration store and nothing more.
 
-    It exposes the state root, the store and the bound implementer and
-    verifier ports. It has no recorder, no verifier and no prover attribute, cannot be subclassed
+    It exposes the state root, the store and the bound implementer,
+    verifier and reviewer ports. It has no recorder, no verifier and no prover attribute, cannot be subclassed
     and is immutable.
     """
 
@@ -106,6 +108,11 @@ class IntegrationSession:
     @property
     def verifier(self) -> ExecutionClaimAdapter:
         """DL-2's verifier port: the execution claim adapter (FD-8, S4)."""
+        return self._verifier
+
+    @property
+    def reviewer(self) -> ExecutionClaimAdapter:
+        """DL-2's reviewer port: the same execution claim adapter (FD-8, S5)."""
         return self._verifier
 
     @property

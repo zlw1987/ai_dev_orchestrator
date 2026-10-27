@@ -1,4 +1,4 @@
-"""DL-4B S4 — the execution claim adapter, VERIFYING half (FD-6, FD-8).
+"""DL-4B S4/S5 — the execution claim adapter, VERIFYING and REVIEWING (FD-6, FD-8).
 
 :class:`ExecutionClaimAdapter` answers DL-2's verifier dispatch. It does not
 verify, run, launch or call anything. It hands the store the dispatch ticket
@@ -21,8 +21,17 @@ verification executable behaved honestly (FD-15, D-2′); the store accepts
 ``VERIFICATION_OBSERVED`` only for the dispatch whose claim and M2 it bound,
 whoever presents it.
 
-S5's reviewer is answered from the same recorded claim. This module has no
-``review`` method yet, and nothing here runs the review command again.
+S5: the same adapter answers DL-2's reviewer dispatch from the claim it
+already recorded under the attempt's verifier ticket (§5.4). ``review`` hands
+the store the reviewer ticket through the same recorder, and the store, from
+its own records alone, locates that attempt's consumed ``verified`` verifier
+dispatch, re-proves its evidence, reads the verdict again from the exact
+stored ``review-packet`` bytes, and records ``review_evidence``. Nothing is
+handed off, waited for, observed, run or sent: the review command ran once,
+during VERIFYING, and its stdout is the only source. The returned
+:class:`~ai_dev_orchestrator.control_plane.models.ReviewProposal` carries that
+verdict and the claim's digest; the verdict is advisory model output and an
+execution claim (D-2′), never a verified fact.
 
 The adapter takes no path, artifact, config, claim, observation, digest or
 report from its caller: the contract and attempt it is handed are only
@@ -57,9 +66,12 @@ class _ClaimRecorder:
     def hand_off_review(self, ticket: DispatchTicket):
         return self._store._perform_review_handoff(self._key, ticket)
 
+    def observe_review(self, ticket: DispatchTicket):
+        return self._store._perform_review_observation(self._key, ticket)
+
 
 class ExecutionClaimAdapter:
-    """DL-2's ``BoundVerifierPort`` in an integration session."""
+    """DL-2's ``BoundVerifierPort`` and ``BoundReviewerPort`` in an integration session."""
 
     __slots__ = ("_recorder",)
 
@@ -101,6 +113,24 @@ class ExecutionClaimAdapter:
             raise ValueError("the attempt is not the dispatched attempt.")
         observation = self._recorder.hand_off_review(ticket)
         return bind_role_output(ticket, observation)
+
+    def review(self, *, step_contract: StepContract, attempt: int, dispatch: DispatchTicket) -> BoundRoleOutput:
+        """Answer the reviewer ``dispatch`` from the claim its attempt's
+        verifier dispatch already recorded (S5). Runs nothing and waits for
+        nothing.
+
+        Raises when no proven ``verified`` review-packet claim answers it;
+        DL-2 then reduces the step to RECOVERY_REQUIRED. Nothing is retried.
+        """
+        if type(dispatch) is not DispatchTicket:
+            raise TypeError("dispatch must be exactly a DispatchTicket.")
+        ticket = DispatchTicket.model_validate_json(dispatch.model_dump_json())
+        if type(step_contract) is not StepContract or step_contract.sha256 != ticket.step_contract_sha256:
+            raise ValueError("the step contract is not the dispatched contract.")
+        if type(attempt) is not int or attempt != ticket.attempt:
+            raise ValueError("the attempt is not the dispatched attempt.")
+        proposal = self._recorder.observe_review(ticket)
+        return bind_role_output(ticket, proposal)
 
 
 def mint_execution_claim_adapter(store: Any, key: object) -> ExecutionClaimAdapter:
