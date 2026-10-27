@@ -181,6 +181,8 @@ class TestFiles:
         self.reads: list[str] = []
         self.before_read: dict[str, object] = {}
         self.fail_create: set[str] = set()
+        #: DL-4B S6: the boundary's published/ directory, whose files A creates.
+        self.published: str | None = None
 
     def _owner(self, path: str) -> str:
         if _key(path) in self.owner:
@@ -191,6 +193,8 @@ class TestFiles:
         if parent.startswith("outbox-"):
             return X
         if _key(path).startswith(_key(self.exchange)):
+            return A
+        if self.published is not None and _key(ntpath.dirname(path)) == _key(self.published):
             return A
         return X
 

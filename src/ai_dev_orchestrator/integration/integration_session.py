@@ -25,7 +25,9 @@ session's :class:`~.execution_claim.ExecutionClaimAdapter`, exposed as
 ``verifier``: it records the review command's execution claim and A's M2
 observation. S5 exposes that same adapter as ``reviewer``: it answers the
 reviewer dispatch from the claim already recorded, with no second recorder and
-no second execution surface. A library session reads the real files through the default
+no second execution surface. S6 exposes ``planner``: the deterministic
+:class:`~.alpha_planner.AlphaPlannerRule`, which calls no model and holds no
+recorder; the store accepts only the decision it re-derives itself. A library session reads the real files through the default
 :class:`~.authority_files.WindowsAuthorityFiles` unless the caller supplies
 ``files``, and waits with a caller-supplied ``waiter`` (tests); it is never
 production either way.
@@ -39,6 +41,7 @@ from functools import partial
 from typing import Any
 
 from ai_dev_orchestrator.control_plane.containment import AidoStateRoot
+from ai_dev_orchestrator.integration.alpha_planner import AlphaPlannerRule, mint_alpha_planner_rule
 from ai_dev_orchestrator.integration.attestation_verifier import RegistryHumanAttestationVerifier
 from ai_dev_orchestrator.integration.authority_files import AuthorityFiles, WindowsAuthorityFiles
 from ai_dev_orchestrator.integration.boundary_facts import SecurityFacts
@@ -52,27 +55,28 @@ from ai_dev_orchestrator.integration.integration_store import IntegrationStore
 from ai_dev_orchestrator.integration.write_handoff import WriteHandoffAdapter, mint_write_handoff_adapter
 
 _SESSION_TOKEN = object()
-_SESSION_FIELDS = ("_state_root", "_store", "_implementer", "_verifier")
+_SESSION_FIELDS = ("_state_root", "_store", "_implementer", "_verifier", "_planner")
 
 
 class IntegrationSession:
     """An open integration store and nothing more.
 
     It exposes the state root, the store and the bound implementer,
-    verifier and reviewer ports. It has no recorder, no verifier and no prover attribute, cannot be subclassed
+    verifier, reviewer and planner ports. It has no recorder, no verifier and no prover attribute, cannot be subclassed
     and is immutable.
     """
 
     __slots__ = _SESSION_FIELDS
 
     def __init__(self, state_root: AidoStateRoot, store: IntegrationStore, implementer: WriteHandoffAdapter,
-                 verifier: ExecutionClaimAdapter, *, _token: object = None) -> None:
+                 verifier: ExecutionClaimAdapter, planner: AlphaPlannerRule, *, _token: object = None) -> None:
         if _token is not _SESSION_TOKEN:
             raise TypeError("an integration session is opened only by open_integration_session().")
         object.__setattr__(self, "_state_root", state_root)
         object.__setattr__(self, "_store", store)
         object.__setattr__(self, "_implementer", implementer)
         object.__setattr__(self, "_verifier", verifier)
+        object.__setattr__(self, "_planner", planner)
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         raise TypeError("IntegrationSession cannot be subclassed.")
@@ -116,6 +120,11 @@ class IntegrationSession:
         return self._verifier
 
     @property
+    def planner(self) -> AlphaPlannerRule:
+        """DL-2's planner port: the deterministic Alpha rule (FD-8, S6). No model."""
+        return self._planner
+
+    @property
     def boundary_sha256(self) -> str:
         """The identity boundary digest this session is pinned to."""
         return self._store.boundary_sha256
@@ -150,7 +159,8 @@ def open_integration_session(state_root: AidoStateRoot) -> IntegrationSession:
         claim_key=claim_key,
     )
     return IntegrationSession(state_root, store, mint_write_handoff_adapter(store, key),
-                              mint_execution_claim_adapter(store, claim_key), _token=_SESSION_TOKEN)
+                              mint_execution_claim_adapter(store, claim_key), mint_alpha_planner_rule(store),
+                              _token=_SESSION_TOKEN)
 
 
 def open_integration_session_from_facts(
@@ -178,4 +188,5 @@ def open_integration_session_from_facts(
         claim_key=claim_key,
     )
     return IntegrationSession(state_root, store, mint_write_handoff_adapter(store, key),
-                              mint_execution_claim_adapter(store, claim_key), _token=_SESSION_TOKEN)
+                              mint_execution_claim_adapter(store, claim_key), mint_alpha_planner_rule(store),
+                              _token=_SESSION_TOKEN)

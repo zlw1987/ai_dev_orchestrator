@@ -24,6 +24,11 @@ mirror readers for the bytes A binds (:mod:`.claim_readers`), write-once blobs
 (:mod:`.state_blobs`), and :mod:`.write_handoff`, the implementer port whose
 recorder the session mints.
 
+S6 is the human acceptance lifecycle: :mod:`.alpha_planner`, the deterministic
+Alpha planner rule (no model), and :mod:`.acceptance_bundle`, the human's review
+material, published into the A-owned ``published/`` directory; the hold and
+the signed ``step-acceptance-subject.v2`` live in the integration store.
+
 Nothing in this package launches a process, opens a socket, calls a model,
 runs Git, reads a credential value or signs anything, and no CLI command
 reaches it. The only ACL it ever sets is the protected DACL of a directory it

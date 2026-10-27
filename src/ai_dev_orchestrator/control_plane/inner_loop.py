@@ -33,6 +33,11 @@ using injected role ports and DL-1's store. It is a driver and nothing else:
 - **No human acceptance source.** The loop never supplies a
   :class:`~ai_dev_orchestrator.control_plane.models.HumanStepAcceptance`. A step
   whose contract requires one escalates to HUMAN_REQUIRED instead of completing.
+  DL-4B S6: in an integration store (store.v4 only) the refused decision is
+  instead **held** by the store and the loop stops with
+  ``AWAITING_HUMAN_ACCEPTANCE``; a held decision is found before any planner
+  ticket is requested, so the planner is never asked again. v2 and v3 stores
+  take the escalation path unchanged.
 
 - **DL-4A: bound dispatch in an authority store.** When the store is a DL-4A
   authority store, every role call is preceded by a persisted
@@ -102,6 +107,7 @@ InnerLoopCause = Literal[
     "in_flight_not_dispatched_here",
     "project_not_active",
     "replayed_receipt",
+    "awaiting_human_acceptance",
 ]
 
 _FAILURE_CAUSE: dict[str, InnerLoopCause] = {
@@ -128,6 +134,9 @@ class InnerLoopStop(str, Enum):
     TRANSITION_REFUSED = "transition_refused"
     REPLAYED_RECEIPT = "replayed_receipt"
     ITERATION_BOUND_REACHED = "iteration_bound_reached"
+    #: DL-4B S6 (FD-7): the step is at ACCEPTANCE with a held planner decision
+    #: that lacks only a signed human acceptance. Never produced for v2/v3 stores.
+    AWAITING_HUMAN_ACCEPTANCE = "awaiting_human_acceptance"
 
 
 _TERMINAL_STOP = {
@@ -432,6 +441,14 @@ class _Run:
         return None
 
     def _decide(self, step: StepRun) -> InnerLoopStop | None:
+        # DL-4B S6 (FD-7): an integration store holds a decision that lacks only
+        # a human acceptance. Once held, the planner is never asked again.
+        holds = self.store.holds_acceptance_decisions
+        if holds and self.store.held_acceptance_decision(
+            self.step_run_id, expected_state_version=step.state_version
+        ) is not None:
+            self._note("awaiting_human_acceptance", "planner")
+            return InnerLoopStop.AWAITING_HUMAN_ACCEPTANCE
         decision, bound, result = self._dispatch("planner", PlannerDecision, step)
         if decision is None:
             self._note(_FAILURE_CAUSE[result], "planner")
@@ -445,6 +462,9 @@ class _Run:
         except TransitionRefused as exc:
             self.refusal_code = exc.code
             if exc.code is RefusalCode.HUMAN_ACCEPTANCE_MISSING:
+                if holds and self._hold(step, bound):
+                    self._note("awaiting_human_acceptance", "planner")
+                    return InnerLoopStop.AWAITING_HUMAN_ACCEPTANCE
                 self._note("human_acceptance_unavailable", "planner")
                 return self._escalate(
                     step, "the step contract requires human acceptance and DL-2 has no source "
@@ -453,6 +473,19 @@ class _Run:
             return InnerLoopStop.TRANSITION_REFUSED
         self._receipt(applied)
         return None
+
+    def _hold(self, step: StepRun, bound: BoundRoleOutput | None) -> bool:
+        """DL-4B S6: persist the refused decision as held. The store re-runs
+        the unchanged validator and holds only a ``HUMAN_ACCEPTANCE_MISSING``
+        refusal; a refused hold escalates exactly as before (R-9)."""
+        try:
+            self.store.hold_acceptance_decision(
+                self.step_run_id, expected_state_version=step.state_version, role_output=bound
+            )
+        except TransitionRefused as exc:
+            self.refusal_code = exc.code
+            return False
+        return True
 
     # --- mechanics -------------------------------------------------------
 

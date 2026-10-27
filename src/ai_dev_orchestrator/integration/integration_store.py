@@ -72,9 +72,35 @@ REVIEW_OBSERVED    accepted only for the exact reviewer ticket whose review_evid
 ```
 
 The verdict is model output, advisory by contract, and an execution claim
-(D-2′). The planner's output is still refused (S6). A caller's report,
-digest, verdict or model is never a substitute for the claim *and* the
-authority observation (FD-8, FD-15).
+(D-2′). A caller's report, digest, verdict or model is never a substitute for
+the claim *and* the authority observation (FD-8, FD-15).
+
+DL-4B S6 adds the human acceptance lifecycle (FD-7, FD-8, FD-8a):
+
+```text
+PLANNER RULE       the only planner decision accepted is the deterministic Alpha
+                   rule's, re-derived from the re-proven write, verification and
+                   review evidence (never a cached step_runs field, R5-8):
+                   RECOMMEND_STEP_ACCEPT iff M0/M1/M2 hold, the claimed outcome is
+                   'verified' and the claimed verdict 'approve'; else HUMAN_REQUIRED
+HOLD               hold_acceptance_decision: ONE transaction re-proves the step, the
+                   planner ticket and envelope (DL-4A) and the rule, dry-runs the
+                   unchanged validator, requires exactly HUMAN_ACCEPTANCE_MISSING,
+                   and stores the canonical envelope on the ticket. No transition
+SUBJECT v2         request_step_acceptance: step-acceptance-subject.v2 over the held
+                   decision, from re-proven records; the bundle is published first
+BUNDLE             held_acceptance_bundle / publish_acceptance_bundle: the human's
+                   material, AIDO-observed facts apart from execution claims, in
+                   the A-owned published/ directory, each file written once
+COMPLETE           apply_step_transition(DECIDE_ACCEPTANCE, human_attestation=v2):
+                   FD-5 ordering; the presented envelope must equal the held one;
+                   the held ticket and the challenge are consumed with COMPLETE
+DECLINE            ESCALATE → HUMAN_REQUIRED, unchanged; the held ticket goes stale
+```
+
+No execution claim, model verdict, cached field, planner recommendation or
+matching digest completes a step: only a signed acceptance of the exact v2
+subject, re-verified on every proof (FD-4), does.
 
 No subprocess, Git, network, model, environment read or workspace write
 happens here. Besides the security facts and the two admin-owned files, A
@@ -117,21 +143,30 @@ from ai_dev_orchestrator.control_plane.containment import AidoStateRoot, Contain
 from ai_dev_orchestrator.control_plane.contracts import validate_plan_against_contract
 from ai_dev_orchestrator.control_plane.integration_records import (
     AUTHORITY_OBSERVATION_PROVENANCE,
+    CLAIM_PROVENANCE_UNAUTHENTICATED,
     CLAIM_SHAPES,
     EXECUTION_CLAIM_PROVENANCE,
     OBSERVATION_KINDS,
     REVIEW_CLAIM_OUTCOMES,
+    STEP_ACCEPTANCE_SUBJECT_V2_SCHEMA_VERSION,
     WRITE_HANDOFF_REPORT_SUMMARY,
     WRITE_INTENT_STATES,
+    StepAcceptanceSubjectV2,
     WriteScopeV1,
+    alpha_planner_decision,
+    envelope_bytes,
+    evidence_record_sha256,
     exact_diff_approval_subject_v1_sha256,
     is_alpha_policy,
     plan_activation_subject_v2_sha256,
     write_scopes_sha256,
 )
 from ai_dev_orchestrator.control_plane.models import (
+    REQUIRED_STEP_ACCEPTANCE_APPROVAL_TEXT,
     ExecutionPlan,
+    HumanStepAcceptance,
     ImplementationReport,
+    PlannerDecision,
     ProjectContract,
     ProjectContractContent,
     ProjectRun,
@@ -151,6 +186,7 @@ from ai_dev_orchestrator.control_plane.store import (
     _ROLES,
     _SCHEMA,
     _TABLES,
+    AppliedTransition,
     ControlPlaneStore,
     RecordNotFoundError,
     StateUntrustedError,
@@ -158,14 +194,33 @@ from ai_dev_orchestrator.control_plane.store import (
     _in_list,
     _PlanIssuance,
 )
-from ai_dev_orchestrator.control_plane.transitions import StepEvent, StepTransitionRequest
+from ai_dev_orchestrator.control_plane.transitions import (
+    RefusalCode,
+    StepEvent,
+    StepTransitionRequest,
+    TransitionRefused,
+    decide_step_transition,
+)
 from ai_dev_orchestrator.integration.attestation_verifier import (
     AttestationRefusal,
     HumanAttestationRefusedError,
     RegistryHumanAttestationVerifier,
     VerifiedHumanAttestation,
 )
-from ai_dev_orchestrator.integration import claim_readers, claim_receiver, exchange, state_blobs
+from ai_dev_orchestrator.integration import acceptance_bundle, claim_readers, claim_receiver, exchange, state_blobs
+from ai_dev_orchestrator.integration.acceptance_bundle import (
+    ACCEPTANCE_BUNDLE_SCHEMA_VERSION,
+    AIDO_OBSERVED_STATEMENT,
+    EXECUTION_CLAIM_STATEMENT,
+    PLANNER_STATEMENT,
+    AcceptanceBundleError,
+    HeldAcceptanceBundle,
+    HeldAcceptanceDecision,
+    PublishedAcceptanceBundle,
+    blob_name,
+    bundle_bytes,
+    bundle_name,
+)
 from ai_dev_orchestrator.integration.authority_files import AuthorityFiles
 from ai_dev_orchestrator.integration.boundary_facts import ObjectFacts
 from ai_dev_orchestrator.integration.claim_readers import ClaimReadError
@@ -417,9 +472,8 @@ _V4_TABLES = _TABLES | {
     *LATER_SLICE_TABLES,
     *S3_TABLES,
 }
-#: The approval kinds this store issues and consumes. Step acceptance v2 is
-#: S6's: a challenge of that kind is unexplained here.
-_ISSUED_KINDS = (_K.PROJECT_CONTRACT, _K.PLAN_ACTIVATION, _K.EXACT_DIFF_APPROVAL)
+#: The approval kinds this store issues and consumes (S6 adds step acceptance v2).
+_ISSUED_KINDS = (_K.PROJECT_CONTRACT, _K.PLAN_ACTIVATION, _K.EXACT_DIFF_APPROVAL, _K.STEP_ACCEPTANCE)
 #: The one write each implementer dispatch may report, AIDO's own words.
 _INTENT_COMPLETED = "completed"
 
@@ -551,8 +605,82 @@ class _ReviewerChain(NamedTuple):
     proposal: ReviewProposal
 
 
+class _AlphaFacts(NamedTuple):
+    """What the deterministic Alpha planner rule and ``step-acceptance-subject.v2``
+    are computed from (S6), re-derived from re-proven records alone. ``ground``
+    is ``accept``, ``verification_not_verified``, ``review_not_approve`` or
+    ``evidence_unproven`` (then ``reason`` says why and nothing else is set)."""
+
+    ground: str
+    reason: str | None
+    write: dict[str, object] | None
+    verification: dict[str, object] | None
+    review: dict[str, object] | None
+    entry: sqlite3.Row | None
+    refs: tuple[str, ...]
+
+
+class _Hold(NamedTuple):
+    """One held planner decision, re-proven (S6)."""
+
+    ticket: sqlite3.Row
+    envelope: BoundRoleOutput
+    envelope_sha256: str
+    facts: _AlphaFacts
+    subject: StepAcceptanceSubjectV2
+
+
+class _Acceptance(NamedTuple):
+    """What one signed acceptance was checked against, inside a transaction."""
+
+    step: StepRun
+    contract: StepContract
+    project: ProjectRun
+    context: object
+    hold: _Hold
+    challenge: ApprovalChallengeV2
+
+
+#: The failures a re-derivation turns into "not proven", never into authority.
+_FACT_ERRORS = (
+    TransitionRefused, StoreError, ContainmentError, ObservationError, ClaimReadError, ValidationError,
+    ValueError, TypeError, KeyError, IndexError,
+)
+#: The request id of the hold's dry run of the validator. Never persisted.
+_DRY_RUN_REQUEST_ID = "0" * 32
+_S6_ATTESTATION_ONLY = (
+    "a human attestation in an integration store is consumed only by DL-4B S6's signed step "
+    "acceptance: DECIDE_ACCEPTANCE over a held planner decision, with its human-attestation.v2."
+)
+
+
 def _exact_diff_consumer(plan_sha256: str, step_id: str) -> str:
     return f"exact_diff:{plan_sha256}:{step_id}"
+
+
+def _acceptance_consumer(request_id: str) -> str:
+    return f"step_acceptance:{request_id}"
+
+
+def _require_held_refusal(step: StepRun, contract: StepContract, project_state: ProjectState,
+                          dependencies_complete: bool, decision: PlannerDecision) -> None:
+    """The unchanged DL-1 validator, as a dry run, refuses ``decision`` with
+    exactly ``HUMAN_ACCEPTANCE_MISSING``: the one refusal a hold stands for."""
+    request = StepTransitionRequest(
+        request_id=_DRY_RUN_REQUEST_ID, expected_state_version=step.state_version,
+        event=StepEvent.DECIDE_ACCEPTANCE, planner_decision=decision,
+    )
+    try:
+        decide_step_transition(step=step, contract=contract, project_state=project_state,
+                               dependencies_complete=dependencies_complete, request=request)
+    except TransitionRefused as exc:
+        if exc.code is RefusalCode.HUMAN_ACCEPTANCE_MISSING:
+            return
+        raise AuthorityRefusedError(
+            f"the validator refuses this decision with {exc.code.value}, not a missing human acceptance; "
+            "only that refusal is held."
+        ) from None
+    raise AuthorityRefusedError("the validator would apply this decision; it is applied, never held.")
 
 
 _INBOX_FORBIDDEN = frozenset('<>:"/\\|?*')
@@ -644,6 +772,7 @@ _ANSWERING_EVENT = {
     "implementer": StepEvent.IMPLEMENTATION_RETURNED.value,
     "verifier": StepEvent.VERIFICATION_OBSERVED.value,
     "reviewer": StepEvent.REVIEW_OBSERVED.value,
+    "planner": StepEvent.DECIDE_ACCEPTANCE.value,
 }
 
 
@@ -794,6 +923,12 @@ class IntegrationStore(ControlPlaneStore):
     def is_production(self) -> bool:
         return self._require_authority().origin == "windows"
 
+    @property
+    def holds_acceptance_decisions(self) -> bool:
+        """S6 (FD-7): store.v4 holds a planner decision lacking only a human
+        acceptance; DL-2 stops at it instead of escalating."""
+        return True
+
     # --- the boundary at every consumption ----------------------------------
 
     def _reprove_boundary(self) -> IdentityBoundaryProof:
@@ -901,13 +1036,11 @@ class IntegrationStore(ControlPlaneStore):
     @_reproving
     def apply_step_transition(self, step_run_id, request, *, role_output=None, human_attestation=None):
         """DL-4A's transition, behind the boundary proof. A human attestation
-        is refused: store.v4's human acceptance is S6's signed v2 acceptance
-        over a held decision, which does not exist yet."""
+        is accepted only as S6's signed ``human-attestation.v2`` over
+        ``step-acceptance-subject.v2``, completing a held decision
+        (:meth:`_apply_signed_acceptance`); every other attestation is refused."""
         if human_attestation is not None:
-            raise AuthorityRefusedError(
-                "a human step acceptance in an integration store is DL-4B S6's signed "
-                "step-acceptance-subject.v2; this store accepts none yet."
-            )
+            return self._apply_signed_acceptance(step_run_id, request, role_output, human_attestation)
         return super().apply_step_transition(step_run_id, request, role_output=role_output)
 
     @_reproving
@@ -1102,12 +1235,6 @@ class IntegrationStore(ControlPlaneStore):
             )
             self._consume_challenge_v2(challenge.challenge_id, consumed_by, attestation, verified)
         return plan.sha256
-
-    def request_step_acceptance(self, step_run_id: str):
-        raise AuthorityRefusedError(
-            "a step acceptance in an integration store is DL-4B S6's step-acceptance-subject.v2 "
-            "over a held planner decision; S2 issues none."
-        )
 
     @_reproving
     def authorized_target_workspace(self, project_run_id: str):
@@ -2630,6 +2757,713 @@ class IntegrationStore(ControlPlaneStore):
             return f"the review evidence cannot be re-derived: {exc}"
         return None
 
+    # --- S6: the deterministic planner, the held decision and signed acceptance ------
+
+    def _alpha_facts(self, step_run_id: str, attempt: int, version: int) -> _AlphaFacts:
+        """The deterministic Alpha rule's inputs for one attempt at the
+        ACCEPTANCE version it entered, re-derived from re-proven records only
+        (FD-8): the write, verification and review evidence, never a cached
+        ``step_runs`` field (R5-8). Anything that does not re-prove yields the
+        ``evidence_unproven`` ground, which never recommends acceptance."""
+        try:
+            return self._proven_alpha_facts(step_run_id, attempt, version)
+        except _FACT_ERRORS as exc:
+            return _AlphaFacts("evidence_unproven", str(exc), None, None, None, None, ())
+
+    def _proven_alpha_facts(self, step_run_id: str, attempt: int, version: int) -> _AlphaFacts:
+        conn = self._conn
+        entries = conn.execute(
+            "SELECT * FROM transitions WHERE subject_kind = 'step' AND subject_id = ? AND to_state = ? "
+            "AND to_version = ? AND attempt = ?",
+            (step_run_id, StepState.ACCEPTANCE.value, version, attempt),
+        ).fetchall()
+        if len(entries) != 1 or entries[0]["event"] not in (
+            StepEvent.VERIFICATION_OBSERVED.value, StepEvent.REVIEW_OBSERVED.value
+        ):
+            raise AuthorityRefusedError("the attempt did not enter ACCEPTANCE at this version through an observation.")
+        entry = entries[0]
+
+        def answered(role: str) -> list[sqlite3.Row]:
+            return conn.execute(
+                "SELECT * FROM dispatch_tickets WHERE step_run_id = ? AND attempt = ? AND role = ? "
+                "AND consumed_request_id IS NOT NULL", (step_run_id, attempt, role),
+            ).fetchall()
+
+        implementers, verifiers, reviewers = answered("implementer"), answered("verifier"), answered("reviewer")
+        if len(implementers) != 1 or len(verifiers) != 1 or len(reviewers) > 1:
+            raise AuthorityRefusedError("the attempt has no single answered implementer and verifier dispatch.")
+        implementer, verifier = implementers[0], verifiers[0]
+        for issue in (self._write_evidence_issue(implementer["ticket_id"]),
+                      self._verification_evidence_issue(verifier["ticket_id"])):
+            if issue is not None:
+                raise AuthorityRefusedError(issue)
+        write = conn.execute("SELECT * FROM write_evidence WHERE ticket_id = ?", (implementer["ticket_id"],)).fetchone()
+        intent = conn.execute("SELECT * FROM write_intents WHERE intent_id = ?", (write["intent_id"],)).fetchone()
+        write_claim = conn.execute(
+            "SELECT * FROM execution_claims WHERE ticket_id = ?", (implementer["ticket_id"],)
+        ).fetchone()
+        verification = conn.execute(
+            "SELECT * FROM verification_evidence_v2 WHERE ticket_id = ?", (verifier["ticket_id"],)
+        ).fetchone()
+
+        def manifest(observation_id: str) -> str:
+            return conn.execute(
+                "SELECT manifest_sha256 FROM authority_observations WHERE observation_id = ?", (observation_id,)
+            ).fetchone()["manifest_sha256"]
+
+        m0, m1 = manifest(write["m0_observation_id"]), manifest(write["m1_observation_id"])
+        m2 = manifest(verification["m2_observation_id"])
+        observed = conn.execute(
+            "SELECT * FROM transitions WHERE request_id = ?", (verifier["consumed_request_id"],)
+        ).fetchone()
+        if observed is None or (observed["event"], observed["verification_outcome"]) != (
+            StepEvent.VERIFICATION_OBSERVED.value, verification["outcome"]
+        ):
+            raise AuthorityRefusedError("the verification transition is not its recorded evidence's outcome.")
+        write_record = {
+            "implementer_ticket_id": implementer["ticket_id"], "write_intent_id": intent["intent_id"],
+            "write_scope_sha256": write["write_scope_sha256"],
+            "approved_diff_artifact_sha256": intent["approved_diff_artifact_sha256"],
+            "workspace_identity_sha256": write["workspace_identity_sha256"],
+            "write_claim_sha256": write_claim["claim_sha256"], "m0_observation_sha256": m0,
+            "m1_observation_sha256": m1, "provenance": write["provenance"],
+        }
+        verification_record = {
+            "verifier_ticket_id": verifier["ticket_id"], "write_intent_id": verification["write_intent_id"],
+            "claim_sha256": verification["claim_sha256"], "m2_observation_sha256": m2,
+            "outcome": verification["outcome"], "provenance": verification["provenance"],
+        }
+        refs = [
+            f"write-evidence:{evidence_record_sha256('write', write_record)}", f"m0:{m0}", f"m1:{m1}",
+            f"verification-evidence:{evidence_record_sha256('verification', verification_record)}", f"m2:{m2}",
+        ]
+        if entry["event"] == StepEvent.VERIFICATION_OBSERVED.value:
+            if entry["request_id"] != verifier["consumed_request_id"] or reviewers:
+                raise AuthorityRefusedError("the attempt's ACCEPTANCE is not its verification's.")
+            if verification["outcome"] == "verified":
+                raise AuthorityRefusedError(
+                    "a verified outcome reached ACCEPTANCE without the review the Alpha requires."
+                )
+            return _AlphaFacts("verification_not_verified", None, write_record, verification_record, None, entry,
+                               tuple(refs))
+        if len(reviewers) != 1 or entry["request_id"] != reviewers[0]["consumed_request_id"]:
+            raise AuthorityRefusedError("the attempt's ACCEPTANCE is not its review's.")
+        reviewer = reviewers[0]
+        if (issue := self._review_evidence_issue(reviewer["ticket_id"])) is not None:
+            raise AuthorityRefusedError(issue)
+        review = conn.execute("SELECT * FROM review_evidence WHERE ticket_id = ?", (reviewer["ticket_id"],)).fetchone()
+        if (review["verifier_ticket_id"], entry["review_verdict"]) != (verifier["ticket_id"], review["verdict"]):
+            raise AuthorityRefusedError("the review transition is not its recorded evidence's verdict.")
+        review_record = {
+            "reviewer_ticket_id": reviewer["ticket_id"], "verifier_ticket_id": review["verifier_ticket_id"],
+            "claim_sha256": review["claim_sha256"], "verdict": review["verdict"], "provenance": review["provenance"],
+        }
+        refs.append(f"review-evidence:{evidence_record_sha256('review', review_record)}")
+        if verification["outcome"] != "verified":
+            ground = "verification_not_verified"
+        elif review["verdict"] != "approve":
+            ground = "review_not_approve"
+        else:
+            ground = "accept"
+        return _AlphaFacts(ground, None, write_record, verification_record, review_record, entry, tuple(refs))
+
+    @staticmethod
+    def _rule_decision(facts: _AlphaFacts, step_contract_sha256: str, attempt: int) -> PlannerDecision:
+        return alpha_planner_decision(
+            step_contract_sha256=step_contract_sha256, attempt=attempt, ground=facts.ground,
+            evidence_refs=facts.refs,
+        )
+
+    @_reproving
+    def _alpha_planner_decision(self, ticket: DispatchTicket) -> PlannerDecision:
+        """What :class:`~.alpha_planner.AlphaPlannerRule` answers one planner
+        dispatch with: the rule over this store's re-proven records for the
+        ticket's attempt and version. Reads only; records nothing."""
+        ticket = self._revalidated_authority(DispatchTicket, ticket)
+        with self._transaction():
+            step, contract, (project, _) = self._proven_step_by_id(ticket.step_run_id)
+            row = self._conn.execute(
+                "SELECT * FROM dispatch_tickets WHERE ticket_id = ?", (ticket.ticket_id,)
+            ).fetchone()
+            if row is None or self._ticket_from_row(row) != ticket:
+                raise AuthorityRefusedError("the ticket is not one AIDO issued.")
+            if ticket.role != "planner" or row["consumed_request_id"] is not None or row["held_envelope"] is not None:
+                raise AuthorityRefusedError("the ticket is not an unanswered, unheld planner dispatch.")
+            if project.state is not ProjectState.ACTIVE:
+                raise AuthorityRefusedError(f"the project is {project.state.value}.")
+            if (step.state, step.state_version, step.attempt) != (
+                StepState.ACCEPTANCE, ticket.state_version, ticket.attempt
+            ):
+                raise AuthorityRefusedError("the planner ticket is stale: its step left that state.")
+            facts = self._alpha_facts(step.step_run_id, step.attempt, step.state_version)
+            return self._rule_decision(facts, contract.sha256, step.attempt)
+
+    def _planner_decision_issue(self, ticket_row: sqlite3.Row, decision: object) -> str | None:
+        """Why ``decision`` is not exactly the Alpha rule's decision for the
+        planner ticket's attempt and version, or ``None``."""
+        facts = self._alpha_facts(ticket_row["step_run_id"], ticket_row["attempt"], ticket_row["state_version"])
+        expected = self._rule_decision(facts, ticket_row["step_contract_sha256"], ticket_row["attempt"])
+        if type(decision) is not PlannerDecision or envelope_bytes(decision) != envelope_bytes(expected):
+            return "the planner decision is not AIDO's deterministic Alpha rule's decision for this attempt."
+        return None
+
+    def _acceptance_subject(self, ticket_row: sqlite3.Row, facts: _AlphaFacts,
+                            envelope_sha256: str) -> StepAcceptanceSubjectV2:
+        """``step-acceptance-subject.v2`` for a held decision, from the
+        re-derived records alone."""
+        return StepAcceptanceSubjectV2(
+            schema_version=STEP_ACCEPTANCE_SUBJECT_V2_SCHEMA_VERSION,
+            kind="step_acceptance",
+            project_run_id=ticket_row["project_run_id"],
+            step_run_id=ticket_row["step_run_id"],
+            step_contract_sha256=ticket_row["step_contract_sha256"],
+            attempt=ticket_row["attempt"],
+            state_version=ticket_row["state_version"],
+            verification_evidence_sha256=evidence_record_sha256("verification", facts.verification),
+            write_scope_sha256=facts.write["write_scope_sha256"],
+            write_evidence_sha256=evidence_record_sha256("write", facts.write),
+            review_evidence_sha256=evidence_record_sha256("review", facts.review),
+            planner_envelope_sha256=envelope_sha256,
+            identity_boundary_sha256=self._boundary_sha256,
+            m0_observation_sha256=facts.write["m0_observation_sha256"],
+            m1_observation_sha256=facts.write["m1_observation_sha256"],
+            m2_observation_sha256=facts.verification["m2_observation_sha256"],
+            claim_provenance=CLAIM_PROVENANCE_UNAUTHENTICATED,
+        )
+
+    def _proven_hold(self, row: sqlite3.Row) -> _Hold:
+        """One held planner ticket, re-proven now, whatever its step's state
+        today: its canonical envelope binds the ticket, the envelope's decision
+        is exactly the rule's ``RECOMMEND_STEP_ACCEPT`` for that attempt and
+        version, and the unchanged validator, replayed at that version, still
+        refuses it with exactly ``HUMAN_ACCEPTANCE_MISSING``."""
+        if row["role"] != "planner" or row["step_state"] != StepState.ACCEPTANCE.value:
+            raise AuthorityRefusedError("a held ticket is not a planner dispatch at ACCEPTANCE.")
+        if row["held_envelope"] is None or row["held_envelope_sha256"] is None or row["held_at"] is None:
+            raise AuthorityRefusedError("a held ticket is missing part of its hold.")
+        try:
+            envelope = BoundRoleOutput.model_validate_json(row["held_envelope"])
+        except (ValidationError, ValueError, TypeError):
+            raise AuthorityRefusedError("a held envelope no longer validates.") from None
+        data = envelope_bytes(envelope)
+        envelope_sha256 = hashlib.sha256(data).hexdigest()
+        if data.decode("utf-8") != row["held_envelope"] or envelope_sha256 != row["held_envelope_sha256"]:
+            raise AuthorityRefusedError("a held envelope is not its canonical bytes and digest.")
+        if (
+            envelope.ticket_id, envelope.project_run_id, envelope.step_run_id, envelope.step_contract_sha256,
+            envelope.attempt, envelope.role,
+        ) != (
+            row["ticket_id"], row["project_run_id"], row["step_run_id"], row["step_contract_sha256"],
+            row["attempt"], "planner",
+        ):
+            raise AuthorityRefusedError("a held envelope does not answer its own ticket.")
+        facts = self._alpha_facts(row["step_run_id"], row["attempt"], row["state_version"])
+        if facts.ground != "accept":
+            raise AuthorityRefusedError(
+                f"a held decision's evidence no longer supports acceptance ({facts.reason or facts.ground})."
+            )
+        if envelope_bytes(envelope.output) != envelope_bytes(
+            self._rule_decision(facts, row["step_contract_sha256"], row["attempt"])
+        ):
+            raise AuthorityRefusedError("a held decision is not AIDO's deterministic Alpha rule's decision.")
+        contract = self._load_contract(row["step_contract_sha256"], "step_contract")
+        entry = facts.entry
+        replayed = StepRun(
+            step_run_id=row["step_run_id"], project_run_id=row["project_run_id"], step_id=contract.step_id,
+            step_contract_sha256=row["step_contract_sha256"], state=StepState.ACCEPTANCE,
+            state_version=row["state_version"], attempt=row["attempt"],
+            verification_outcome=entry["verification_outcome"], review_verdict=entry["review_verdict"],
+        )
+        _require_held_refusal(replayed, contract, ProjectState.ACTIVE, True, envelope.output)
+        return _Hold(row, envelope, envelope_sha256, facts,
+                     self._acceptance_subject(row, facts, envelope_sha256))
+
+    def _current_hold(self, step: StepRun, project: ProjectRun) -> _Hold | None:
+        """Inside a transaction: the held decision a signed acceptance may
+        complete now (the step at ACCEPTANCE at the held version, the ticket
+        unanswered, the project ACTIVE), re-proven, or ``None``."""
+        row = self._conn.execute(
+            "SELECT * FROM dispatch_tickets WHERE step_run_id = ? AND role = 'planner' AND state_version = ?",
+            (step.step_run_id, step.state_version),
+        ).fetchone()
+        if row is None or row["held_envelope"] is None:
+            return None
+        if (
+            row["consumed_request_id"] is not None or step.state is not StepState.ACCEPTANCE
+            or row["attempt"] != step.attempt or project.state is not ProjectState.ACTIVE
+        ):
+            return None
+        return self._proven_hold(row)
+
+    def _held_or_refuse(self, step_run_id: str) -> tuple[_Hold, StepRun, StepContract, ProjectRun]:
+        step, contract, (project, _) = self._proven_step_by_id(step_run_id)
+        if project.state is not ProjectState.ACTIVE:
+            raise AuthorityRefusedError(f"the project is {project.state.value}.")
+        if step.state is not StepState.ACCEPTANCE:
+            raise AuthorityRefusedError("a step acceptance exists only at ACCEPTANCE.")
+        hold = self._current_hold(step, project)
+        if hold is None:
+            raise AuthorityRefusedError(
+                "the step has no held planner decision at its current version; a step acceptance needs one."
+            )
+        return hold, step, contract, project
+
+    @staticmethod
+    def _held_record(hold: _Hold, *, duplicate: bool) -> HeldAcceptanceDecision:
+        return HeldAcceptanceDecision(
+            ticket_id=hold.ticket["ticket_id"], step_run_id=hold.ticket["step_run_id"],
+            state_version=hold.ticket["state_version"],
+            envelope=BoundRoleOutput.model_validate_json(hold.ticket["held_envelope"]),
+            envelope_sha256=hold.envelope_sha256, held_at=datetime.fromisoformat(hold.ticket["held_at"]),
+            subject_sha256=hold.subject.sha256, duplicate=duplicate,
+        )
+
+    @_reproving
+    def held_acceptance_decision(self, step_run_id: str, *,
+                                 expected_state_version: int) -> HeldAcceptanceDecision | None:
+        """The re-proven held planner decision at the step's current version,
+        or ``None`` (FD-7). DL-2 asks this before it requests any planner
+        ticket, so a held decision is never decided twice."""
+        if type(step_run_id) is not str or type(expected_state_version) is not int:
+            raise AuthorityRefusedError("a held decision is looked up by step run id and int version.")
+        with self._transaction():
+            step, _, (project, _) = self._proven_step_by_id(step_run_id)
+            if step.state_version != expected_state_version:
+                raise TransitionRefused(RefusalCode.STALE_STATE_VERSION, "the step moved since that version.")
+            hold = self._current_hold(step, project)
+        return None if hold is None else self._held_record(hold, duplicate=False)
+
+    @_reproving
+    def hold_acceptance_decision(self, step_run_id: str, *, expected_state_version: int,
+                                 role_output: BoundRoleOutput) -> HeldAcceptanceDecision:
+        """Hold a planner decision that lacks only a human acceptance (FD-7).
+
+        Authority-consuming: it holds or refuses, never ignores. In ONE
+        transaction it re-proves the step at ACCEPTANCE at the expected
+        version, validates the envelope against its unanswered planner ticket
+        (DL-4A), requires the decision to be exactly the Alpha rule's, runs
+        the **unchanged** DL-1 validator as a dry run and requires exactly
+        ``HUMAN_ACCEPTANCE_MISSING``, then stores the canonical envelope and
+        its digest on the ticket. No transition is written; the step version
+        does not change. An identical repeat is a receipt; a different
+        envelope for a held ticket is refused.
+        """
+        self._require_authority()
+        role_output = self._revalidated_authority(BoundRoleOutput, role_output)
+        if type(step_run_id) is not str or type(expected_state_version) is not int:
+            raise AuthorityRefusedError("a hold names its step run id and int version.")
+        if role_output.role != "planner":
+            raise AuthorityRefusedError("only a planner decision is held.")
+        data = envelope_bytes(role_output)
+        with self._transaction():
+            step, contract, (project, context) = self._proven_step_by_id(step_run_id)
+            if project.state is not ProjectState.ACTIVE:
+                raise AuthorityRefusedError(f"the project is {project.state.value}.")
+            if (step.state, step.state_version) != (StepState.ACCEPTANCE, expected_state_version):
+                raise AuthorityRefusedError("a decision is held only at ACCEPTANCE, at the step's current version.")
+            row = self._conn.execute(
+                "SELECT * FROM dispatch_tickets WHERE ticket_id = ?", (role_output.ticket_id,)
+            ).fetchone()
+            if row is None:
+                raise AuthorityRefusedError("the role output answers no dispatch AIDO issued.")
+            if row["held_envelope"] is not None:
+                if row["held_envelope"] != data.decode("utf-8"):
+                    raise AuthorityRefusedError(
+                        "this dispatch already holds another decision; a hold is never replaced."
+                    )
+                hold = self._current_hold(step, project)
+                if hold is None or hold.ticket["ticket_id"] != row["ticket_id"]:
+                    raise AuthorityRefusedError("that held decision is no longer current.")
+                return self._held_record(hold, duplicate=True)
+            request = StepTransitionRequest(
+                request_id=_DRY_RUN_REQUEST_ID, expected_state_version=expected_state_version,
+                event=StepEvent.DECIDE_ACCEPTANCE, planner_decision=role_output.output,
+            )
+            ControlPlaneStore._authorize_step_request(self, step, request, role_output, None)
+            if (issue := self._planner_decision_issue(row, role_output.output)) is not None:
+                raise AuthorityRefusedError(issue)
+            _require_held_refusal(
+                step, contract, project.state,
+                self._dependencies_complete(project, context, contract.depends_on), role_output.output,
+            )
+            if self._conn.execute(
+                "UPDATE dispatch_tickets SET held_envelope = ?, held_envelope_sha256 = ?, held_at = ? "
+                "WHERE ticket_id = ? AND role = 'planner' AND consumed_request_id IS NULL AND held_envelope IS NULL",
+                (data.decode("utf-8"), hashlib.sha256(data).hexdigest(), self._now().isoformat(), row["ticket_id"]),
+            ).rowcount != 1:
+                raise StateUntrustedError("a planner ticket changed underneath its own transaction.")
+            hold = self._current_hold(step, project)
+            if hold is None:
+                raise StateUntrustedError("a hold does not re-prove inside its own transaction.")
+        return self._held_record(hold, duplicate=False)
+
+    def _bundle(self, hold: _Hold, step: StepRun, contract: StepContract, project: ProjectRun) -> HeldAcceptanceBundle:
+        """Inside a transaction: the human's review material for ``hold``,
+        built from re-proven records and the write-once blobs they name."""
+        conn = self._conn
+        facts = hold.facts
+        activation = self._load_activation(project.execution_plan_sha256)
+        [scope] = [scope for scope in activation.write_scopes if scope.step_id == contract.step_id]
+        intent = conn.execute(
+            "SELECT * FROM write_intents WHERE intent_id = ?", (facts.write["write_intent_id"],)
+        ).fetchone()
+        approval = conn.execute(
+            "SELECT * FROM exact_diff_approvals WHERE approval_id = ?", (intent["exact_diff_approval_id"],)
+        ).fetchone()
+        context, attestation, issue = self._exact_diff_proof(approval)
+        if issue is not None:
+            raise AuthorityRefusedError(issue)
+        tickets = {
+            "m0": facts.write["implementer_ticket_id"], "m1": facts.write["implementer_ticket_id"],
+            "m2": facts.verification["verifier_ticket_id"],
+        }
+        observations, parsed = {}, {}
+        for kind, ticket_id in tickets.items():
+            row = conn.execute(
+                "SELECT * FROM authority_observations WHERE ticket_id = ? AND kind = ?", (ticket_id, kind)
+            ).fetchone()
+            parsed[kind], issue = self._observation_row(row["observation_id"], ticket_id, kind)
+            if issue is not None:
+                raise AuthorityRefusedError(issue)
+            observations[kind] = {
+                "manifest_sha256": row["manifest_sha256"], "target_sha256": row["target_sha256"],
+                "head_oid": row["head_oid"], "git_control_sha256": row["git_control_sha256"],
+                "entry_count": row["entry_count"], "observed_at": row["observed_at"],
+            }
+        additions = classify_verification(parsed["m1"], parsed["m2"], target_path=scope.path,
+                                          post_image_sha256=context.facts.post_image_sha256).additions
+        claims = {
+            name: conn.execute("SELECT * FROM execution_claims WHERE ticket_id = ?", (ticket_id,)).fetchone()
+            for name, ticket_id in (("write", facts.write["implementer_ticket_id"]),
+                                    ("review", facts.verification["verifier_ticket_id"]))
+        }
+        write_claim = self._blob("claims", claims["write"]["claim_sha256"], claim_readers.MAX_WRITE_CLAIM_BYTES)
+        review_bytes = self._blob("claims", claims["review"]["claim_sha256"], claim_readers.MAX_REVIEW_CLAIM_BYTES)
+        verdict = claim_readers.read_review_verdict(review_bytes)
+        blobs = [
+            ("approved-diff", context.artifact_sha256, context.artifact),
+            ("config", context.config_sha256, context.config),
+            ("claims", claims["write"]["claim_sha256"], write_claim),
+            ("claims", claims["review"]["claim_sha256"], review_bytes),
+            *(("observations", observations[kind]["manifest_sha256"],
+               self._blob("observations", observations[kind]["manifest_sha256"], MAX_MANIFEST_BYTES))
+              for kind in ("m0", "m1", "m2")),
+        ]
+        transitions = conn.execute(
+            "SELECT seq, event, rule, from_state, to_state, from_version, to_version, attempt FROM transitions "
+            "WHERE subject_kind = 'step' AND subject_id = ? ORDER BY seq", (step.step_run_id,),
+        ).fetchall()
+
+        def claim(name: str) -> dict:
+            row = claims[name]
+            return {"claim_sha256": row["claim_sha256"], "byte_length": row["byte_length"], "shape": row["shape"],
+                    "received_at": row["received_at"], "published_name": blob_name("claims", row["claim_sha256"])}
+
+        subject = hold.subject
+        content = {
+            "schema_version": ACCEPTANCE_BUNDLE_SCHEMA_VERSION,
+            "acceptance": {
+                "subject_kind": _K.STEP_ACCEPTANCE.value, "subject": subject.model_dump(mode="json"),
+                "subject_sha256": subject.sha256, "approval_text": APPROVAL_TEXT_V2[_K.STEP_ACCEPTANCE],
+            },
+            "step": {
+                "project_run_id": step.project_run_id, "step_run_id": step.step_run_id, "step_id": step.step_id,
+                "attempt": step.attempt, "state": step.state.value, "state_version": step.state_version,
+                "step_contract": contract.model_dump(mode="json"), "step_contract_sha256": contract.sha256,
+            },
+            "write_scope": scope.model_dump(mode="json"),
+            "write_scope_sha256": scope.sha256,
+            "aido_observed": {
+                "evidence_class": AUTHORITY_OBSERVATION_PROVENANCE,
+                "statement": AIDO_OBSERVED_STATEMENT,
+                "identity_boundary_sha256": self._boundary_sha256,
+                "target_workspace_sha256": activation.target_workspace_sha256,
+                "approved_change": {
+                    "path": context.facts.path, "change_type": scope.change_type,
+                    "pre_image_sha256": context.facts.pre_image_sha256,
+                    "post_image_sha256": context.facts.post_image_sha256,
+                    "approved_diff_artifact_sha256": context.artifact_sha256,
+                    "project_config_sha256": context.config_sha256,
+                    "exact_diff_approval": {
+                        "approver_id": attestation.approver_id, "attested_at": attestation.attested_at.isoformat(),
+                        "challenge_id": attestation.challenge_id,
+                    },
+                },
+                "observations": observations,
+                "m2_additions": list(additions),
+                "write_intent": {"intent_id": intent["intent_id"], "state": intent["state"]},
+                "lifecycle": [dict(row) for row in transitions],
+            },
+            "execution_claims": {
+                "evidence_class": EXECUTION_CLAIM_PROVENANCE,
+                "claim_provenance": CLAIM_PROVENANCE_UNAUTHENTICATED,
+                "statement": EXECUTION_CLAIM_STATEMENT,
+                "write_report": claim("write"),
+                "review_command": {
+                    **claim("review"), "verification_outcome": facts.verification["outcome"],
+                    "review_verdict": facts.review["verdict"], "review_finding_count": verdict.finding_count,
+                },
+            },
+            "evidence_records": {
+                kind: {"record": record, "sha256": evidence_record_sha256(kind, record)}
+                for kind, record in (("write", facts.write), ("verification", facts.verification),
+                                     ("review", facts.review))
+            },
+            "planner": {
+                "statement": PLANNER_STATEMENT, "held_envelope": hold.envelope.model_dump(mode="json"),
+                "held_envelope_sha256": hold.envelope_sha256, "held_at": hold.ticket["held_at"],
+            },
+            "blobs": [
+                {"kind": kind, "sha256": sha256, "state_root_name": f"evidence/{kind}/{sha256}",
+                 "published_name": blob_name(kind, sha256)}
+                for kind, sha256, _ in blobs
+            ],
+        }
+        document = bundle_bytes(content)
+        files: dict[str, bytes] = {blob_name(kind, sha256): data for kind, sha256, data in blobs}
+        name = bundle_name(subject.sha256)
+        return HeldAcceptanceBundle(subject=subject, name=name, document=document,
+                                    files=(*files.items(), (name, document)))
+
+    def _publish_bundle(self, bundle: HeldAcceptanceBundle, *, create: bool) -> PublishedAcceptanceBundle:
+        boundary = self._last_proof.boundary
+        try:
+            return acceptance_bundle.publish(self._files(), boundary.paths.published, boundary.authority.sid,
+                                             bundle, create=create)
+        except AcceptanceBundleError as exc:
+            raise AuthorityRefusedError(f"the acceptance bundle is refused: {exc}") from None
+
+    @_reproving
+    def held_acceptance_bundle(self, step_run_id: str) -> HeldAcceptanceBundle:
+        """The human's review material for the step's current held decision:
+        a re-proven read. It separates what A observed from execution claims,
+        and carries the exact ``step-acceptance-subject.v2`` to sign."""
+        if type(step_run_id) is not str:
+            raise AuthorityRefusedError("a bundle is read by step run id.")
+        with self._transaction():
+            return self._bundle(*self._held_or_refuse(step_run_id))
+
+    @_reproving
+    def publish_acceptance_bundle(self, step_run_id: str) -> PublishedAcceptanceBundle:
+        """Publish the current held decision's bundle, and copies of the blobs
+        it references, into the A-owned ``published/`` directory (O reads, X
+        has nothing), each created once and re-read byte for byte."""
+        if type(step_run_id) is not str:
+            raise AuthorityRefusedError("a bundle is published by step run id.")
+        with self._transaction():
+            bundle = self._bundle(*self._held_or_refuse(step_run_id))
+        return self._publish_bundle(bundle, create=True)
+
+    @_reproving
+    def request_step_acceptance(self, step_run_id: str) -> ApprovalChallengeV2:  # type: ignore[override]
+        """Issue the challenge a human signs to accept the held decision:
+        ``step-acceptance-subject.v2``, computed from re-proven records.
+        Refused without a current held decision. The bundle the subject names
+        is published (or re-verified) in ``published/`` first, so a challenge
+        never exists for material the human could not review."""
+        self._require_authority()
+        if type(step_run_id) is not str:
+            raise AuthorityRefusedError("a step acceptance is requested by step run id.")
+        with self._transaction():
+            hold, *rest = self._held_or_refuse(step_run_id)
+            bundle = self._bundle(hold, *rest)
+        self._publish_bundle(bundle, create=True)
+        with self._transaction():
+            again, *_ = self._held_or_refuse(step_run_id)
+            if (again.ticket["ticket_id"], again.subject.sha256) != (hold.ticket["ticket_id"], hold.subject.sha256):
+                raise AuthorityRefusedError("the held decision changed while its bundle was published.")
+            return self._insert_challenge_v2(_K.STEP_ACCEPTANCE, hold.subject.sha256)
+
+    def _apply_signed_acceptance(self, step_run_id: str, request: object, role_output: object,
+                                 attestation: object) -> AppliedTransition:
+        """DECIDE_ACCEPTANCE over a held decision with a signed v2 acceptance
+        (FD-7). FD-5 ordering, as every v4 approval:
+
+        ```text
+        1  read transaction: re-prove the step and the held decision; the
+           presented envelope must equal the held one canonically, the request's
+           decision must be the held decision, and its HumanStepAcceptance must
+           record exactly the attested approver and time; the store's own
+           challenge for the v2 subject must be open
+        2  the published bundle is re-verified byte for byte
+        3  the signature is verified against the registry, OUTSIDE any transaction
+        4  write transaction: everything in 1 again, then the unchanged validator
+           decides; only COMPLETE is written, and the held ticket and the
+           challenge are consumed in that same transaction
+        ```
+
+        A replay is a receipt only with exactly the consumed envelope and
+        attestation."""
+        request = self._revalidated_request(StepTransitionRequest, request)
+        if type(attestation) is not HumanAttestationV2:
+            raise AuthorityRefusedError(_S6_ATTESTATION_ONLY)
+        attestation = self._revalidated_authority(HumanAttestationV2, attestation)
+        if request.event is not StepEvent.DECIDE_ACCEPTANCE or request.human_acceptance is None:
+            raise AuthorityRefusedError(_S6_ATTESTATION_ONLY)
+        if role_output is None:
+            raise AuthorityRefusedError("a signed acceptance presents the held planner envelope.")
+        role_output = self._revalidated_authority(BoundRoleOutput, role_output)
+        if attestation.subject_kind is not _K.STEP_ACCEPTANCE:
+            raise HumanAttestationRefusedError(_R.STATEMENT_MISMATCH, "the attestation is not a step acceptance.")
+        consumed_by = _acceptance_consumer(request.request_id)
+        presented = envelope_bytes(role_output)
+
+        def checked():
+            step, contract, (project, context) = self._proven_step_by_id(step_run_id)
+            replay = self._replayed(request.request_id, request.request_sha256, "step", step_run_id)
+            if replay is not None:
+                ticket = self._conn.execute(
+                    "SELECT held_envelope FROM dispatch_tickets WHERE consumed_request_id = ?", (request.request_id,)
+                ).fetchone()
+                challenge = self._conn.execute(
+                    "SELECT attestation_sha256 FROM approval_challenges_v2 WHERE consumed_by = ?", (consumed_by,)
+                ).fetchone()
+                if ticket is None or ticket["held_envelope"] != presented.decode("utf-8") or challenge is None or (
+                    challenge["attestation_sha256"] != attestation.sha256
+                ):
+                    raise AuthorityRefusedError(
+                        "a replayed acceptance must present exactly the envelope and attestation it consumed."
+                    )
+                return AppliedTransition(record=replay, duplicate=True, current_state=step.state.value,
+                                         current_state_version=step.state_version)
+            if project.state is not ProjectState.ACTIVE or step.state is not StepState.ACCEPTANCE:
+                raise AuthorityRefusedError("a step acceptance exists only for an ACTIVE project's step at ACCEPTANCE.")
+            hold = self._current_hold(step, project)
+            if hold is None:
+                raise AuthorityRefusedError(
+                    "the step has no held planner decision at its current version; nothing is accepted without one."
+                )
+            if presented != envelope_bytes(hold.envelope):
+                raise AuthorityRefusedError("the presented planner envelope is not the held one.")
+            if envelope_bytes(request.planner_decision) != envelope_bytes(hold.envelope.output):
+                raise AuthorityRefusedError("the request's planner decision is not the held decision.")
+            expected = HumanStepAcceptance(
+                step_contract_sha256=step.step_contract_sha256, attempt=step.attempt,
+                approved_by=attestation.approver_id, approved_at=attestation.attested_at,
+                approval_text=REQUIRED_STEP_ACCEPTANCE_APPROVAL_TEXT, source="manual",
+            )
+            if envelope_bytes(request.human_acceptance) != envelope_bytes(expected):
+                raise AuthorityRefusedError(
+                    "the human acceptance does not record exactly the attested approver and time."
+                )
+            challenge = self._open_challenge(attestation, _K.STEP_ACCEPTANCE, hold.subject.sha256)
+            return _Acceptance(step, contract, project, context, hold, challenge)
+
+        with self._transaction():
+            first = checked()
+            if type(first) is AppliedTransition:
+                return first
+            bundle = self._bundle(first.hold, first.step, first.contract, first.project)
+        self._publish_bundle(bundle, create=False)
+        verified = self._verify_for_consumption(first.challenge, attestation)
+        with self._transaction():
+            again = checked()
+            if type(again) is not _Acceptance or (
+                again.challenge, again.hold.ticket["ticket_id"], again.hold.subject.sha256
+            ) != (first.challenge, first.hold.ticket["ticket_id"], first.hold.subject.sha256):
+                raise AuthorityRefusedError("the held decision changed while the acceptance was being verified.")
+            step, contract, project = again.step, again.contract, again.project
+            decision = decide_step_transition(
+                step=step, contract=contract, project_state=project.state,
+                dependencies_complete=self._dependencies_complete(project, again.context, contract.depends_on),
+                request=request,
+            )
+            if decision.to_state is not StepState.COMPLETE:
+                raise AuthorityRefusedError(
+                    "the validator did not authorize COMPLETE; a signed acceptance writes nothing else."
+                )
+            record = self._write_step(step, decision, request.request_id, request.request_sha256, request.event.value)
+            self._propagate(project, decision, request.request_id, request.request_sha256)
+            if self._conn.execute(
+                "UPDATE dispatch_tickets SET consumed_request_id = ? WHERE ticket_id = ? "
+                "AND consumed_request_id IS NULL AND held_envelope_sha256 = ?",
+                (request.request_id, again.hold.ticket["ticket_id"], again.hold.envelope_sha256),
+            ).rowcount != 1:
+                raise StateUntrustedError("a held ticket changed underneath its own transaction.")
+            self._consume_challenge_v2(again.challenge.challenge_id, consumed_by, attestation, verified)
+        return AppliedTransition(record=record, duplicate=False, current_state=record.to_state,
+                                 current_state_version=record.to_version)
+
+    def _decision_transition_issue(self, ticket: sqlite3.Row, row: sqlite3.Row) -> str | None:
+        """Why a recorded DECIDE_ACCEPTANCE is not exactly the Alpha rule's
+        decision, or, for COMPLETE, not the held decision completed by a signed
+        v2 acceptance that re-verifies now (FD-4), or ``None``. The request is
+        rebuilt from the re-derived records and must hash to the recorded one."""
+        try:
+            consumer = _acceptance_consumer(row["request_id"])
+            if ticket["held_envelope"] is not None:
+                hold = self._proven_hold(ticket)
+                if row["to_state"] != StepState.COMPLETE.value:
+                    return "a held decision was consumed by something other than a signed COMPLETE."
+                attestation, issue = self._consumed_approval_v2(consumer, _K.STEP_ACCEPTANCE, hold.subject.sha256)
+                if issue is not None:
+                    return issue
+                expected = StepTransitionRequest(
+                    request_id=row["request_id"], expected_state_version=row["from_version"],
+                    event=StepEvent.DECIDE_ACCEPTANCE, planner_decision=hold.envelope.output,
+                    human_acceptance=HumanStepAcceptance(
+                        step_contract_sha256=ticket["step_contract_sha256"], attempt=ticket["attempt"],
+                        approved_by=attestation.approver_id, approved_at=attestation.attested_at,
+                        approval_text=REQUIRED_STEP_ACCEPTANCE_APPROVAL_TEXT, source="manual",
+                    ),
+                )
+            else:
+                if row["to_state"] == StepState.COMPLETE.value:
+                    return "a COMPLETE without a held decision and a signed acceptance."
+                if self._conn.execute(
+                    "SELECT 1 FROM approval_challenges_v2 WHERE consumed_by = ?", (consumer,)
+                ).fetchone() is not None:
+                    return "an unheld decision consumed a step acceptance."
+                facts = self._alpha_facts(ticket["step_run_id"], row["attempt"], row["from_version"])
+                expected = StepTransitionRequest(
+                    request_id=row["request_id"], expected_state_version=row["from_version"],
+                    event=StepEvent.DECIDE_ACCEPTANCE,
+                    planner_decision=self._rule_decision(facts, ticket["step_contract_sha256"], row["attempt"]),
+                )
+        except _FACT_ERRORS as exc:
+            return f"the decision cannot be re-derived: {exc}"
+        if expected.request_sha256 != row["request_sha256"]:
+            return "the decision is not AIDO's deterministic decision (or its signed acceptance) for this attempt."
+        return None
+
+    def _s6_issues(self) -> list[str]:
+        """Every held ticket re-proves, and every step-acceptance challenge was
+        issued for the subject of a held decision. Answered planner tickets
+        are explained by their step's DECIDE_ACCEPTANCE proof."""
+        issues: list[str] = []
+        subjects = set()
+        for row in self._conn.execute(
+            "SELECT * FROM dispatch_tickets WHERE held_envelope IS NOT NULL OR held_envelope_sha256 IS NOT NULL "
+            "OR held_at IS NOT NULL"
+        ).fetchall():
+            try:
+                subjects.add(self._proven_hold(row).subject.sha256)
+            except _FACT_ERRORS as exc:
+                issues.append(f"held dispatch {row['ticket_id']}: {exc}")
+                continue
+            if row["consumed_request_id"] is not None and self._conn.execute(
+                "SELECT 1 FROM transitions WHERE request_id = ? AND event = ? AND to_state = ?",
+                (row["consumed_request_id"], StepEvent.DECIDE_ACCEPTANCE.value, StepState.COMPLETE.value),
+            ).fetchone() is None:
+                issues.append(f"held dispatch {row['ticket_id']} was answered by no signed acceptance.")
+        for row in self._conn.execute(
+            "SELECT subject_sha256 FROM approval_challenges_v2 WHERE subject_kind = ?", (_K.STEP_ACCEPTANCE.value,)
+        ):
+            if row["subject_sha256"] not in subjects:
+                issues.append("a step acceptance challenge was issued for no held decision.")
+        return issues
+
+    def _step_acceptance_subject(self, step: StepRun) -> str:
+        raise AuthorityRefusedError(
+            "DL-4A's step-acceptance subject reads store.v3 evidence; an integration store signs "
+            "step-acceptance-subject.v2 over a held decision."
+        )
+
+    def _attempt_evidence_sha256(self, step_run_id: str, attempt: int) -> str:
+        raise AuthorityRefusedError(
+            "DL-4A's verification_evidence is a store.v3 table; store.v4 binds verification_evidence_v2."
+        )
+
     # --- S3: proofs of the write chain ----------------------------------------------
 
     def _observation_row(self, observation_id: object, ticket_id: str,
@@ -2939,20 +3773,17 @@ class IntegrationStore(ControlPlaneStore):
         Each one makes every run untrusted."""
         issues = []
         if self._conn.execute(
-            "SELECT COUNT(*) FROM dispatch_tickets WHERE held_envelope IS NOT NULL "
-            "OR held_envelope_sha256 IS NOT NULL OR held_at IS NOT NULL"
-        ).fetchone()[0]:
-            issues.append("a dispatch ticket is held, which nothing in this store can do yet (S6).")
-        if self._conn.execute(
             "SELECT COUNT(*) FROM dispatch_tickets WHERE consumed_request_id IS NOT NULL "
             f"AND role NOT IN ({_in_list(_ANSWERING_EVENT)})"
         ).fetchone()[0]:
-            issues.append("a planner dispatch is answered, which nothing in this store can do yet (S6).")
+            issues.append("a dispatch of an unknown role is answered.")
         for row in self._conn.execute(
             "SELECT t.ticket_id, t.role FROM dispatch_tickets t WHERE t.consumed_request_id IS NOT NULL "
             "AND NOT EXISTS (SELECT 1 FROM transitions r WHERE r.request_id = t.consumed_request_id "
-            "AND r.event = CASE t.role WHEN 'implementer' THEN ? WHEN 'verifier' THEN ? WHEN 'reviewer' THEN ? END)",
-            (_ANSWERING_EVENT["implementer"], _ANSWERING_EVENT["verifier"], _ANSWERING_EVENT["reviewer"]),
+            "AND r.event = CASE t.role WHEN 'implementer' THEN ? WHEN 'verifier' THEN ? WHEN 'reviewer' THEN ? "
+            "WHEN 'planner' THEN ? END)",
+            (_ANSWERING_EVENT["implementer"], _ANSWERING_EVENT["verifier"], _ANSWERING_EVENT["reviewer"],
+             _ANSWERING_EVENT["planner"]),
         ):
             issues.append(f"dispatch {row['ticket_id']} is answered by no recorded {row['role']} output.")
         kinds = _in_list(kind.value for kind in _ISSUED_KINDS)
@@ -2985,7 +3816,15 @@ class IntegrationStore(ControlPlaneStore):
                         (row["subject_sha256"],),
                     ).fetchone() is not None
                 )
-            else:
+            elif row["subject_kind"] == _K.STEP_ACCEPTANCE.value:
+                request_id = row["consumed_by"].removeprefix("step_acceptance:")
+                explained = row["consumed_by"].startswith("step_acceptance:") and self._conn.execute(
+                    "SELECT 1 FROM transitions r JOIN dispatch_tickets t ON t.consumed_request_id = r.request_id "
+                    "WHERE r.request_id = ? AND r.event = ? AND r.to_state = ? AND t.role = 'planner' "
+                    "AND t.held_envelope IS NOT NULL",
+                    (request_id, StepEvent.DECIDE_ACCEPTANCE.value, StepState.COMPLETE.value),
+                ).fetchone() is not None
+            elif row["subject_kind"] == _K.PLAN_ACTIVATION.value:
                 plan = row["consumed_by"].removeprefix("execution_plan:")
                 explained = row["consumed_by"].startswith("execution_plan:") and (
                     self._conn.execute(
@@ -2995,9 +3834,12 @@ class IntegrationStore(ControlPlaneStore):
                         (plan, row["consumed_by"]),
                     ).fetchone() is not None
                 )
+            else:
+                explained = False
             if not explained:
                 issues.append("a consumed approval challenge is not explained by what it approved.")
         issues.extend(self._s3_issues())
+        issues.extend(self._s6_issues())
         return issues
 
     def _authority_step_issues(self, step: StepRun, contract: StepContract, project: ProjectRun) -> list[str]:
@@ -3022,10 +3864,7 @@ class IntegrationStore(ControlPlaneStore):
         for row in role_rows:
             role = roles.get(row["event"])
             if role is None:
-                issues.append(
-                    f"transition {row['seq']} records a role output, which needs an execution claim "
-                    "and an authority observation this store cannot hold yet."
-                )
+                issues.append(f"transition {row['seq']} records a role output of no role this store dispatches.")
                 continue
             ticket = consumed.get(row["request_id"])
             if ticket is None or (
@@ -3039,6 +3878,8 @@ class IntegrationStore(ControlPlaneStore):
                 continue
             if role == "implementer":
                 issue = self._write_evidence_issue(ticket["ticket_id"])
+            elif role == "planner":
+                issue = self._decision_transition_issue(ticket, row)
             elif role == "reviewer":
                 issue = self._review_evidence_issue(ticket["ticket_id"])
                 recorded = self._conn.execute(
@@ -3078,8 +3919,12 @@ class IntegrationStore(ControlPlaneStore):
         whose ``review_evidence`` the store re-derives from the attempt's
         consumed, ``verified`` verifier dispatch and the exact claim bytes its
         evidence names, with the re-derived proposal (verdict and claim digest)
-        as the payload (:meth:`_review_evidence_issue`). The planner's output
-        is still refused (S6)."""
+        as the payload (:meth:`_review_evidence_issue`).
+
+        S6: ``DECIDE_ACCEPTANCE`` without a human acceptance is accepted only
+        for an unheld planner ticket whose decision is exactly the Alpha rule's
+        (:meth:`_authorize_decision`); a human acceptance is consumed only by
+        :meth:`_apply_signed_acceptance`."""
         role = _EVENT_ROLE.get(request.event)
         if role is None:
             self._refuse_unconsumable_authority(request, role_output, attestation)
@@ -3097,6 +3942,8 @@ class IntegrationStore(ControlPlaneStore):
             if (issue := self._review_evidence_issue(consumption.ticket_id, request.review)) is not None:
                 raise AuthorityRefusedError(f"{_unconsumable(request.event.value, role)} ({issue})")
             return consumption
+        if role == "planner":
+            return self._authorize_decision(step, request, role_output, attestation)
         if role != "implementer":
             raise AuthorityRefusedError(_unconsumable(request.event.value, role))
         consumption = ControlPlaneStore._authorize_step_request(self, step, request, role_output, attestation)
@@ -3106,6 +3953,32 @@ class IntegrationStore(ControlPlaneStore):
             raise AuthorityRefusedError(
                 "an implementer dispatch in an integration store reports only AIDO's fixed write-handoff report."
             )
+        return consumption
+
+    def _authorize_decision(self, step: StepRun, request: StepTransitionRequest,
+                            role_output: BoundRoleOutput | None, attestation: object):
+        """S6: a planner decision applied without a human acceptance. Its
+        ticket must be unanswered and unheld (a held decision completes only
+        with a signed acceptance), and its decision exactly the rule's."""
+        if request.human_acceptance is not None or attestation is not None:
+            raise AuthorityRefusedError(_S6_ATTESTATION_ONLY)
+        try:
+            consumption = ControlPlaneStore._authorize_step_request(self, step, request, role_output, None)
+        except AuthorityRefusedError as exc:
+            raise AuthorityRefusedError(f"a planner decision answers its own AIDO dispatch ({exc})") from None
+        row = self._conn.execute(
+            "SELECT * FROM dispatch_tickets WHERE ticket_id = ?", (consumption.ticket_id,)
+        ).fetchone()
+        if row["held_envelope"] is not None:
+            raise AuthorityRefusedError(
+                "a held decision is completed only by a signed human acceptance; it is never applied without one."
+            )
+        if (issue := self._planner_decision_issue(row, request.planner_decision)) is not None:
+            raise AuthorityRefusedError(issue)
+        # FD-8a makes every v4 step contract require human acceptance; this is
+        # the direct guard that no unsigned decision can ever reach COMPLETE.
+        if not self._load_contract(step.step_contract_sha256, "step_contract").human_acceptance_required:
+            raise AuthorityRefusedError("an integration store completes no step without a signed human acceptance.")
         return consumption
 
     def _record_verification_evidence(self, recorder_key, ticket, data):  # type: ignore[override]

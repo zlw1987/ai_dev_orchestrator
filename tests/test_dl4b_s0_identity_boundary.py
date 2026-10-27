@@ -2043,11 +2043,13 @@ _S2_MODULES = ("integration_store.py", "integration_session.py")
 _S3_MODULES = ("authority_files.py", "claim_readers.py", "claim_receiver.py", "exchange.py", "state_blobs.py",
                "workspace_observation.py", "write_handoff.py")
 _S4_MODULES = ("execution_claim.py",)
+#: Added by DL-4B S6 (the acceptance lifecycle); checked by its own suite.
+_S6_MODULES = ("acceptance_bundle.py", "alpha_planner.py")
 
 
 def test_the_package_has_exactly_the_s0_modules() -> None:
     assert sorted(p.name for p in _PACKAGE.glob("*.py")) == sorted(
-        _MODULES + _S1_MODULES + _S2_MODULES + _S3_MODULES + _S4_MODULES)
+        _MODULES + _S1_MODULES + _S2_MODULES + _S3_MODULES + _S4_MODULES + _S6_MODULES)
 
 
 def test_no_execution_network_model_git_or_harness_surface() -> None:

@@ -12,6 +12,9 @@ plan_activation_subject_v2_sha256  what a human signs to activate a plan in stor
                                  v1's fields + write scopes + project config + identity
                                  boundary (FD-10, AMEND1)
 ALPHA_EXECUTION_POLICY           the only policy store.v4 activates (FD-8a)
+StepAcceptanceSubjectV2          step-acceptance-subject.v2: what a human signs to accept
+                                 a held attempt (S6, FD-7)
+alpha_planner_decision           the deterministic Alpha planner rule's output (S6, FD-8)
 ```
 
 Nothing here is authority by construction. The integration store recomputes
@@ -37,7 +40,13 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from ai_dev_orchestrator.control_plane.authority import ExecutionPolicy
-from ai_dev_orchestrator.control_plane.models import _slug, canonical_json_bytes, model_sha256
+from ai_dev_orchestrator.control_plane.models import (
+    PlannerDecision,
+    PlannerRecommendation,
+    _slug,
+    canonical_json_bytes,
+    model_sha256,
+)
 
 WRITE_SCOPE_SCHEMA_VERSION = "write-scope.v1"
 PLAN_ACTIVATION_SUBJECT_V2_SCHEMA_VERSION = "plan-activation-subject.v2"
@@ -222,6 +231,109 @@ def exact_diff_approval_subject_v1_sha256(
         "write_scope_sha256": write_scope_sha256,
         "approved_diff_artifact_sha256": approved_diff_artifact_sha256,
     })).hexdigest()
+
+
+STEP_ACCEPTANCE_SUBJECT_V2_SCHEMA_VERSION = "step-acceptance-subject.v2"
+EVIDENCE_RECORD_SCHEMA_VERSION = "evidence-record.v1"
+#: DL-4B S6 (AMEND1). The fixed label every acceptance subject v2 carries: the
+#: verification outcome, the review packet and verdict and both harness
+#: reports were produced inside the execution identity and authenticate
+#: nothing about who produced them (FD-15, D-2′).
+CLAIM_PROVENANCE_UNAUTHENTICATED = "execution_identity_unauthenticated"
+
+#: DL-4B S6. The fixed rationale of each ground of the deterministic Alpha
+#: planner rule (FD-8). The rule names no state; DL-1's validator decides.
+ALPHA_PLANNER_RATIONALE = {
+    "accept": (
+        "AIDO's deterministic Alpha rule: the approved write is proven by M0 and M1, M2 holds, the "
+        "claimed verification outcome is 'verified' and the claimed review verdict is 'approve'. "
+        "Both are execution claims; only a signed human acceptance can complete this step."
+    ),
+    "verification_not_verified": (
+        "AIDO's deterministic Alpha rule: the claimed verification outcome is not 'verified'; a human decides."
+    ),
+    "review_not_approve": (
+        "AIDO's deterministic Alpha rule: the claimed review verdict is not 'approve'; a human decides."
+    ),
+    "evidence_unproven": (
+        "AIDO's deterministic Alpha rule: the attempt's write, verification or review evidence does "
+        "not re-prove; a human decides."
+    ),
+}
+
+
+def alpha_planner_decision(
+    *, step_contract_sha256: str, attempt: int, ground: str, evidence_refs: tuple[str, ...]
+) -> PlannerDecision:
+    """The ``AlphaPlannerRule`` decision for one ground (FD-8). Pure: the
+    integration store computes the ground from its own re-proven records,
+    never from a cached step field, and refuses any other planner output."""
+    return PlannerDecision(
+        step_contract_sha256=step_contract_sha256,
+        attempt=attempt,
+        recommendation=(
+            PlannerRecommendation.RECOMMEND_STEP_ACCEPT if ground == "accept"
+            else PlannerRecommendation.HUMAN_REQUIRED
+        ),
+        rationale=ALPHA_PLANNER_RATIONALE[ground],
+        evidence_refs=evidence_refs,
+    )
+
+
+def evidence_record_sha256(kind: str, record: dict[str, object]) -> str:
+    """The digest of one store.v4 evidence record as an acceptance subject
+    binds it: the record's own ids, the claim and observation digests it
+    names, and (for verification and review) the claimed outcome or verdict.
+    ``kind`` is ``write``, ``verification`` or ``review``."""
+    if kind not in ("write", "verification", "review"):
+        raise ValueError("no such evidence record kind.")
+    return hashlib.sha256(canonical_json_bytes({
+        "schema_version": EVIDENCE_RECORD_SCHEMA_VERSION, "kind": kind, "record": record,
+    })).hexdigest()
+
+
+def envelope_bytes(envelope: BaseModel) -> bytes:
+    """The canonical bytes of a bound role output; what a hold stores and the
+    acceptance subject binds by digest."""
+    return canonical_json_bytes(envelope.model_dump(mode="json"))
+
+
+class StepAcceptanceSubjectV2(BaseModel):
+    """``step-acceptance-subject.v2`` (FD-7, AMEND1): what a human signs to
+    accept one held step attempt in store.v4.
+
+    DL-4A's v1 fields, where ``verification_evidence_sha256`` is the digest of
+    the attempt's ``verification_evidence_v2`` record (claim digest, M2 and the
+    claimed outcome; a v4 "evidence" record means claim + authority
+    observation, §8), plus the write scope, the write and review evidence
+    records, the held planner envelope, the identity boundary, the three
+    authority observations, and the fixed claim provenance label. Every value
+    is recomputed by the store from re-proven records; none comes from a caller.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    schema_version: Literal["step-acceptance-subject.v2"]
+    kind: Literal["step_acceptance"]
+    project_run_id: str
+    step_run_id: str
+    step_contract_sha256: str
+    attempt: int
+    state_version: int
+    verification_evidence_sha256: str
+    write_scope_sha256: str
+    write_evidence_sha256: str
+    review_evidence_sha256: str
+    planner_envelope_sha256: str
+    identity_boundary_sha256: str
+    m0_observation_sha256: str
+    m1_observation_sha256: str
+    m2_observation_sha256: str
+    claim_provenance: Literal["execution_identity_unauthenticated"]
+
+    @property
+    def sha256(self) -> str:
+        return model_sha256(self)
 
 
 def plan_activation_subject_v2_sha256(

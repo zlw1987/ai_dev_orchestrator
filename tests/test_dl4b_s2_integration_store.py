@@ -558,7 +558,8 @@ def test_a_library_session_is_never_production_and_says_so(h: Harness) -> None:
 @needs_windows_paths
 def test_the_session_exposes_no_recorder_and_cannot_be_altered(h: Harness) -> None:
     public = {name for name in dir(h.session) if not name.startswith("_")}
-    assert public == {"state_root", "store", "implementer", "verifier", "reviewer", "boundary_sha256", "is_production", "close"}
+    assert public == {"state_root", "store", "implementer", "verifier", "reviewer", "planner", "boundary_sha256",
+                      "is_production", "close"}
     for name in public:
         value = getattr(h.session, name)
         assert "recorder" not in type(value).__name__.lower()
@@ -646,11 +647,13 @@ REPROVED = {
     "authorized_target_workspace",
     # DL-4B S3
     "request_exact_diff_approval", "record_exact_diff_approval",
+    # DL-4B S6
+    "request_step_acceptance", "held_acceptance_decision", "hold_acceptance_decision", "held_acceptance_bundle",
+    "publish_acceptance_bundle",
 }
-REFUSED_ALWAYS = {"record_project_contract", "record_execution_plan", "record_step_contract",
-                  "request_step_acceptance"}
+REFUSED_ALWAYS = {"record_project_contract", "record_execution_plan", "record_step_contract"}
 NOT_AUTHORITY = {"close", "inspect_project_run", "inspect_step_run", "inspect_step_runs", "transitions_for",
-                 "authority_mode", "boundary_sha256", "is_production"}
+                 "authority_mode", "boundary_sha256", "is_production", "holds_acceptance_decisions"}
 
 
 def test_every_public_store_method_is_classified() -> None:
@@ -704,6 +707,14 @@ def test_every_consumption_boundary_reproves_and_changes_nothing_when_it_fails(h
             execution_plan_sha256=chain.plan.sha256, step_id=STEP, artifact_name="a.json",
             config_name="p.yaml"),
         "record_exact_diff_approval": lambda: store.record_exact_diff_approval(att),
+        # DL-4B S6
+        "request_step_acceptance": lambda: store.request_step_acceptance(step.step_run_id),
+        "held_acceptance_decision": lambda: store.held_acceptance_decision(
+            step.step_run_id, expected_state_version=step.state_version),
+        "hold_acceptance_decision": lambda: store.hold_acceptance_decision(
+            step.step_run_id, expected_state_version=step.state_version, role_output=None),
+        "held_acceptance_bundle": lambda: store.held_acceptance_bundle(step.step_run_id),
+        "publish_acceptance_bundle": lambda: store.publish_acceptance_bundle(step.step_run_id),
     }
     assert set(calls) == REPROVED
     break_boundary(h)

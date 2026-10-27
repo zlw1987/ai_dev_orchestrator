@@ -1596,6 +1596,13 @@ class ControlPlaneStore:
         """``True`` for a DL-4A authority store, ``False`` for an offline store."""
         return self._authority is not None
 
+    @property
+    def holds_acceptance_decisions(self) -> bool:
+        """DL-4B S6 (FD-7): ``True`` only for an integration store (store.v4),
+        which holds a planner decision lacking only a human acceptance instead
+        of escalating it. store.v2 and store.v3 never hold one."""
+        return False
+
     def _require_authority(self) -> _AuthorityContext:
         if self._authority is None:
             raise AuthorityRefusedError(
