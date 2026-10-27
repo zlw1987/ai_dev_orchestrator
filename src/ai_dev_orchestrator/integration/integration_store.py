@@ -37,8 +37,25 @@ IMPLEMENTATION_    accepted only for the exact ticket whose write the store prov
 RETURNED           (approval, completed intent, claim receipt, M0, M1, as approved)
 ```
 
-Every other role-output event is still refused (S4–S6), and a row in an S4–S6
-table is unexplained. A caller's report, digest or model is never a
+DL-4B S4 adds the VERIFYING half of the execution claim adapter:
+
+```text
+REVIEW HANDOFF     capability-gated (_perform_review_handoff, reachable only through
+                   the session's ExecutionClaimAdapter): the verifier ticket must be
+                   for the version the proven write produced; ONE transaction persists
+                   the handoff row (the write intent's artifact + config digests)
+                   → publish → FD-17 claim → strict classification of the review
+                   command's stdout → M2 against M1 → claim receipt + M2, and
+                   verification_evidence_v2 iff the claim binds and M2 holds
+VERIFICATION_      accepted only for the exact verifier ticket whose evidence the store
+OBSERVED           re-derives (write chain, handoff, claim bytes, M1, M2), with the
+                   claim's own outcome and the claim digest as the observation
+```
+
+The verification outcome stays an execution claim (FD-15): it selects DL-1's
+branch toward a human; M2 and the store's own rows are the facts. Every other
+role-output event is still refused (S5–S6), and a row in ``review_evidence``
+is unexplained. A caller's report, digest or model is never a
 substitute for the claim *and* the authority observation (FD-8, FD-15).
 
 No subprocess, Git, network, model, environment read or workspace write
@@ -85,6 +102,7 @@ from ai_dev_orchestrator.control_plane.integration_records import (
     CLAIM_SHAPES,
     EXECUTION_CLAIM_PROVENANCE,
     OBSERVATION_KINDS,
+    REVIEW_CLAIM_OUTCOMES,
     WRITE_HANDOFF_REPORT_SUMMARY,
     WRITE_INTENT_STATES,
     WriteScopeV1,
@@ -105,6 +123,7 @@ from ai_dev_orchestrator.control_plane.models import (
     StepContractProposal,
     StepRun,
     StepState,
+    VerificationObservation,
     VerificationOutcome,
 )
 from ai_dev_orchestrator.control_plane.store import (
@@ -143,6 +162,7 @@ from ai_dev_orchestrator.integration.workspace_observation import (
     MAX_MANIFEST_BYTES,
     Observation,
     ObservationError,
+    classify_verification,
     classify_write,
     observe_git_control,
     observe_workspace,
@@ -319,7 +339,7 @@ CREATE TABLE verification_evidence_v2 (
     ticket_id TEXT PRIMARY KEY REFERENCES execution_claims (ticket_id),
     step_run_id TEXT NOT NULL,
     attempt INTEGER NOT NULL,
-    write_intent_id TEXT NOT NULL REFERENCES write_intents (intent_id),
+    write_intent_id TEXT NOT NULL UNIQUE REFERENCES write_intents (intent_id),
     write_scope_sha256 TEXT NOT NULL,
     workspace_identity_sha256 TEXT NOT NULL,
     claim_sha256 TEXT NOT NULL,
@@ -362,8 +382,10 @@ S3_TABLES = (
     "execution_claims",
     "write_evidence",
 )
-#: Tables S4-S6 will write. Nothing writes them yet, so any row is unexplained.
-UNWRITTEN_TABLES = ("verification_evidence_v2", "review_evidence")
+#: DL-4B S4's table. Every row must be explained by a re-proving chain.
+S4_TABLES = ("verification_evidence_v2",)
+#: Tables S5-S6 will write. Nothing writes them yet, so any row is unexplained.
+UNWRITTEN_TABLES = ("review_evidence",)
 _V4_TABLES = _TABLES | {
     "approval_challenges_v2",
     "plan_activations",
@@ -408,6 +430,9 @@ class _IntegrationContext(NamedTuple):
     #: The capability the write handoff adapter's recorder holds. Only the
     #: session that opened the store knows it.
     write_key: object | None
+    #: S4: the execution claim adapter's recorder capability, distinct from
+    #: ``write_key``. Only the session that opened the store knows it.
+    claim_key: object | None = None
 
 
 class _Activation(NamedTuple):
@@ -460,6 +485,32 @@ class WriteHandoffRefusedError(AuthorityRefusedError):
     and nothing will hand off a second write for the step."""
 
 
+class VerificationClaimRefusedError(AuthorityRefusedError):
+    """A review handoff ended without verification evidence: the claim could
+    not be classified, did not bind, or M2 did not hold. No evidence was
+    recorded; the dispatch can never be handed off again, and DL-2 reduces the
+    step to RECOVERY_REQUIRED."""
+
+
+class _VerifierChain(NamedTuple):
+    """What one verifier dispatch is bound to, re-derived from stored rows:
+    the attempt's proven write (its implementer ticket, completed intent and
+    M1) and the exact-diff approval behind it."""
+
+    context: _DiffContext
+    attestation: HumanAttestationV2
+    implementer_ticket_id: str
+    intent: sqlite3.Row
+    m1: Observation
+
+
+class _ReviewState(NamedTuple):
+    """The re-proven state one verifier dispatch hands off a review from."""
+
+    chain: _VerifierChain
+    handoff: sqlite3.Row | None
+
+
 def _exact_diff_consumer(plan_sha256: str, step_id: str) -> str:
     return f"exact_diff:{plan_sha256}:{step_id}"
 
@@ -505,6 +556,24 @@ def _write_claim_issue(claim: claim_readers.WriteClaimFacts, state: _WriteState,
     return None
 
 
+def _review_claim_issue(claim: claim_readers.ReviewClaimFacts, chain: _VerifierChain,
+                        m2: Observation | None) -> str | None:
+    """Why a classified review claim does not bind to the scope, the attested
+    approval, the approved artifact and A's own M2, or ``None``. The packet's
+    own consistency was the reader's (it refuses a contradiction)."""
+    if claim.path != chain.context.scope.path:
+        return "the review claim names another target."
+    if (claim.approved_by, claim.approved_at) != (chain.attestation.approver_id, chain.attestation.attested_at):
+        return "the review claim's approval is not the attested exact-diff approval."
+    if claim.identity != chain.context.facts.identity:
+        return "the review claim's identity is not the approved artifact's."
+    if REVIEW_CLAIM_OUTCOMES.get(claim.shape) != claim.outcome:
+        return "the review claim's outcome is not the one its shape permits."
+    if m2 is None or claim.post_image_bytes != m2.target_size:
+        return "the review claim's target size is not what A observed at M2."
+    return None
+
+
 def _write_handoff_report(step_contract_sha256: str, attempt: int) -> ImplementationReport:
     """The only report an implementer dispatch returns in store.v4: AIDO's
     fixed words, no claims (§5.5 step 7)."""
@@ -528,6 +597,13 @@ def _unconsumable(event: str, role: str) -> str:
         "which an integration store records only through the DL-4B S3-S6 adapters; no "
         "caller-supplied output, report or digest replaces them."
     )
+
+
+#: The one event that answers each dispatch role an integration store accepts.
+_ANSWERING_EVENT = {
+    "implementer": StepEvent.IMPLEMENTATION_RETURNED.value,
+    "verifier": StepEvent.VERIFICATION_OBSERVED.value,
+}
 
 
 def _reproving(method: Callable) -> Callable:
@@ -610,14 +686,16 @@ class IntegrationStore(ControlPlaneStore):
         files: Callable[[], AuthorityFiles] | None = None,
         waiter: Waiter | None = None,
         write_key: object | None = None,
+        claim_key: object | None = None,
     ) -> IntegrationStore:
         """Prove the boundary, bind it to ``root``, then open ``root``'s store.
 
         Nothing on disk is created or opened before the first proof passes and
         names this state root. The origin of that proof (``windows`` or
         ``injected``) is the store's, for its whole life. ``files`` builds A's
-        file access only after that proof; ``write_key`` is the capability the
-        opening session minted for its write handoff adapter.
+        file access only after that proof; ``write_key`` and ``claim_key`` are
+        the capabilities the opening session minted for its write handoff and
+        execution claim adapters.
         """
         if type(root) is not AidoStateRoot:
             raise StoreError("an integration session needs an AidoStateRoot.")
@@ -644,6 +722,7 @@ class IntegrationStore(ControlPlaneStore):
         context = _IntegrationContext(
             root=root, prove=prove, verifier=verifier, origin=origin, files=file_access,
             waiter=waiter if waiter is not None else claim_receiver.SystemWaiter(), write_key=write_key,
+            claim_key=claim_key,
         )
         store = cls._open(root.store_path, clock, context)
         try:
@@ -1974,6 +2053,399 @@ class IntegrationStore(ControlPlaneStore):
              AUTHORITY_OBSERVATION_PROVENANCE, now),
         )
 
+    # --- S4: the review handoff (capability-gated) ---------------------------------
+
+    def _verifier_chain(self, ticket_row: sqlite3.Row) -> _VerifierChain:
+        """Inside a transaction: the proven write a verifier ticket is bound
+        to, or a refusal. The ticket must be for exactly the version the
+        attempt's ``IMPLEMENTATION_RETURNED`` produced, and that implementer
+        dispatch's write evidence must re-prove (FD-8, §5.2 step 1)."""
+        if ticket_row["role"] != "verifier" or ticket_row["step_state"] != StepState.VERIFYING.value:
+            raise AuthorityRefusedError("the ticket is not a verifier dispatch.")
+        implementers = self._conn.execute(
+            "SELECT * FROM dispatch_tickets WHERE step_run_id = ? AND attempt = ? AND role = 'implementer' "
+            "AND consumed_request_id IS NOT NULL", (ticket_row["step_run_id"], ticket_row["attempt"]),
+        ).fetchall()
+        if len(implementers) != 1:
+            raise AuthorityRefusedError("the attempt has no single answered implementer dispatch.")
+        implementer = implementers[0]
+        transition = self._conn.execute(
+            "SELECT * FROM transitions WHERE request_id = ?", (implementer["consumed_request_id"],)
+        ).fetchone()
+        if transition is None or (
+            transition["subject_kind"], transition["subject_id"], transition["event"], transition["to_state"],
+            transition["to_version"], transition["attempt"],
+        ) != (
+            "step", ticket_row["step_run_id"], StepEvent.IMPLEMENTATION_RETURNED.value, StepState.VERIFYING.value,
+            ticket_row["state_version"], ticket_row["attempt"],
+        ):
+            raise AuthorityRefusedError("the verifier ticket is not for the version the proven write produced.")
+        if (issue := self._write_evidence_issue(implementer["ticket_id"])) is not None:
+            raise AuthorityRefusedError(issue)
+        intent = self._conn.execute(
+            "SELECT * FROM write_intents WHERE ticket_id = ?", (implementer["ticket_id"],)
+        ).fetchone()
+        evidence = self._conn.execute(
+            "SELECT m1_observation_id FROM write_evidence WHERE ticket_id = ?", (implementer["ticket_id"],)
+        ).fetchone()
+        approval = self._conn.execute(
+            "SELECT * FROM exact_diff_approvals WHERE approval_id = ?", (intent["exact_diff_approval_id"],)
+        ).fetchone()
+        context, attestation, issue = self._exact_diff_proof(approval)
+        if issue is not None:
+            raise AuthorityRefusedError(issue)
+        m1, issue = self._observation_row(evidence["m1_observation_id"], implementer["ticket_id"], "m1")
+        if issue is not None:
+            raise AuthorityRefusedError(issue)
+        if not (context.config_facts.controlled_verification_enabled
+                and context.config_facts.controlled_review_enabled):
+            raise AuthorityRefusedError(
+                "the project config does not enable both controlled_verification and controlled_review."
+            )
+        return _VerifierChain(context, attestation, implementer["ticket_id"], intent, m1)
+
+    def _review_state(self, ticket: DispatchTicket, *, fresh: bool) -> _ReviewState:
+        """Inside a transaction: the re-proven state one verifier dispatch may
+        hand off a review from, or a refusal. ``fresh`` requires that nothing
+        was handed off for it yet; otherwise its handoff must exist and nothing
+        may have been received or recorded for it."""
+        step, _, (project, _) = self._proven_step_by_id(ticket.step_run_id)
+        row = self._conn.execute(
+            "SELECT * FROM dispatch_tickets WHERE ticket_id = ?", (ticket.ticket_id,)
+        ).fetchone()
+        if row is None or self._ticket_from_row(row) != ticket:
+            raise AuthorityRefusedError("the ticket is not one AIDO issued.")
+        if ticket.role != "verifier" or row["consumed_request_id"] is not None:
+            raise AuthorityRefusedError("the ticket is not an unanswered verifier dispatch.")
+        if project.state is not ProjectState.ACTIVE:
+            raise AuthorityRefusedError(f"the project is {project.state.value}.")
+        if (step.state, step.state_version, step.attempt) != (
+            StepState.VERIFYING, ticket.state_version, ticket.attempt
+        ):
+            raise AuthorityRefusedError("the verifier ticket is stale: its step left that state.")
+        chain = self._verifier_chain(row)
+        handoff = self._conn.execute(
+            "SELECT * FROM execution_handoffs WHERE ticket_id = ?", (ticket.ticket_id,)
+        ).fetchone()
+        received = any(self._conn.execute(sql, (ticket.ticket_id,)).fetchone() is not None for sql in (
+            "SELECT 1 FROM execution_claims WHERE ticket_id = ?",
+            "SELECT 1 FROM authority_observations WHERE ticket_id = ?",
+            "SELECT 1 FROM verification_evidence_v2 WHERE ticket_id = ?",
+        ))
+        if fresh and (handoff is not None or received):
+            raise AuthorityRefusedError("this verifier dispatch was already handed off; it is handed off once.")
+        if not fresh and (handoff is None or received):
+            raise AuthorityRefusedError("the verifier dispatch has no open review handoff.")
+        return _ReviewState(chain, handoff)
+
+    @_reproving
+    def _perform_review_handoff(self, key: object, ticket: DispatchTicket) -> VerificationObservation:
+        """The review handoff of one verifier dispatch (§5.2, §5.6, FD-17,
+        FD-18). Reachable only with the capability the session minted into
+        its :class:`~.execution_claim.ExecutionClaimAdapter`; it takes the
+        ticket and nothing else, so no caller supplies a path, an artifact, a
+        config, claim bytes, an observation, a report or a digest.
+
+        ```text
+        1  ONE transaction: re-prove ticket, boundary, the attempt's proven
+           write and the config's opt-ins; insert the handoff row (the write
+           intent's artifact and config digests). COMMIT before anything is
+           visible to X.
+        2  publish handoff-<ticket> and outbox-<ticket>; record their identities
+        3  wait (fixed bound) for the completion marker; re-prove; read the
+           claim ONCE, only while the ticket is still unanswered at VERIFYING
+        4  classify the bytes (or raise, recording nothing); M2; ONE
+           transaction: the claim receipt, M2, and the evidence iff the claim
+           binds and M2 holds against M1
+        ```
+
+        Anything short of evidence raises: DL-2 reduces the step to
+        RECOVERY_REQUIRED. The handoff row exists from step 1, so nothing here
+        or anywhere hands this dispatch off twice.
+        """
+        self._require_claim_key(key)
+        ticket = self._revalidated_authority(DispatchTicket, ticket)
+        self._claim_review_handoff(key, ticket)
+        try:
+            self._reprove_boundary()
+            self._publish_review_handoff(key, ticket)
+            self._reprove_boundary()
+            received = self._receive_review_claim(key, ticket)
+        except (ExchangeError, ClaimProtocolError) as exc:
+            # FD-17 step 3/4: a deadline, a protocol deviation or a failed
+            # publication records nothing authoritative.
+            raise VerificationClaimRefusedError(f"no review claim was received: {exc}") from None
+        self._reprove_boundary()
+        return self._settle_review(key, ticket, received)
+
+    def _require_claim_key(self, key: object) -> None:
+        """Every phase of a review handoff requires the claim recorder's
+        capability, so no phase is reachable around :meth:`_perform_review_handoff`."""
+        authority = self._require_authority()
+        if key is None or key is not authority.claim_key:
+            raise AuthorityRefusedError("only this session's execution claim adapter may hand off a review.")
+        self._require_proven_call()
+
+    def _claim_review_handoff(self, key: object, ticket: DispatchTicket) -> None:
+        self._require_claim_key(key)
+        authority = self._require_authority()
+        with self._transaction():
+            state = self._review_state(ticket, fresh=True)
+        activation = state.chain.context.activation
+        self._require_clone(activation.target_workspace)
+        try:
+            authority.root.reverify_target_workspace(
+                activation.target_workspace, activation.target_workspace_sha256
+            )
+        except ContainmentError as exc:
+            raise AuthorityRefusedError(f"the workspace is not the activated clone: {exc}") from None
+        self._require_config_workspace(state.chain.context)
+        with self._transaction():
+            again = self._review_state(ticket, fresh=True)
+            if (again.chain.implementer_ticket_id, again.chain.context.subject) != (
+                state.chain.implementer_ticket_id, state.chain.context.subject
+            ):
+                raise AuthorityRefusedError("the proven write changed while the review handoff was prepared.")
+            self._conn.execute(
+                "INSERT INTO execution_handoffs (ticket_id, approved_diff_artifact_sha256, "
+                "project_config_sha256, created_at) VALUES (?, ?, ?, ?)",
+                (ticket.ticket_id, again.chain.context.artifact_sha256, again.chain.context.config_sha256,
+                 self._now().isoformat()),
+            )
+
+    def _publish_review_handoff(self, key: object, ticket: DispatchTicket) -> None:
+        self._require_claim_key(key)
+        with self._transaction():
+            state = self._review_state(ticket, fresh=False)
+            if state.handoff["published_at"] is not None:
+                raise StateUntrustedError("the review handoff was already published.")
+        boundary = self._last_proof.boundary
+        context = state.chain.context
+        published = exchange.publish_handoff(
+            self._files(), exchange_root=boundary.paths.exchange_root, ticket_id=ticket.ticket_id,
+            authority_sid=boundary.authority.sid, execution_sid=boundary.execution.sid,
+            operator_sid=boundary.operator.sid, artifact=context.artifact, config=context.config,
+        )
+        with self._transaction():
+            self._review_state(ticket, fresh=False)
+            if self._conn.execute(
+                "UPDATE execution_handoffs SET handoff_directory_identity = ?, outbox_directory_identity = ?, "
+                "published_at = ? WHERE ticket_id = ? AND published_at IS NULL",
+                (published.handoff_identity, published.outbox_identity, self._now().isoformat(),
+                 ticket.ticket_id),
+            ).rowcount != 1:
+                raise StateUntrustedError("a review handoff changed underneath its own transaction.")
+
+    def _receive_review_claim(self, key: object, ticket: DispatchTicket) -> ReceivedClaim:
+        self._require_claim_key(key)
+        authority = self._require_authority()
+        with self._transaction():
+            state = self._review_state(ticket, fresh=False)
+        if state.handoff["published_at"] is None:
+            raise AuthorityRefusedError("the review handoff was never published.")
+        _, outbox = exchange.ticket_directories(self._last_proof.boundary.paths.exchange_root, ticket.ticket_id)
+        deadline = authority.waiter.monotonic() + claim_receiver.CLAIM_WAIT_SECONDS
+        claim_receiver.await_completion(self._files(), outbox, authority.waiter, deadline)
+        # FD-16 and FD-17: re-prove, and never read a claim for a ticket that
+        # left its permitted state, or already holds one, while A waited.
+        self._reprove_boundary()
+        with self._transaction():
+            state = self._review_state(ticket, fresh=False)
+        boundary = self._last_proof.boundary
+        exchange.outbox_still_published(
+            self._files(), boundary.paths.exchange_root, ticket.ticket_id,
+            authority_sid=boundary.authority.sid, execution_sid=boundary.execution.sid,
+            operator_sid=boundary.operator.sid, identity=state.handoff["outbox_directory_identity"],
+        )
+        return claim_receiver.read_claim(self._files(), outbox, boundary.execution.sid,
+                                         claim_readers.MAX_REVIEW_CLAIM_BYTES)
+
+    def _settle_review(self, key: object, ticket: DispatchTicket, received: ReceivedClaim) -> VerificationObservation:
+        self._require_claim_key(key)
+        with self._transaction():
+            state = self._review_state(ticket, fresh=False)
+        try:
+            claim = claim_readers.read_review_claim(received.data)
+        except ClaimReadError as exc:
+            # §5.2 step 5: an unclassifiable claim records nothing.
+            raise VerificationClaimRefusedError(f"the review claim is refused: {exc}") from None
+        chain = state.chain
+        scope = chain.context.scope
+        reasons: list[str] = []
+        m2: Observation | None = None
+        try:
+            m2 = observe_workspace(self._files(), chain.context.activation.target_workspace, scope.path)
+        except ObservationError as exc:
+            reasons.append(f"M2 could not be taken: {exc}")
+        if m2 is not None:
+            effect = classify_verification(chain.m1, m2, target_path=scope.path,
+                                           post_image_sha256=chain.context.facts.post_image_sha256)
+            reasons.extend(effect.issues)
+        if (issue := _review_claim_issue(claim, chain, m2)) is not None:
+            reasons.append(issue)
+        self._publish_blob("claims", received.data)
+        if m2 is not None:
+            self._publish_blob("observations", m2.manifest)
+        with self._transaction():
+            again = self._review_state(ticket, fresh=False)
+            if (again.chain.implementer_ticket_id, again.chain.intent["intent_id"]) != (
+                chain.implementer_ticket_id, chain.intent["intent_id"]
+            ):
+                raise StateUntrustedError("the proven write changed while the review claim was settled.")
+            now = self._now().isoformat()
+            self._conn.execute(
+                "INSERT INTO execution_claims (ticket_id, claim_sha256, byte_length, shape, provenance, "
+                "received_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (ticket.ticket_id, received.sha256, len(received.data), claim.shape,
+                 EXECUTION_CLAIM_PROVENANCE, now),
+            )
+            m2_id = None
+            if m2 is not None:
+                m2_id = uuid.uuid4().hex
+                self._insert_observation(m2_id, ticket.ticket_id, "m2", m2, now)
+            if not reasons:
+                self._conn.execute(
+                    "INSERT INTO verification_evidence_v2 (ticket_id, step_run_id, attempt, write_intent_id, "
+                    "write_scope_sha256, workspace_identity_sha256, claim_sha256, m2_observation_id, outcome, "
+                    "provenance, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (ticket.ticket_id, ticket.step_run_id, ticket.attempt, chain.intent["intent_id"],
+                     scope.sha256, chain.context.activation.target_workspace_sha256, received.sha256, m2_id,
+                     claim.outcome, EXECUTION_CLAIM_PROVENANCE, now),
+                )
+        if reasons:
+            raise VerificationClaimRefusedError(
+                "the review claim is recorded but not bound as verification evidence: " + "; ".join(reasons)
+            )
+        return VerificationObservation(
+            step_contract_sha256=ticket.step_contract_sha256, attempt=ticket.attempt,
+            outcome=claim.outcome, evidence_sha256=received.sha256,
+        )
+
+    # --- S4: proofs of the verification chain ----------------------------------------
+
+    def _settled_review(
+        self, ticket_id: str, chain: _VerifierChain
+    ) -> tuple[sqlite3.Row | None, claim_readers.ReviewClaimFacts | None, sqlite3.Row | None, list[str]]:
+        """A verifier dispatch's recorded claim and M2, re-derived from their
+        stored bytes, and every reason they do not bind as verification
+        evidence (empty when they do). Raises for records that cannot be
+        re-derived at all."""
+        claim_row = self._conn.execute(
+            "SELECT * FROM execution_claims WHERE ticket_id = ?", (ticket_id,)
+        ).fetchone()
+        m2_rows = self._conn.execute(
+            "SELECT * FROM authority_observations WHERE ticket_id = ?", (ticket_id,)
+        ).fetchall()
+        if claim_row is None:
+            if m2_rows:
+                raise AuthorityRefusedError("a verifier dispatch has an observation but no claim.")
+            return None, None, None, ["the verifier dispatch has no recorded claim."]
+        if claim_row["shape"] not in REVIEW_CLAIM_OUTCOMES or claim_row["provenance"] != EXECUTION_CLAIM_PROVENANCE:
+            raise AuthorityRefusedError("a verifier dispatch's claim is not a review-command shape.")
+        data = self._blob("claims", claim_row["claim_sha256"], claim_readers.MAX_REVIEW_CLAIM_BYTES)
+        if len(data) != claim_row["byte_length"]:
+            raise AuthorityRefusedError("a recorded review claim is not its stored bytes.")
+        claim = claim_readers.read_review_claim(data)
+        if claim.shape != claim_row["shape"]:
+            raise AuthorityRefusedError("a recorded review claim is not of its recorded shape.")
+        if len(m2_rows) > 1 or any(row["kind"] != "m2" for row in m2_rows):
+            raise AuthorityRefusedError("a verifier dispatch has an observation other than its one M2.")
+        if not m2_rows:
+            return claim_row, claim, None, ["the verifier dispatch has no M2."]
+        m2, issue = self._observation_row(m2_rows[0]["observation_id"], ticket_id, "m2")
+        if issue is not None:
+            raise AuthorityRefusedError(issue)
+        reasons = list(classify_verification(
+            chain.m1, m2, target_path=chain.context.scope.path,
+            post_image_sha256=chain.context.facts.post_image_sha256,
+        ).issues)
+        if (issue := _review_claim_issue(claim, chain, m2)) is not None:
+            reasons.append(issue)
+        return claim_row, claim, m2_rows[0], reasons
+
+    def _verification_evidence_issue(self, ticket_id: str) -> str | None:
+        """Why one verifier dispatch's ``verification_evidence_v2`` does not
+        re-derive, or ``None``. Re-derived entirely from stored rows and
+        blobs: the verifier ticket, the attempt's proven write chain (approval
+        re-verified, completed intent, M0, M1), the published review handoff
+        of the same approved bytes, the claim bytes and their classification,
+        M2 against M1, the claim's binding, and every evidence column."""
+        try:
+            evidence = self._conn.execute(
+                "SELECT * FROM verification_evidence_v2 WHERE ticket_id = ?", (ticket_id,)
+            ).fetchone()
+            if evidence is None:
+                return "the verifier dispatch has no verification evidence recorded by the execution claim adapter."
+            ticket = self._conn.execute(
+                "SELECT * FROM dispatch_tickets WHERE ticket_id = ?", (ticket_id,)
+            ).fetchone()
+            if ticket is None or (ticket["step_run_id"], ticket["attempt"]) != (
+                evidence["step_run_id"], evidence["attempt"]
+            ):
+                return "the verification evidence is not bound to its verifier ticket's step and attempt."
+            chain = self._verifier_chain(ticket)
+            context = chain.context
+            handoff = self._conn.execute(
+                "SELECT * FROM execution_handoffs WHERE ticket_id = ?", (ticket_id,)
+            ).fetchone()
+            if handoff is None or handoff["published_at"] is None or (
+                handoff["approved_diff_artifact_sha256"], handoff["project_config_sha256"]
+            ) != (context.artifact_sha256, context.config_sha256):
+                return "the verifier dispatch's handoff is not the published approved bytes."
+            claim_row, claim, m2_row, reasons = self._settled_review(ticket_id, chain)
+            if reasons:
+                return "; ".join(reasons)
+            if (
+                evidence["write_intent_id"], evidence["write_scope_sha256"], evidence["workspace_identity_sha256"],
+                evidence["claim_sha256"], evidence["m2_observation_id"], evidence["outcome"], evidence["provenance"],
+            ) != (
+                chain.intent["intent_id"], context.scope.sha256, context.activation.target_workspace_sha256,
+                claim_row["claim_sha256"], m2_row["observation_id"], claim.outcome, EXECUTION_CLAIM_PROVENANCE,
+            ):
+                return "the verification evidence binds another intent, scope, workspace, claim, M2 or outcome."
+        except (AuthorityRefusedError, ContainmentError, ObservationError, ClaimReadError, StoreError) as exc:
+            return f"the verification evidence cannot be re-derived: {exc}"
+        return None
+
+    def _evidence_issue(self, ticket_id, step_run_id, attempt, outcome, evidence_sha256=None):  # type: ignore[override]
+        """store.v4: a verifier dispatch's observation is accepted only as the
+        ``verification_evidence_v2`` the execution claim adapter recorded for
+        exactly this ticket, re-derived now. The observation's outcome must be
+        the claim's own and its digest the claim's (§5.2 step 7)."""
+        row = self._conn.execute(
+            "SELECT * FROM verification_evidence_v2 WHERE ticket_id = ?", (ticket_id,)
+        ).fetchone()
+        if row is None:
+            return "the verifier dispatch has no verification evidence recorded by the execution claim adapter."
+        if (row["step_run_id"], row["attempt"], row["outcome"]) != (step_run_id, attempt, outcome) or (
+            evidence_sha256 is not None and row["claim_sha256"] != evidence_sha256
+        ):
+            return "the verification observation is not its recorded claim, outcome and M2."
+        return self._verification_evidence_issue(ticket_id)
+
+    def _review_handoff_issue(self, row: sqlite3.Row, ticket: sqlite3.Row) -> str | None:
+        """Why a verifier dispatch's handoff, and whatever it received, is not
+        explained by a chain that re-proves now, or ``None``. A settled
+        dispatch has evidence exactly when its claim binds and its M2 holds."""
+        chain = self._verifier_chain(ticket)
+        if (row["approved_diff_artifact_sha256"], row["project_config_sha256"]) != (
+            chain.context.artifact_sha256, chain.context.config_sha256
+        ):
+            return "it does not hand off the approved bytes the write used."
+        claim_row, _, _, reasons = self._settled_review(row["ticket_id"], chain)
+        if claim_row is not None and row["published_at"] is None:
+            return "it received a claim it never published an outbox for."
+        evidence = self._conn.execute(
+            "SELECT 1 FROM verification_evidence_v2 WHERE ticket_id = ?", (row["ticket_id"],)
+        ).fetchone() is not None
+        if evidence:
+            return self._verification_evidence_issue(row["ticket_id"])
+        if claim_row is not None and not reasons:
+            return "a settled verification whose claim binds and whose M2 holds has no evidence."
+        if ticket["consumed_request_id"] is not None:
+            return "an answered verifier dispatch has no verification evidence."
+        return None
+
     # --- S3: proofs of the write chain ----------------------------------------------
 
     def _observation_row(self, observation_id: object, ticket_id: str,
@@ -2082,9 +2554,14 @@ class IntegrationStore(ControlPlaneStore):
         return None
 
     def _s3_issues(self) -> list[str]:
-        """Every S3 row, explained by a chain that re-proves now, or why not."""
+        """Every S3 and S4 row, explained by a chain that re-proves now, or
+        why not. A row of a verifier dispatch is explained by S4's chain."""
         issues: list[str] = []
         conn = self._conn
+
+        def verifier_ticket(ticket_id: str) -> sqlite3.Row | None:
+            ticket = conn.execute("SELECT * FROM dispatch_tickets WHERE ticket_id = ?", (ticket_id,)).fetchone()
+            return ticket if ticket is not None and ticket["role"] == "verifier" else None
 
         def check(label: str, test: Callable[[], str | None]) -> None:
             try:
@@ -2179,6 +2656,12 @@ class IntegrationStore(ControlPlaneStore):
             check("a write intent", lambda row=row: intent_issue(row))
 
         def observation_issue(row: sqlite3.Row) -> str | None:
+            if verifier_ticket(row["ticket_id"]) is not None:
+                if row["kind"] != "m2" or conn.execute(
+                    "SELECT 1 FROM execution_claims WHERE ticket_id = ?", (row["ticket_id"],)
+                ).fetchone() is None:
+                    return "it is not the M2 of a verifier dispatch's received claim."
+                return self._observation_row(row["observation_id"], row["ticket_id"], "m2")[1]
             intent = conn.execute("SELECT * FROM write_intents WHERE ticket_id = ?",
                                   (row["ticket_id"],)).fetchone()
             if row["kind"] not in ("m0", "m1") or intent is None:
@@ -2193,6 +2676,9 @@ class IntegrationStore(ControlPlaneStore):
             check("an authority observation", lambda row=row: observation_issue(row))
 
         def handoff_issue(row: sqlite3.Row) -> str | None:
+            ticket = verifier_ticket(row["ticket_id"])
+            if ticket is not None:
+                return self._review_handoff_issue(row, ticket)
             intent = conn.execute("SELECT * FROM write_intents WHERE ticket_id = ?",
                                   (row["ticket_id"],)).fetchone()
             if intent is None:
@@ -2211,6 +2697,17 @@ class IntegrationStore(ControlPlaneStore):
             check("an execution handoff", lambda row=row: handoff_issue(row))
 
         def claim_issue(row: sqlite3.Row) -> str | None:
+            if verifier_ticket(row["ticket_id"]) is not None:
+                handoff = conn.execute("SELECT published_at FROM execution_handoffs WHERE ticket_id = ?",
+                                       (row["ticket_id"],)).fetchone()
+                if handoff is None or handoff["published_at"] is None:
+                    return "it is a verifier claim with no published handoff."
+                if row["shape"] not in REVIEW_CLAIM_OUTCOMES or row["provenance"] != EXECUTION_CLAIM_PROVENANCE:
+                    return "it is not a review-command claim."
+                data = self._blob("claims", row["claim_sha256"], claim_readers.MAX_REVIEW_CLAIM_BYTES)
+                if len(data) != row["byte_length"] or claim_readers.read_review_claim(data).shape != row["shape"]:
+                    return "it is not its stored bytes of its recorded shape."
+                return None
             intent = conn.execute("SELECT state FROM write_intents WHERE ticket_id = ?",
                                   (row["ticket_id"],)).fetchone()
             if intent is None or intent["state"] == "pending" or (row["shape"], row["provenance"]) != (
@@ -2228,6 +2725,9 @@ class IntegrationStore(ControlPlaneStore):
 
         for row in conn.execute("SELECT ticket_id FROM write_evidence").fetchall():
             check("write evidence", lambda row=row: self._write_evidence_issue(row["ticket_id"]))
+
+        for row in conn.execute("SELECT ticket_id FROM verification_evidence_v2").fetchall():
+            check("verification evidence", lambda row=row: self._verification_evidence_issue(row["ticket_id"]))
 
         for table in UNWRITTEN_TABLES:
             if conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]:
@@ -2257,15 +2757,16 @@ class IntegrationStore(ControlPlaneStore):
             issues.append("a dispatch ticket is held, which nothing in this store can do yet (S6).")
         if self._conn.execute(
             "SELECT COUNT(*) FROM dispatch_tickets WHERE consumed_request_id IS NOT NULL "
-            "AND role != 'implementer'"
+            f"AND role NOT IN ({_in_list(_ANSWERING_EVENT)})"
         ).fetchone()[0]:
-            issues.append("a non-implementer dispatch is answered, which nothing in this store can do yet.")
+            issues.append("a reviewer or planner dispatch is answered, which nothing in this store can do yet.")
         for row in self._conn.execute(
-            "SELECT t.ticket_id FROM dispatch_tickets t WHERE t.consumed_request_id IS NOT NULL "
+            "SELECT t.ticket_id, t.role FROM dispatch_tickets t WHERE t.consumed_request_id IS NOT NULL "
             "AND NOT EXISTS (SELECT 1 FROM transitions r WHERE r.request_id = t.consumed_request_id "
-            "AND r.event = ?)", (StepEvent.IMPLEMENTATION_RETURNED.value,)
+            "AND r.event = CASE t.role WHEN 'implementer' THEN ? WHEN 'verifier' THEN ? END)",
+            (_ANSWERING_EVENT["implementer"], _ANSWERING_EVENT["verifier"]),
         ):
-            issues.append(f"dispatch {row['ticket_id']} is answered by no recorded implementation.")
+            issues.append(f"dispatch {row['ticket_id']} is answered by no recorded {row['role']} output.")
         kinds = _in_list(kind.value for kind in _ISSUED_KINDS)
         if self._conn.execute(
             f"SELECT COUNT(*) FROM approval_challenges_v2 WHERE subject_kind NOT IN ({kinds})"
@@ -2329,8 +2830,10 @@ class IntegrationStore(ControlPlaneStore):
         role_rows = [row for row in rows if row["event"] in _LOGGED_EVENT_ROLE]
         if len(consumed) != len(role_rows):
             issues.append("its consumed dispatch tickets are not its role-output transitions.")
+        roles = {event: role for role, event in _ANSWERING_EVENT.items()}
         for row in role_rows:
-            if row["event"] != StepEvent.IMPLEMENTATION_RETURNED.value:
+            role = roles.get(row["event"])
+            if role is None:
                 issues.append(
                     f"transition {row['seq']} records a role output, which needs an execution claim "
                     "and an authority observation this store cannot hold yet."
@@ -2341,12 +2844,17 @@ class IntegrationStore(ControlPlaneStore):
                 ticket["role"], ticket["state_version"], ticket["attempt"], ticket["step_state"],
                 ticket["project_run_id"], ticket["step_contract_sha256"],
             ) != (
-                "implementer", row["from_version"], row["attempt"], row["from_state"],
+                role, row["from_version"], row["attempt"], row["from_state"],
                 step.project_run_id, step.step_contract_sha256,
             ):
                 issues.append(f"transition {row['seq']} was not bound to an AIDO dispatch.")
                 continue
-            if (issue := self._write_evidence_issue(ticket["ticket_id"])) is not None:
+            if role == "implementer":
+                issue = self._write_evidence_issue(ticket["ticket_id"])
+            else:
+                issue = self._evidence_issue(ticket["ticket_id"], step.step_run_id, row["attempt"],
+                                             row["verification_outcome"])
+            if issue is not None:
                 issues.append(f"transition {row['seq']}: {issue}")
         return issues
 
@@ -2363,12 +2871,23 @@ class IntegrationStore(ControlPlaneStore):
         implementer ticket whose write the store itself proves: a re-verified,
         spent exact-diff approval, a completed intent, the recorded write
         claim, M0 and M1 showing exactly the approved change, and AIDO's own
-        fixed report as the payload. Every other role output is still refused
-        (S4-S6)."""
+        fixed report as the payload.
+
+        S4: ``VERIFICATION_OBSERVED`` is accepted only for the exact verifier
+        ticket whose ``verification_evidence_v2`` the store re-derives (the
+        write chain, the review handoff, the claim bytes, M1 and M2), with the
+        claim's own outcome and the claim digest as the observation
+        (:meth:`_evidence_issue`). Every other role output is still refused
+        (S5-S6)."""
         role = _EVENT_ROLE.get(request.event)
         if role is None:
             self._refuse_unconsumable_authority(request, role_output, attestation)
             return None
+        if role == "verifier":
+            try:
+                return ControlPlaneStore._authorize_step_request(self, step, request, role_output, attestation)
+            except AuthorityRefusedError as exc:
+                raise AuthorityRefusedError(f"{_unconsumable(request.event.value, role)} ({exc})") from None
         if role != "implementer":
             raise AuthorityRefusedError(_unconsumable(request.event.value, role))
         consumption = ControlPlaneStore._authorize_step_request(self, step, request, role_output, attestation)
@@ -2383,7 +2902,8 @@ class IntegrationStore(ControlPlaneStore):
     def _record_verification_evidence(self, recorder_key, ticket, data):  # type: ignore[override]
         raise AuthorityRefusedError(
             "an integration store records no verification-result.v1 evidence: verification is an "
-            "execution claim bound to an authority observation (FD-15), recorded only by S4's adapter."
+            "execution claim bound to an authority observation (FD-15), recorded only by the session's "
+            "execution claim adapter."
         )
 
 

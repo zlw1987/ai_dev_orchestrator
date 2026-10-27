@@ -53,6 +53,14 @@ EXECUTION_CLAIM_PROVENANCE = "execution_claim"
 AUTHORITY_OBSERVATION_PROVENANCE = "authority_observation"
 #: §8 ``execution-claim.v1``: the shapes S3/S4 classify stdout into.
 CLAIM_SHAPES = ("write-result", "review-packet", "verification-failed", "workspace-untrusted")
+#: DL-4B S4. The review command's stdout shapes and the one verification
+#: outcome each permits (§5.6): exit 0 → packet, exit 2 → failed, exit 3 →
+#: untrusted. Exits 1 and 4 print nothing on stdout and yield no claim.
+REVIEW_CLAIM_OUTCOMES = {
+    "review-packet": "verified",
+    "verification-failed": "verification-failed",
+    "workspace-untrusted": "workspace-state-untrusted",
+}
 #: FD-18 observation kinds.
 OBSERVATION_KINDS = ("m0", "m1", "m2")
 #: §8 ``write-intent.v1`` states.

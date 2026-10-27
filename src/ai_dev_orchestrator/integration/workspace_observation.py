@@ -23,7 +23,9 @@ those facts. It carries no time and no kind, so it is content-addressed; its
 row records when and why it was taken.
 
 :func:`classify_write` decides what a write did from two observations alone
-(M0 before, M1 after). An execution claim never enters it.
+(M0 before, M1 after). :func:`classify_verification` (S4) decides whether M2,
+taken after the review claim, still shows M1: target, every M1 path and
+``.git`` unchanged, additions listed. An execution claim never enters either.
 
 What an observation cannot see, stated: alternate data streams, file
 attributes other than the reparse flag, and anything that changes after the
@@ -395,3 +397,40 @@ def classify_write(m0: Observation, m1: Observation, *, target_path: str, pre_im
     ):
         return "as_approved"
     return "indeterminate"
+
+
+@dataclass(frozen=True)
+class VerificationEffect:
+    """What M2 shows against M1 (FD-18, S4). ``holds`` is the M2 rule;
+    ``additions`` are the repo-relative paths present at M2 and not at M1,
+    listed for the human and never refused; ``issues`` say why M2 fails."""
+
+    holds: bool
+    additions: tuple[str, ...]
+    issues: tuple[str, ...]
+
+
+def classify_verification(m1: Observation, m2: Observation, *, target_path: str,
+                          post_image_sha256: str) -> VerificationEffect:
+    """M2's rule, from M1 and M2 alone (§5.8.5): the target still holds the
+    approved post-image; every M1 path is present and unchanged; HEAD and the
+    ``.git`` control digest are unchanged. Additions are listed, not refused:
+    A cannot evaluate ``.gitignore`` without Git, and an ignored test cache is
+    legitimate. A verification claim never enters this."""
+    if m1.tree is None or m2.tree is None:
+        return VerificationEffect(False, (), ("an observation has no working-tree manifest.",))
+    issues = []
+    if m2.head_oid != m1.head_oid:
+        issues.append("M2: the clone's detached HEAD changed since M1.")
+    if m2.git_control_sha256 != m1.git_control_sha256:
+        issues.append("M2: the clone's .git control state changed since M1.")
+    if m2.target_path != target_path or m2.target_sha256 != post_image_sha256:
+        issues.append("M2: the target no longer holds the approved post-image.")
+    before = {path: (size, digest) for path, size, digest in m1.tree}
+    after = {path: (size, digest) for path, size, digest in m2.tree}
+    if any(path not in after for path in before):
+        issues.append("M2: a path present at M1 is gone.")
+    if any(path in after and after[path] != entry for path, entry in before.items()):
+        issues.append("M2: a path present at M1 changed.")
+    additions = tuple(sorted(path for path in after if path not in before))
+    return VerificationEffect(not issues, additions, tuple(issues))

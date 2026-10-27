@@ -20,7 +20,10 @@ write handoff's recorder (FD-6: it records execution claims and A's own
 observations, never a harness call) straight into the session's
 :class:`~.write_handoff.WriteHandoffAdapter`, which the session exposes as
 ``implementer``; the recorder itself is reachable from neither the session nor
-the store. A library session reads the real files through the default
+the store. S4 mints a second, distinct recorder the same way into the
+session's :class:`~.execution_claim.ExecutionClaimAdapter`, exposed as
+``verifier``: it records the review command's execution claim and A's M2
+observation. A library session reads the real files through the default
 :class:`~.authority_files.WindowsAuthorityFiles` unless the caller supplies
 ``files``, and waits with a caller-supplied ``waiter`` (tests); it is never
 production either way.
@@ -38,6 +41,7 @@ from ai_dev_orchestrator.integration.attestation_verifier import RegistryHumanAt
 from ai_dev_orchestrator.integration.authority_files import AuthorityFiles, WindowsAuthorityFiles
 from ai_dev_orchestrator.integration.boundary_facts import SecurityFacts
 from ai_dev_orchestrator.integration.claim_receiver import SystemWaiter, Waiter
+from ai_dev_orchestrator.integration.execution_claim import ExecutionClaimAdapter, mint_execution_claim_adapter
 from ai_dev_orchestrator.integration.identity_boundary import (
     prove_identity_boundary,
     prove_identity_boundary_from_facts,
@@ -46,26 +50,27 @@ from ai_dev_orchestrator.integration.integration_store import IntegrationStore
 from ai_dev_orchestrator.integration.write_handoff import WriteHandoffAdapter, mint_write_handoff_adapter
 
 _SESSION_TOKEN = object()
-_SESSION_FIELDS = ("_state_root", "_store", "_implementer")
+_SESSION_FIELDS = ("_state_root", "_store", "_implementer", "_verifier")
 
 
 class IntegrationSession:
     """An open integration store and nothing more.
 
-    It exposes the state root, the store and the bound implementer port. It
-    has no recorder, no verifier and no prover attribute, cannot be subclassed
+    It exposes the state root, the store and the bound implementer and
+    verifier ports. It has no recorder, no verifier and no prover attribute, cannot be subclassed
     and is immutable.
     """
 
     __slots__ = _SESSION_FIELDS
 
     def __init__(self, state_root: AidoStateRoot, store: IntegrationStore, implementer: WriteHandoffAdapter,
-                 *, _token: object = None) -> None:
+                 verifier: ExecutionClaimAdapter, *, _token: object = None) -> None:
         if _token is not _SESSION_TOKEN:
             raise TypeError("an integration session is opened only by open_integration_session().")
         object.__setattr__(self, "_state_root", state_root)
         object.__setattr__(self, "_store", store)
         object.__setattr__(self, "_implementer", implementer)
+        object.__setattr__(self, "_verifier", verifier)
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         raise TypeError("IntegrationSession cannot be subclassed.")
@@ -99,6 +104,11 @@ class IntegrationSession:
         return self._implementer
 
     @property
+    def verifier(self) -> ExecutionClaimAdapter:
+        """DL-2's verifier port: the execution claim adapter (FD-8, S4)."""
+        return self._verifier
+
+    @property
     def boundary_sha256(self) -> str:
         """The identity boundary digest this session is pinned to."""
         return self._store.boundary_sha256
@@ -121,7 +131,7 @@ def open_integration_session(state_root: AidoStateRoot) -> IntegrationSession:
     """Prove the FD-16 identity boundary for this process, then open the
     integration store of ``state_root``, which must be the boundary's declared
     state root. Nothing is created or opened if the proof fails."""
-    key = object()
+    key, claim_key = object(), object()
     store = IntegrationStore._open_integration(
         state_root,
         prove=prove_identity_boundary,
@@ -130,8 +140,10 @@ def open_integration_session(state_root: AidoStateRoot) -> IntegrationSession:
         files=WindowsAuthorityFiles,
         waiter=SystemWaiter(),
         write_key=key,
+        claim_key=claim_key,
     )
-    return IntegrationSession(state_root, store, mint_write_handoff_adapter(store, key), _token=_SESSION_TOKEN)
+    return IntegrationSession(state_root, store, mint_write_handoff_adapter(store, key),
+                              mint_execution_claim_adapter(store, claim_key), _token=_SESSION_TOKEN)
 
 
 def open_integration_session_from_facts(
@@ -147,7 +159,7 @@ def open_integration_session_from_facts(
     and so is the store it creates."""
     if not callable(clock):
         raise TypeError("clock must be callable.")
-    key = object()
+    key, claim_key = object(), object()
     store = IntegrationStore._open_integration(
         state_root,
         prove=partial(prove_identity_boundary_from_facts, facts, clock=clock),
@@ -156,5 +168,7 @@ def open_integration_session_from_facts(
         files=WindowsAuthorityFiles if files is None else (lambda: files),
         waiter=waiter,
         write_key=key,
+        claim_key=claim_key,
     )
-    return IntegrationSession(state_root, store, mint_write_handoff_adapter(store, key), _token=_SESSION_TOKEN)
+    return IntegrationSession(state_root, store, mint_write_handoff_adapter(store, key),
+                              mint_execution_claim_adapter(store, claim_key), _token=_SESSION_TOKEN)

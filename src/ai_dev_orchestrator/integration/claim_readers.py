@@ -14,8 +14,17 @@ approved-diff-proposal.v2   the human-approved artifact (5F2C input). What A bin
 workspace-write-result.v1   the 5F2C report, received as an EXECUTION CLAIM (FD-15).
                             What A binds: target path, change type, sizes,
                             approved_by / approved_at and the identity tuple
-project config (YAML)       the config bytes X receives. What A checks: the write
-                            opt-in, the workspace root and the project identity
+project config (YAML)       the config bytes X receives. What A checks: the write,
+                            verification and review opt-ins, the workspace root and
+                            the project identity
+review-command stdout       (S4) what `l2-review-approved-file-edit` prints, received
+                            as an EXECUTION CLAIM: a `review-packet.v5` embedding the
+                            `verification-result.v1` (exit 0), or the bare report with
+                            outcome `verification-failed` (exit 2) or
+                            `workspace-state-untrusted` (exit 3). What A binds: the
+                            shape, the outcome the report's own facts support, the
+                            target path and size, approved_by / approved_at and the
+                            identity tuple
 ```
 
 Every reader is strict and **rejects, never repairs**: UTF-8 without a BOM,
@@ -40,12 +49,22 @@ import yaml
 from pydantic import ValidationError
 
 from ai_dev_orchestrator.control_plane.attestation_v2 import REQUIRED_EXACT_DIFF_APPROVAL_TEXT
+from ai_dev_orchestrator.control_plane.authority import (
+    VERIFICATION_RESULT_FIELDS,
+    VERIFICATION_RESULT_MODE,
+    VERIFICATION_RESULT_SCHEMA_VERSION,
+    VERIFICATION_TRUST_FIELDS,
+)
+from ai_dev_orchestrator.control_plane.integration_records import REVIEW_CLAIM_OUTCOMES
 from ai_dev_orchestrator.models import ProjectConfig
 
 #: Fixed bounds on what A reads. Code constants, never configuration.
 MAX_APPROVED_DIFF_BYTES = 2 * 1024 * 1024
 MAX_PROJECT_CONFIG_BYTES = 256 * 1024
 MAX_WRITE_CLAIM_BYTES = 4 * 1024 * 1024
+#: S4: the review command's stdout. A packet embeds the bounded, redacted
+#: verification output and the review; DL-4A's evidence bound applies.
+MAX_REVIEW_CLAIM_BYTES = 16 * 1024 * 1024
 
 APPROVED_DIFF_SCHEMA_VERSION = "approved-diff-proposal.v2"
 APPROVED_DIFF_MODE = "file-edit-approval-only"
@@ -83,6 +102,21 @@ WRITE_RESULT_FIELDS = frozenset({
     "operational_files", "git", "single_writer_contract", "next_step",
 })
 WRITE_TARGET_FIELDS = frozenset({"path", "change_type", "line_ending", "pre_image_bytes", "post_image_bytes"})
+#: S4: the shipped 5F2D target block and the 5F2E packet, restated (pinned by test).
+VERIFICATION_TARGET_FIELDS = frozenset({
+    "path", "change_type", "post_image_verified_before_execution", "post_image_bytes",
+})
+REVIEW_PACKET_SCHEMA_VERSION = "review-packet.v5"
+REVIEW_PACKET_MODE = "controlled-review"
+REVIEW_PACKET_FIELDS = frozenset({
+    "schema_version", "mode", "project_id", "repo", "issue_number", "title", "approved_by",
+    "approved_at", "target", "verification", "reviewer", "reviewer_supervision", "review",
+    "transmission_boundary", "capability_boundaries", "human_decision_required", "next_step",
+    "superseded_schema_version_note",
+})
+REVIEW_TARGET_FIELDS = frozenset({"path", "change_type"})
+MODEL_REVIEW_FIELDS = frozenset({"verdict", "summary", "findings", "residual_risks", "human_notes"})
+REVIEW_VERDICTS = ("approve", "changes_requested", "needs_human_review")
 
 _HEX64 = re.compile(r"[0-9a-f]{64}")
 
@@ -131,6 +165,27 @@ class WriteClaimFacts:
 
 
 @dataclass(frozen=True)
+class ReviewClaimFacts:
+    """What the review command's stdout *says* (S4). Not a fact.
+
+    ``shape`` is ``review-packet`` (exit 0), ``verification-failed`` (exit 2)
+    or ``workspace-untrusted`` (exit 3). ``outcome`` is the outcome the
+    verification report's own facts support, which must also be the one it
+    states and the one its shape permits. ``verdict`` is the packet's claimed
+    review verdict (``None`` for a bare report); S5 re-derives it.
+    """
+
+    shape: str
+    outcome: str
+    path: str
+    post_image_bytes: int
+    approved_by: str
+    approved_at: datetime
+    identity: Identity
+    verdict: str | None
+
+
+@dataclass(frozen=True)
 class ProjectConfigFacts:
     """What A checks in the config bytes the execution identity receives."""
 
@@ -138,6 +193,8 @@ class ProjectConfigFacts:
     github_repo: str
     workspace_path: str
     workspace_write_enabled: bool
+    controlled_verification_enabled: bool
+    controlled_review_enabled: bool
 
 
 def _no_duplicates(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -334,6 +391,110 @@ def read_write_claim(data: bytes) -> WriteClaimFacts:
     )
 
 
+def _verification_report(value: object, what: str) -> tuple[str, str, int, str, datetime, Identity]:
+    """One ``verification-result.v1`` object: its supported outcome, target
+    path and size, approval and identity. The outcome is re-derived from the
+    report's own facts exactly as 5F2D derives it (DL-4A's rule: an untrusted
+    workspace outranks a failed run) and must equal the stated one."""
+    document = _object(value, VERIFICATION_RESULT_FIELDS, what)
+    _exactly(document["schema_version"], VERIFICATION_RESULT_SCHEMA_VERSION, f"{what}.schema_version")
+    _exactly(document["mode"], VERIFICATION_RESULT_MODE, f"{what}.mode")
+    outcome = document["outcome"]
+    if type(outcome) is not str or outcome not in REVIEW_CLAIM_OUTCOMES.values():
+        raise ClaimReadError("malformed", f"{what}.outcome is not a shipped outcome.")
+    execution = document["execution"]
+    post = document["workspace_postcondition"]
+    if not isinstance(execution, dict) or type(execution.get("passed")) is not bool:
+        raise ClaimReadError("malformed", f"{what}.execution has no boolean passed.")
+    if not isinstance(post, dict) or any(type(post.get(f)) is not bool for f in VERIFICATION_TRUST_FIELDS):
+        raise ClaimReadError("malformed", f"{what}.workspace_postcondition has no boolean trust facts.")
+    if not all(post[f] for f in VERIFICATION_TRUST_FIELDS):
+        derived = "workspace-state-untrusted"
+    elif execution["passed"]:
+        derived = "verified"
+    else:
+        derived = "verification-failed"
+    if derived != outcome:
+        raise ClaimReadError("outcome_unsupported", f"{what} states an outcome its own facts do not support.")
+    target = _object(document["target"], VERIFICATION_TARGET_FIELDS, f"{what}.target")
+    _exactly(target["change_type"], "modify", f"{what}.target.change_type")
+    _exactly(target["post_image_verified_before_execution"], True,
+             f"{what}.target.post_image_verified_before_execution")
+    for block in ("command", "output", "workspace_precondition", "capability_boundaries"):
+        if not isinstance(document[block], dict):
+            raise ClaimReadError("malformed", f"{what}.{block} is not an object.")
+    for text in ("single_actor_contract", "next_step"):
+        _text(document[text], f"{what}.{text}")
+    return (
+        outcome,
+        _text(target["path"], f"{what}.target.path"),
+        _size(target["post_image_bytes"], f"{what}.target.post_image_bytes"),
+        _text(document["approved_by"], f"{what}.approved_by"),
+        _instant(document["approved_at"], f"{what}.approved_at"),
+        _identity(document, what),
+    )
+
+
+def read_review_claim(data: bytes) -> ReviewClaimFacts:
+    """Classify the review command's stdout bytes by their shape, or refuse.
+
+    The exit code is not an input: the bytes alone decide. Accepted shapes,
+    each exactly what the frozen command prints:
+
+    - ``review-packet.v5`` (exit 0). Its embedded verification must support
+      ``verified``; its own identity, approval and target must be the embedded
+      report's; its ``review`` must carry a shipped verdict;
+    - a bare ``verification-result.v1`` supporting ``verification-failed``
+      (exit 2) or ``workspace-state-untrusted`` (exit 3).
+
+    Anything else is refused: a bare ``verified`` report (the command never
+    prints one), a contradiction inside a packet, an unsupported outcome, a
+    second document, or empty stdout (exits 1 and 4 print nothing on stdout).
+    What it returns is what the execution identity **claims**.
+    """
+    document = strict_json_object(data, MAX_REVIEW_CLAIM_BYTES, "review claim")
+    schema = document.get("schema_version")
+    if schema == VERIFICATION_RESULT_SCHEMA_VERSION:
+        outcome, path, size, approved_by, approved_at, identity = _verification_report(
+            document, "the verification report")
+        if outcome == "verified":
+            raise ClaimReadError(
+                "unexpected_shape", "a bare verified report is not a shape the review command prints."
+            )
+        shape = next(name for name, value in REVIEW_CLAIM_OUTCOMES.items() if value == outcome)
+        return ReviewClaimFacts(shape, outcome, path, size, approved_by, approved_at, identity, None)
+    if schema != REVIEW_PACKET_SCHEMA_VERSION:
+        raise ClaimReadError("unexpected_shape", "the review claim is neither a review packet nor a report.")
+    packet = _object(document, REVIEW_PACKET_FIELDS, "the review packet")
+    _exactly(packet["mode"], REVIEW_PACKET_MODE, "mode")
+    _exactly(packet["human_decision_required"], True, "human_decision_required")
+    identity = _identity(packet, "the review packet")
+    approved_by = _text(packet["approved_by"], "approved_by")
+    approved_at = _instant(packet["approved_at"], "approved_at")
+    target = _object(packet["target"], REVIEW_TARGET_FIELDS, "target")
+    _exactly(target["change_type"], "modify", "target.change_type")
+    path = _text(target["path"], "target.path")
+    outcome, v_path, size, v_by, v_at, v_identity = _verification_report(
+        packet["verification"], "verification")
+    if outcome != "verified":
+        raise ClaimReadError("contradictory", "a review packet embeds a verification that did not pass.")
+    if (v_path, v_by, v_at, v_identity) != (path, approved_by, approved_at, identity):
+        raise ClaimReadError(
+            "contradictory", "the packet's target, approval or identity is not its verification's."
+        )
+    review = _object(packet["review"], MODEL_REVIEW_FIELDS, "review")
+    verdict = review["verdict"]
+    if type(verdict) is not str or verdict not in REVIEW_VERDICTS:
+        raise ClaimReadError("malformed", "review.verdict is not a shipped verdict.")
+    for block in ("reviewer", "reviewer_supervision", "transmission_boundary", "capability_boundaries"):
+        if not isinstance(packet[block], dict):
+            raise ClaimReadError("malformed", f"{block} is not an object.")
+    _text(packet["next_step"], "next_step")
+    if type(packet["superseded_schema_version_note"]) is not str:
+        raise ClaimReadError("malformed", "superseded_schema_version_note is not a string.")
+    return ReviewClaimFacts("review-packet", outcome, path, size, approved_by, approved_at, identity, verdict)
+
+
 def read_project_config(data: bytes) -> ProjectConfigFacts:
     """Parse config bytes exactly as ``load_project_config`` parses a file's
     text (UTF-8, ``yaml.safe_load``, one mapping, ``ProjectConfig``)."""
@@ -356,4 +517,6 @@ def read_project_config(data: bytes) -> ProjectConfigFacts:
         github_repo=config.repo.github_repo,
         workspace_path=config.repo.workspace_path,
         workspace_write_enabled=config.workspace_write.enabled,
+        controlled_verification_enabled=config.controlled_verification.enabled,
+        controlled_review_enabled=config.controlled_review.enabled,
     )
