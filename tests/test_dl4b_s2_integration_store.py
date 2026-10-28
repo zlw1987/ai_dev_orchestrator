@@ -650,6 +650,8 @@ REPROVED = {
     # DL-4B S6
     "request_step_acceptance", "held_acceptance_decision", "hold_acceptance_decision", "held_acceptance_bundle",
     "publish_acceptance_bundle",
+    # DL-4B S7
+    "alpha_inventory", "read_inbox_document",
 }
 REFUSED_ALWAYS = {"record_project_contract", "record_execution_plan", "record_step_contract"}
 NOT_AUTHORITY = {"close", "inspect_project_run", "inspect_step_run", "inspect_step_runs", "transitions_for",
@@ -715,6 +717,9 @@ def test_every_consumption_boundary_reproves_and_changes_nothing_when_it_fails(h
             step.step_run_id, expected_state_version=step.state_version, role_output=None),
         "held_acceptance_bundle": lambda: store.held_acceptance_bundle(step.step_run_id),
         "publish_acceptance_bundle": lambda: store.publish_acceptance_bundle(step.step_run_id),
+        # DL-4B S7
+        "alpha_inventory": lambda: store.alpha_inventory(),
+        "read_inbox_document": lambda: store.read_inbox_document("a.json"),
     }
     assert set(calls) == REPROVED
     break_boundary(h)

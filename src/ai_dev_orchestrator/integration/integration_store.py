@@ -102,6 +102,22 @@ No execution claim, model verdict, cached field, planner recommendation or
 matching digest completes a step: only a signed acceptance of the exact v2
 subject, re-verified on every proof (FD-4), does.
 
+DL-4B S7 adds two read-only, re-proven discovery reads for the non-model Alpha
+driver, so that it decides its next action from the store and never from a
+caller's account of what already happened:
+
+```text
+INVENTORY          alpha_inventory: every recorded project contract, activated plan
+                   and exact-diff approval, each re-proven as it is listed (a record
+                   that does not re-prove raises StateUntrustedError), plus the ids of
+                   the recorded project runs (discovery only: a run is authority only
+                   after recover() and a re-proven read)
+INBOX DOCUMENT     read_inbox_document: one operator file from the inbox, read once
+                   with S3's checks (O's single-link regular file, bounded). Never
+                   authority by itself: what it holds is consumed only through the
+                   existing approval APIs, which verify it
+```
+
 No subprocess, Git, network, model, environment read or workspace write
 happens here. Besides the security facts and the two admin-owned files, A
 reads the clone (observations), its inbox, and the outbox it created, and
@@ -120,6 +136,7 @@ import typing
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal, NamedTuple
 
@@ -227,6 +244,7 @@ from ai_dev_orchestrator.integration.claim_readers import ClaimReadError
 from ai_dev_orchestrator.integration.claim_receiver import ClaimProtocolError, ReceivedClaim, Waiter
 from ai_dev_orchestrator.integration.exchange import ExchangeError
 from ai_dev_orchestrator.integration.identity_boundary import (
+    IdentityBoundary,
     IdentityBoundaryError,
     IdentityBoundaryProof,
     IsolationCategory,
@@ -652,6 +670,51 @@ _S6_ATTESTATION_ONLY = (
     "a human attestation in an integration store is consumed only by DL-4B S6's signed step "
     "acceptance: DECIDE_ACCEPTANCE over a held planner decision, with its human-attestation.v2."
 )
+
+#: DL-4B S7: the bound on one operator document read from the inbox (the Alpha
+#: definition, a human attestation, or the approved artifact the driver re-reads
+#: to present its digest): the largest of them, the approved-diff bound. A code
+#: constant, not configuration.
+MAX_OPERATOR_DOCUMENT_BYTES = claim_readers.MAX_APPROVED_DIFF_BYTES
+
+
+@dataclass(frozen=True)
+class RecordedExactDiffApproval:
+    """One recorded exact-diff approval (H6), re-proven when it was listed.
+    ``spent`` is whether a write intent consumed it."""
+
+    execution_plan_sha256: str
+    step_id: str
+    approval_id: str
+    spent: bool
+
+
+@dataclass(frozen=True)
+class OperatorDocument:
+    """One inbox file as A read it, once (S3's checks). A receipt of what the
+    operator identity placed there, never authority."""
+
+    name: str
+    content: bytes
+    sha256: str
+
+
+@dataclass(frozen=True)
+class AlphaInventory:
+    """What one state root holds, for the S7 driver to decide its next action.
+
+    ``project_contracts``, ``execution_plans`` and ``exact_diff_approvals``
+    were each re-proven as they were listed, exactly as a consumer would prove
+    them. ``project_run_ids`` are discovery only: a run is authority only after
+    ``recover()`` and a re-proven read. ``boundary`` is the identity boundary
+    the listing call proved, for presentation; no store API takes it.
+    """
+
+    boundary: IdentityBoundary
+    project_contracts: tuple[ProjectContract, ...]
+    execution_plans: tuple[ExecutionPlan, ...]
+    exact_diff_approvals: tuple[RecordedExactDiffApproval, ...]
+    project_run_ids: tuple[str, ...]
 
 
 def _exact_diff_consumer(plan_sha256: str, step_id: str) -> str:
@@ -3273,6 +3336,62 @@ class IntegrationStore(ControlPlaneStore):
             if (again.ticket["ticket_id"], again.subject.sha256) != (hold.ticket["ticket_id"], hold.subject.sha256):
                 raise AuthorityRefusedError("the held decision changed while its bundle was published.")
             return self._insert_challenge_v2(_K.STEP_ACCEPTANCE, hold.subject.sha256)
+
+    # --- S7: discovery reads for the Alpha driver ---------------------------------
+
+    @_reproving
+    def alpha_inventory(self) -> AlphaInventory:
+        """Every project contract, activated plan and exact-diff approval this
+        state root records, each re-proven now, and the ids of its project
+        runs. A record that does not re-prove raises
+        :class:`StateUntrustedError`; nothing is written."""
+        self._require_authority()
+        with self._transaction():
+            contracts = []
+            for row in self._conn.execute(
+                "SELECT sha256 FROM contracts WHERE kind = 'project_contract' ORDER BY rowid"
+            ).fetchall():
+                contract = self._load_contract(row["sha256"], "project_contract")
+                if (issue := self._contract_approval_issue(contract)) is not None:
+                    raise StateUntrustedError(issue)
+                contracts.append(contract)
+            plans = []
+            for row in self._conn.execute(
+                "SELECT sha256 FROM contracts WHERE kind = 'execution_plan' ORDER BY rowid"
+            ).fetchall():
+                plan = self._load_contract(row["sha256"], "execution_plan")
+                _, issue = self._plan_issuance_issue(plan, plan.project_contract_sha256)
+                if issue is not None:
+                    raise StateUntrustedError(issue)
+                plans.append(plan)
+            approvals = []
+            for row in self._conn.execute("SELECT * FROM exact_diff_approvals ORDER BY rowid").fetchall():
+                _, _, issue = self._exact_diff_proof(row)
+                if issue is not None:
+                    raise StateUntrustedError(issue)
+                approvals.append(RecordedExactDiffApproval(
+                    execution_plan_sha256=row["execution_plan_sha256"], step_id=row["step_id"],
+                    approval_id=row["approval_id"], spent=row["consumed_by_ticket_id"] is not None,
+                ))
+            runs = tuple(row["project_run_id"] for row in self._conn.execute(
+                "SELECT project_run_id FROM project_runs ORDER BY rowid"
+            ).fetchall())
+        boundary = IdentityBoundary.model_validate_json(self._last_proof.boundary.model_dump_json())
+        return AlphaInventory(boundary=boundary, project_contracts=tuple(contracts), execution_plans=tuple(plans),
+                              exact_diff_approvals=tuple(approvals), project_run_ids=runs)
+
+    @_reproving
+    def read_inbox_document(self, name: str) -> OperatorDocument:
+        """One file the operator identity placed in the inbox, read once with
+        S3's checks (O's single-link regular file at its own path, at most
+        :data:`MAX_OPERATOR_DOCUMENT_BYTES`). Never authority by itself: what
+        it holds becomes authority only through an approval API that verifies
+        it. It takes a name and nothing else."""
+        self._require_authority()
+        if type(name) is not str:
+            raise AuthorityRefusedError("an inbox document is named by a string.")
+        content = self._read_inbox(name, MAX_OPERATOR_DOCUMENT_BYTES)
+        return OperatorDocument(name=name, content=content, sha256=hashlib.sha256(content).hexdigest())
 
     def _apply_signed_acceptance(self, step_run_id: str, request: object, role_output: object,
                                  attestation: object) -> AppliedTransition:

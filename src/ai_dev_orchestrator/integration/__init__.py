@@ -29,6 +29,12 @@ Alpha planner rule (no model), and :mod:`.acceptance_bundle`, the human's review
 material, published into the A-owned ``published/`` directory; the hold and
 the signed ``step-acceptance-subject.v2`` live in the integration store.
 
+S7 is the non-model Alpha driver: :mod:`.alpha_driver`, the authority
+identity's entry point, derives the Alpha's stage from the store every time
+and calls only the accepted store APIs and the DL-3 outer loop, presenting
+(never running) the frozen X-side commands; :mod:`.alpha_operator` is the
+operator's pure statement helper. Neither adds authority.
+
 Nothing in this package launches a process, opens a socket, calls a model,
 runs Git, reads a credential value or signs anything, and no CLI command
 reaches it. The only ACL it ever sets is the protected DACL of a directory it
