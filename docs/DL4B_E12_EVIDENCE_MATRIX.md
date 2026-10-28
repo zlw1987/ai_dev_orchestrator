@@ -1,9 +1,11 @@
 # DL-4B E-12 — Pass / Fail Evidence Matrix
 
-**Status: PREP FU1 — UNDER CORRECTIVE REVIEW, all rows NOT TESTED.** Fill in only
+**Status: PREP FU2 — UNDER CORRECTIVE REVIEW, all rows NOT TESTED.** Fill in only
 during a separately authorized E-12 (see `DL4B_E12_ISOLATION_REHEARSAL_PREP.md`
-§9–§10), after FU1 is accepted. E-12 is NOT authorized or executable; E-6 NOT
-PERFORMED; AUTH-PILOT NOT AUTHORIZED.
+§9–§10), after FU2 is accepted. E-12 is NOT authorized or executable; E-6 NOT
+PERFORMED; AUTH-PILOT NOT AUTHORIZED. Every PASS below requires a **real
+observation** recorded in the stated evidence source; a requirement not
+exercised stays `NOT TESTED` with its reason.
 
 Every row has one of three states: **PASS** (the mechanical check met its
 stated expectation), **FAIL** (it did not — any FAIL blocks the Alpha, E-10),
@@ -24,7 +26,8 @@ offline suite instead; `optional` = a recommended spot-check that may be skipped
 | `PRECOND-POLICY` | Host policy permits local standard accounts, (if S4U) batch-logon, user switching (D-17) | permitted | admin confirmation | NOT TESTED |
 | `PRECOND-SUITE` | Full offline suite green at baseline `c7f9e64` (E-3); do not re-run the full suite for the docs-only FU1 | all pass | `pytest -q` | NOT TESTED |
 | `PRECOND-REVIEW` | Design+AMEND1 (E-2) and S0–S7 (E-3) accepted — S0–S7 are **ACCEPTED/FROZEN for offline scope**; confirm no code changed since `c7f9e64` | accepted | review record | NOT TESTED |
-| `PRECOND-FU1` | E-12 PREP FU1 (these three docs) independently accepted | accepted | review record | NOT TESTED |
+| `PRECOND-FU2` | E-12 PREP FU2 (these three docs, topology/helper/launch-order/no-signing corrections) independently accepted | accepted | review record | NOT TESTED |
+| `PRECOND-ROOTS` | The five boundary paths (`state_root`, `published`, `inbox`, `exchange_root`, active `clone`) are mutually disjoint and load into `identity-boundary.v1` (no nested layout `BoundaryPaths._disjoint` would reject) | disjoint, loads | admin + `status` | NOT TESTED |
 | `PRECOND-SIGNING` | D-E12-9: real signing capability provisioned so O signs the three S7 approvals. If not authorized, all §9 S7 rows are `NOT TESTED / no-signing`; ISO and HARNESS are unaffected. **Not E-6, does not satisfy E-6** | provisioned or deferred | admin + O | NOT TESTED |
 
 ## 2. FD-13 — identities and launch
@@ -41,11 +44,13 @@ offline suite instead; `optional` = a recommended spot-check that may be skipped
 
 | Id | Check | Expected | Evidence | State / Reason |
 |---|---|---|---|---|
-| `FD14-STATEROOT-ACL` | State root / `published/` / `inbox/` / handoff DACLs per prep §3.1 | as table | `icacls` dump | NOT TESTED |
-| `FD14-OUTBOX-OWNERRIGHTS` | Outbox `OWNER RIGHTS` caps A to list/read; X-R add/write/delete own | as table | `icacls` dump | NOT TESTED |
+| `FD14-STATEROOT-ACL` | `<state_root>` DACL per prep §3.1: A full; X-R/O none | as table | `icacls` dump | NOT TESTED |
+| `FD14-PUBLISHED-ACL` | `<published>` DACL: A full; O read; X-R none | as table | `icacls` dump | NOT TESTED |
+| `FD14-INBOX-ACL` | `<inbox>` DACL: A read; O add-file + write own; X-R none | as table | `icacls` dump | NOT TESTED |
+| `FD14-EXCHANGE-ACL` | `<exchange_root>` DACL; `handoff-<ticket>` write-once (X-R read only); `outbox-<ticket>` `OWNER RIGHTS` caps A to list/read, X-R add/write/delete own only | as table | `icacls` dump | NOT TESTED |
 | `FD14-CLONE-ACL` | Working tree X-R-modify + `OWNER RIGHTS`; `.git` X-R read+execute only; root no DELETE/`WRITE_DAC`/`WRITE_OWNER` | as table | `icacls` dump | NOT TESTED |
-| `FD14-EFFECTIVE` | AuthZ effective rights for X-R's SID within the table for every object | within table | AuthZ spot check | NOT TESTED |
-| `FD14-HOSTILE-DENIED` | Every hostile write/delete/rename/chown/re-permission on every FD-14 object fails `ACCESS_DENIED` | all denied (5) | hostile log (diagnostic) + `ISO-DIGEST-Q`/`-POST` (no X-R-owned object, no rewrite/deletion) | NOT TESTED |
+| `FD14-EFFECTIVE` | AuthZ effective rights for X-R's SID within the table for every object across the five roots | within table | AuthZ spot check | NOT TESTED |
+| `FD14-HOSTILE-DENIED` | Every hostile write/delete/rename/chown/re-permission on every FD-14 object fails `ACCESS_DENIED` | all denied (5) | hostile log (diagnostic) + `ISO-DIGEST-Q`/`-POST` (no unexpected-name object, no rewrite/deletion) + `ISO-ADVERSARY-*` (proof the adversary actually ran) | NOT TESTED |
 | `FD14-PROC-DENIED` | Hostile `OpenProcess`/token open on A denied | denied | hostile log | NOT TESTED |
 | `FD14-LOADPATH-DENIED` | Hostile writes to A's install / `sys.path` / `PATH` dirs denied | denied | hostile log + `ISO-PROOF-POST` (step 5 re-evaluates X-R rights on every `PATH`/`sys.path` dir) | NOT TESTED |
 
@@ -92,27 +97,32 @@ offline suite instead; `optional` = a recommended spot-check that may be skipped
 
 | Id | Check | Expected | Evidence | State / Reason |
 |---|---|---|---|---|
-| `ISO-DIGEST-PRE` | A's pre-rehearsal manifests: state root, exchange root (outbox excluded), `.git` control, anchors (prep §5.0, runbook §A3) | recorded | `*-pre.txt` | NOT TESTED |
-| `ISO-DIGEST-Q` | **Quiescent bracket** (A idle, only the adversary active): all four manifests `strict`-identical to pre (the literal §5.8.10 test) | all `strict` PASS | `e12_measure.py strict` ×4 (runbook §A3q) | NOT TESTED |
-| `ISO-DIGEST-POST` | **Full-window accountable compare**: anchors + `.git` `strict`-identical; both authority trees `classify` with no write-once rewrite/deletion, no X-R-owned object, no reparse, no hard link, no change outside an A-owned growth region | all PASS | `strict` ×2 + `classify` ×2 (runbook §A6) | NOT TESTED |
-| `ISO-PUBLISHED-UNCHANGED` | No `published/` object is rewritten by X-R; growth is A-owned only (covered by `ISO-DIGEST-POST` exchange-root `classify` + `S7-PUBLISHED-ACL`) | A-owned growth only | `classify` + `icacls` | NOT TESTED |
-| `ISO-OVERALL` | `ISO-PROOF-POST` PASS **and** `ISO-DIGEST-Q` PASS **and** `ISO-DIGEST-POST` PASS **and** `FD18-GIT-UNCHANGED` PASS | all PASS | the rows above | NOT TESTED |
+| `ISO-ADVERSARY-LAUNCH` | The hostile verifier **actually launched**: the X2 report has `execution.started == true` and is **not** `refused-before-execution` (a pre-launch refusal is never a launch). Requires the X1 approved write first | launched | `e12_measure.py adversary` on `verify-report.json` (runbook X2/Aadv) | NOT TESTED |
+| `ISO-ADVERSARY-ACTIVE` | The detached descendant started and stayed active ≥ the D-E12-8 window; the attack set was attempted | active ≥ window | `adversary` markers (`hostile-start`/`descendant-start`/`descendant-end`) + O `tasklist` + hostile log | NOT TESTED |
+| `ISO-DIGEST-PRE` | A's pre-rehearsal manifests: `state_root`, `published`, `inbox`, `exchange_root` (`--exchange`, outbox excluded), `.git` control of `<clone_iso>`, anchors (prep §5.0, runbook §A3) | recorded | `*-pre.txt` (6 manifests) | NOT TESTED |
+| `ISO-DIGEST-Q` | **Quiescent bracket** (A idle, only the adversary active): all six manifests `strict`-identical to pre (the literal §5.8.10 test) | all `strict` PASS | `e12_measure.py strict` ×6 (runbook §A3q) | NOT TESTED |
+| `ISO-DIGEST-POST` | **Full-window accountable compare**: anchors + `.git` `strict`-identical; each of the four A-owned plane roots `classify`-clean (no write-once rewrite/deletion, no unexpected-name object, no reparse, no hard link) | all PASS | `strict` ×2 + `classify` ×4 (runbook §A6) | NOT TESTED |
+| `ISO-PUBLISHED-UNCHANGED` | No `published` object is rewritten/forged by X-R; growth matches only `driver-*.json` (covered by `ISO-DIGEST-POST` published `classify` + `S7-PUBLISHED-ACL`) | expected names only | `classify` + `icacls` | NOT TESTED |
+| `ISO-OVERALL` | `ISO-ADVERSARY-LAUNCH`+`-ACTIVE` PASS **and** `ISO-PROOF-POST` PASS **and** `ISO-DIGEST-Q` PASS **and** `ISO-DIGEST-POST` PASS **and** `FD18-GIT-UNCHANGED` PASS. A byte-identical plane with no proven adversary run is **INVALID, not PASS** | all PASS | the rows above | NOT TESTED |
 
 ## 8. HARNESS — detached HEAD + read-only `.git`
 
 | Id | Check | Expected | Evidence | State / Reason |
 |---|---|---|---|---|
-| `HARNESS-OWNER` | X-R owns the clone (C-10) | owned | `icacls` / Git ownership check | NOT TESTED |
-| `HARNESS-WRITE-DETACHED` | Frozen writer accepts detached HEAD + read-only `.git` and writes | accepted, written | **default:** S7 write X-step X4 stdout + working-tree change (optional standalone X2 on a separate `<clone_harness>`) | NOT TESTED |
-| `HARNESS-VERIFY-DETACHED` | Frozen verifier preflight accepts detached HEAD + read-only `.git` | accepted | verifier stdout (from X1 and X5) | NOT TESTED |
+| `HARNESS-OWNER` | X-R owns each clone (C-10) | owned | `icacls` / Git ownership check | NOT TESTED |
+| `HARNESS-WRITE-DETACHED` | Frozen writer accepts detached HEAD + read-only `.git` and writes | accepted, written | **standalone** writer run on `<clone_harness>` (runbook Phase 2 X2h); corroborated by ISO X1 and S7 X4 | NOT TESTED |
+| `HARNESS-VERIFY-DETACHED` | Frozen verifier accepts detached HEAD + read-only `.git` **end to end to a `verified` outcome** (benign executable, no signing) | `outcome: verified` | **standalone** verifier run on `<clone_harness>` (`harness-verify.json`, runbook Phase 2 X2h); corroborated by ISO X2 preflight | NOT TESTED |
 
 ## 9. S7 — driver integration measurements
 
 > **Every S7 row requires `PRECOND-SIGNING` (D-E12-9):** reaching `run`'s write
-> and verify steps needs three real, S1-verified approvals. Without it, stop
-> after HARNESS and record every row below `NOT TESTED / no-signing`. Signing is
-> real authenticator use in O's session; it is **not** a model call and **not**
-> E-6.
+> and verify steps needs three real, S1-verified approvals. Without it, **skip
+> Phase 3 entirely** and record every row below `NOT TESTED / no-signing` — ISO
+> and HARNESS have already covered the isolation core and the writer/verifier
+> compatibility without signing, so a no-signing run still yields a meaningful
+> ISO+HARNESS verdict, and the overall verdict never claims S7 (or HARNESS)
+> coverage from an exercise that did not run. Signing is real authenticator use
+> in O's session; it is **not** a model call and **not** E-6.
 
 | Id | Check | Expected | Evidence | State / Reason |
 |---|---|---|---|---|
@@ -139,14 +149,20 @@ offline suite instead; `optional` = a recommended spot-check that may be skipped
 
 ## 11. Overall E-12 verdict (fill at close)
 
-E-12 **PASSES** iff: all §1 preconditions PASS (`PRECOND-FU1` included);
-`ISO-OVERALL` PASS (which requires `ISO-PROOF-POST`, the quiescent
-`ISO-DIGEST-Q`, the full-window `ISO-DIGEST-POST` and `FD18-GIT-UNCHANGED`);
-both `HARNESS-*-DETACHED` PASS; and no row is FAIL. The S7 rows PASS only if
-`PRECOND-SIGNING` was met; otherwise they are `NOT TESTED / no-signing` and E-12
-still passes on ISO + HARNESS, with S7 deferred. Any FAIL, any measurement
-`FAIL` line, or a frozen harness refusing the detached HEAD or read-only `.git`,
-**blocks the live Alpha** (E-10) — no retry, repair or cleanup.
+E-12 **PASSES** iff: all §1 preconditions PASS (`PRECOND-FU2` and `PRECOND-ROOTS`
+included); `ISO-OVERALL` PASS (which requires `ISO-ADVERSARY-LAUNCH` and
+`-ACTIVE` — the adversary provably ran — plus `ISO-PROOF-POST`, the quiescent
+`ISO-DIGEST-Q`, the full-window `ISO-DIGEST-POST` and `FD18-GIT-UNCHANGED`); both
+`HARNESS-*-DETACHED` PASS from the **standalone** `<clone_harness>` run reaching
+`verified`; and no row is FAIL. The S7 rows PASS only if `PRECOND-SIGNING` was
+met; otherwise they are `NOT TESTED / no-signing` and E-12 still passes on
+ISO + HARNESS, with S7 deferred — **the verdict must not claim HARNESS coverage
+from an S7 run that did not happen, nor S7 coverage on a no-signing host**
+(mandatory validation #9). An ISO run in which the hostile verifier was
+`refused-before-execution` (adversary never launched) is **INVALID, not a pass**.
+Any FAIL, any measurement `FAIL` line, or a frozen harness refusing the detached
+HEAD or read-only `.git` (or not reaching `verified` in HARNESS), **blocks the
+live Alpha** (E-10) — no retry, repair or cleanup.
 
 > Overall verdict: **NOT TESTED** (preparation under corrective review; E-12 not
 > authorized or executed).
