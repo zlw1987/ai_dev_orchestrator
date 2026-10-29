@@ -1,9 +1,15 @@
 # DL-4B E-12 — Operator Execution Runbook
 
-**Status: PREP FU3 — UNDER CORRECTIVE REVIEW, NOT AUTHORIZED TO RUN.** Execute
+**Status: PREP FU4 — UNDER CORRECTIVE REVIEW, NOT AUTHORIZED TO RUN.** Execute
 only after every gating condition and decision in
-`DL4B_E12_ISOLATION_REHEARSAL_PREP.md` §9–§10 is signed (including FU3
-acceptance). Record outcomes in `DL4B_E12_EVIDENCE_MATRIX.md`.
+`DL4B_E12_ISOLATION_REHEARSAL_PREP.md` §9–§10 is signed (including FU4
+acceptance). Record outcomes in `DL4B_E12_EVIDENCE_MATRIX.md`. FU4 corrects three
+operator-execution contradictions FU3 left: the first `status` needs the inbox
+`alpha-definition.json` to be executable at all (A0.pre / Phase 0.10, A1); the
+post-S7 `status` is terminally RECOVERY_REQUIRED (exit 3), not exit 0 (A6); and
+the independent adversary observation must correlate an actual live descendant by
+process identity, with a PowerShell-free, wmic-free timestamp procedure (Xobs /
+Aadv / Appendix M).
 
 Read `DL4B_E12_ISOLATION_REHEARSAL_PREP.md` first, especially §5.0 (the
 measurement contract), §3.1–§3.3 (the five-root topology, the per-exercise
@@ -66,6 +72,7 @@ under `%USERPROFILE%\aido-e12\`. All measurement output stays in A's area,
 | 0.7 | admin | Provision A's launch: A's interactive session via secure logon UI, **or** an S4U task (no stored password, fixed `python -I` action, O granted run only) | `FD13-LAUNCH` |
 | 0.8 | admin | Create `<xr_scratch>` (X-R-owned) for the adversary's diagnostic markers/log, and `<obs_log>` (admin-owned) for the independent live-process observation — both **outside all five roots** | — |
 | 0.9 | admin | Bind `identity-boundary.v1` to **`<clone_iso>`** (the first exercise's clone) and record its digest `DIGEST_ISO` | `PRECOND-ROOTS` |
+| 0.10 | O | Place the rehearsal `alpha-definition.json` into `<inbox>` (O add-file right, FD-14). It must be the **one** definition the whole rehearsal uses — the same one S7's three approvals walk (contract, plan activation, exact diff). **Required before A1:** `AlphaDriver._derive()` reads `inbox\alpha-definition.json` first, so a `status` with no definition refuses `definition_unreadable` (exit 1), which is a provisioning error, not an isolation result | `ISO-DEFINITION` |
 
 A one-off AuthZ effective-rights spot check per FD-14 object (for X-R's SID) may
 be run here by admin to pre-confirm `FD14-EFFECTIVE`.
@@ -112,10 +119,23 @@ In A's session, `cmd.exe`, isolated (the boundary binds `<clone_iso>`, Phase 0.9
 "C:\AIDO\venv\Scripts\python.exe" -I -m ai_dev_orchestrator.integration.alpha_driver --state-root "<state_root>" status > "<published>\driver-001-status.json"
 ```
 
-Expect exit `0` and no `isolation_unproven` refusal → `ISO-PROOF-PRE` PASS. This
-first `status` also creates `control-plane.sqlite3`. (If it refuses
-`IsolationUnprovenError:<category>`, provisioning is wrong — fix as admin and
-re-run; do not proceed.)
+Two independent things must hold, and they are **not** the same check:
+
+- **FD-16 isolation re-proof passed.** `open_integration_session` proved the
+  boundary; the report is **not** a `REFUSED` report whose `refusal.category`
+  starts `IsolationUnprovenError:`. This is `ISO-PROOF-PRE`.
+- **The lifecycle exit code.** With the inbox definition present (Phase 0.10) and
+  no contract/plan/approval/run yet recorded, `_derive()` returns stage
+  **`contract_approval`**, outcome `APPROVAL_REQUIRED`, so the process exits
+  **`0`**.
+
+So expect: `"stage": "contract_approval"`, `"outcome": "APPROVAL_REQUIRED"`,
+`"refusal": null`, **exit 0** → `ISO-PROOF-PRE` PASS. This first `status` also
+creates `control-plane.sqlite3`. Two refusals (both exit 1) must be told apart:
+`IsolationUnprovenError:<category>` is a **provisioning (isolation) error** — fix
+as admin and re-run, do not proceed; `definition_unreadable` /
+`definition_invalid` means Phase 0.10 is missing or wrong — place the valid
+definition and re-run. Neither is an isolation PASS and neither proceeds.
 
 ### A2 (A) — time the proof
 
@@ -192,18 +212,49 @@ through the ISO bracket.
 ### Xobs (admin) — independent live-process observation (during the bracket)
 
 **While the descendant is running**, an administrator (elevated — a standard O
-account cannot see another user's processes) records independent sightings of the
-X-R descendant into `<obs_log>`, one monotonic epoch-second timestamp per line, at
-several points spanning the D-E12-8 window. Example per sighting:
+account cannot see another user's processes) records **independent** sightings of
+the X-R descendant into `<obs_log>`, one line per sighting
+(`<epoch> <pid> <image>`), at several points spanning the D-E12-8 window. The
+observation must identify the **actual** rehearsal descendant — a specific live
+PID at the rehearsal's own adversary identity owned by the throwaway X-R account —
+**not merely any process with a matching image name** (FU4).
+
+This needs **no PowerShell and no wmic**. The admin saves a tiny `observe.bat`
+(reviewed like the hostile program and the helper), run on a timer across the
+window. `<adv_image>` is the hostile program's **rehearsal-unique** image
+basename (e.g. `aido-e12-adversary.exe`), `<PY>` the venv interpreter, `<host>`
+the machine name:
 
 ```bat
-tasklist /v /fi "USERNAME eq <host>\aido-x-rehearsal" | findstr /i "<hostile.exe>" && (for /f %t in ('powershell -nop -c "[int][double]::Parse((Get-Date -UFormat %%s))"') do @echo %t>> "<obs_log>")
+@echo off
+setlocal enabledelayedexpansion
+rem  %1 unique adversary image basename   %2 DOMAIN\aido-x-rehearsal
+rem  %3 observer log   %4 python.exe (locale-independent epoch; not PowerShell)
+set "IMG=%~1"
+set "ACCT=%~2"
+set "OBS=%~3"
+set "PY=%~4"
+for /f %%E in ('%PY% -I -c "import time;print(int(time.time()))"') do set "NOW=%%E"
+for /f "usebackq tokens=1,2 delims=," %%A in (`tasklist /v /fo csv /nh /fi "IMAGENAME eq %IMG%" /fi "USERNAME eq %ACCT%"`) do (
+  set "IMGNAME=%%~A"
+  set "PID=%%~B"
+  if not "!PID!"=="" >>"%OBS%" echo !NOW! !PID! !IMGNAME!
+)
+endlocal
 ```
 
-(If PowerShell is disallowed, append the clock with `echo %DATE% %TIME%>>` and
-convert offline; the point is an **independent, non-X-R** record that the
-descendant was alive at several times across the window.) This admin observation —
-**not** X-R's markers — is the authoritative `ISO-ADVERSARY-ACTIVE` evidence.
+Run it repeatedly (pure `cmd.exe`; `timeout` is not PowerShell), e.g.
+`for /l %i in (1,1,<n>) do ( call observe.bat <adv_image> <host>\aido-x-rehearsal "<obs_log>" "<PY>" & timeout /t <interval> /nobreak >nul )`,
+so the window holds ≥ 2 sightings of the same live PID. `tasklist /v /fo csv`
+reports the image name, PID and owner (`UserName`) in pure `cmd.exe`; filtering on
+the **unique** image **and** the throwaway `aido-x-rehearsal` owner is the
+independent correlation to the launched adversary. Each tick stamps a
+locale-independent epoch via a one-line `python -I` call — **not** PowerShell. On
+a host that still has wmic, `wmic process where "ExecutablePath='<hostile.exe>'"
+get ProcessId` plus `wmic os get LocalDateTime` yields the stronger full-path
+identity in the same line shape, which the helper also accepts; pass the full
+`ExecutablePath` as `<adv-identity>` then. This admin observation — **not** any
+X-R marker — is the authoritative `ISO-ADVERSARY-ACTIVE` evidence.
 
 ### A3q (A) — quiescent isolation bracket (the literal §5.8.10 test)
 
@@ -239,19 +290,28 @@ not before it) A confirms the adversary provably launched and ran across the
 window — a digest alone cannot satisfy ISO:
 
 ```bat
-"<PY>" -I "%USERPROFILE%\aido-e12\e12_measure.py" adversary "<xr_scratch>\verify-report.json" "<obs_log>" <D-E12-8-seconds>
+"<PY>" -I "%USERPROFILE%\aido-e12\e12_measure.py" adversary "<xr_scratch>\verify-report.json" "<obs_log>" <D-E12-8-seconds> "<adv-identity>"
 ```
 
-`adversary` PASSes only if the verifier report shows launch
-(`execution.started == true`, not `refused-before-execution`) **and** the
-**independent** admin observation log `<obs_log>` (Xobs) holds ≥ 2 sightings
-spanning ≥ the window → `ISO-ADVERSARY-LAUNCH` + `ISO-ADVERSARY-ACTIVE` +
-`ISO-ADVERSARY-DURATION`. A `FAIL` (`adversary-refused-before-launch`,
-`adversary-not-started`, `insufficient-observation`, or `observed-active-…-under`)
-→ STOP, ISO INVALID. The X-R `hostile-log.txt` is recorded as diagnostic attack
-coverage (`ISO-ADVERSARY-COVERAGE`) only. Finally the admin confirms **no X-R
-descendant remains live** (elevated `tasklist`), closing the adversarial bracket
-before any Phase 3 rebind.
+`<adv-identity>` is the same identity the observer recorded: the configured
+hostile executable's full `ExecutablePath` on a wmic host, else the unique
+`<adv_image>` basename captured under the X-R-owner filter (Xobs). `adversary`
+PASSes **only** if the verifier report shows launch (`execution.started == true`,
+not `refused-before-execution`) **and** a **single** PID whose sightings all carry
+`<adv-identity>` is observed ≥ 2 times spanning ≥ the window → `PASS
+correlated-pid-<pid>-active-<span>s-over-<n>-sightings` =
+`ISO-ADVERSARY-LAUNCH` + `ISO-ADVERSARY-ACTIVE` + `ISO-ADVERSARY-DURATION`. It
+`FAIL`s closed — STOP, ISO INVALID — for a missing/refused/unstarted launch
+(`adversary-report-unreadable` / `adversary-refused-before-launch` /
+`adversary-not-started`), a non-three-field line (`malformed-observation`), a bad
+stamp (`malformed-timestamp`), a non-numeric PID (`missing-process-identity`), a
+same-name process at a different identity (`uncorrelated-process`), no correlated
+sighting or only one or only-the-short-lived-parent (`insufficient-observation…`),
+or a span under the window (`observed-active-…-under-…`). The X-R
+`hostile-log.txt` is recorded as diagnostic attack coverage
+(`ISO-ADVERSARY-COVERAGE`) only. Finally the admin confirms **no X-R descendant
+remains live** (elevated `tasklist`), closing the adversarial bracket before any
+Phase 3 rebind.
 
 ---
 
@@ -332,6 +392,12 @@ also changed) → STOP, Alpha blocked. Then A re-runs the FD-16 proof against th
 "C:\AIDO\venv\Scripts\python.exe" -I -m ai_dev_orchestrator.integration.alpha_driver --state-root "<state_root>" status > "<published>\driver-010-status.json"
 ```
 
+No approval is recorded yet at this point, so expect `refusal == null`, `stage ==
+"contract_approval"`, `outcome APPROVAL_REQUIRED`, **exit 0**. An
+`IsolationUnprovenError:<category>` refusal (exit 1) is the only isolation
+failure; `definition_unreadable` means the inbox definition (Phase 0.10) is
+missing.
+
 ### A4 (O → A) — approvals, each redirected to `published/`
 
 Walk `request-approval` / `record-approval` for contract, plan activation and
@@ -390,7 +456,11 @@ type nul > "<exchange_root>\outbox-<ticket>\complete"
 
 The bare verified `verification-result.v1` is **not** a `ReviewPacket`, so A
 classifies "anything else" → **RECOVERY_REQUIRED**. `run` returns exit **3** →
-`S7-VERIFY-RECOVER` PASS (this is expected).
+`S7-VERIFY-RECOVER` PASS (this is expected). RECOVERY_REQUIRED is **terminal**:
+the step state never leaves it, so every later `status` — including the A6 close
+(`driver-099-status.json`) — also derives `recovery_required` and exits **3**
+with `refusal == null`. That is the expected terminal lifecycle, not an isolation
+failure (A6); do not re-run, repair or `git restore` it (E-10).
 
 ### Spot-check deviations (X-R, disposable outbox) — optional but recommended
 
@@ -412,7 +482,27 @@ active boundary:
 "<PY>" -I -m ai_dev_orchestrator.integration.alpha_driver --state-root "<state_root>" status > "<published>\driver-099-status.json"
 ```
 
-Expect exit `0`, no `isolation_unproven` → `ISO-PROOF-POST` PASS.
+**This `status` re-proves FD-16 and reports the terminal lifecycle; its exit code
+depends on the path, and the two must not be conflated (FU4).** Every `status`
+opens a fresh session, so FD-16 is re-proved each time; but the exit code is the
+lifecycle's, and after S7 the lifecycle is terminally `recovery_required`. Read
+`driver-099-status.json` and classify it four ways:
+
+| Observation in the report | Meaning | Verdict |
+|---|---|---|
+| `refusal == null`; `stage == "contract_approval"`, `outcome APPROVAL_REQUIRED`, **exit 0** | FD-16 re-proof passed; no-signing path (no approval signed, nothing ran) — the lifecycle never left contract approval | `ISO-PROOF-POST` **PASS** (no-signing) |
+| `refusal == null`; `stage == "recovery_required"`, `outcome RECOVERY_REQUIRED`, **exit 3** | FD-16 re-proof passed; S7 path — the D-E12-3 verifier-for-reviewer substitution ended the attempt in RECOVERY_REQUIRED, which every later `status` maps to exit 3 | `ISO-PROOF-POST` **PASS** (S7); this is the **expected terminal lifecycle**, not a failure |
+| `outcome REFUSED`, `refusal.category` starts `IsolationUnprovenError:` (exit 1) | the FD-16 re-proof itself **failed** | **actual isolation failure** → FAIL, Alpha blocked |
+| `outcome REFUSED`, any other category (e.g. `definition_unreadable`, `foreign_record`, `state_unreadable`, exit 1), or any stage/exit not matching the path above | provisioning/state went wrong | **unexpected refusal / state** → FAIL, investigate |
+
+**Exit 3 is not read as PASS by itself.** It is a PASS **only** when the report's
+`stage` is `recovery_required` with `refusal == null` on the S7 path (where
+RECOVERY_REQUIRED is the designed end — see X5 / `S7-VERIFY-RECOVER`). On the
+no-signing path the post `status` must be exit 0 / `contract_approval`, and an
+exit 3 there would be an unexpected state. The only isolation FAIL is an
+`IsolationUnprovenError:` refusal at **exit 1**; a passing FD-16 proof never
+produces exit 3 by itself — the RECOVERY_REQUIRED exit 3 comes from the lifecycle,
+with the proof having passed.
 
 **A6-ISO (always).** The ISO clone and the ISO-phase anchors are closed against
 their **own** ISO baselines (boundary bound to `<clone_iso>` throughout ISO):
@@ -485,8 +575,18 @@ E-12 teardown unless AUTH-PILOT says so).
 - No hostile `verify` without the approved write first — a `refused-before-execution`
   result means the adversary never launched and ISO is INVALID, not a pass.
 - No ISO PASS from X-R's own markers/log alone — the authoritative active-interval
-  evidence is the **independent admin observation** `<obs_log>`; a missing or
-  insufficient observation is FAIL, never PASS.
+  evidence is the **independent admin observation** `<obs_log>`, and it must
+  correlate an **actual** live descendant: a single persistent PID at the
+  rehearsal's own `<adv-identity>` under the throwaway X-R owner, not merely any
+  same-name process. A missing, uncorrelated, malformed or insufficient
+  observation is FAIL, never PASS.
+- No reading a post-S7 `status` exit **3** as an isolation failure: after the X5
+  substitution RECOVERY_REQUIRED is terminal, so exit 3 with `stage ==
+  "recovery_required"` and `refusal == null` is the **expected** lifecycle and a
+  PASS for the FD-16 re-proof. The only isolation FAIL is an
+  `IsolationUnprovenError:` refusal at exit 1. Equally, no reading exit 3 as PASS
+  on the no-signing path, where the post `status` must be exit 0 /
+  `contract_approval`.
 - No boundary rebind while the adversary is live, and no rebind that changes
   anything other than `identity-boundary.v1.json`. Any anchor change inside an
   exercise, or an extra changed row during the rebind, is a FAIL — never excused
@@ -528,6 +628,7 @@ import os
 import re
 import stat
 import sys
+from datetime import datetime
 
 _REPARSE = 0x400
 _GIT_TOP = ("HEAD", "config", "index", "packed-refs")
@@ -535,6 +636,8 @@ _GIT_DIRS = ("refs", "hooks", "info")
 _TICKET = "[0-9a-f]{32}"
 _SHA256 = "[0-9a-f]{64}"
 _OUTBOX_DIR = re.compile(r"^outbox-[0-9a-f]{32}$")
+_WMIC_STAMP = re.compile(r"^(\d{14})(?:\.\d+)?(?:[+-]\d{1,4})?$")
+_EPOCH_STAMP = re.compile(r"^\d{1,13}(?:\.\d+)?$")
 
 
 def _is_reparse(path):
@@ -748,47 +851,100 @@ def classify(a, b, allowlist):
     return 0
 
 
-def adversary(report_path, observer_log, min_seconds):
+def _parse_stamp(token):
+    # The observer's wall-clock stamp, as epoch seconds. Two PowerShell-free
+    # shapes are accepted: a plain integer/float epoch (what `python -I -c
+    # "import time;print(int(time.time()))"` prints — the primary procedure,
+    # which needs no wmic), and wmic's LocalDateTime (14 digits YYYYMMDDHHMMSS
+    # with an optional fraction and UTC offset) where wmic is present. The span
+    # is a difference, so a consistent clock within one log is all that matters;
+    # a token of neither shape is malformed.
+    m = _WMIC_STAMP.match(token)
+    if m:
+        try:
+            return datetime.strptime(m.group(1), "%Y%m%d%H%M%S").timestamp()
+        except (ValueError, OverflowError, OSError):
+            return None
+    if _EPOCH_STAMP.match(token):
+        return float(token)
+    return None
+
+
+def adversary(report_path, observer_log, min_seconds, expected_image_path):
     min_seconds = float(min_seconds)
+    expected = os.path.normcase(os.path.normpath(expected_image_path))
+    # 1. Launch evidence is AIDO's OWN frozen verifier report. A pre-launch
+    #    refusal (refused-before-execution) never started the configured
+    #    executable, and a report that does not record a start is no launch
+    #    (mandatory validation #8). A missing report is missing launch evidence.
     try:
         with open(report_path, "r", encoding="utf-8") as handle:
             report = json.load(handle)
     except (OSError, ValueError):
         sys.stdout.write("FAIL\tadversary-report-unreadable\n")
         return 1
-    # Launch confirmation comes from AIDO's own frozen verifier report. A
-    # pre-launch refusal (exit 1 / refused-before-execution) never launched the
-    # configured executable, so it can NEVER be counted as the adversary having
-    # run (mandatory validation #8).
-    outcome = report.get("outcome")
-    started = bool(report.get("execution", {}).get("started"))
-    if outcome == "refused-before-execution" or report.get("category") == "refused-before-execution":
+    if report.get("outcome") == "refused-before-execution" or report.get("category") == "refused-before-execution":
         sys.stdout.write("FAIL\tadversary-refused-before-launch\n")
         return 1
-    if not started:
+    if not bool(report.get("execution", {}).get("started")):
         sys.stdout.write("FAIL\tadversary-not-started\n")
         return 1
-    # Active-interval evidence is the INDEPENDENT observer's log (admin elevated
-    # tasklist), NOT any X-R-authored marker (those are diagnostic claims). A
-    # missing or insufficient observation must never yield PASS.
-    stamps = []
+    # 2. Active/duration evidence is the INDEPENDENT observer log (admin,
+    #    elevated; a standard O account cannot see another user's processes),
+    #    NOT any X-R-authored marker. Each sighting is one line
+    #       <epoch-or-wmic-stamp> <pid> <ExecutablePath-or-unique-image>
+    #    whitespace-split into exactly three fields (the identity, last, may
+    #    hold spaces). The observed process is correlated to the LAUNCHED
+    #    adversary by identity: it must be the SAME unique rehearsal adversary
+    #    the verifier launched (passed here as expected_image_path — the
+    #    configured hostile executable's full path where wmic is present, else
+    #    its unique rehearsal image basename, captured under the throwaway X-R
+    #    owner filter). A same-name process at a different identity is NOT this
+    #    rehearsal's adversary.
+    by_pid = {}
     try:
         with open(observer_log, "r", encoding="utf-8") as handle:
-            for line in handle:
-                line = line.strip()
-                if line and not line.startswith("#"):
-                    stamps.append(float(line))
-    except (OSError, ValueError):
+            for raw in handle:
+                line = raw.strip()
+                if not line or line.startswith("#"):
+                    continue
+                fields = line.split(None, 2)
+                if len(fields) != 3:
+                    sys.stdout.write("FAIL\tmalformed-observation\t%s\n" % line)
+                    return 1
+                stamp_token, pid_token, path_token = fields
+                dt = _parse_stamp(stamp_token)
+                if dt is None:
+                    sys.stdout.write("FAIL\tmalformed-timestamp\t%s\n" % stamp_token)
+                    return 1
+                if not pid_token.isdigit():
+                    sys.stdout.write("FAIL\tmissing-process-identity\t%s\n" % line)
+                    return 1
+                if os.path.normcase(os.path.normpath(path_token)) != expected:
+                    sys.stdout.write("FAIL\tuncorrelated-process\t%s\n" % path_token)
+                    return 1
+                by_pid.setdefault(pid_token, []).append(dt)
+    except OSError:
         sys.stdout.write("FAIL\tobserver-log-unreadable\n")
         return 1
-    if len(stamps) < 2:
-        sys.stdout.write("FAIL\tinsufficient-observation\t%d-sighting(s)\n" % len(stamps))
+    if not by_pid:
+        sys.stdout.write("FAIL\tinsufficient-observation\t0-sighting(s)\n")
         return 1
-    span = max(stamps) - min(stamps)
-    if span < min_seconds:
-        sys.stdout.write("FAIL\tobserved-active-%.1fs-under-%.1fs\n" % (span, min_seconds))
+    # 3. The persistent descendant is the single PID whose correlated sightings
+    #    span the longest. The short-lived parent cannot span the window, so an
+    #    observation of only the parent fails here, not by accident.
+    best_pid, best_span, best_count = None, -1.0, 0
+    for pid, stamps in by_pid.items():
+        span = max(stamps) - min(stamps)
+        if span > best_span:
+            best_pid, best_span, best_count = pid, span, len(stamps)
+    if best_count < 2:
+        sys.stdout.write("FAIL\tinsufficient-observation\tpid-%s-%d-sighting(s)\n" % (best_pid, best_count))
         return 1
-    sys.stdout.write("PASS\tobserved-active-%.1fs-over-%d-sightings\n" % (span, len(stamps)))
+    if best_span < min_seconds:
+        sys.stdout.write("FAIL\tobserved-active-%.1fs-under-%.1fs\n" % (best_span, min_seconds))
+        return 1
+    sys.stdout.write("PASS\tcorrelated-pid-%s-active-%.1fs-over-%d-sightings\n" % (best_pid, best_span, best_count))
     return 0
 
 
@@ -807,7 +963,7 @@ def main(argv):
     if mode == "rebind":
         return rebind(argv[2], argv[3], argv[4])
     if mode == "adversary":
-        return adversary(argv[2], argv[3], argv[4])
+        return adversary(argv[2], argv[3], argv[4], argv[5])
     raise SystemExit("unknown mode: %r" % mode)
 
 
@@ -886,8 +1042,38 @@ The helper's `*` does **not** span `/`, `<ticket>` matches exactly
 `[0-9a-f]{32}` and `<sha256>` exactly `[0-9a-f]{64}`, so a directory named
 `outbox-evil` (non-hex) is **not** excluded — it is measured and, being
 unexpected, fails. The `rebind` mode proves the one authorized between-exercise
-transition changed only `identity-boundary.v1.json`; the `adversary` mode takes
-the AIDO verifier report and the **independent** observer log `<obs_log>` (not
-X-R markers). Substitute the two O-named docs (`approved_diff_name`,
-`project_config_name`) with the names the rehearsal's `alpha-definition.json`
-actually declares.
+transition changed only `identity-boundary.v1.json`.
+
+The `adversary` mode takes **four** arguments —
+`adversary <verify-report> <obs_log> <window-seconds> <adv-identity>` — and is
+mechanically meaningful about *which* process it accepts (FU4):
+
+- **launch** comes from AIDO's own verifier report (`execution.started == true`,
+  never `refused-before-execution`); a missing report or an unstarted one FAILs;
+- **active/duration** comes from the **independent** admin observer log
+  `<obs_log>` (never an X-R marker). Each sighting is one whitespace-split line
+  `<stamp> <pid> <identity>`: a monotonic wall-clock `<stamp>` (epoch seconds —
+  the primary, wmic-free form — or wmic `LocalDateTime` where present), the
+  OS-reported `<pid>`, and the observed process `<identity>`;
+- **correlation to the launched adversary** is by `<identity>`: every sighting's
+  identity must equal `<adv-identity>` (the configured hostile executable's full
+  `ExecutablePath` where wmic is present, otherwise the unique rehearsal image
+  basename captured under the throwaway X-R-owner filter). A same-name process at
+  a different identity is **not** this rehearsal's adversary;
+- **persistence** is required of a **single** PID: the helper takes the PID whose
+  correlated sightings span the longest and requires ≥ 2 of them spanning ≥ the
+  window. The short-lived parent cannot span the window, so observing only the
+  parent FAILs.
+
+It **fails closed** (and never PASSes) for: a missing/refused/unstarted launch
+report (`adversary-report-unreadable` / `adversary-refused-before-launch` /
+`adversary-not-started`); a line that is not three fields
+(`malformed-observation`); a bad stamp (`malformed-timestamp`); a non-numeric PID
+(`missing-process-identity`); a same-name process at a different identity
+(`uncorrelated-process`); no correlated sighting (`insufficient-observation
+0-sighting(s)`); a single correlated sighting or only-the-parent
+(`insufficient-observation pid-…`); and a span under the window
+(`observed-active-…-under-…`). X-R's own markers/log remain **diagnostic only**.
+
+Substitute the two O-named docs (`approved_diff_name`, `project_config_name`)
+with the names the rehearsal's `alpha-definition.json` actually declares.

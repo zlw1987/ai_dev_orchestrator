@@ -1,10 +1,10 @@
 # DL-4B E-12 — Windows Isolation Rehearsal Preparation
 
-**Status: E-12 PREP UNDER CORRECTIVE REVIEW (FU3) — NOT AUTHORIZED TO EXECUTE.**
-This document is being corrected by E-12 PREP FU3; it is PENDING INDEPENDENT
+**Status: E-12 PREP UNDER CORRECTIVE REVIEW (FU4) — NOT AUTHORIZED TO EXECUTE.**
+This document is being corrected by E-12 PREP FU4; it is PENDING INDEPENDENT
 REVIEW and does not authorize E-12, E-6, or a live Alpha. FU2 repaired the
 five-disjoint-root topology, the real object names, the hostile-verifier launch
-order and the no-signing HARNESS gap. FU3 completes the remaining
+order and the no-signing HARNESS gap. FU3 completed the remaining
 execution-contract corrections: the full write-once evidence allowlist (the real
 S3/S4 blob kinds `approved-diff` / `config` / `claims` / `observations` plus
 `verification`, no broad `evidence/**` growth), exercise-scoped anchor/clone
@@ -14,11 +14,22 @@ re-proved; the no-signing close never references an unrun S7 clone), corrected
 adversary timing and provenance (launch → independent live observation → quiescent
 bracket → end-of-window duration; X-R markers are diagnostic, not authoritative),
 and the one-time `AidoStateRoot.create()` state-root bootstrap before the first
-`status`.
+`status`. FU4 corrects three operator-execution contradictions FU3 left, keeping
+FU3's design otherwise intact: (1) `AlphaDriver._derive()` reads
+`inbox\alpha-definition.json` first, so the first `status` needs an O-placed
+definition to return its stage and exit code at all — the one definition the whole
+rehearsal (including S7) uses; (2) the D-E12-3 verifier-for-reviewer substitution
+ends the S7 attempt in RECOVERY_REQUIRED, which the frozen driver maps to exit 3
+on `run` **and every later `status`**, so the post-S7 proof is exit 3, not exit 0,
+while a passing FD-16 proof is told apart from an isolation failure (exit 1
+`IsolationUnprovenError:`); (3) the independent adversary observation must
+correlate an **actual** live descendant by process identity (a persistent PID at
+the rehearsal's own adversary identity under the throwaway X-R owner), with a
+PowerShell-free, wmic-free timestamp procedure the helper accepts.
 
 | | |
 |---|---|
-| Baseline | `main` at `063769e64dba26c85049817764948b5b759ecf72` (FU3 corrective baseline; docs-only on top of the S0–S7 code). DL-4B **S0–S7 are implemented and independently ACCEPTED/FROZEN for offline scope** (code frozen at `c7f9e64873bbeddd8188582fcbcdbfdcc84c05c5`; no code changed since) |
+| Baseline | `main` at `95486d7050a40cd9f5b9fb7aebbb53a4532563d8` (FU4 corrective baseline; docs-only on top of the S0–S7 code). DL-4B **S0–S7 are implemented and independently ACCEPTED/FROZEN for offline scope** (code frozen at `c7f9e64873bbeddd8188582fcbcdbfdcc84c05c5`; no code changed since) |
 | Contract | `docs/DL4B_REAL_INTEGRATION_BOUNDARY_DESIGN.md` (AMEND1), especially §5.8 and §5.8.10; the S7 obligations in `docs/DL4B_S7_ALPHA_DRIVER.md` §9–§10 and `docs/DL4B_S7_OPERATOR_RUNBOOK.md` §10 |
 | Kind | **Preparation only.** No account/ACL provisioning, no scheduled task, no hostile program executed, no real target workspace, no model, no credential value, no branch/PR. Documentation-only |
 | Deliverables | This prep document; `DL4B_E12_OPERATOR_RUNBOOK.md`; `DL4B_E12_EVIDENCE_MATRIX.md`; §9 (decisions requiring authorization); §10 (GO/NO-GO) |
@@ -319,21 +330,32 @@ distinguished kinds of evidence are kept apart, and X-R's own markers/logs are
 - **Independent live-process observation during the bracket** — an
   **administrator** (elevated; a standard O account cannot see another user's
   processes) records sightings of the X-R descendant into an observer log
-  `<obs_log>` at several timestamps **while the quiescent bracket is running**
-  (the descendant is still live). This is the authoritative active evidence —
-  **not** any X-R marker. `ISO-ADVERSARY-ACTIVE`.
+  `<obs_log>` **while the quiescent bracket is running** (the descendant is still
+  live). Each sighting is one line `<stamp> <pid> <identity>` and must identify
+  the **actual** rehearsal descendant — a **single persistent PID** at the
+  rehearsal's own adversary identity (the configured hostile `ExecutablePath`
+  where wmic is present, else the unique rehearsal image basename, captured under
+  the throwaway `aido-x-rehearsal` owner), **not merely any process with a
+  matching image name** (FU4). The stamp is PowerShell-free and wmic-free (epoch
+  seconds from a one-line `python -I` call; wmic `LocalDateTime` also accepted).
+  This is the authoritative active evidence — **not** any X-R marker.
+  `ISO-ADVERSARY-ACTIVE`.
 - **End-of-window duration** — checked **after** the quiescent bracket (not
-  before it): the observer log's span ≥ the D-E12-8 window. `ISO-ADVERSARY-DURATION`.
+  before it): the correlated PID's sighting span ≥ the D-E12-8 window.
+  `ISO-ADVERSARY-DURATION`.
 - **Coverage of the enumerated attack attempts** — the hostile program's own log
   records each target and Win32 result (expected `ERROR_ACCESS_DENIED` = 5, or the
   NT status equivalent). This is an **X claim**, diagnostic only.
   `ISO-ADVERSARY-COVERAGE`.
 
-`e12_measure.py adversary` reads the AIDO verifier report (launch) and the
-independent `<obs_log>` (active/duration); a **missing or insufficient
-observation is FAIL, never PASS**. X-R's diagnostic markers may live in an
-X-R-owned scratch directory outside all five roots, but they never produce a
-PASS.
+`e12_measure.py adversary <report> <obs_log> <window> <adv-identity>` reads the
+AIDO verifier report (launch) and the independent `<obs_log>` (active/duration).
+It fails closed — never PASS — for a missing/refused/unstarted launch, a
+malformed line, a bad stamp, a non-numeric PID, a same-name process at a
+**different** identity (`uncorrelated-process`), no correlated sighting, a single
+correlated sighting or only the short-lived parent, or a span under the window.
+X-R's diagnostic markers may live in an X-R-owned scratch directory outside all
+five roots, but they never produce a PASS.
 
 The attack set (§5.8.10 item 2), each to be attempted repeatedly:
 
@@ -496,9 +518,11 @@ no Git, no model and no network client.
   `execution.started == false`), the hostile executable never started, and a
   byte-identical plane proves nothing. ISO PASS **requires** launch confirmation
   (AIDO's own verifier report `execution.started == true`) **and** an
-  **independent** live-process observation during the bracket (admin elevated
-  `tasklist`, §3.3), **and** an end-of-window duration ≥ the D-E12-8 window; a
-  missing or insufficient observation is `FAIL`, never PASS (matrix
+  **independent** live-process observation during the bracket that correlates an
+  **actual** descendant — a single persistent PID at the rehearsal's own adversary
+  identity under the throwaway X-R owner, not merely a same-name process (admin
+  elevated, §3.3, FU4) — **and** an end-of-window duration ≥ the D-E12-8 window; a
+  missing, uncorrelated or insufficient observation is `FAIL`, never PASS (matrix
   `ISO-ADVERSARY-*`). X-R's own markers and log are **diagnostic claims**, never
   the authoritative observation. FU2's write-then-verify ordering is what makes
   the launch reachable at all.
@@ -591,9 +615,22 @@ quiescent strict compare → window end → duration. ISO owns the adversary, wi
 0. **(A, one-time bootstrap)** `AidoStateRoot.create()` on the empty
    `<state_root>` (frozen contract, runbook A0). The first `status` (step 1)
    calls `AidoStateRoot.open()`, which refuses an uninitialized directory.
+   **(O, before step 1)** places the rehearsal `alpha-definition.json` in
+   `<inbox>` (runbook Phase 0.10): `AlphaDriver._derive()` reads it first, so a
+   `status` with no definition refuses `definition_unreadable` and never reports a
+   stage. It is the **one** definition the whole rehearsal uses, so S7's three
+   approvals (step 12) walk this same contract/plan/exact-diff.
 1. **(A)** Run the FD-16 proof (`alpha_driver … status`), which opens the store
    (`control-plane.sqlite3` now exists) and proves the boundary bound to
-   `<clone_iso>`. It must pass → `ISO-PROOF-PRE`.
+   `<clone_iso>`. Two independent facts must hold and are **not** the same check
+   (FU4): the **FD-16 re-proof passed** (the report is not a `REFUSED` whose
+   `refusal.category` starts `IsolationUnprovenError:`), and, with the definition
+   present and nothing yet recorded, `_derive()` returns stage
+   `contract_approval` / `APPROVAL_REQUIRED`, so the process **exits 0**. Expect
+   `stage=contract_approval`, `refusal=null`, exit 0 → `ISO-PROOF-PRE`. An
+   `IsolationUnprovenError:<category>` refusal (exit 1) is a provisioning
+   (isolation) error; a `definition_unreadable`/`definition_invalid` refusal (exit
+   1) means the inbox definition is missing or wrong — neither is a PASS.
 2. **(A)** Take the **pre-rehearsal manifests** with `e12_measure.py` (runbook
    §A3): a `tree` manifest of each of `state_root`, `published`, `inbox` and
    `exchange_root` (the last with `--exchange`, pruning `outbox-<ticket>`), the
@@ -632,7 +669,13 @@ quiescent strict compare → window end → duration. ISO owns the adversary, wi
    coverage** (`ISO-ADVERSARY-COVERAGE`), never as authoritative isolation
    evidence.
 8. **(A)** Re-run the FD-16 proof (`ISO-PROOF-POST`) and re-take all six
-   manifests. **Pass** (`ISO-DIGEST-POST`) = the proof still passes **and** the
+   manifests. On this ISO-only (no-signing) path no approval was signed and
+   nothing ran, so the proof `status` is stage `contract_approval` /
+   `APPROVAL_REQUIRED`, exit 0; "the proof still passes" means the report is
+   **not** an `IsolationUnprovenError:` refusal (exit 1), which is the only
+   isolation failure (FU4; the exit-3 terminal RECOVERY_REQUIRED shape belongs to
+   the S7 path, step 16 / A6). **Pass** (`ISO-DIGEST-POST`) = the proof still
+   passes **and** the
    adversary launched + was observed live + ran ≥ the window (steps 4–7) **and**
    the `strict` anchors/`.git`(`<clone_iso>`) compares show no difference **and**
    the `classify` compare of **each** A-owned root prints `PASS` (no write-once
@@ -726,7 +769,13 @@ unrun `<clone_s7>` (§5.0.1).
     expected).
 16. **(A)** `run` returns exit **3** (RECOVERY_REQUIRED). Confirm the verify
     announcement and the final report are both in the one redirected file
-    (`S7-ANNOUNCE-VERIFY`, and §7.1).
+    (`S7-ANNOUNCE-VERIFY`, and §7.1). RECOVERY_REQUIRED is **terminal** (FU4): the
+    frozen driver maps it to exit 3, and every later `status` on this path —
+    including the S7 close proof (step 18 / A6, `ISO-PROOF-POST`) — also derives
+    `recovery_required` with `refusal == null` and exits 3. That exit 3 is the
+    **expected terminal lifecycle** with the FD-16 proof having passed, **not** an
+    isolation failure; only an `IsolationUnprovenError:` refusal (exit 1) is an
+    isolation failure. Do not re-run, repair or `git restore` it (E-10).
 17. **(O)** Confirm every `published/driver-*.json` is readable by O and that
     X-R cannot open, add to, or alter `published/` (matrix `S7-PUBLISHED-ACL`).
 18. **(A)** S7 close: re-manifest and compare, each against **its own** baseline —
@@ -750,7 +799,7 @@ with that reason.
 |---|---|---|
 | **FD-13** (identities & launch) | Three distinct SIDs; none in `Administrators`/`Backup Operators`; separate logon sessions; A started with `-I` | `whoami /user` and `/groups` per session; `query session`; the driver's `interpreter_not_isolated` refusal when `-I` is dropped |
 | **FD-14** (access rights) | The adversary **provably launched** (AIDO verifier report) and was **independently observed live** across the window (admin, not X-R); every hostile write/delete/rename/chown/re-permission attempt on every FD-14 object fails `ACCESS_DENIED`; the AuthZ effective rights for X-R's SID are within the table | `ISO-ADVERSARY-LAUNCH` (report) + `ISO-ADVERSARY-ACTIVE`/`-DURATION` (independent admin observation — a digest alone is insufficient); hostile-program log (`ISO-ADVERSARY-COVERAGE`, diagnostic only); `ISO-DIGEST-POST` reports no finding; an induced AuthZ check per object |
-| **FD-16** (mechanical re-proof) | The proof passes before and after the rehearsal, and **again whenever the active boundary changes** (ISO on `<clone_iso>`; S7 on `<clone_s7>` after the authorized rebind); one induced violation yields the exact `isolation_unproven:<category>` and exit 1 | `ISO-PROOF-PRE`/`-POST`, `S7-PROOF-PRE`; one negative induction (e.g., add a `Users` allow ACE → `object_unprotected`/`object_rights`) |
+| **FD-16** (mechanical re-proof) | The proof passes before and after the rehearsal, and **again whenever the active boundary changes** (ISO on `<clone_iso>`; S7 on `<clone_s7>` after the authorized rebind); one induced violation yields the exact `isolation_unproven:<category>` and exit 1. **The proof passing is distinct from the `status` exit code (FU4):** a passing proof exits 0 (`contract_approval`, no-signing) or 3 (`recovery_required`, the terminal S7 lifecycle); only an `IsolationUnprovenError:` refusal (exit 1) is a proof failure | `ISO-PROOF-PRE`/`-POST`, `S7-PROOF-PRE`; one negative induction (e.g., add a `Users` allow ACE → `object_unprotected`/`object_rights`) |
 | **FD-17** (claim protocol) | A valid write claim is received (`stdout.json` + `complete`, X-R-owned, 1 link, no reparse, within cap); at least two live deviations refuse with the right `claim_refused:<category>` | the successful write-step M1; X-R plants an extra file (`unexpected_entry`) and a junction (`reparse_point`) in a disposable outbox |
 | **FD-18** (observation) | M1−M0 = exactly the target (post-image); `.git` digest unchanged M0→M1; a planted junction/hard link in the tree refuses | the write-step observations in the bundle/`published/`; one induced reparse/hard-link → `ObservationError` |
 
@@ -829,10 +878,15 @@ bracket), `classify` (the compare of one root against its own enumerated
 expected-name allowlist, flagging write-once rewrites, deletions, unexpected-name
 objects, reparse points and hard links), `rebind` (proves the authorized
 between-exercise transition changed **only** the `identity-boundary.v1.json`
-anchor row — §5.0.1), and `adversary` (confirms launch from AIDO's verifier
-report — not `refused-before-execution` — **and** that an **independent**
-observer log, not X-R markers, spans ≥ the required interval; a missing or
-insufficient observation is FAIL, never PASS; §3.3, mandatory validation #8). The
+anchor row — §5.0.1), and `adversary` (four args: `<report> <obs_log> <window> <adv-identity>`; confirms
+launch from AIDO's verifier report — not `refused-before-execution` — **and** that
+the **independent** observer log, not X-R markers, holds a **single persistent
+PID** at `<adv-identity>` observed ≥ 2 times spanning ≥ the window. It fails
+closed for a missing/refused/unstarted launch, a malformed line, a bad stamp, a
+non-numeric PID, a same-name process at a **different** identity, no correlated
+sighting, only the short-lived parent, or a span under the window; a missing,
+uncorrelated or insufficient observation is FAIL, never PASS; §3.3, mandatory
+validation #8). The
 helper's rules are keyed to the real frozen object names (`control-plane.sqlite3`,
 `aido-state-root.json`, the five `evidence/<kind>/` write-once sets,
 `handoff-<ticket>/`, …) via `<sha256>` (64 hex) and `<ticket>` (32 hex) tokens,
@@ -925,7 +979,7 @@ operational S7 approval signing). D-E12-9 does not perform or satisfy E-6.
 
 **Recommendation: NO-GO to execute E-12 today; GO to execute once the gating
 conditions below are each met and signed.** Preparation is **under corrective
-review (FU3)** and is not complete until FU3 is accepted.
+review (FU4)** and is not complete until FU4 is accepted.
 
 **Scope coverage, by exercise (what a GO would and would not establish):**
 
@@ -942,7 +996,7 @@ coverage comes only from the standalone step-9 run reaching `verified`
 
 **Gating conditions (all required):**
 
-1. **E-12 PREP FU3 accepted** (matrix `PRECOND-FU2` superseded by `PRECOND-FU3`).
+1. **E-12 PREP FU4 accepted** (matrix `PRECOND-FU3` superseded by `PRECOND-FU4`).
    These three documents are under corrective review; running against an
    unreviewed prep would measure an unsettled procedure. (This is the prep-side
    blocker. **S7 is not a blocker**: S0–S7 are independently **ACCEPTED/FROZEN for
@@ -959,8 +1013,10 @@ coverage comes only from the standalone step-9 run reaching `verified`
    (E-5): registry, `identity-boundary.v1` (its **five disjoint** paths, bound to
    `<clone_iso>` first), the three accounts, the per-root FD-14 ACLs, A's task;
    AIDO runs non-elevated; **A bootstraps the state root with
-   `AidoStateRoot.create()`** (runbook A0) and then A's FD-16 proof passes
-   (`ISO-PROOF-PRE`).
+   `AidoStateRoot.create()`** (runbook A0), **O places the one
+   `alpha-definition.json` in the inbox** (Phase 0.10, `ISO-DEFINITION`) so the
+   first `status` can return a stage at all, and then A's FD-16 proof passes with
+   stage `contract_approval` / exit 0 (`ISO-PROOF-PRE`).
 6. **Each exercise's disposable clone + preimage-bound artifact, the hostile
    program, the benign HARNESS verifier script, the independent-observer plan
    (admin `tasklist`), and the `e12_measure.py` helper with its per-root
@@ -969,7 +1025,7 @@ coverage comes only from the standalone step-9 run reaching `verified`
    workspace.
 7. **The full offline suite green at the baseline** (E-3). The S7 doc records
    5681 passed at `b9312195`; re-confirm at `c7f9e64` (do **not** re-run the full
-   ~1h43m suite for this documentation-only FU3).
+   ~1h43m suite for this documentation-only FU4).
 
 **Why GO is the right outcome once gated:** E-12 is the only place the OS-level
 isolation the entire DL-4B authority model depends on is tested against a *real*
@@ -983,13 +1039,24 @@ radius is contained.
 **Fail conditions that end E-12 and block the Alpha** (no retry, repair or
 cleanup — E-10):
 
+- the first `status` cannot report a stage because the inbox `alpha-definition.json`
+  is missing or invalid (`definition_unreadable`/`definition_invalid`, exit 1) —
+  Phase 0.10 / `ISO-DEFINITION` was not done; fix provisioning and re-run, it is
+  not an isolation result;
 - the adversary did **not** provably launch and run — the verifier returned
   `refused-before-execution`, or `e12_measure.py adversary` cannot confirm launch
-  (AIDO report) **and** an independent observation (admin, not X-R) spanning ≥ the
-  D-E12-8 window (`ISO-ADVERSARY-*`); a byte-identical plane with no
-  independently-observed adversary is **INVALID, not a pass**;
-- the FD-16 proof fails before or after an exercise, or is not re-proved after the
-  active boundary changes (`ISO-PROOF-PRE/-POST`, `S7-PROOF-PRE`);
+  (AIDO report) **and** a **correlated** independent observation (admin, not X-R):
+  a single persistent PID at the rehearsal's own `<adv-identity>` observed ≥ 2
+  times spanning ≥ the D-E12-8 window (`ISO-ADVERSARY-*`); a byte-identical plane
+  with no correlated, independently-observed adversary — or one resting on a
+  same-name process at a different identity, or on X-R's own markers — is
+  **INVALID, not a pass**;
+- the FD-16 proof **fails** — an `IsolationUnprovenError:<category>` refusal at
+  exit 1 — before or after an exercise, or is not re-proved after the active
+  boundary changes (`ISO-PROOF-PRE/-POST`, `S7-PROOF-PRE`). A passing proof whose
+  `status` exits 3 because the lifecycle is terminally RECOVERY_REQUIRED (the S7
+  path after X5) is **not** a proof failure (FU4); an exit 3 on the no-signing
+  path, or any unexpected refusal category, **is**;
 - the ISO quiescent bracket shows **any** difference across the five-root
   manifests (`ISO-DIGEST-Q`);
 - a per-exercise `strict` compare shows any anchor or that exercise's own
@@ -1007,6 +1074,6 @@ cleanup — E-10):
 
 A failed attempt is **not** retried, repaired or cleaned up; the rehearsal ends.
 
-**Final status: E-12 PREP FU3 IMPLEMENTED — PENDING INDEPENDENT REVIEW.
+**Final status: E-12 PREP FU4 IMPLEMENTED — PENDING INDEPENDENT REVIEW.
 E-12 is NOT authorized or executable; E-6 NOT PERFORMED; AUTH-PILOT NOT
 AUTHORIZED.**

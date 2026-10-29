@@ -1,8 +1,8 @@
 # DL-4B E-12 — Pass / Fail Evidence Matrix
 
-**Status: PREP FU3 — UNDER CORRECTIVE REVIEW, all rows NOT TESTED.** Fill in only
+**Status: PREP FU4 — UNDER CORRECTIVE REVIEW, all rows NOT TESTED.** Fill in only
 during a separately authorized E-12 (see `DL4B_E12_ISOLATION_REHEARSAL_PREP.md`
-§9–§10), after FU3 is accepted. E-12 is NOT authorized or executable; E-6 NOT
+§9–§10), after FU4 is accepted. E-12 is NOT authorized or executable; E-6 NOT
 PERFORMED; AUTH-PILOT NOT AUTHORIZED. Every PASS below requires a **real
 observation** recorded in the stated evidence source; a requirement not
 exercised stays `NOT TESTED` with its reason.
@@ -26,9 +26,10 @@ offline suite instead; `optional` = a recommended spot-check that may be skipped
 | `PRECOND-POLICY` | Host policy permits local standard accounts, (if S4U) batch-logon, user switching (D-17) | permitted | admin confirmation | NOT TESTED |
 | `PRECOND-SUITE` | Full offline suite green at baseline `c7f9e64` (E-3); do not re-run the full suite for the docs-only FU1 | all pass | `pytest -q` | NOT TESTED |
 | `PRECOND-REVIEW` | Design+AMEND1 (E-2) and S0–S7 (E-3) accepted — S0–S7 are **ACCEPTED/FROZEN for offline scope**; confirm no code changed since `c7f9e64` | accepted | review record | NOT TESTED |
-| `PRECOND-FU3` | E-12 PREP FU3 (these three docs; the FU3 corrections: full write-once evidence allowlist, exercise-scoped anchor/clone measurement, adversary timing/provenance, state-root bootstrap) independently accepted | accepted | review record | NOT TESTED |
+| `PRECOND-FU4` | E-12 PREP FU4 (these three docs; the FU4 corrections: the inbox definition before the first `status`, the terminal post-S7 RECOVERY_REQUIRED exit-3 vs isolation-failure distinction, and the identity-correlated PowerShell/wmic-free adversary observation) independently accepted; supersedes `PRECOND-FU3` | accepted | review record | NOT TESTED |
 | `PRECOND-ROOTS` | The five boundary paths (`state_root`, `published`, `inbox`, `exchange_root`, active `clone`) are mutually disjoint and load into `identity-boundary.v1` bound to `<clone_iso>` first (no nested layout `BoundaryPaths._disjoint` would reject) | disjoint, loads | admin (0.9) + `status` | NOT TESTED |
 | `ISO-BOOTSTRAP` | A initializes the empty `<state_root>` once with the frozen `AidoStateRoot.create()` before the first `status` (which calls `open()`) | marker + `evidence/`+`staging/` created | runbook A0 | NOT TESTED |
+| `ISO-DEFINITION` | O places the **one** rehearsal `alpha-definition.json` in `<inbox>` before the first `status` (FU4): `_derive()` reads it first, so without it `status` refuses `definition_unreadable` (exit 1) and reports no stage. Same definition S7's approvals walk | present, valid | runbook Phase 0.10 | NOT TESTED |
 | `PRECOND-SIGNING` | D-E12-9: real signing capability provisioned so O signs the three S7 approvals. If not authorized, all §9 S7 rows are `NOT TESTED / no-signing`; ISO and HARNESS are unaffected. **Not E-6, does not satisfy E-6** | provisioned or deferred | admin + O | NOT TESTED |
 
 ## 2. FD-13 — identities and launch
@@ -59,9 +60,9 @@ offline suite instead; `optional` = a recommended spot-check that may be skipped
 
 | Id | Check | Expected | Evidence | State / Reason |
 |---|---|---|---|---|
-| `ISO-PROOF-PRE` | FD-16 proof passes before the rehearsal, boundary bound to `<clone_iso>` (after `ISO-BOOTSTRAP`) | exit 0, no `isolation_unproven` | `driver-001-status.json` | NOT TESTED |
-| `S7-PROOF-PRE` | FD-16 **re-proved** after the authorized rebind to `<clone_s7>`, before any S7 write/verify (re-proof whenever the active boundary changes) | exit 0, no `isolation_unproven` | `driver-010-status.json` | NOT TESTED / no-signing |
-| `ISO-PROOF-POST` | FD-16 proof passes **after** the adversary ran | exit 0, no `isolation_unproven` | `driver-099-status.json` | NOT TESTED |
+| `ISO-PROOF-PRE` | FD-16 proof passes before the rehearsal, boundary bound to `<clone_iso>`, with the inbox definition present (`ISO-DEFINITION`) | `stage=contract_approval`, `refusal=null`, **exit 0** (a passing proof + the only-stage derivable with no record). An `IsolationUnprovenError:` refusal (exit 1) is an isolation failure; `definition_unreadable` (exit 1) is a missing-definition failure | `driver-001-status.json` | NOT TESTED |
+| `S7-PROOF-PRE` | FD-16 **re-proved** after the authorized rebind to `<clone_s7>`, before any S7 write/verify (re-proof whenever the active boundary changes) | `stage=contract_approval`, `refusal=null`, **exit 0** (no approval recorded yet); isolation failure = `IsolationUnprovenError:` exit 1 | `driver-010-status.json` | NOT TESTED / no-signing |
+| `ISO-PROOF-POST` | FD-16 proof passes **after** the adversary ran; the re-proof passing is **distinct** from the `status` exit code (FU4) | **no-signing path:** `stage=contract_approval`, `refusal=null`, **exit 0**. **S7 path:** `stage=recovery_required`, `refusal=null`, **exit 3** — the terminal lifecycle after the X5 substitution, with the FD-16 proof passed, **not** a failure. The **only** isolation FAIL is an `IsolationUnprovenError:` refusal at **exit 1**; exit 3 is **not** a PASS by itself and exit 3 on the no-signing path is unexpected | `driver-099-status.json` | NOT TESTED |
 | `ANCHOR-REBIND` | The one authorized ISO→S7 `identity-boundary.v1` rebind, adversary-absent, changes **only** the boundary anchor row (registry unchanged); a hostile extra change FAILs | `rebind` PASS `rebind-changed-only identity-boundary.v1.json` | `e12_measure.py rebind` (runbook A-rebind) | NOT TESTED / no-signing |
 | `FD16-ANCHORS` | Registry + `identity-boundary.v1` at constant paths, anchor checks pass | pass | proof result | NOT TESTED |
 | `FD16-NEG` | One induced violation yields the exact category | `isolation_unproven:object_unprotected` (or `object_rights`), exit 1 | induced ACE + re-run | NOT TESTED |
@@ -101,14 +102,14 @@ offline suite instead; `optional` = a recommended spot-check that may be skipped
 | Id | Check | Expected | Evidence | State / Reason |
 |---|---|---|---|---|
 | `ISO-ADVERSARY-LAUNCH` | The hostile verifier **actually launched**: the X2 report has `execution.started == true` and is **not** `refused-before-execution` (a pre-launch refusal is never a launch). Requires the X1 approved write first. This is AIDO's own observation | launched | `e12_measure.py adversary` (report half) on `verify-report.json` (runbook X2/Aadv) | NOT TESTED |
-| `ISO-ADVERSARY-ACTIVE` | The descendant was **independently observed live** across the window by an admin (elevated `tasklist`, not X-R), ≥ 2 sightings — the authoritative active-interval evidence. A missing/insufficient observation is FAIL, never PASS | observed, ≥2 sightings | admin `<obs_log>` via `e12_measure.py adversary` (runbook Xobs/Aadv) | NOT TESTED |
-| `ISO-ADVERSARY-DURATION` | The independent observation span ≥ the D-E12-8 window (checked **after** the quiescent bracket, once the window ends) | span ≥ window | `adversary` (observer-log half), runbook Aadv | NOT TESTED |
+| `ISO-ADVERSARY-ACTIVE` | The descendant was **independently observed live** and **correlated** (FU4): a **single persistent PID** at the rehearsal's own `<adv-identity>` under the throwaway X-R owner, ≥ 2 sightings — not merely any same-name process. A missing, uncorrelated, malformed or insufficient observation is FAIL, never PASS | correlated PID, ≥2 sightings | admin `<obs_log>` via `e12_measure.py adversary <report> <obs_log> <window> <adv-identity>` (runbook Xobs/Aadv) | NOT TESTED |
+| `ISO-ADVERSARY-DURATION` | The **correlated PID's** sighting span ≥ the D-E12-8 window (checked **after** the quiescent bracket, once the window ends) | span ≥ window | `adversary` (observer-log half), runbook Aadv | NOT TESTED |
 | `ISO-ADVERSARY-COVERAGE` | X-R's hostile log records the enumerated attack attempts + Win32 results — **diagnostic only**, never authoritative isolation evidence | recorded | `<xr_scratch>\hostile-log.txt` (diagnostic) | NOT TESTED |
 | `ISO-DIGEST-PRE` | A's pre-rehearsal manifests: `state_root`, `published`, `inbox`, `exchange_root` (`--exchange`, outbox excluded), `.git` control of `<clone_iso>`, anchors (prep §5.0, runbook §A3) | recorded | `*-pre.txt` (6 manifests) | NOT TESTED |
 | `ISO-DIGEST-Q` | **Quiescent bracket** (A idle, descendant still live): all six manifests `strict`-identical to pre (the literal §5.8.10 test) | all `strict` PASS | `e12_measure.py strict` ×6 (runbook §A3q) | NOT TESTED |
 | `ISO-DIGEST-POST` | **Exercise-scoped accountable compare**: `approver-registry.v1.json` strict across the rehearsal and each exercise's anchors strict against **its own** baseline; each clone's `.git` strict against **its own** pre (never cross-clone); each A-owned plane root `classify`-clean against the ISO pre (no write-once rewrite/deletion of any evidence kind, no unexpected-name object, no reparse, no hard link) | all PASS | `strict` + `classify` (runbook §A6-ISO/A6-S7) | NOT TESTED |
 | `ISO-PUBLISHED-UNCHANGED` | No `published` object is rewritten/forged by X-R; growth matches only `driver-*.json` (covered by `ISO-DIGEST-POST` published `classify` + `S7-PUBLISHED-ACL`) | expected names only | `classify` + `icacls` | NOT TESTED |
-| `ISO-OVERALL` | `ISO-BOOTSTRAP` + `ISO-ADVERSARY-LAUNCH` + `ISO-ADVERSARY-ACTIVE` + `ISO-ADVERSARY-DURATION` PASS **and** `ISO-PROOF-POST` PASS **and** `ISO-DIGEST-Q` PASS **and** `ISO-DIGEST-POST` PASS **and** `FD18-GIT-UNCHANGED` PASS. A byte-identical plane with no **independently observed** adversary run is **INVALID, not PASS** | all PASS | the rows above | NOT TESTED |
+| `ISO-OVERALL` | `ISO-BOOTSTRAP` + `ISO-DEFINITION` + `ISO-ADVERSARY-LAUNCH` + `ISO-ADVERSARY-ACTIVE` + `ISO-ADVERSARY-DURATION` PASS **and** `ISO-PROOF-POST` PASS (per the FU4 exit-code reading) **and** `ISO-DIGEST-Q` PASS **and** `ISO-DIGEST-POST` PASS **and** `FD18-GIT-UNCHANGED` PASS. A byte-identical plane with no **independently observed and identity-correlated** adversary run is **INVALID, not PASS** | all PASS | the rows above | NOT TESTED |
 
 ## 8. HARNESS — detached HEAD + read-only `.git`
 
@@ -137,7 +138,7 @@ offline suite instead; `optional` = a recommended spot-check that may be skipped
 | `S7-ANNOUNCE-VERIFY` | Verify announcement readable before `run` returns | visible live | O reading the growing file | NOT TESTED |
 | `S7-STREAM-SEPARATION` | The single `run` stdout file holds multiple JSON docs split on blank line; documentation remedy (a) is sufficient on the host (F-E12-1) | (a) sufficient | O's read experience | NOT TESTED |
 | `S7-PUBLISHED-ACL` | Every `driver-*.json` created with inherited protected DACL, readable by O, unreachable by X-R | created, readable, X-R denied | `icacls` + O read + hostile log | NOT TESTED |
-| `S7-VERIFY-RECOVER` | S7 `run` ends RECOVERY_REQUIRED (bare verify is not a `ReviewPacket`) | exit 3 | `driver-012-run.json` | NOT TESTED / expected |
+| `S7-VERIFY-RECOVER` | S7 `run` ends RECOVERY_REQUIRED (bare verify is not a `ReviewPacket`); RECOVERY_REQUIRED is terminal, so every later `status` (incl. `ISO-PROOF-POST`) also exits 3 with `refusal=null` — expected, not an isolation failure (FU4) | exit 3 | `driver-012-run.json` | NOT TESTED / expected |
 
 ## 10. Explicitly NOT TESTED by E-12 (covered elsewhere)
 
@@ -154,11 +155,13 @@ offline suite instead; `optional` = a recommended spot-check that may be skipped
 
 ## 11. Overall E-12 verdict (fill at close)
 
-E-12 **PASSES** iff: all §1 preconditions PASS (`PRECOND-FU3`, `PRECOND-ROOTS`
-and `ISO-BOOTSTRAP` included); `ISO-OVERALL` PASS (which requires
-`ISO-ADVERSARY-LAUNCH` plus the **independent** `ISO-ADVERSARY-ACTIVE` and
-`-DURATION` — the adversary provably launched and was observed live, by an
-observer that is **not** X-R — plus `ISO-PROOF-POST`, the quiescent
+E-12 **PASSES** iff: all §1 preconditions PASS (`PRECOND-FU4`, `PRECOND-ROOTS`,
+`ISO-BOOTSTRAP` and `ISO-DEFINITION` included); `ISO-OVERALL` PASS (which requires
+`ISO-ADVERSARY-LAUNCH` plus the **independent, identity-correlated**
+`ISO-ADVERSARY-ACTIVE` and `-DURATION` — the adversary provably launched and a
+single persistent PID at the rehearsal's own identity was observed live, by an
+observer that is **not** X-R — plus `ISO-PROOF-POST` read per the FU4 exit-code
+rule, the quiescent
 `ISO-DIGEST-Q`, the exercise-scoped `ISO-DIGEST-POST` and `FD18-GIT-UNCHANGED`);
 both `HARNESS-*-DETACHED` PASS from the **standalone** `<clone_harness>` run
 reaching `verified`; and no row is FAIL. The S7 rows (including `S7-PROOF-PRE`
