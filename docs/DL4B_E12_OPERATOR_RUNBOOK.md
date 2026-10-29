@@ -1,8 +1,8 @@
 # DL-4B E-12 — Operator Execution Runbook
 
-**Status: PREP FU2 — UNDER CORRECTIVE REVIEW, NOT AUTHORIZED TO RUN.** Execute
+**Status: PREP FU3 — UNDER CORRECTIVE REVIEW, NOT AUTHORIZED TO RUN.** Execute
 only after every gating condition and decision in
-`DL4B_E12_ISOLATION_REHEARSAL_PREP.md` §9–§10 is signed (including FU2
+`DL4B_E12_ISOLATION_REHEARSAL_PREP.md` §9–§10 is signed (including FU3
 acceptance). Record outcomes in `DL4B_E12_EVIDENCE_MATRIX.md`.
 
 Read `DL4B_E12_ISOLATION_REHEARSAL_PREP.md` first, especially §5.0 (the
@@ -28,17 +28,23 @@ contained by another. There is **no nested layout** (`published\` / `inbox\` /
 
 | Placeholder | Root | Measured as |
 |---|---|---|
-| `<state_root>` | the store + evidence (`control-plane.sqlite3`, `aido-state-root.json`, `evidence\verification\`, `staging\`) | `tree` + `allowlist-state.txt` |
+| `<state_root>` | the store + evidence (`control-plane.sqlite3`, `aido-state-root.json`, `evidence\{approved-diff,config,claims,observations}\<sha256>`, `evidence\verification\<sha256>.json`, `staging\`) | `tree` + `allowlist-state.txt` |
 | `<published>` | A's `driver-<nnn>-<verb>.json` reports (O reads) | `tree` + `allowlist-published.txt` |
 | `<inbox>` | O-placed `alpha-definition.json`, `attestation-*.json`, the two O-named docs | `tree` + `allowlist-inbox.txt` |
 | `<exchange_root>` | `handoff-<ticket>\` (write-once) and `outbox-<ticket>\` (claim channel) | `tree --exchange` + `allowlist-exchange.txt` |
 | `<clone>` | the per-exercise synthetic repo (`<clone_iso>`, `<clone_harness>`, `<clone_s7>`) | `git` (`.git` control set) |
 
-Each exercise binds its **own** disposable clone into `identity-boundary.v1`
-(the admin re-provisions the boundary's `clone` and re-binds the digest between
-exercises). The four A-owned plane roots are provisioned once and reused. The
-hostile program is `<hostile.exe>`, **outside** every clone. The adversary's
-markers go under `<xr_scratch>` (X-R-owned, **outside all five roots**).
+Only **ISO** and **S7** run `alpha_driver` and so consult `identity-boundary.v1`;
+**HARNESS** uses only the writer/verifier, which never read it. ISO runs with
+`<clone_iso>` bound; the admin performs **one authorized rebind** to `<clone_s7>`
+between ISO and S7 — adversary-absent, changing only the boundary row, with FD-16
+re-proved (§5.0.1, Phase 3 A-rebind). Each clone is measured **only against
+itself**; `<clone_iso>` is never compared to `<clone_s7>`. The four A-owned plane
+roots are provisioned once and reused. The hostile program is `<hostile.exe>`,
+**outside** every clone. X-R's own markers/log go under `<xr_scratch>` (X-R-owned,
+**outside all five roots**) and are **diagnostic only**; the authoritative
+adversary-active evidence is the **admin** independent observation log
+`<obs_log>` (elevated `tasklist`).
 
 The measurement helper is `%USERPROFILE%\aido-e12\e12_measure.py` (Appendix M),
 saved and reviewed before E-12; manifests, compares and the five allowlists live
@@ -58,37 +64,58 @@ under `%USERPROFILE%\aido-e12\`. All measurement output stays in A's area,
 | 0.5 | X-R | `git clone` each exercise's synthetic repo into `<clone_iso>` / `<clone_harness>` / `<clone_s7>`, checkout **detached** at `base_head_oid`; confirm no hooks, no submodules. Each has its own write target + preimage-bound artifact | `HARNESS-DETACHED-SETUP` |
 | 0.6 | admin | Apply the clone ACLs (prep §3.2) to each clone: working tree X-R-modify + `OWNER RIGHTS`; `.git` X-R read+execute only via `OWNER RIGHTS`; root no DELETE/`WRITE_DAC`/`WRITE_OWNER` for X-R. **Before any harness runs** | `FD14-CLONE-ACL`, `HARNESS-OWNER` |
 | 0.7 | admin | Provision A's launch: A's interactive session via secure logon UI, **or** an S4U task (no stored password, fixed `python -I` action, O granted run only) | `FD13-LAUNCH` |
-| 0.8 | admin | Create `<xr_scratch>` (X-R-owned), **outside all five roots**, for the adversary's markers and log | — |
+| 0.8 | admin | Create `<xr_scratch>` (X-R-owned) for the adversary's diagnostic markers/log, and `<obs_log>` (admin-owned) for the independent live-process observation — both **outside all five roots** | — |
+| 0.9 | admin | Bind `identity-boundary.v1` to **`<clone_iso>`** (the first exercise's clone) and record its digest `DIGEST_ISO` | `PRECOND-ROOTS` |
 
 A one-off AuthZ effective-rights spot check per FD-14 object (for X-R's SID) may
 be run here by admin to pre-confirm `FD14-EFFECTIVE`.
 
-> **Boundary re-provisioning between exercises.** `identity-boundary.v1` names
-> exactly **one** `clone`. Before ISO, bind `<clone_iso>` and its digest; before
-> HARNESS, re-bind `<clone_harness>`; before S7, re-bind `<clone_s7>`. The four
-> plane roots do not change. This is an admin action; AIDO never rewrites the
-> boundary.
+> **One clone bound at a time; one authorized rebind.** `identity-boundary.v1`
+> names exactly **one** `clone`. Phase 0.9 binds `<clone_iso>` for ISO. HARNESS
+> (Phase 2) does not read the boundary, so nothing is rebound for it. Phase 3
+> performs the **single authorized rebind** to `<clone_s7>` — adversary-absent,
+> changing only the boundary row, proved with `e12_measure.py rebind`, FD-16
+> re-proved (§5.0.1). This is an admin action; AIDO never rewrites the boundary.
 
 ---
 
 ## Phase 1 — Exercise ISO (adversarial isolation core), on `<clone_iso>`
 
-**Order is load-bearing (prep §3.3).** The frozen verifier launches its
-configured executable **only after** proving the approved post-image. So the
-approved **write** (X1) must precede the hostile **verify** (X2); otherwise the
-verifier refuses before launch and the adversary never runs.
+**Order is load-bearing (prep §3.3, §5.0.1).** Bootstrap → prove → write →
+launch → **independent live observation** → quiescent compare (descendant still
+live) → window end → duration. The frozen verifier launches its configured
+executable **only after** proving the approved post-image, so the approved
+**write** (X1) precedes the hostile **verify** (X2); and the end-of-window
+duration evidence (`Aadv`) is gathered **after** the quiescent bracket (`A3q`),
+not before it.
+
+### A0 (A) — bootstrap the state root (one-time)
+
+`<state_root>` was created empty (Phase 0.4); an empty directory is **not** an
+initialized state root, and the first `status` (A1) calls `AidoStateRoot.open()`,
+which refuses it. A initializes it once with the frozen `AidoStateRoot.create()`
+contract (no new command, no frozen-code change):
+
+```bat
+"C:\AIDO\venv\Scripts\python.exe" -I -c "from ai_dev_orchestrator.control_plane.containment import AidoStateRoot; AidoStateRoot.create(r'<state_root>')"
+```
+
+Expect it to create `aido-state-root.json`, `evidence\`, `evidence\verification\`
+and `staging\`. It refuses a non-empty directory → if it does, do not "clean"; A
+owns nothing to adopt. → `ISO-BOOTSTRAP` PASS.
 
 ### A1 (A) — open and prove
 
-In A's session, `cmd.exe`, isolated:
+In A's session, `cmd.exe`, isolated (the boundary binds `<clone_iso>`, Phase 0.9):
 
 ```bat
 "C:\AIDO\venv\Scripts\python.exe" -I -m ai_dev_orchestrator.integration.alpha_driver --state-root "<state_root>" status > "<published>\driver-001-status.json"
 ```
 
-Expect exit `0` and no `isolation_unproven` refusal → `ISO-PROOF-PRE` PASS.
-(If it refuses `IsolationUnprovenError:<category>`, provisioning is wrong — fix
-as admin and re-run; do not proceed.)
+Expect exit `0` and no `isolation_unproven` refusal → `ISO-PROOF-PRE` PASS. This
+first `status` also creates `control-plane.sqlite3`. (If it refuses
+`IsolationUnprovenError:<category>`, provisioning is wrong — fix as admin and
+re-run; do not proceed.)
 
 ### A2 (A) — time the proof
 
@@ -150,38 +177,40 @@ ai-dev-orchestrator l2-verify-approved-file-edit --project-config "<cfg_hostile>
 ```
 
 Because X1 established the approved state, the verifier's preflight **passes** and
-it **launches** `<hostile.exe>`, which spawns a detached descendant that writes
-`<xr_scratch>\hostile-start.txt`, `<xr_scratch>\descendant-start.txt` and (on
-exit) `<xr_scratch>\descendant-end.txt` (monotonic epoch seconds), hammers the
-attack set (prep §3.3) for the window (D-E12-8), and logs each attempt + Win32
-result to `<xr_scratch>\hostile-log.txt`. Leave it running through Phase 2 and 3.
+it **launches** `<hostile.exe>`, which spawns a detached descendant that hammers
+the attack set (prep §3.3) for the window (D-E12-8) and logs each attempt + Win32
+result to `<xr_scratch>\hostile-log.txt` (**diagnostic only**). **Launch
+confirmation** is AIDO's own verifier report, not any X-R marker:
+`e12_measure.py` reads `execution.started == true`. Leave the descendant running
+through the ISO bracket.
 
 > **If the verifier returns `refused-before-execution`** (`execution.started ==
 > false`), the hostile program **never launched** — ISO is **INVALID, not a
 > pass** (prep §3.3; mandatory validation #8). Check X1 applied the write to the
 > clone bound in `identity-boundary.v1`.
 
-### Aadv (A) — confirm the adversary provably launched and ran
+### Xobs (admin) — independent live-process observation (during the bracket)
 
-After the window, A confirms positive execution evidence (a digest alone cannot
-satisfy ISO):
+**While the descendant is running**, an administrator (elevated — a standard O
+account cannot see another user's processes) records independent sightings of the
+X-R descendant into `<obs_log>`, one monotonic epoch-second timestamp per line, at
+several points spanning the D-E12-8 window. Example per sighting:
 
 ```bat
-"<PY>" -I "%USERPROFILE%\aido-e12\e12_measure.py" adversary "<xr_scratch>\verify-report.json" "<xr_scratch>" <D-E12-8-seconds>
+tasklist /v /fi "USERNAME eq <host>\aido-x-rehearsal" | findstr /i "<hostile.exe>" && (for /f %t in ('powershell -nop -c "[int][double]::Parse((Get-Date -UFormat %%s))"') do @echo %t>> "<obs_log>")
 ```
 
-Expect `PASS\tadversary-active-<n>s` → `ISO-ADVERSARY-LAUNCH` + `ISO-ADVERSARY-ACTIVE`.
-A `FAIL` (`adversary-refused-before-launch`, `adversary-not-started`,
-`missing-marker`, or active interval under the window) → STOP, ISO INVALID. O
-also corroborates the descendant was live during the window (`tasklist` in O's
-session).
+(If PowerShell is disallowed, append the clock with `echo %DATE% %TIME%>>` and
+convert offline; the point is an **independent, non-X-R** record that the
+descendant was alive at several times across the window.) This admin observation —
+**not** X-R's markers — is the authoritative `ISO-ADVERSARY-ACTIVE` evidence.
 
 ### A3q (A) — quiescent isolation bracket (the literal §5.8.10 test)
 
-With the descendant running and **A performing no lifecycle write**, wait the
-D-E12-8 window, then re-manifest all five roots and `strict`-compare against the
-A3 manifests. Only the adversary is active, so **every** manifest must be
-byte-identical:
+With the descendant **still running** (Xobs in progress) and **A performing no
+lifecycle write**, over the D-E12-8 window re-manifest all five roots and
+`strict`-compare against the A3 manifests. Only the adversary is active, so
+**every** manifest must be byte-identical:
 
 ```bat
 "<PY>" -I "%USERPROFILE%\aido-e12\e12_measure.py" tree "<state_root>"                > "%USERPROFILE%\aido-e12\state-q.txt"
@@ -203,18 +232,42 @@ In the quiescent bracket A writes nothing, so **every** root is compared with
 `ERRORLEVEL`. **All six `PASS`** → `ISO-DIGEST-Q` PASS. Any `FAIL` → STOP, Alpha
 blocked (E-10): no retry, repair or cleanup.
 
+### Aadv (A) — launch + end-of-window duration (AFTER the bracket)
+
+The hostile program exits at the end of the D-E12-8 window. **Now** (after A3q,
+not before it) A confirms the adversary provably launched and ran across the
+window — a digest alone cannot satisfy ISO:
+
+```bat
+"<PY>" -I "%USERPROFILE%\aido-e12\e12_measure.py" adversary "<xr_scratch>\verify-report.json" "<obs_log>" <D-E12-8-seconds>
+```
+
+`adversary` PASSes only if the verifier report shows launch
+(`execution.started == true`, not `refused-before-execution`) **and** the
+**independent** admin observation log `<obs_log>` (Xobs) holds ≥ 2 sightings
+spanning ≥ the window → `ISO-ADVERSARY-LAUNCH` + `ISO-ADVERSARY-ACTIVE` +
+`ISO-ADVERSARY-DURATION`. A `FAIL` (`adversary-refused-before-launch`,
+`adversary-not-started`, `insufficient-observation`, or `observed-active-…-under`)
+→ STOP, ISO INVALID. The X-R `hostile-log.txt` is recorded as diagnostic attack
+coverage (`ISO-ADVERSARY-COVERAGE`) only. Finally the admin confirms **no X-R
+descendant remains live** (elevated `tasklist`), closing the adversarial bracket
+before any Phase 3 rebind.
+
 ---
 
 ## Phase 2 — Exercise HARNESS (detached HEAD + read-only `.git`), standalone on `<clone_harness>`, no signing
 
-HARNESS is an **explicit standalone, signing-free** exercise (prep §4, §5 step 8):
+HARNESS is an **explicit standalone, signing-free** exercise (prep §4, §5 step 9):
 a writer+verifier compatibility run that reaches a `verified` outcome on its own
-clone. It does **not** depend on S7 or `PRECOND-SIGNING`.
+clone. It does **not** read `identity-boundary.v1`, so the active boundary binding
+is irrelevant and nothing is rebound for it; its `.git` control is measured only
+against its own pre.
 
 > **No double-write.** A `modify` write is pinned to `pre_image_sha256`.
 > `<clone_harness>` has its **own** preimage-bound artifact and a write target
-> **distinct** from `<clone_iso>` (X1) and `<clone_s7>` (X4). Re-provision
-> `identity-boundary.v1` to bind `<clone_harness>` before this phase.
+> **distinct** from `<clone_iso>` (X1) and `<clone_s7>` (Phase 3). The writer
+> touches only the working tree, so `<clone_harness>`'s `.git` control stays
+> `strict` (take its `git` pre before and post after the writer).
 
 ### X2h (X-R) — writer, then benign verifier → `verified`
 
@@ -241,20 +294,43 @@ same preflight under an adversarial executable.
 ## Phase 3 — Exercise S7 (driver integration measurements), on `<clone_s7>`
 
 Run the real driver against the A-owned plane with a benign approved definition;
-the write-scope config points at `<hostile.exe>` so the VERIFYING X-step also
-feeds ISO's descendant. (The approvals reuse the S7 operator runbook procedure;
-here we note only the E-12-specific observations.) Re-provision
-`identity-boundary.v1` to bind `<clone_s7>` before this phase.
+the write-scope config points at `<hostile.exe>` so the VERIFYING X-step runs the
+verifier against a hostile executable. (The approvals reuse the S7 operator
+runbook procedure; here we note only the E-12-specific observations.)
 
 > **Phase 3 gate — `PRECOND-SIGNING` (D-E12-9).** Phase 3 needs three **real,
 > S1-verified** approvals, so it runs **only** if the signing capability
 > (authenticator, OpenSSH `sk`, throwaway registry entry) is provisioned and
 > D-E12-9 is signed. There is no fabricated-signature or bypass path. If
-> `PRECOND-SIGNING` is not met, **skip Phase 3 entirely** and record every §9
-> matrix row `NOT TESTED` (reason `no-signing`). ISO (Phase 1) and HARNESS
-> (Phase 2) have already covered the isolation core and the writer/verifier
-> compatibility without it. This signing is **not** E-6 and does not satisfy it
-> (prep §1, §8); E-12 still calls **no model**.
+> `PRECOND-SIGNING` is not met, **skip Phase 3 entirely** (no rebind, no
+> `<clone_s7>` measurement) and record every §9 matrix row `NOT TESTED` (reason
+> `no-signing`); the close (Phase 4) then uses ISO's own post, never an unrun
+> `<clone_s7>`. ISO (Phase 1) and HARNESS (Phase 2) have already covered the
+> isolation core and the writer/verifier compatibility without it. This signing
+> is **not** E-6 and does not satisfy it (prep §1, §8); E-12 still calls **no
+> model**.
+
+### A-rebind (admin, then A) — authorized boundary rebind to `<clone_s7>`, adversary absent
+
+Only reached if `PRECOND-SIGNING` is met. The ISO adversary is already gone
+(Aadv confirmed no X-R descendant remains). An administrator rewrites
+`identity-boundary.v1` to bind `<clone_s7>`, records the new digest `DIGEST_S7`,
+and A proves the transition changed **only** the boundary row:
+
+```bat
+"<PY>" -I "%USERPROFILE%\aido-e12\e12_measure.py" tree "%ProgramData%\AIDO" > "%USERPROFILE%\aido-e12\anchors-s7-pre.txt"
+"<PY>" -I "%USERPROFILE%\aido-e12\e12_measure.py" rebind "%USERPROFILE%\aido-e12\anchors-pre.txt" "%USERPROFILE%\aido-e12\anchors-s7-pre.txt" "identity-boundary.v1.json"
+"<PY>" -I "%USERPROFILE%\aido-e12\e12_measure.py" git "<clone_s7>" > "%USERPROFILE%\aido-e12\git-s7-pre.txt"
+```
+
+`rebind` must print `PASS\trebind-changed-only\tidentity-boundary.v1.json`
+(`ANCHOR-REBIND`); any `UNAUTHORIZED-ANCHOR-CHANGE` (e.g. the approver registry
+also changed) → STOP, Alpha blocked. Then A re-runs the FD-16 proof against the
+**new** boundary — it must pass before any S7 write/verify (`S7-PROOF-PRE`):
+
+```bat
+"C:\AIDO\venv\Scripts\python.exe" -I -m ai_dev_orchestrator.integration.alpha_driver --state-root "<state_root>" status > "<published>\driver-010-status.json"
+```
 
 ### A4 (O → A) — approvals, each redirected to `published/`
 
@@ -326,46 +402,59 @@ classifies "anything else" → **RECOVERY_REQUIRED**. `run` returns exit **3** �
 
 ## Phase 4 — close and verify (A, then admin)
 
-### A6 (A) — post-rehearsal proof and accountable compare
+### A6 (A) — exercise-scoped post-rehearsal proof and accountable compare
 
-After the rehearsal window (D-E12-8), with the hostile descendant still having
-run:
+Each artifact is compared **only against the baseline of the exercise that owns
+it**; a clone is never compared to a different clone. Re-prove FD-16 for the
+active boundary:
 
 ```bat
 "<PY>" -I -m ai_dev_orchestrator.integration.alpha_driver --state-root "<state_root>" status > "<published>\driver-099-status.json"
 ```
 
-Expect exit `0`, no `isolation_unproven` → `ISO-PROOF-POST` PASS. Then re-take
-the six manifests and compare. Anchors and `.git` are `strict` (byte-identical
-required, because S7's legitimate writes never touch them); each A-owned plane
-root is `classify` against its own expected-name allowlist (Appendix M), because
-S7 legitimately grew A-owned regions:
+Expect exit `0`, no `isolation_unproven` → `ISO-PROOF-POST` PASS.
+
+**A6-ISO (always).** The ISO clone and the ISO-phase anchors are closed against
+their **own** ISO baselines (boundary bound to `<clone_iso>` throughout ISO):
 
 ```bat
+"<PY>" -I "%USERPROFILE%\aido-e12\e12_measure.py" git    "<clone_iso>"              > "%USERPROFILE%\aido-e12\git-iso-post.txt"
+"<PY>" -I "%USERPROFILE%\aido-e12\e12_measure.py" strict "%USERPROFILE%\aido-e12\git-pre.txt"     "%USERPROFILE%\aido-e12\git-iso-post.txt"
+```
+
+**A6-S7 (only if Phase 3 ran).** The S7 clone and the S7 anchors are closed
+against their **own** S7 baselines (`git-s7-pre.txt`, `anchors-s7-pre.txt` from
+A-rebind), and the shared plane roots are `classify`-ed against the ISO pre
+baseline (the plane is one resource that grew legitimately during S7):
+
+```bat
+"<PY>" -I "%USERPROFILE%\aido-e12\e12_measure.py" git      "<clone_s7>"                 > "%USERPROFILE%\aido-e12\git-s7-post.txt"
+"<PY>" -I "%USERPROFILE%\aido-e12\e12_measure.py" strict   "%USERPROFILE%\aido-e12\git-s7-pre.txt"  "%USERPROFILE%\aido-e12\git-s7-post.txt"
 "<PY>" -I "%USERPROFILE%\aido-e12\e12_measure.py" tree "<state_root>"                > "%USERPROFILE%\aido-e12\state-post.txt"
 "<PY>" -I "%USERPROFILE%\aido-e12\e12_measure.py" tree "<published>"                 > "%USERPROFILE%\aido-e12\pub-post.txt"
 "<PY>" -I "%USERPROFILE%\aido-e12\e12_measure.py" tree "<inbox>"                     > "%USERPROFILE%\aido-e12\inbox-post.txt"
 "<PY>" -I "%USERPROFILE%\aido-e12\e12_measure.py" tree "<exchange_root>" --exchange  > "%USERPROFILE%\aido-e12\exch-post.txt"
-"<PY>" -I "%USERPROFILE%\aido-e12\e12_measure.py" git  "<clone_s7>"                  > "%USERPROFILE%\aido-e12\git-post.txt"
-"<PY>" -I "%USERPROFILE%\aido-e12\e12_measure.py" tree "%ProgramData%\AIDO"          > "%USERPROFILE%\aido-e12\anchors-post.txt"
-"<PY>" -I "%USERPROFILE%\aido-e12\e12_measure.py" strict   "%USERPROFILE%\aido-e12\anchors-pre.txt" "%USERPROFILE%\aido-e12\anchors-post.txt"
-"<PY>" -I "%USERPROFILE%\aido-e12\e12_measure.py" strict   "%USERPROFILE%\aido-e12\git-pre.txt"     "%USERPROFILE%\aido-e12\git-post.txt"
+"<PY>" -I "%USERPROFILE%\aido-e12\e12_measure.py" tree "%ProgramData%\AIDO"          > "%USERPROFILE%\aido-e12\anchors-s7-post.txt"
+"<PY>" -I "%USERPROFILE%\aido-e12\e12_measure.py" strict   "%USERPROFILE%\aido-e12\anchors-s7-pre.txt" "%USERPROFILE%\aido-e12\anchors-s7-post.txt"
 "<PY>" -I "%USERPROFILE%\aido-e12\e12_measure.py" classify "%USERPROFILE%\aido-e12\state-pre.txt"   "%USERPROFILE%\aido-e12\state-post.txt" "%USERPROFILE%\aido-e12\allowlist-state.txt"
 "<PY>" -I "%USERPROFILE%\aido-e12\e12_measure.py" classify "%USERPROFILE%\aido-e12\pub-pre.txt"     "%USERPROFILE%\aido-e12\pub-post.txt"   "%USERPROFILE%\aido-e12\allowlist-published.txt"
 "<PY>" -I "%USERPROFILE%\aido-e12\e12_measure.py" classify "%USERPROFILE%\aido-e12\inbox-pre.txt"   "%USERPROFILE%\aido-e12\inbox-post.txt" "%USERPROFILE%\aido-e12\allowlist-inbox.txt"
 "<PY>" -I "%USERPROFILE%\aido-e12\e12_measure.py" classify "%USERPROFILE%\aido-e12\exch-pre.txt"    "%USERPROFILE%\aido-e12\exch-post.txt"  "%USERPROFILE%\aido-e12\allowlist-exchange.txt"
 ```
 
-> **If Phase 3 was skipped (`no-signing`)**, use the quiescent-bracket manifests
-> as the post manifests (A wrote nothing after ISO), so every compare above is
-> also `strict`-clean. The S7-specific rows are `NOT TESTED`, not PASS.
+> **If Phase 3 was skipped (`no-signing`)**, A6-S7 is **not** run. The boundary
+> stayed bound to `<clone_iso>`, A wrote nothing after bootstrap, so the final
+> plane/anchor state equals the ISO quiescent state: close the plane roots with
+> `classify` (or `strict`) against the `*-pre.txt` baselines, and the anchors
+> with `strict` against `anchors-pre.txt`. **Never** manifest or reference
+> `<clone_s7>` — it was never bound and never written.
 
-`ISO-DIGEST-POST` PASS requires **every** compare to print `PASS`
-(`ERRORLEVEL 0`): no anchor or `.git` byte changed, and no `classify` run found a
-write-once rewrite, a deletion, an unexpected-name object, a reparse point, or a
-hard link. **Any `FAIL` line → FAIL, Alpha blocked** (E-10; no retry, repair or
-cleanup). The hostile log is read for diagnosis only and is never authority-plane
-evidence.
+`ISO-DIGEST-POST` PASS requires **every** compare that was run to print `PASS`
+(`ERRORLEVEL 0`): no anchor or clone `.git` byte changed against its own baseline,
+and no `classify` run found a write-once rewrite, a deletion, an unexpected-name
+object, a reparse point, or a hard link. **Any `FAIL` line → FAIL, Alpha blocked**
+(E-10; no retry, repair or cleanup). The hostile log is read for diagnosis only
+and is never authority-plane evidence.
 
 ### A7 (A) — induced negatives (one each, to confirm detection is live)
 
@@ -395,6 +484,17 @@ E-12 teardown unless AUTH-PILOT says so).
 - No real target repository, no real credential value, no branch/commit/push/PR.
 - No hostile `verify` without the approved write first — a `refused-before-execution`
   result means the adversary never launched and ISO is INVALID, not a pass.
+- No ISO PASS from X-R's own markers/log alone — the authoritative active-interval
+  evidence is the **independent admin observation** `<obs_log>`; a missing or
+  insufficient observation is FAIL, never PASS.
+- No boundary rebind while the adversary is live, and no rebind that changes
+  anything other than `identity-boundary.v1.json`. Any anchor change inside an
+  exercise, or an extra changed row during the rebind, is a FAIL — never excused
+  as administrator activity. FD-16 is re-proved after the rebind (`S7-PROOF-PRE`).
+- No comparing one clone against another; each clone is measured only against its
+  own pre. On the no-signing path, never manifest or reference `<clone_s7>`.
+- No broad `evidence/**` growth rule — every evidence object must match an
+  enumerated write-once kind; a rewrite or deletion of any existing blob is a FAIL.
 - No `git restore`, retry, repair or cleanup of a RECOVERY_REQUIRED attempt, or of
   any `FAIL` digest/compare (E-10): the S7 run ending exit 3 is the expected end
   of the exercise; a measurement `FAIL` ends E-12 and blocks the Alpha.
@@ -402,8 +502,8 @@ E-12 teardown unless AUTH-PILOT says so).
   wait expire.
 - No elevation of A or X-R; the boundary proof refuses an elevated token.
 - No measurement output or adversary marker written into any of the five roots;
-  keep A's measurement in `%USERPROFILE%\aido-e12\` and the markers in
-  `<xr_scratch>`.
+  keep A's measurement in `%USERPROFILE%\aido-e12\`, X-R's diagnostic markers in
+  `<xr_scratch>`, and the independent observation in `<obs_log>`.
 
 ---
 
@@ -421,7 +521,7 @@ state root is `control-plane.sqlite3-journal` (there is no WAL —
 
 ```python
 # e12_measure.py — E-12 rehearsal measurement helper (operator tool, not AIDO code).
-# Run by A as: "<PY>" -I e12_measure.py <tree|git|strict|classify|adversary> ...
+# Run by A as: "<PY>" -I e12_measure.py <tree|git|strict|classify|rebind|adversary> ...
 import hashlib
 import json
 import os
@@ -433,6 +533,7 @@ _REPARSE = 0x400
 _GIT_TOP = ("HEAD", "config", "index", "packed-refs")
 _GIT_DIRS = ("refs", "hooks", "info")
 _TICKET = "[0-9a-f]{32}"
+_SHA256 = "[0-9a-f]{64}"
 _OUTBOX_DIR = re.compile(r"^outbox-[0-9a-f]{32}$")
 
 
@@ -531,26 +632,45 @@ def _load(path):
     return out
 
 
-def strict(a, b):
+def _diff_keys(a, b):
     ma, mb = _load(a), _load(b)
-    findings = []
-    for rel in sorted(set(ma) | set(mb)):
-        if ma.get(rel) != mb.get(rel):
-            findings.append("DIFF\t%s" % rel)
+    return sorted(rel for rel in set(ma) | set(mb) if ma.get(rel) != mb.get(rel))
+
+
+def strict(a, b):
+    findings = _diff_keys(a, b)
     if findings:
-        sys.stdout.write("\n".join(findings) + "\nFAIL\n")
+        sys.stdout.write("\n".join("DIFF\t%s" % r for r in findings) + "\nFAIL\n")
         return 1
     sys.stdout.write("PASS\n")
     return 0
 
 
+def rebind(a, b, expected_relpath):
+    # The authorized identity-boundary.v1 rebind between exercises must change
+    # exactly one anchor row — the boundary file — and nothing else.
+    changed = _diff_keys(a, b)
+    unexpected = [r for r in changed if r != expected_relpath]
+    if expected_relpath not in changed:
+        sys.stdout.write("FAIL\trebind-did-not-change\t%s\n" % expected_relpath)
+        return 1
+    if unexpected:
+        sys.stdout.write("\n".join("UNAUTHORIZED-ANCHOR-CHANGE\t%s" % r for r in unexpected) + "\nFAIL\n")
+        return 1
+    sys.stdout.write("PASS\trebind-changed-only\t%s\n" % expected_relpath)
+    return 0
+
+
 def _compile(glob):
-    # '*' does NOT span '/', '**' spans, '<ticket>' is 32 lowercase hex.
+    # '*' does NOT span '/', '**' spans, '<ticket>'=32 hex, '<sha256>'=64 hex.
     out, i = ["^"], 0
     while i < len(glob):
         if glob.startswith("<ticket>", i):
             out.append(_TICKET)
             i += len("<ticket>")
+        elif glob.startswith("<sha256>", i):
+            out.append(_SHA256)
+            i += len("<sha256>")
         elif glob.startswith("**", i):
             out.append(".*")
             i += 2
@@ -628,7 +748,7 @@ def classify(a, b, allowlist):
     return 0
 
 
-def adversary(report_path, markers_dir, min_seconds):
+def adversary(report_path, observer_log, min_seconds):
     min_seconds = float(min_seconds)
     try:
         with open(report_path, "r", encoding="utf-8") as handle:
@@ -636,7 +756,8 @@ def adversary(report_path, markers_dir, min_seconds):
     except (OSError, ValueError):
         sys.stdout.write("FAIL\tadversary-report-unreadable\n")
         return 1
-    # A pre-launch refusal (exit 1 / refused-before-execution) never launched the
+    # Launch confirmation comes from AIDO's own frozen verifier report. A
+    # pre-launch refusal (exit 1 / refused-before-execution) never launched the
     # configured executable, so it can NEVER be counted as the adversary having
     # run (mandatory validation #8).
     outcome = report.get("outcome")
@@ -647,26 +768,33 @@ def adversary(report_path, markers_dir, min_seconds):
     if not started:
         sys.stdout.write("FAIL\tadversary-not-started\n")
         return 1
-    stamps = {}
-    for name in ("hostile-start.txt", "descendant-start.txt", "descendant-end.txt"):
-        p = os.path.join(markers_dir, name)
-        try:
-            with open(p, "r", encoding="utf-8") as handle:
-                stamps[name] = float(handle.read().strip())
-        except (OSError, ValueError):
-            sys.stdout.write("FAIL\tmissing-marker\t%s\n" % name)
-            return 1
-    active = stamps["descendant-end.txt"] - stamps["descendant-start.txt"]
-    if active < min_seconds:
-        sys.stdout.write("FAIL\tdescendant-active-%.1fs-under-%.1fs\n" % (active, min_seconds))
+    # Active-interval evidence is the INDEPENDENT observer's log (admin elevated
+    # tasklist), NOT any X-R-authored marker (those are diagnostic claims). A
+    # missing or insufficient observation must never yield PASS.
+    stamps = []
+    try:
+        with open(observer_log, "r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    stamps.append(float(line))
+    except (OSError, ValueError):
+        sys.stdout.write("FAIL\tobserver-log-unreadable\n")
         return 1
-    sys.stdout.write("PASS\tadversary-active-%.1fs\n" % active)
+    if len(stamps) < 2:
+        sys.stdout.write("FAIL\tinsufficient-observation\t%d-sighting(s)\n" % len(stamps))
+        return 1
+    span = max(stamps) - min(stamps)
+    if span < min_seconds:
+        sys.stdout.write("FAIL\tobserved-active-%.1fs-under-%.1fs\n" % (span, min_seconds))
+        return 1
+    sys.stdout.write("PASS\tobserved-active-%.1fs-over-%d-sightings\n" % (span, len(stamps)))
     return 0
 
 
 def main(argv):
     if len(argv) < 2:
-        raise SystemExit("usage: tree|git|strict|classify|adversary ...")
+        raise SystemExit("usage: tree|git|strict|classify|rebind|adversary ...")
     mode = argv[1]
     if mode == "tree":
         return tree(argv[2], exchange=("--exchange" in argv[3:]))
@@ -676,6 +804,8 @@ def main(argv):
         return strict(argv[2], argv[3])
     if mode == "classify":
         return classify(argv[2], argv[3], argv[4])
+    if mode == "rebind":
+        return rebind(argv[2], argv[3], argv[4])
     if mode == "adversary":
         return adversary(argv[2], argv[3], argv[4])
     raise SystemExit("unknown mode: %r" % mode)
@@ -693,16 +823,34 @@ changed allowed). An object matching **no** rule is a `NEW-UNEXPECTED` /
 that stops a malicious object being dismissed as legitimate. Add no rule that
 would admit an X-R-writable name.
 
-`allowlist-state.txt` (the frozen `AidoStateRoot` layout; no WAL):
+`allowlist-state.txt` (the frozen `AidoStateRoot` layout; every write-once
+evidence kind, no WAL, **no broad `evidence/**` rule**). `<sha256>` expands to
+exactly 64 lowercase hex — the DL-4B blobs are bare-hex, only `verification`
+carries `.json`:
 
 ```text
-# <state_root> — the frozen AidoStateRoot layout
+# <state_root> — the frozen AidoStateRoot + store.v4 evidence layout
 S aido-state-root.json
 G control-plane.sqlite3
 G control-plane.sqlite3-journal
-W evidence/verification/*.json
+W evidence/approved-diff/
+W evidence/approved-diff/<sha256>
+W evidence/config/
+W evidence/config/<sha256>
+W evidence/claims/
+W evidence/claims/<sha256>
+W evidence/observations/
+W evidence/observations/<sha256>
+W evidence/verification/<sha256>.json
 G staging/*.partial
 ```
+
+`evidence/`, `evidence/verification/` and `staging/` exist from
+`AidoStateRoot.create()` (baseline, unchanged → no rule needed); the four DL-4B
+blob kind directories are created lazily, so each kind directory line is listed
+`W` (new allowed, never deleted). A file under any `evidence/<kind>/` that is not
+a 64-hex SHA-256 (e.g. a planted `not-a-sha.txt`), or a rewrite/deletion of an
+existing blob, is a `classify` FAIL.
 
 `allowlist-published.txt`:
 
@@ -734,9 +882,12 @@ W handoff-<ticket>/approved-diff-proposal.json
 W handoff-<ticket>/project.yaml
 ```
 
-The helper's `*` does **not** span `/`, and `<ticket>` matches exactly
-`[0-9a-f]{32}`, so `evidence/verification/*.json` covers only the blob files
-there and a directory named `outbox-evil` (non-hex) is **not** excluded — it is
-measured and, being unexpected, fails. Substitute the two O-named docs
-(`approved_diff_name`, `project_config_name`) with the names the rehearsal's
-`alpha-definition.json` actually declares.
+The helper's `*` does **not** span `/`, `<ticket>` matches exactly
+`[0-9a-f]{32}` and `<sha256>` exactly `[0-9a-f]{64}`, so a directory named
+`outbox-evil` (non-hex) is **not** excluded — it is measured and, being
+unexpected, fails. The `rebind` mode proves the one authorized between-exercise
+transition changed only `identity-boundary.v1.json`; the `adversary` mode takes
+the AIDO verifier report and the **independent** observer log `<obs_log>` (not
+X-R markers). Substitute the two O-named docs (`approved_diff_name`,
+`project_config_name`) with the names the rehearsal's `alpha-definition.json`
+actually declares.

@@ -1,20 +1,24 @@
 # DL-4B E-12 — Windows Isolation Rehearsal Preparation
 
-**Status: E-12 PREP UNDER CORRECTIVE REVIEW (FU2) — NOT AUTHORIZED TO EXECUTE.**
-This document is being corrected by E-12 PREP FU2; it is PENDING INDEPENDENT
-REVIEW and does not authorize E-12, E-6, or a live Alpha. FU2 repairs four
-execution-contract defects against the frozen code: the filesystem topology
-(five mutually disjoint roots per `BoundaryPaths._disjoint`, not a nested
-layout), the measurement helper's object names (the real `control-plane.sqlite3`
-/ `aido-state-root.json` / `evidence/verification/` / `handoff-<ticket>` /
-`outbox-<ticket>` set), the hostile-verifier launch order (the frozen verifier
-runs its configured executable only *after* the approved post-image is proved,
-so the write must precede the verify), and the no-signing HARNESS gap (a
-standalone, signing-free writer+verifier compatibility exercise).
+**Status: E-12 PREP UNDER CORRECTIVE REVIEW (FU3) — NOT AUTHORIZED TO EXECUTE.**
+This document is being corrected by E-12 PREP FU3; it is PENDING INDEPENDENT
+REVIEW and does not authorize E-12, E-6, or a live Alpha. FU2 repaired the
+five-disjoint-root topology, the real object names, the hostile-verifier launch
+order and the no-signing HARNESS gap. FU3 completes the remaining
+execution-contract corrections: the full write-once evidence allowlist (the real
+S3/S4 blob kinds `approved-diff` / `config` / `claims` / `observations` plus
+`verification`, no broad `evidence/**` growth), exercise-scoped anchor/clone
+measurement (each clone has its own pre/post Git-control compare; the authorized
+`identity-boundary.v1` rebind happens outside the adversarial bracket with FD-16
+re-proved; the no-signing close never references an unrun S7 clone), corrected
+adversary timing and provenance (launch → independent live observation → quiescent
+bracket → end-of-window duration; X-R markers are diagnostic, not authoritative),
+and the one-time `AidoStateRoot.create()` state-root bootstrap before the first
+`status`.
 
 | | |
 |---|---|
-| Baseline | `main` at `5b76d9c21e06cc37d127bbaa7c24206b22c78cd8` (FU2 corrective baseline; docs-only on top of the S0–S7 code). DL-4B **S0–S7 are implemented and independently ACCEPTED/FROZEN for offline scope** (code frozen at `c7f9e64873bbeddd8188582fcbcdbfdcc84c05c5`; no code changed since) |
+| Baseline | `main` at `063769e64dba26c85049817764948b5b759ecf72` (FU3 corrective baseline; docs-only on top of the S0–S7 code). DL-4B **S0–S7 are implemented and independently ACCEPTED/FROZEN for offline scope** (code frozen at `c7f9e64873bbeddd8188582fcbcdbfdcc84c05c5`; no code changed since) |
 | Contract | `docs/DL4B_REAL_INTEGRATION_BOUNDARY_DESIGN.md` (AMEND1), especially §5.8 and §5.8.10; the S7 obligations in `docs/DL4B_S7_ALPHA_DRIVER.md` §9–§10 and `docs/DL4B_S7_OPERATOR_RUNBOOK.md` §10 |
 | Kind | **Preparation only.** No account/ACL provisioning, no scheduled task, no hostile program executed, no real target workspace, no model, no credential value, no branch/PR. Documentation-only |
 | Deliverables | This prep document; `DL4B_E12_OPERATOR_RUNBOOK.md`; `DL4B_E12_EVIDENCE_MATRIX.md`; §9 (decisions requiring authorization); §10 (GO/NO-GO) |
@@ -99,12 +103,14 @@ The rehearsal has three coordinated exercises on one provisioned host, in order:
 | **HARNESS** — frozen-harness compatibility (§5.8.8, E-12 criterion) | `<clone_harness>` | The frozen writer and verifier accept a **detached HEAD** and a **`.git` that is read-only to X**, end to end to a `verified` outcome, **with no signing** | `l2-apply-approved-file-edit`, then `l2-verify-approved-file-edit` with a **benign** configured executable |
 | **S7** — driver integration measurements (§9–§10 of the driver doc) | `<clone_s7>` | Per-invocation FD-16 proof duration; exclusive store lock across the long `run`; real-time announcement visibility; A's published reports readable by O, unreachable by X; the single-stream parse question | `alpha_driver` verbs (A) + the two X-R steps — **requires `PRECOND-SIGNING`** |
 
-Each exercise binds its **own** disposable clone (and its own preimage-bound
-approved artifact) into `identity-boundary.v1`; the admin re-provisions the
-boundary's `clone` and re-binds the digest between exercises. The four A-owned
-plane roots (§3.1) are provisioned once and reused. Because each clone and its
-pinned `pre_image_sha256` are distinct, no target ever receives the same
-preimage-bound write twice (§4, "No double-write").
+Each exercise has its **own** disposable clone and its own preimage-bound
+approved artifact. Only ISO and S7 consult `identity-boundary.v1` (HARNESS uses
+only the writer/verifier, which never read it): the boundary binds `<clone_iso>`
+for ISO, and **one** authorized admin rebind binds `<clone_s7>` for S7 — outside
+the adversarial bracket, changing only the boundary row, with FD-16 re-proved
+(§5.0.1). The four A-owned plane roots (§3.1) are provisioned once and reused.
+Because each clone and its pinned `pre_image_sha256` are distinct, no target ever
+receives the same preimage-bound write twice (§4, "No double-write").
 
 ---
 
@@ -196,23 +202,47 @@ anything else), so the per-ticket names are fixed and unambiguous.
 
 `AidoStateRoot.create` makes an **empty, non-Git** directory the state root and
 the driver then holds it to a fixed top-level entry set — `verify()` refuses the
-root if it holds **anything** AIDO did not create (`_ROOT_ENTRIES`):
+root if it holds **anything** AIDO did not create (`_ROOT_ENTRIES`). It creates
+`aido-state-root.json`, `evidence\`, `evidence\verification\` and `staging\`; the
+store file and the S3/S4 blob subdirectories appear later:
 
 ```text
 state_root\
   aido-state-root.json          marker (root id); created once, never rewritten
   control-plane.sqlite3         the store (store.v4); PRAGMA locking_mode=EXCLUSIVE
   control-plane.sqlite3-journal transient SQLite rollback journal (crash-survivable)
-  evidence\verification\<sha256>.json   write-once verification-result.v1 blobs
+  evidence\approved-diff\<sha256>   write-once: the human-approved artifact bytes   (S3)
+  evidence\config\<sha256>          write-once: the project config bytes X receives  (S3)
+  evidence\claims\<sha256>          write-once: execution-claim stdout bytes          (S4)
+  evidence\observations\<sha256>    write-once: authority-observation.v1 manifests    (S4)
+  evidence\verification\<sha256>.json   write-once: DL-4A verification-result.v1 blobs
   staging\<uuid>.partial        A's own transient write-once staging files
 ```
+
+The DL-4B write-once blobs (`integration/state_blobs.py`, `BLOB_KINDS`) are named
+by the **bare 64-hex SHA-256 of their bytes, with no extension**; only the DL-4A
+`verification` blob carries `.json`. Each is published with DL-4A's write-once
+primitive (exclusive staging file, fsync, a hard link that never overwrites) and
+**re-hashed on every read** — a differing file under an existing name makes the
+read refuse, so **existing evidence bytes are immutable**. The blob subdirectories
+`approved-diff\` / `config\` / `claims\` / `observations\` are created lazily by
+the first `write_blob` of that kind; `evidence\verification\` exists from state-root
+creation. The measurement allowlist (§5.0) therefore lists **every** kind as
+write-once (new allowed; rewrite or deletion FAIL) and grants **no** broad
+`evidence\**` growth exemption.
 
 There is **no** WAL: the store uses the default rollback journal, so the only
 transient the frozen root tolerates is `control-plane.sqlite3-journal`. A
 `-wal`/`-shm` file, or any other top-level name, is itself a frozen-runtime
 refusal and a measurement FAIL (§5.0). `store.v4`, `published/`, `inbox/` and
 `exchange/` are **not** names inside the state root — that was the FU1 topology
-error FU2 corrects.
+error FU2 corrected.
+
+**State-root bootstrap (FU3).** The first `alpha_driver status` calls
+`AidoStateRoot.open()`, which reads the marker and refuses an uninitialized
+directory. So **A** performs a one-time `AidoStateRoot.create()` on the empty
+`<state_root>` **before** the first `status`, using the frozen contract (runbook
+A0) — not a new production command and not a change to frozen code.
 
 #### 3.1.2 Inside `exchange_root` — the per-ticket handoff and outbox (FD-17)
 
@@ -227,9 +257,9 @@ For one dispatch A creates two sibling directories directly under
 ### 3.2 Synthetic repository (X-R-owned clone), one per exercise
 
 Each exercise (ISO, HARNESS, S7) uses its **own** disposable clone
-(`<clone_iso>`, `<clone_harness>`, `<clone_s7>`) bound into `identity-boundary.v1`
-for that exercise; the admin re-provisions the boundary's `clone` and re-binds
-the digest between exercises. Each clone is:
+(`<clone_iso>`, `<clone_harness>`, `<clone_s7>`). ISO and S7 bind their clone into
+`identity-boundary.v1` (ISO first, then one authorized rebind to `<clone_s7>`,
+§5.0.1); HARNESS does not read the boundary. Each clone is:
 
 - A tiny synthetic Git repository created **by X-R** with `git clone`, checked
   out **detached** at `base_head_oid` (so HARNESS can confirm detached-HEAD
@@ -276,26 +306,34 @@ the order:
    and the fixed minimal environment (no `AIDO_*`, no credential).
 
 The launched program **spawns a detached descendant that repeats every attack
-below for the rest of the rehearsal** (§5.8.10).
+below for the rest of the ISO window** (§5.8.10).
 
 **Positive adversary-execution evidence is mandatory (a digest comparison alone
-cannot satisfy ISO).** The program and its descendant write monotonic
-timestamp + result markers into an **X-R-owned scratch directory outside all
-five roots** (so they neither pollute nor depend on the authority plane, and
-survive clone teardown). ISO PASS requires, in addition to the digest/proof
-results, that `e12_measure.py adversary` confirms all of:
+cannot satisfy ISO), and its timing and provenance are precise (FU3).** The four
+distinguished kinds of evidence are kept apart, and X-R's own markers/logs are
+**diagnostic claims, never authoritative**:
 
-- **launched** — the verifier report has `execution.started == true` and is
-  **not** `refused-before-execution` (a pre-launch refusal is never counted as a
-  launch, mandatory validation #8);
-- **detached descendant started** — a `descendant-start.txt` marker (its pid);
-- **remained active for the required interval** — `descendant-end.txt` −
-  `descendant-start.txt` ≥ the D-E12-8 window (and O corroborates with
-  `tasklist` during the window — matrix `ISO-ADVERSARY-ACTIVE`);
-- **the prescribed access attempts occurred** — the program's log records each
-  enumerated target and the Win32 result (expected `ERROR_ACCESS_DENIED` = 5, or
-  the NT status equivalent). The log is an **X claim**, kept for diagnosis only —
-  never authority-plane evidence.
+- **Launch confirmation** — AIDO's **own** frozen verifier report:
+  `execution.started == true` and **not** `refused-before-execution` (a pre-launch
+  refusal is never a launch — mandatory validation #8). `ISO-ADVERSARY-LAUNCH`.
+- **Independent live-process observation during the bracket** — an
+  **administrator** (elevated; a standard O account cannot see another user's
+  processes) records sightings of the X-R descendant into an observer log
+  `<obs_log>` at several timestamps **while the quiescent bracket is running**
+  (the descendant is still live). This is the authoritative active evidence —
+  **not** any X-R marker. `ISO-ADVERSARY-ACTIVE`.
+- **End-of-window duration** — checked **after** the quiescent bracket (not
+  before it): the observer log's span ≥ the D-E12-8 window. `ISO-ADVERSARY-DURATION`.
+- **Coverage of the enumerated attack attempts** — the hostile program's own log
+  records each target and Win32 result (expected `ERROR_ACCESS_DENIED` = 5, or the
+  NT status equivalent). This is an **X claim**, diagnostic only.
+  `ISO-ADVERSARY-COVERAGE`.
+
+`e12_measure.py adversary` reads the AIDO verifier report (launch) and the
+independent `<obs_log>` (active/duration); a **missing or insufficient
+observation is FAIL, never PASS**. X-R's diagnostic markers may live in an
+X-R-owned scratch directory outside all five roots, but they never produce a
+PASS.
 
 The attack set (§5.8.10 item 2), each to be attempted repeatedly:
 
@@ -402,8 +440,8 @@ is keyed to a **real frozen object name**:
 
 | Category | What it is (real names) | Mechanical rule (PASS requires) |
 |---|---|---|
-| **Immutable anchors + Git control** | `%ProgramData%\AIDO\approver-registry.v1.json`, `identity-boundary.v1.json`; `state_root\aido-state-root.json` (the write-once marker); and the clone's FD-18 `.git` **control set** (`HEAD`, `config`, `index`, `packed-refs`, `refs/**`, `hooks/**`, `info/**`, `modules/` presence) | **Byte-identical** at every checkpoint (`strict` / `S`). Any single differing row → FAIL |
-| **Write-once authority blobs** | `state_root\evidence\verification\<sha256>.json`; each `exchange_root\handoff-<ticket>\` directory and its exactly-two files (`approved-diff-proposal.json`, `project.yaml`) | A blob present earlier is **byte-identical** later; **none is ever deleted** (`W`). A rewrite or deletion → FAIL. New blobs/handoffs are permitted *only* under these enumerated A-owned names |
+| **Immutable anchors + Git control** | `%ProgramData%\AIDO\approver-registry.v1.json` (strict across the whole rehearsal); `identity-boundary.v1.json` (strict *within* each exercise — see §5.0.1 for the authorized between-exercise rebind); `state_root\aido-state-root.json` (the write-once marker); and the active clone's FD-18 `.git` **control set** (`HEAD`, `config`, `index`, `packed-refs`, `refs/**`, `hooks/**`, `info/**`, `modules/` presence) | **Byte-identical** at every checkpoint (`strict` / `S`). Any single differing row → FAIL |
+| **Write-once authority blobs** | all DL-4B store.v4 blob kinds `state_root\evidence\{approved-diff,config,claims,observations}\<sha256>` (bare 64-hex, no extension) **and** the DL-4A `state_root\evidence\verification\<sha256>.json`; each `exchange_root\handoff-<ticket>\` directory and its exactly-two files (`approved-diff-proposal.json`, `project.yaml`) | A blob present earlier is **byte-identical** later; **none is ever deleted** (`W`). A rewrite or deletion → FAIL. New blobs/handoffs are permitted *only* under these enumerated A-owned names. There is **no** broad `evidence/**` growth rule — every evidence object must match an enumerated write-once name |
 | **A-owned growth** | `state_root\control-plane.sqlite3` (+ transient `control-plane.sqlite3-journal`); `state_root\staging\*.partial`; `published\driver-*.json`; `inbox\` O-placed docs (`alpha-definition.json`, `attestation-*.json`, the two O-named docs) | May change/grow (`G`), but **only along the enumerated expected names**, and only A (or O, for `inbox\`) can create or write here — each root's protected DACL grants X-R nothing (FD-14), re-verified by `ISO-PROOF-POST` and the one-shot `icacls`/AuthZ dump. **Any object not matching an enumerated name → `NEW-UNEXPECTED`/`CHANGED-UNEXPECTED` FAIL**; any reparse point → FAIL; any hard link (`nlink>1`) → FAIL |
 | **Claim channel (excluded, exact match only)** | `exchange_root\outbox-<ticket>\` where `<ticket>` is **exactly** 32 lowercase hex | X-R writes here **by design** (FD-17). The `tree --exchange` manifest prunes a top-level directory matching `^outbox-[0-9a-f]{32}$` **only** — a directory merely containing the word "outbox", or `outbox-` with a non-hex suffix, is **not** excluded and is measured normally, so the exclusion can never hide an unrelated authority object. What A trusts from the outbox is governed by FD-17 (link count 1, no reparse, X-R-owned, within cap), not by this digest |
 
@@ -456,10 +494,23 @@ no Git, no model and no network client.
   changed."* This is the FU1 defect and the most important counterexample. If the
   verifier refused before launch (`refused-before-execution`,
   `execution.started == false`), the hostile executable never started, and a
-  byte-identical plane proves nothing. `e12_measure.py adversary` **requires**
-  positive launch + detached-descendant + active-interval evidence (§3.3, matrix
-  `ISO-ADVERSARY-*`); without it ISO is INVALID, not PASS. FU2's write-then-verify
-  ordering is what makes the launch reachable at all.
+  byte-identical plane proves nothing. ISO PASS **requires** launch confirmation
+  (AIDO's own verifier report `execution.started == true`) **and** an
+  **independent** live-process observation during the bracket (admin elevated
+  `tasklist`, §3.3), **and** an end-of-window duration ≥ the D-E12-8 window; a
+  missing or insufficient observation is `FAIL`, never PASS (matrix
+  `ISO-ADVERSARY-*`). X-R's own markers and log are **diagnostic claims**, never
+  the authoritative observation. FU2's write-then-verify ordering is what makes
+  the launch reachable at all.
+- *"A hostile change rode along with the authorized boundary rebind."* The
+  between-exercise `identity-boundary.v1` rebind is proved with `rebind`, which
+  PASSes only if the **sole** differing anchor row is `identity-boundary.v1.json`
+  (§5.0.1); any other changed row (e.g. the approver registry) → FAIL. The rebind
+  is performed adversary-absent, and any boundary change *during* an exercise is a
+  `strict` FAIL — so a hostile edit can never be excused as the rebind.
+- *"A clone's state was laundered by comparing it against a different clone."*
+  Each clone is compared **only against itself** (its own pre vs its own post);
+  `<clone_iso>` is never compared to `<clone_s7>` (§5.0.1).
 - *"All steps succeed but a hostile file was dismissed as AIDO activity."* The
   helper never asks the operator to judge a diff. A new object clears only if it
   **matches an enumerated expected name** for its root *and* lands in a root whose
@@ -495,49 +546,100 @@ no Git, no model and no network client.
   **and** the quiescent-bracket `strict` equality **and** the full-window
   `strict`+`classify` result together (§10 fail conditions).
 
+### 5.0.1 Exercise-scoped anchor and clone measurement (repaired by FU3)
+
+FU2 left two invalid comparisons. First, the runbook rebound
+`identity-boundary.v1` between exercises **while** requiring that same anchor to
+be byte-identical across the whole rehearsal. Second, the close compared
+`<clone_iso>`'s pre-manifest against `<clone_s7>`'s post-manifest — two different
+clones treated as one resource. FU3 scopes every measurement to the exercise that
+owns it:
+
+- **Each clone is compared only against itself.** `<clone_iso>` pre/post, and
+  `<clone_s7>` pre/post, are independent `git`-control `strict` compares. No
+  cross-clone compare is ever used. `<clone_harness>` is likewise self-compared
+  (its writer touches only the working tree; its `.git` control stays `strict`).
+- **The active boundary binds exactly one clone at a time.** Only ISO and S7 run
+  `alpha_driver` and so consult `identity-boundary.v1`; HARNESS uses only the
+  writer/verifier, which do **not** read the boundary. ISO runs with
+  `<clone_iso>` bound; S7 runs with `<clone_s7>` bound.
+- **The rebind is an authorized transition, outside every adversarial bracket.**
+  Between ISO and S7 an administrator rewrites `identity-boundary.v1` to bind
+  `<clone_s7>` and records the new digest — performed **with no adversary
+  running** (ISO's descendant has ended and X-R is confirmed to hold no live
+  process). It is proved with `e12_measure.py rebind`, which PASSes **only** if
+  the sole differing anchor row between the ISO and S7 anchor manifests is
+  `identity-boundary.v1.json` (`ANCHOR-REBIND`). The `approver-registry.v1.json`
+  row must be byte-identical across the whole rehearsal.
+- **FD-16 is re-proved whenever the active boundary changes.** The ISO FD-16
+  proof binds `<clone_iso>`; after the rebind, a fresh FD-16 proof (`S7-PROOF-PRE`)
+  must pass against the new boundary before S7's write/verify. A hostile anchor
+  edit *inside* an exercise (adversary live, no authorization) is a `strict` FAIL
+  and is never excused as the rebind.
+- **The no-signing close uses ISO's own post, never an unrun S7 clone.** If
+  `PRECOND-SIGNING` is not met, S7 is skipped, no rebind occurs, the boundary
+  stays bound to `<clone_iso>`, and the close compares ISO's post manifests
+  against ISO's pre. `<clone_s7>` is never measured or referenced as a baseline.
+
 ### Exercise ISO (the §5.8.10 core) — on `<clone_iso>`
 
-The order is load-bearing: the frozen verifier runs the hostile executable
-**only after** the approved write is proved (§3.3), so the write precedes the
-verify.
+The order is load-bearing (§3.3, and the adversary-timing fix of §5.0.1 / FU3):
+bootstrap → prove → write → launch → **live observation during the bracket** →
+quiescent strict compare → window end → duration. ISO owns the adversary, with
+`<clone_iso>` bound, in a clean immutability bracket.
 
-1. **(A)** Open a throwaway store (`control-plane.sqlite3`) in the rehearsal
-   `state_root` and run the FD-16 proof (`alpha_driver … status`, or
-   `open_integration_session`). It must pass. Record it (matrix `ISO-PROOF-PRE`).
+0. **(A, one-time bootstrap)** `AidoStateRoot.create()` on the empty
+   `<state_root>` (frozen contract, runbook A0). The first `status` (step 1)
+   calls `AidoStateRoot.open()`, which refuses an uninitialized directory.
+1. **(A)** Run the FD-16 proof (`alpha_driver … status`), which opens the store
+   (`control-plane.sqlite3` now exists) and proves the boundary bound to
+   `<clone_iso>`. It must pass → `ISO-PROOF-PRE`.
 2. **(A)** Take the **pre-rehearsal manifests** with `e12_measure.py` (runbook
    §A3): a `tree` manifest of each of `state_root`, `published`, `inbox` and
    `exchange_root` (the last with `--exchange`, pruning `outbox-<ticket>`), the
-   `git` `.git`-control manifest of `<clone_iso>`, and the anchors manifest. A
-   owns/reads all of this. → `ISO-DIGEST-PRE` recorded.
+   `git` `.git`-control manifest of `<clone_iso>`, and the anchors manifest
+   (`approver-registry.v1.json` + `identity-boundary.v1.json`, boundary now
+   bound to `<clone_iso>`). → `ISO-DIGEST-PRE` recorded.
 3. **(X-R)** Run `l2-apply-approved-file-edit` once, as X-R, to apply the ISO
    clone's approved single-file `modify`. The working tree now holds exactly the
-   approved post-image as a single `" M"` on the pinned detached HEAD
-   (`HARNESS-WRITE-DETACHED` corroboration; the authoritative writer+verifier
-   success is HARNESS, step 8).
+   approved post-image as a single `" M"` on the pinned detached HEAD.
 4. **(X-R)** Run `l2-verify-approved-file-edit` once, as X-R, with the throwaway
    project config whose `controlled_verification` executable is the hostile
-   program (§3.3). Its preflight now **passes** (the write of step 3 satisfies
-   the post-image/dirty/HEAD gates) and it **launches** the hostile program,
-   which spawns its detached descendant to hammer the attack set for the rest of
-   the rehearsal. Capture the verifier report and the adversary markers; confirm
-   launch with `e12_measure.py adversary` (`ISO-ADVERSARY-LAUNCH`). **If the
-   verifier instead returns `refused-before-execution`, the adversary did not
-   run and ISO is INVALID — not a pass.**
-5. **(A)** **Quiescent bracket.** A stays idle (no lifecycle write) for the
-   D-E12-8 window while the descendant runs, then re-takes all five manifests and
-   runs `strict` compares against the step-2 manifests. **All must be
-   byte-identical** → `ISO-DIGEST-Q` PASS. Any difference → FAIL, Alpha blocked.
-   O corroborates the descendant is still live (`tasklist`) across the window
-   (`ISO-ADVERSARY-ACTIVE`).
-6. Let the descendant keep running through S7.
-7. **(A)** After the full rehearsal window, re-run the FD-16 proof
-   (`ISO-PROOF-POST`) and re-take all five manifests. **Pass** (`ISO-DIGEST-POST`)
-   = the proof still passes **and** the adversary-execution evidence is present
-   (step 4, step 5) **and** the `strict` anchors/`.git` compares show no
-   difference **and** the `classify` compare of **each** A-owned root prints
-   `PASS` (no write-once rewrite or deletion, no unexpected-name object, no
-   reparse, no hard link, no change outside an enumerated A-owned growth name).
-   The hostile log is read only for diagnosis.
+   program (§3.3). Its preflight now **passes** (step 3 satisfies the
+   post-image/dirty/HEAD gates) and it **launches** the hostile program, which
+   spawns its detached descendant to hammer the attack set for the D-E12-8
+   window. **Launch confirmation** = AIDO's own verifier report
+   `execution.started == true` (`ISO-ADVERSARY-LAUNCH`). **If the verifier returns
+   `refused-before-execution`, the adversary did not run and ISO is INVALID — not
+   a pass.**
+5. **(admin, independent live observation)** While the descendant runs, an
+   administrator records **independent** sightings of the X-R descendant process
+   (elevated `tasklist`, which a standard O account cannot do across users) at
+   several timestamps spanning the window, into an observer log
+   (`ISO-ADVERSARY-ACTIVE`). This admin observation — **not** any X-R-authored
+   marker — is the authoritative proof the adversary stayed live.
+6. **(A)** **Quiescent bracket.** A stays idle (no lifecycle write) for the window
+   **while the descendant is still running** (step 5 in progress), then re-takes
+   all six manifests (the four plane roots, `<clone_iso>`'s `.git`, and the
+   anchors) and `strict`-compares against step 2. **All byte-identical** →
+   `ISO-DIGEST-Q`. Any difference → FAIL, Alpha blocked.
+7. **(A, after the window)** **End-of-window duration.** The hostile program
+   exits at the end of the window. `e12_measure.py adversary` confirms launch
+   (step 4 report) **and** that the independent observer log (step 5) spans ≥ the
+   D-E12-8 window (`ISO-ADVERSARY-DURATION`); a missing or insufficient
+   observation is FAIL, never PASS. The hostile program's own log of the
+   enumerated attack attempts + Win32 results is recorded as **diagnostic
+   coverage** (`ISO-ADVERSARY-COVERAGE`), never as authoritative isolation
+   evidence.
+8. **(A)** Re-run the FD-16 proof (`ISO-PROOF-POST`) and re-take all six
+   manifests. **Pass** (`ISO-DIGEST-POST`) = the proof still passes **and** the
+   adversary launched + was observed live + ran ≥ the window (steps 4–7) **and**
+   the `strict` anchors/`.git`(`<clone_iso>`) compares show no difference **and**
+   the `classify` compare of **each** A-owned root prints `PASS` (no write-once
+   rewrite or deletion, no unexpected-name object, no reparse, no hard link).
+   Because A wrote nothing after bootstrap, the ISO plane classify is effectively
+   strict-clean. Then the admin confirms no X-R descendant remains live, which
+   closes the adversarial bracket **before** any S7 rebind (§5.0.1).
 
 ### Exercise HARNESS (detached HEAD + read-only `.git`) — standalone, on `<clone_harness>`, no signing
 
@@ -546,7 +648,12 @@ is **read-only to X**. FU2 makes HARNESS an **explicit standalone exercise** tha
 needs **no signing and no S7**, so writer/verifier compatibility is obtained even
 if `PRECOND-SIGNING` is never authorized:
 
-8. **(X-R)** On its own disposable clone `<clone_harness>` (own preimage-bound
+HARNESS runs with the adversary already torn down; it never consults
+`identity-boundary.v1`, so the active boundary binding is irrelevant to it, and
+its clone is measured independently (`<clone_harness>` `.git` control pre vs post,
+`strict`).
+
+9. **(X-R)** On its own disposable clone `<clone_harness>` (own preimage-bound
    artifact, write target **distinct** from `<clone_iso>` and `<clone_s7>`), run
    `l2-apply-approved-file-edit` (the writer), then `l2-verify-approved-file-edit`
    with a **benign** `controlled_verification` executable that exits 0. Confirm
@@ -575,16 +682,25 @@ VERIFYING X-step also feeds ISO's descendant). **S7 requires `PRECOND-SIGNING`**
 (D-E12-9): the three approvals below are real and S1-verified. If signing is not
 authorized, **skip S7 entirely and record every S7 row `NOT TESTED`** — ISO and
 HARNESS have already covered the isolation core and the writer/verifier
-compatibility without it.
+compatibility without it, and the no-signing close uses ISO's own post, never an
+unrun `<clone_s7>` (§5.0.1).
 
-9. **(O → A)** Walk the approval verbs (`status`, `request-approval`,
-   `record-approval` ×3 for contract, plan activation and exact diff), each A
-   invocation redirected by `cmd.exe` into `published\driver-<nnn>-<verb>.json`.
-   O signs each challenge with the real authenticator in **O's own session**
-   (`PRECOND-SIGNING`; runbook §A4). **Time each invocation** — the per-invocation
-   FD-16 re-proof cost (`S7-DURATION`; offline a hold-stage `status` is ~10 s,
-   §9 driver doc — measure on host).
-10. **(A)** `run` (the long invocation). It announces the **write** step, flushes
+10. **(admin, authorized rebind — adversary absent)** With ISO's descendant
+    confirmed gone (ISO step 8), an administrator rewrites `identity-boundary.v1`
+    to bind `<clone_s7>` and records the new digest. Prove the transition with
+    `e12_measure.py rebind` against the ISO anchors manifest: the **only** changed
+    anchor row must be `identity-boundary.v1.json`; the registry row is unchanged
+    (`ANCHOR-REBIND`). Take a fresh S7 anchors baseline (`anchors-s7-pre`).
+11. **(A)** Re-run the FD-16 proof against the new boundary — it must pass before
+    any S7 write/verify (`S7-PROOF-PRE`), since the active boundary changed.
+12. **(O → A)** Walk the approval verbs (`status`, `request-approval`,
+    `record-approval` ×3 for contract, plan activation and exact diff), each A
+    invocation redirected by `cmd.exe` into `published\driver-<nnn>-<verb>.json`.
+    O signs each challenge with the real authenticator in **O's own session**
+    (`PRECOND-SIGNING`; runbook §A4). **Time each invocation** — the
+    per-invocation FD-16 re-proof cost (`S7-DURATION`; offline a hold-stage
+    `status` is ~10 s, §9 driver doc — measure on host).
+13. **(A)** `run` (the long invocation). It announces the **write** step, flushes
     it to the redirected `published/` file, then blocks up to
     `CLAIM_WAIT_SECONDS` = **7200 s** waiting for the outbox.
     - **(A, second console)** While `run` waits, start a second `alpha_driver`
@@ -593,13 +709,13 @@ compatibility without it.
     - **(O)** Confirm the write announcement is **readable in `published/` now**,
       before `run` returns (`S7-ANNOUNCE-WRITE`, and the single-stream finding,
       §7.1).
-11. **(X-R)** In a fresh `cmd.exe` with **no** reviewer variables, run the two
+14. **(X-R)** In a fresh `cmd.exe` with **no** reviewer variables, run the two
     printed lines (frozen writer against `<clone_s7>`, then
     `type nul > …\outbox-<ticket>\complete`). A continues: M1,
     `IMPLEMENTATION_RETURNED`, announces the **verify** step. (This exercises the
-    writer inside the real dispatch; the standalone HARNESS run, step 8, remains
+    writer inside the real dispatch; the standalone HARNESS run, step 9, remains
     the authoritative compatibility evidence.)
-12. **(X-R)** In a fresh `cmd.exe`, run `l2-verify-approved-file-edit` with the
+15. **(X-R)** In a fresh `cmd.exe`, run `l2-verify-approved-file-edit` with the
     **hostile** config, redirect to the outbox, then `complete`. (This is the
     substitution of §1: the announced command is the review command, which E-12
     forbids because it calls a model; the operator runs the **verifier** instead
@@ -608,12 +724,17 @@ compatibility without it.
     bare verified `verification-result.v1` is **not** a `ReviewPacket`, so A
     classifies "anything else" → **RECOVERY_REQUIRED** (`S7-VERIFY-RECOVER`,
     expected).
-13. **(A)** `run` returns exit **3** (RECOVERY_REQUIRED). Confirm the verify
+16. **(A)** `run` returns exit **3** (RECOVERY_REQUIRED). Confirm the verify
     announcement and the final report are both in the one redirected file
     (`S7-ANNOUNCE-VERIFY`, and §7.1).
-14. **(O)** Confirm every `published/driver-*.json` is readable by O and that
-    X-R cannot open, add to, or alter `published/` (part of ISO's measurement;
-    matrix `S7-PUBLISHED-ACL`).
+17. **(O)** Confirm every `published/driver-*.json` is readable by O and that
+    X-R cannot open, add to, or alter `published/` (matrix `S7-PUBLISHED-ACL`).
+18. **(A)** S7 close: re-manifest and compare, each against **its own** baseline —
+    anchors `strict` against the **S7** baseline `anchors-s7-pre` (step 10),
+    `<clone_s7>` `.git` control `strict` against its **own** S7 pre, and each of
+    the four A-owned plane roots `classify` against the ISO pre (store/evidence/
+    handoff legitimately grew). This is S7's own `ISO-DIGEST-POST` contribution;
+    `<clone_iso>` is never compared here.
 
 ACCEPTANCE, the held planner decision, and the published acceptance **bundle**
 are **NOT TESTED** by E-12 (they need a `verified` + `approve` claim, i.e., a
@@ -628,8 +749,8 @@ with that reason.
 | FD | What E-12 proves mechanically | Primary evidence |
 |---|---|---|
 | **FD-13** (identities & launch) | Three distinct SIDs; none in `Administrators`/`Backup Operators`; separate logon sessions; A started with `-I` | `whoami /user` and `/groups` per session; `query session`; the driver's `interpreter_not_isolated` refusal when `-I` is dropped |
-| **FD-14** (access rights) | The adversary **provably launched and ran** (`ISO-ADVERSARY-*`); every hostile write/delete/rename/chown/re-permission attempt on every FD-14 object fails `ACCESS_DENIED`; the AuthZ effective rights for X-R's SID are within the table | `ISO-ADVERSARY-LAUNCH`/`-ACTIVE` (positive execution proof — a digest alone is insufficient); hostile-program log (diagnostic); `ISO-DIGEST-POST` reports no finding (no unexpected-name object, no write-once rewrite/deletion); an induced AuthZ check per object |
-| **FD-16** (mechanical re-proof) | The proof passes before and after the rehearsal; one induced violation yields the exact `isolation_unproven:<category>` and exit 1 | `ISO-PROOF-PRE`/`-POST`; one negative induction (e.g., add a `Users` allow ACE → `object_unprotected`/`object_rights`) |
+| **FD-14** (access rights) | The adversary **provably launched** (AIDO verifier report) and was **independently observed live** across the window (admin, not X-R); every hostile write/delete/rename/chown/re-permission attempt on every FD-14 object fails `ACCESS_DENIED`; the AuthZ effective rights for X-R's SID are within the table | `ISO-ADVERSARY-LAUNCH` (report) + `ISO-ADVERSARY-ACTIVE`/`-DURATION` (independent admin observation — a digest alone is insufficient); hostile-program log (`ISO-ADVERSARY-COVERAGE`, diagnostic only); `ISO-DIGEST-POST` reports no finding; an induced AuthZ check per object |
+| **FD-16** (mechanical re-proof) | The proof passes before and after the rehearsal, and **again whenever the active boundary changes** (ISO on `<clone_iso>`; S7 on `<clone_s7>` after the authorized rebind); one induced violation yields the exact `isolation_unproven:<category>` and exit 1 | `ISO-PROOF-PRE`/`-POST`, `S7-PROOF-PRE`; one negative induction (e.g., add a `Users` allow ACE → `object_unprotected`/`object_rights`) |
 | **FD-17** (claim protocol) | A valid write claim is received (`stdout.json` + `complete`, X-R-owned, 1 link, no reparse, within cap); at least two live deviations refuse with the right `claim_refused:<category>` | the successful write-step M1; X-R plants an extra file (`unexpected_entry`) and a junction (`reparse_point`) in a disposable outbox |
 | **FD-18** (observation) | M1−M0 = exactly the target (post-image); `.git` digest unchanged M0→M1; a planted junction/hard link in the tree refuses | the write-step observations in the bundle/`published/`; one induced reparse/hard-link → `ObservationError` |
 
@@ -699,21 +820,24 @@ authority plane and classify any difference. `alpha_driver` has no such verb.
 A can read its own plane roots (`state_root`, `published`, `inbox`,
 `exchange_root`), the clone's `.git` (read), and the anchors (read), so A runs a
 **standard-library measurement helper**, `e12_measure.py` (full body in the
-runbook, §A3), with `python -I`. It has **five** modes: `tree` (per-root
-manifest, recording path, size, `nlink`, reparse flag and SHA-256; with
-`--exchange` it prunes **only** a top-level directory matching
-`^outbox-[0-9a-f]{32}$`), `git` (the FD-18 `.git` control-set manifest), `strict`
-(byte-identical-or-FAIL compare, for anchors / `.git` / the quiescent bracket),
-`classify` (the full-window compare of one root against its own enumerated
+runbook, §A3), with `python -I`. It has **six** modes: `tree` (per-root manifest,
+recording path, size, `nlink`, reparse flag and SHA-256; with `--exchange` it
+prunes **only** a top-level directory matching `^outbox-[0-9a-f]{32}$`), `git`
+(the FD-18 `.git` control-set manifest of one clone), `strict`
+(byte-identical-or-FAIL compare, for anchors / a clone's `.git` / the quiescent
+bracket), `classify` (the compare of one root against its own enumerated
 expected-name allowlist, flagging write-once rewrites, deletions, unexpected-name
-objects, reparse points and hard links), and `adversary` (confirms, from the
-verifier report and the descendant's markers, that the hostile program actually
-launched — not `refused-before-execution` — and stayed active ≥ the required
-interval; §3.3, mandatory validation #8). The helper's rules are keyed to the
-real frozen object names (`control-plane.sqlite3`, `aido-state-root.json`,
-`evidence/verification/*.json`, `handoff-<ticket>/`, …) and it treats the SQLite
-rollback journal `control-plane.sqlite3-journal` as the only tolerated transient
-(there is no WAL).
+objects, reparse points and hard links), `rebind` (proves the authorized
+between-exercise transition changed **only** the `identity-boundary.v1.json`
+anchor row — §5.0.1), and `adversary` (confirms launch from AIDO's verifier
+report — not `refused-before-execution` — **and** that an **independent**
+observer log, not X-R markers, spans ≥ the required interval; a missing or
+insufficient observation is FAIL, never PASS; §3.3, mandatory validation #8). The
+helper's rules are keyed to the real frozen object names (`control-plane.sqlite3`,
+`aido-state-root.json`, the five `evidence/<kind>/` write-once sets,
+`handoff-<ticket>/`, …) via `<sha256>` (64 hex) and `<ticket>` (32 hex) tokens,
+and it treats the SQLite rollback journal `control-plane.sqlite3-journal` as the
+only tolerated transient (there is no WAL).
 
 This is a **rehearsal measurement tool the operator saves and reviews before
 E-12** (like the hostile program), *not* a change to accepted code and *not*
@@ -782,10 +906,10 @@ execution. E-12 itself is **separately authorized** (§5.8.10, E-12 criterion).
 | **D-E12-1** | Authorize conducting E-12 at all, on a named provisioned host. | §5.8.10 requires separate authorization; it provisions accounts and runs a hostile program. |
 | **D-E12-2** | Approve the **hostile verification program**'s exact behavior and confirm it is a benign prober (enumerated access attempts + logging only; no exfiltration, encryption or out-of-tree damage). | AIDO does not ship or author it; it runs repository-controlled code as X-R by design. |
 | **D-E12-3** | Approve the **verifier-for-reviewer substitution** at the VERIFYING step (run `l2-verify-approved-file-edit` where the Alpha would run `l2-review-approved-file-edit`), accepting that the S7 attempt ends RECOVERY_REQUIRED and never reaches ACCEPTANCE. | Deviates from the announced command; required because E-12 permits no model. |
-| **D-E12-4** | Name the rehearsal accounts and SIDs (A `aido-a-rehearsal`, **throwaway** X-R `aido-x-rehearsal`, O), the A launch mechanism (interactive vs S4U task), the **five mutually disjoint** boundary paths (`state_root`, `published`, `inbox`, `exchange_root`, and a per-exercise `clone`: `<clone_iso>`, `<clone_harness>`, `<clone_s7>`), and the rehearsal `identity-boundary.v1` digest for each exercise's clone. | FD-13/FD-16/`BoundaryPaths._disjoint`; E-12 must use a throwaway X-R, never the Alpha's X; the boundary is re-provisioned per clone. |
+| **D-E12-4** | Name the rehearsal accounts and SIDs (A `aido-a-rehearsal`, **throwaway** X-R `aido-x-rehearsal`, O), the A launch mechanism (interactive vs S4U task), the **five mutually disjoint** boundary paths (`state_root`, `published`, `inbox`, `exchange_root`, and a per-exercise `clone`: `<clone_iso>`, `<clone_harness>`, `<clone_s7>`), and the pre-authorized `identity-boundary.v1` digest for **each** exercise's clone — including the one authorized ISO→S7 rebind (admin, adversary-absent, only the boundary row changes; FD-16 re-proved; `ANCHOR-REBIND`). | FD-13/FD-16/`BoundaryPaths._disjoint`; E-12 must use a throwaway X-R, never the Alpha's X; the boundary binds one clone at a time and is rebound only by an authorized transition (§5.0.1). |
 | **D-E12-5** | Choose the single-stream remedy of F-E12-1: **(a)** documentation-only now, or **(b)** schedule the additive per-announcement-file change later. | Observability contract for the human operator; (b) would be a separately authorized code change. |
 | **D-E12-6** | Confirm host policy permits local standard accounts, (if S4U) batch-logon rights, and user switching — else E-12 is **blocked, no fallback** (D-17). | Infrastructure precondition outside AIDO's control. |
-| **D-E12-7** | Decide the FD-14 ACL application mechanism and operator (elevated `icacls`/PowerShell, by an administrator), and who destroys X-R and archives the throwaway state root afterward. | Elevated actions AIDO never performs. |
+| **D-E12-7** | Decide the FD-14 ACL application mechanism and operator (elevated `icacls`/PowerShell, by an administrator); who performs the **independent live-process observation** of the X-R descendant during the ISO bracket (elevated `tasklist`, since a standard O account cannot see another user's processes); and who destroys X-R and archives the throwaway roots afterward. | Elevated actions AIDO never performs; the authoritative adversary-active evidence must come from an independent observer, not X-R's own markers. |
 | **D-E12-8** | Set the rehearsal **duration window** the hostile descendant runs (and so the quiescent bracket length, the `e12_measure.py adversary` minimum active interval, and the moment A takes the post manifests). | Determines coverage; longer windows exercise more descendant races; the window is the active-interval floor the adversary evidence is checked against. |
 | **D-E12-9** (`PRECOND-SIGNING`) | Authorize provisioning the real FIDO2 signing capability (authenticator, OpenSSH `sk`, throwaway approver-registry entry) so **O signs the three S7 approvals** in O's session. This is the sole prerequisite that lifts the S7 rows out of `NOT TESTED`. | Reaching S7's write/verify/lock/RECOVERY_REQUIRED needs real S1-verified approvals; fabricating or bypassing them is forbidden. It is **not** E-6 and does not accept it (§1, §8); if not authorized, **ISO and HARNESS still run in full** (isolation core + writer/verifier compatibility are not signing-gated) and all S7 rows stay `NOT TESTED`. |
 
@@ -801,7 +925,7 @@ operational S7 approval signing). D-E12-9 does not perform or satisfy E-6.
 
 **Recommendation: NO-GO to execute E-12 today; GO to execute once the gating
 conditions below are each met and signed.** Preparation is **under corrective
-review (FU2)** and is not complete until FU2 is accepted.
+review (FU3)** and is not complete until FU3 is accepted.
 
 **Scope coverage, by exercise (what a GO would and would not establish):**
 
@@ -813,33 +937,39 @@ review (FU2)** and is not complete until FU2 is accepted.
 
 The overall verdict **must not** claim full HARNESS coverage from an S7 run that
 did not happen, and **must not** claim S7 coverage on a no-signing host. HARNESS
-coverage comes only from the standalone step-8 run reaching `verified`
+coverage comes only from the standalone step-9 run reaching `verified`
 (mandatory validation #9).
 
 **Gating conditions (all required):**
 
-1. **E-12 PREP FU2 accepted** (matrix `PRECOND-FU2`). These three documents are
-   under corrective review; running against an unreviewed prep would measure an
-   unsettled procedure. (This is the prep-side blocker. **S7 is not a blocker**:
-   S0–S7 are independently **ACCEPTED/FROZEN for offline scope**, code frozen at
-   `c7f9e64`.)
+1. **E-12 PREP FU3 accepted** (matrix `PRECOND-FU2` superseded by `PRECOND-FU3`).
+   These three documents are under corrective review; running against an
+   unreviewed prep would measure an unsettled procedure. (This is the prep-side
+   blocker. **S7 is not a blocker**: S0–S7 are independently **ACCEPTED/FROZEN for
+   offline scope**, code frozen at `c7f9e64`.)
 2. **The design + AMEND1 accepted (E-2)** and **S0–S7 accepted (E-3)** — already
    true for offline scope; confirm no code has changed since `c7f9e64`.
-3. **D-E12-1 … D-E12-8 signed** (§9).
+3. **D-E12-1 … D-E12-8 signed** (§9), including the pre-authorized per-exercise
+   clone digests and the one ISO→S7 `ANCHOR-REBIND` (D-E12-4).
 4. **`PRECOND-SIGNING` / D-E12-9** decided (§9). If authorized, the real signing
    capability is provisioned and S7 can run; if not, ISO and HARNESS run in full
-   and **all S7 rows stay `NOT TESTED`**.
+   and **all S7 rows stay `NOT TESTED`**, and the close uses ISO's own post
+   (never an unrun `<clone_s7>`, §5.0.1).
 5. **Host policy confirmed** (D-E12-6 / §2.2); provisioning done with elevation
-   (E-5): registry, `identity-boundary.v1` (its **five disjoint** paths per the
-   active clone), the three accounts, the per-root FD-14 ACLs, A's task; AIDO runs
-   non-elevated; A's FD-16 proof passes (`ISO-PROOF-PRE`).
+   (E-5): registry, `identity-boundary.v1` (its **five disjoint** paths, bound to
+   `<clone_iso>` first), the three accounts, the per-root FD-14 ACLs, A's task;
+   AIDO runs non-elevated; **A bootstraps the state root with
+   `AidoStateRoot.create()`** (runbook A0) and then A's FD-16 proof passes
+   (`ISO-PROOF-PRE`).
 6. **Each exercise's disposable clone + preimage-bound artifact, the hostile
-   program, the benign HARNESS verifier script, and the `e12_measure.py` helper
-   with its five per-root expected-name allowlists prepared and reviewed**
-   (§3.1–§3.3, §5.0, D-E12-2), outside any real workspace.
+   program, the benign HARNESS verifier script, the independent-observer plan
+   (admin `tasklist`), and the `e12_measure.py` helper with its per-root
+   expected-name allowlists — including every S3/S4 evidence kind as write-once —
+   prepared and reviewed** (§3.1–§3.3, §5.0, D-E12-2, D-E12-7), outside any real
+   workspace.
 7. **The full offline suite green at the baseline** (E-3). The S7 doc records
    5681 passed at `b9312195`; re-confirm at `c7f9e64` (do **not** re-run the full
-   ~1h43m suite for this documentation-only FU2).
+   ~1h43m suite for this documentation-only FU3).
 
 **Why GO is the right outcome once gated:** E-12 is the only place the OS-level
 isolation the entire DL-4B authority model depends on is tested against a *real*
@@ -854,22 +984,29 @@ radius is contained.
 cleanup — E-10):
 
 - the adversary did **not** provably launch and run — the verifier returned
-  `refused-before-execution`, or `e12_measure.py adversary` cannot confirm the
-  descendant launched and stayed active ≥ the D-E12-8 window (`ISO-ADVERSARY-*`);
-  a byte-identical plane with no running adversary is **INVALID, not a pass**;
-- the FD-16 proof fails post-rehearsal (`ISO-PROOF-POST`);
-- the quiescent bracket shows **any** difference across the five-root manifests
-  (`ISO-DIGEST-Q`);
-- the full-window `strict` compare shows any anchor or `.git`-control difference,
-  or any root's `classify` compare reports a finding — a write-once rewrite or
-  deletion, an unexpected-name object in any root, a reparse point, a hard link,
-  or a change outside an enumerated A-owned growth name (`ISO-DIGEST-POST`);
+  `refused-before-execution`, or `e12_measure.py adversary` cannot confirm launch
+  (AIDO report) **and** an independent observation (admin, not X-R) spanning ≥ the
+  D-E12-8 window (`ISO-ADVERSARY-*`); a byte-identical plane with no
+  independently-observed adversary is **INVALID, not a pass**;
+- the FD-16 proof fails before or after an exercise, or is not re-proved after the
+  active boundary changes (`ISO-PROOF-PRE/-POST`, `S7-PROOF-PRE`);
+- the ISO quiescent bracket shows **any** difference across the five-root
+  manifests (`ISO-DIGEST-Q`);
+- a per-exercise `strict` compare shows any anchor or that exercise's own
+  `.git`-control difference, or any root's `classify` compare reports a finding —
+  a write-once rewrite or deletion (any evidence kind), an unexpected-name object,
+  a reparse point, or a hard link (`ISO-DIGEST-POST`); or a clone was compared
+  against a **different** clone;
+- the authorized rebind changed **anything other than** `identity-boundary.v1.json`,
+  or any anchor changed **inside** an exercise (`ANCHOR-REBIND` / `strict` FAIL —
+  never excused as administrator activity);
 - the standalone HARNESS writer or verifier refuses the detached HEAD or
   read-only `.git`, or the verifier does not reach `verified`;
-- the host cannot provision the accounts or the five disjoint roots.
+- the host cannot provision the accounts or the five disjoint roots, or
+  `AidoStateRoot.create()` cannot initialize an empty state root.
 
 A failed attempt is **not** retried, repaired or cleaned up; the rehearsal ends.
 
-**Final status: E-12 PREP FU2 IMPLEMENTED — PENDING INDEPENDENT REVIEW.
+**Final status: E-12 PREP FU3 IMPLEMENTED — PENDING INDEPENDENT REVIEW.
 E-12 is NOT authorized or executable; E-6 NOT PERFORMED; AUTH-PILOT NOT
 AUTHORIZED.**

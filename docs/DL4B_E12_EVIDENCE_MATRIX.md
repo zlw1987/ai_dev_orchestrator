@@ -1,8 +1,8 @@
 # DL-4B E-12 — Pass / Fail Evidence Matrix
 
-**Status: PREP FU2 — UNDER CORRECTIVE REVIEW, all rows NOT TESTED.** Fill in only
+**Status: PREP FU3 — UNDER CORRECTIVE REVIEW, all rows NOT TESTED.** Fill in only
 during a separately authorized E-12 (see `DL4B_E12_ISOLATION_REHEARSAL_PREP.md`
-§9–§10), after FU2 is accepted. E-12 is NOT authorized or executable; E-6 NOT
+§9–§10), after FU3 is accepted. E-12 is NOT authorized or executable; E-6 NOT
 PERFORMED; AUTH-PILOT NOT AUTHORIZED. Every PASS below requires a **real
 observation** recorded in the stated evidence source; a requirement not
 exercised stays `NOT TESTED` with its reason.
@@ -26,8 +26,9 @@ offline suite instead; `optional` = a recommended spot-check that may be skipped
 | `PRECOND-POLICY` | Host policy permits local standard accounts, (if S4U) batch-logon, user switching (D-17) | permitted | admin confirmation | NOT TESTED |
 | `PRECOND-SUITE` | Full offline suite green at baseline `c7f9e64` (E-3); do not re-run the full suite for the docs-only FU1 | all pass | `pytest -q` | NOT TESTED |
 | `PRECOND-REVIEW` | Design+AMEND1 (E-2) and S0–S7 (E-3) accepted — S0–S7 are **ACCEPTED/FROZEN for offline scope**; confirm no code changed since `c7f9e64` | accepted | review record | NOT TESTED |
-| `PRECOND-FU2` | E-12 PREP FU2 (these three docs, topology/helper/launch-order/no-signing corrections) independently accepted | accepted | review record | NOT TESTED |
-| `PRECOND-ROOTS` | The five boundary paths (`state_root`, `published`, `inbox`, `exchange_root`, active `clone`) are mutually disjoint and load into `identity-boundary.v1` (no nested layout `BoundaryPaths._disjoint` would reject) | disjoint, loads | admin + `status` | NOT TESTED |
+| `PRECOND-FU3` | E-12 PREP FU3 (these three docs; the FU3 corrections: full write-once evidence allowlist, exercise-scoped anchor/clone measurement, adversary timing/provenance, state-root bootstrap) independently accepted | accepted | review record | NOT TESTED |
+| `PRECOND-ROOTS` | The five boundary paths (`state_root`, `published`, `inbox`, `exchange_root`, active `clone`) are mutually disjoint and load into `identity-boundary.v1` bound to `<clone_iso>` first (no nested layout `BoundaryPaths._disjoint` would reject) | disjoint, loads | admin (0.9) + `status` | NOT TESTED |
+| `ISO-BOOTSTRAP` | A initializes the empty `<state_root>` once with the frozen `AidoStateRoot.create()` before the first `status` (which calls `open()`) | marker + `evidence/`+`staging/` created | runbook A0 | NOT TESTED |
 | `PRECOND-SIGNING` | D-E12-9: real signing capability provisioned so O signs the three S7 approvals. If not authorized, all §9 S7 rows are `NOT TESTED / no-signing`; ISO and HARNESS are unaffected. **Not E-6, does not satisfy E-6** | provisioned or deferred | admin + O | NOT TESTED |
 
 ## 2. FD-13 — identities and launch
@@ -58,8 +59,10 @@ offline suite instead; `optional` = a recommended spot-check that may be skipped
 
 | Id | Check | Expected | Evidence | State / Reason |
 |---|---|---|---|---|
-| `ISO-PROOF-PRE` | FD-16 proof passes before the rehearsal | exit 0, no `isolation_unproven` | `driver-001-status.json` | NOT TESTED |
+| `ISO-PROOF-PRE` | FD-16 proof passes before the rehearsal, boundary bound to `<clone_iso>` (after `ISO-BOOTSTRAP`) | exit 0, no `isolation_unproven` | `driver-001-status.json` | NOT TESTED |
+| `S7-PROOF-PRE` | FD-16 **re-proved** after the authorized rebind to `<clone_s7>`, before any S7 write/verify (re-proof whenever the active boundary changes) | exit 0, no `isolation_unproven` | `driver-010-status.json` | NOT TESTED / no-signing |
 | `ISO-PROOF-POST` | FD-16 proof passes **after** the adversary ran | exit 0, no `isolation_unproven` | `driver-099-status.json` | NOT TESTED |
+| `ANCHOR-REBIND` | The one authorized ISO→S7 `identity-boundary.v1` rebind, adversary-absent, changes **only** the boundary anchor row (registry unchanged); a hostile extra change FAILs | `rebind` PASS `rebind-changed-only identity-boundary.v1.json` | `e12_measure.py rebind` (runbook A-rebind) | NOT TESTED / no-signing |
 | `FD16-ANCHORS` | Registry + `identity-boundary.v1` at constant paths, anchor checks pass | pass | proof result | NOT TESTED |
 | `FD16-NEG` | One induced violation yields the exact category | `isolation_unproven:object_unprotected` (or `object_rights`), exit 1 | induced ACE + re-run | NOT TESTED |
 | `FD16-ENV` | A's environment holds no `AIDO_LITELLM_*`/`AIDO_VLLM_*`/`GITHUB_TOKEN`/`PYTHON*` | absent | proof passes | NOT TESTED |
@@ -89,7 +92,7 @@ offline suite instead; `optional` = a recommended spot-check that may be skipped
 |---|---|---|---|---|
 | `FD18-M0` | M0 = pre-image, HEAD = `base_head_oid`, `.git` digest = activation-time | holds | bundle/`published/` observations | NOT TESTED |
 | `FD18-M1` | M1 − M0 = exactly the target (post-image); `.git` unchanged | holds | observation blobs | NOT TESTED |
-| `FD18-GIT-UNCHANGED` | `.git` control digest unchanged across the whole rehearsal | unchanged | `ISO-DIGEST-PRE`/`-POST` | NOT TESTED |
+| `FD18-GIT-UNCHANGED` | each clone's `.git` control set unchanged across its **own** exercise (`<clone_iso>` over ISO; `<clone_s7>` over S7), self-compared — never cross-clone | unchanged | `e12_measure.py git` + `strict` per clone (runbook A6-ISO/A6-S7) | NOT TESTED |
 | `FD18-REPARSE` | Planted junction in tree refuses | `ObservationError:reparse_point` | spot check | NOT TESTED / optional |
 | `FD18-M2` | M2 (post-review observation) | — | — | NOT TESTED / no-model |
 
@@ -97,20 +100,22 @@ offline suite instead; `optional` = a recommended spot-check that may be skipped
 
 | Id | Check | Expected | Evidence | State / Reason |
 |---|---|---|---|---|
-| `ISO-ADVERSARY-LAUNCH` | The hostile verifier **actually launched**: the X2 report has `execution.started == true` and is **not** `refused-before-execution` (a pre-launch refusal is never a launch). Requires the X1 approved write first | launched | `e12_measure.py adversary` on `verify-report.json` (runbook X2/Aadv) | NOT TESTED |
-| `ISO-ADVERSARY-ACTIVE` | The detached descendant started and stayed active ≥ the D-E12-8 window; the attack set was attempted | active ≥ window | `adversary` markers (`hostile-start`/`descendant-start`/`descendant-end`) + O `tasklist` + hostile log | NOT TESTED |
+| `ISO-ADVERSARY-LAUNCH` | The hostile verifier **actually launched**: the X2 report has `execution.started == true` and is **not** `refused-before-execution` (a pre-launch refusal is never a launch). Requires the X1 approved write first. This is AIDO's own observation | launched | `e12_measure.py adversary` (report half) on `verify-report.json` (runbook X2/Aadv) | NOT TESTED |
+| `ISO-ADVERSARY-ACTIVE` | The descendant was **independently observed live** across the window by an admin (elevated `tasklist`, not X-R), ≥ 2 sightings — the authoritative active-interval evidence. A missing/insufficient observation is FAIL, never PASS | observed, ≥2 sightings | admin `<obs_log>` via `e12_measure.py adversary` (runbook Xobs/Aadv) | NOT TESTED |
+| `ISO-ADVERSARY-DURATION` | The independent observation span ≥ the D-E12-8 window (checked **after** the quiescent bracket, once the window ends) | span ≥ window | `adversary` (observer-log half), runbook Aadv | NOT TESTED |
+| `ISO-ADVERSARY-COVERAGE` | X-R's hostile log records the enumerated attack attempts + Win32 results — **diagnostic only**, never authoritative isolation evidence | recorded | `<xr_scratch>\hostile-log.txt` (diagnostic) | NOT TESTED |
 | `ISO-DIGEST-PRE` | A's pre-rehearsal manifests: `state_root`, `published`, `inbox`, `exchange_root` (`--exchange`, outbox excluded), `.git` control of `<clone_iso>`, anchors (prep §5.0, runbook §A3) | recorded | `*-pre.txt` (6 manifests) | NOT TESTED |
-| `ISO-DIGEST-Q` | **Quiescent bracket** (A idle, only the adversary active): all six manifests `strict`-identical to pre (the literal §5.8.10 test) | all `strict` PASS | `e12_measure.py strict` ×6 (runbook §A3q) | NOT TESTED |
-| `ISO-DIGEST-POST` | **Full-window accountable compare**: anchors + `.git` `strict`-identical; each of the four A-owned plane roots `classify`-clean (no write-once rewrite/deletion, no unexpected-name object, no reparse, no hard link) | all PASS | `strict` ×2 + `classify` ×4 (runbook §A6) | NOT TESTED |
+| `ISO-DIGEST-Q` | **Quiescent bracket** (A idle, descendant still live): all six manifests `strict`-identical to pre (the literal §5.8.10 test) | all `strict` PASS | `e12_measure.py strict` ×6 (runbook §A3q) | NOT TESTED |
+| `ISO-DIGEST-POST` | **Exercise-scoped accountable compare**: `approver-registry.v1.json` strict across the rehearsal and each exercise's anchors strict against **its own** baseline; each clone's `.git` strict against **its own** pre (never cross-clone); each A-owned plane root `classify`-clean against the ISO pre (no write-once rewrite/deletion of any evidence kind, no unexpected-name object, no reparse, no hard link) | all PASS | `strict` + `classify` (runbook §A6-ISO/A6-S7) | NOT TESTED |
 | `ISO-PUBLISHED-UNCHANGED` | No `published` object is rewritten/forged by X-R; growth matches only `driver-*.json` (covered by `ISO-DIGEST-POST` published `classify` + `S7-PUBLISHED-ACL`) | expected names only | `classify` + `icacls` | NOT TESTED |
-| `ISO-OVERALL` | `ISO-ADVERSARY-LAUNCH`+`-ACTIVE` PASS **and** `ISO-PROOF-POST` PASS **and** `ISO-DIGEST-Q` PASS **and** `ISO-DIGEST-POST` PASS **and** `FD18-GIT-UNCHANGED` PASS. A byte-identical plane with no proven adversary run is **INVALID, not PASS** | all PASS | the rows above | NOT TESTED |
+| `ISO-OVERALL` | `ISO-BOOTSTRAP` + `ISO-ADVERSARY-LAUNCH` + `ISO-ADVERSARY-ACTIVE` + `ISO-ADVERSARY-DURATION` PASS **and** `ISO-PROOF-POST` PASS **and** `ISO-DIGEST-Q` PASS **and** `ISO-DIGEST-POST` PASS **and** `FD18-GIT-UNCHANGED` PASS. A byte-identical plane with no **independently observed** adversary run is **INVALID, not PASS** | all PASS | the rows above | NOT TESTED |
 
 ## 8. HARNESS — detached HEAD + read-only `.git`
 
 | Id | Check | Expected | Evidence | State / Reason |
 |---|---|---|---|---|
 | `HARNESS-OWNER` | X-R owns each clone (C-10) | owned | `icacls` / Git ownership check | NOT TESTED |
-| `HARNESS-WRITE-DETACHED` | Frozen writer accepts detached HEAD + read-only `.git` and writes | accepted, written | **standalone** writer run on `<clone_harness>` (runbook Phase 2 X2h); corroborated by ISO X1 and S7 X4 | NOT TESTED |
+| `HARNESS-WRITE-DETACHED` | Frozen writer accepts detached HEAD + read-only `.git` and writes | accepted, written | **standalone** writer run on `<clone_harness>` (runbook Phase 2 X2h); corroborated by ISO X1 and S7 X4 (step 14) | NOT TESTED |
 | `HARNESS-VERIFY-DETACHED` | Frozen verifier accepts detached HEAD + read-only `.git` **end to end to a `verified` outcome** (benign executable, no signing) | `outcome: verified` | **standalone** verifier run on `<clone_harness>` (`harness-verify.json`, runbook Phase 2 X2h); corroborated by ISO X2 preflight | NOT TESTED |
 
 ## 9. S7 — driver integration measurements
@@ -149,20 +154,26 @@ offline suite instead; `optional` = a recommended spot-check that may be skipped
 
 ## 11. Overall E-12 verdict (fill at close)
 
-E-12 **PASSES** iff: all §1 preconditions PASS (`PRECOND-FU2` and `PRECOND-ROOTS`
-included); `ISO-OVERALL` PASS (which requires `ISO-ADVERSARY-LAUNCH` and
-`-ACTIVE` — the adversary provably ran — plus `ISO-PROOF-POST`, the quiescent
-`ISO-DIGEST-Q`, the full-window `ISO-DIGEST-POST` and `FD18-GIT-UNCHANGED`); both
-`HARNESS-*-DETACHED` PASS from the **standalone** `<clone_harness>` run reaching
-`verified`; and no row is FAIL. The S7 rows PASS only if `PRECOND-SIGNING` was
-met; otherwise they are `NOT TESTED / no-signing` and E-12 still passes on
-ISO + HARNESS, with S7 deferred — **the verdict must not claim HARNESS coverage
-from an S7 run that did not happen, nor S7 coverage on a no-signing host**
-(mandatory validation #9). An ISO run in which the hostile verifier was
-`refused-before-execution` (adversary never launched) is **INVALID, not a pass**.
-Any FAIL, any measurement `FAIL` line, or a frozen harness refusing the detached
-HEAD or read-only `.git` (or not reaching `verified` in HARNESS), **blocks the
-live Alpha** (E-10) — no retry, repair or cleanup.
+E-12 **PASSES** iff: all §1 preconditions PASS (`PRECOND-FU3`, `PRECOND-ROOTS`
+and `ISO-BOOTSTRAP` included); `ISO-OVERALL` PASS (which requires
+`ISO-ADVERSARY-LAUNCH` plus the **independent** `ISO-ADVERSARY-ACTIVE` and
+`-DURATION` — the adversary provably launched and was observed live, by an
+observer that is **not** X-R — plus `ISO-PROOF-POST`, the quiescent
+`ISO-DIGEST-Q`, the exercise-scoped `ISO-DIGEST-POST` and `FD18-GIT-UNCHANGED`);
+both `HARNESS-*-DETACHED` PASS from the **standalone** `<clone_harness>` run
+reaching `verified`; and no row is FAIL. The S7 rows (including `S7-PROOF-PRE`
+and `ANCHOR-REBIND`) PASS only if `PRECOND-SIGNING` was met; otherwise they are
+`NOT TESTED / no-signing`, no rebind is performed, the close uses ISO's own post
+(never an unrun `<clone_s7>`), and E-12 still passes on ISO + HARNESS with S7
+deferred — **the verdict must not claim HARNESS coverage from an S7 run that did
+not happen, nor S7 coverage on a no-signing host** (mandatory validation #9).
+Invalid, not a pass: an ISO run where the hostile verifier was
+`refused-before-execution` (adversary never launched), where the active interval
+rests only on X-R's own markers, or where a clone was compared against a
+**different** clone. Any FAIL, any measurement `FAIL` line, an unauthorized
+anchor change outside the one proven rebind, or a frozen harness refusing the
+detached HEAD or read-only `.git` (or not reaching `verified` in HARNESS),
+**blocks the live Alpha** (E-10) — no retry, repair or cleanup.
 
 > Overall verdict: **NOT TESTED** (preparation under corrective review; E-12 not
 > authorized or executed).
