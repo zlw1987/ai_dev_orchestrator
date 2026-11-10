@@ -1908,6 +1908,14 @@ EXPECTED_COMMANDS = [
     # push/PR.
     "l2-supervised-implementer-prepare",
     "l2-supervised-implementer-run",
+    # ALPHA-2A-T1. The single-file task coordinator: a thin fixed sequence
+    # over the accepted stages above, calling their runners unchanged. It adds
+    # no authority, gate, model call, subprocess or approval; every approval
+    # stays a human file edit and the human still commits by hand.
+    "task-start",
+    "task-status",
+    "task-continue",
+    "task-doctor",
 ]
 
 

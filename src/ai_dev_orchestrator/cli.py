@@ -116,6 +116,15 @@ and a response byte bound. Its reply is untrusted proposed content, turned into
 a diff proposal by the unchanged deterministic generator, and the command stops
 before human exact-diff approval. It writes nothing to the workspace, earns no
 qualification credit, and is not an autonomous implementer.
+
+ALPHA-2A-T1 added the **single-file task coordinator**: `task-start`,
+`task-status`, `task-continue` and the read-only `task-doctor`. It keeps one
+task's artifacts in one run directory and calls the accepted stages' own
+extracted runners in-process, in a fixed order, each one only when a human has
+typed that stage's own confirmation flags on `task-continue`. It adds no gate,
+no model call, no subprocess and no approval of its own: drafts carry empty
+approval and consent blocks that a human fills in. See
+`docs/ALPHA_2A_TASK_COORDINATOR.md`.
 """
 
 from __future__ import annotations
@@ -4968,6 +4977,553 @@ def l2_supervised_implementer_run(
         real_flag=real_implementer,
         read_env=_read_supervised_implementer_env,
     )
+
+
+# =============================================================================
+# ALPHA-2A-T1: the single-file task coordinator
+# =============================================================================
+#
+# The coordinator holds no authority of its own. Each stage is the accepted
+# command's own extracted runner, called in-process (no subprocess is added)
+# with the confirmation flags the human typed on task-continue for THAT stage.
+# What each runner writes to stdout and stderr is recorded, exactly, under the
+# run directory's steps/ folder, and still reaches the terminal.
+
+_TASK_EXIT_REFUSED = 1
+
+
+class _StreamTee:
+    """A text stream that writes through to ``original`` and keeps a copy."""
+
+    def __init__(self, original) -> None:
+        self._original = original
+        self._parts: list[str] = []
+        self.encoding = getattr(original, "encoding", None) or "utf-8"
+        self.errors = "strict"
+
+    def write(self, text: str) -> int:
+        if not isinstance(text, str):
+            raise TypeError("write() argument must be str")
+        self._parts.append(text)
+        try:
+            self._original.write(text)
+        except UnicodeEncodeError:
+            self._original.write(text.encode(self.encoding, "replace").decode(self.encoding))
+        return len(text)
+
+    def flush(self) -> None:
+        self._original.flush()
+
+    def isatty(self) -> bool:
+        return False
+
+    def writable(self) -> bool:
+        return True
+
+    def readable(self) -> bool:
+        return False
+
+    def fileno(self) -> int:
+        raise OSError("no file descriptor")
+
+    def getvalue(self) -> str:
+        return "".join(self._parts)
+
+
+def _task_refused(message: str) -> None:
+    typer.echo(f"Error: {message}", err=True)
+    raise typer.Exit(code=_TASK_EXIT_REFUSED)
+
+
+def _task_invoke(task, step: str, function, **kwargs) -> int | None:
+    """Run one accepted runner with stdout/stderr teed, then record both exactly.
+
+    Returns the runner's exit code, or ``None`` if it raised instead of exiting
+    (recorded as ``exit-error``; the run then needs inspection).
+    """
+    from ai_dev_orchestrator.task.run import record_step
+
+    out, err = _StreamTee(sys.stdout), _StreamTee(sys.stderr)
+    saved = sys.stdout, sys.stderr
+    sys.stdout, sys.stderr = out, err
+    code: int | None
+    try:
+        function(**kwargs)
+        code = 0
+    except typer.Exit as exc:
+        code = exc.exit_code
+    except Exception as exc:  # noqa: BLE001 - recorded, never a traceback.
+        code = None
+        err.write(f"Error: internal_error: an unexpected {type(exc).__name__} occurred in {step}.\n")
+    finally:
+        sys.stdout, sys.stderr = saved
+    record = record_step(task, step, code, out.getvalue(), err.getvalue())
+    typer.echo(
+        f"[task] {step} exited {'with an internal error' if code is None else code}; "
+        f"recorded as steps{os.sep}{os.path.basename(record.stdout_path)} (+ .stderr).",
+        err=True,
+    )
+    return code
+
+
+def _task_next_command(task, stage) -> list[str]:
+    from ai_dev_orchestrator.task.run import ACTION_PREPARE
+
+    lines = []
+    for flags, action in stage.actions.items():
+        command = f'ai-dev-orchestrator task-continue --run-dir "{task.run_dir}"'
+        if flags:
+            command += " " + " ".join(flags)
+        label = "re-issue a fresh authorization" if (
+            action == ACTION_PREPARE and stage.name == "implementer_consent"
+        ) else "continue"
+        lines.append(f"  {label}: {command}")
+    return lines
+
+
+def _task_echo_stage(task, stage, *, err: bool) -> None:
+    typer.echo(f"Run:   {task.run_dir}", err=err)
+    typer.echo(f"Task:  {task.title} (issue {task.issue_number}) -> {task.target_path}", err=err)
+    typer.echo(f"Stage: {stage.name}{' (terminal)' if stage.terminal else ''}", err=err)
+    typer.echo(f"  {stage.message}", err=err)
+    for line in _task_next_command(task, stage):
+        typer.echo(line, err=err)
+
+
+def _task_load(run_dir: Path):
+    from ai_dev_orchestrator.task.run import TaskRefused, check_config_unchanged, load_task
+
+    try:
+        task = load_task(str(run_dir))
+        check_config_unchanged(task)
+    except TaskRefused as exc:
+        _task_refused(f"{exc} Nothing was done.")
+    return task
+
+
+def _task_project(task):
+    from ai_dev_orchestrator.config_loader import ConfigError, load_project_config
+
+    try:
+        return load_project_config(Path(task.project_config))
+    except ConfigError as exc:
+        _task_refused(f"{exc} Nothing was done.")
+
+
+def _task_check_gates(project) -> None:
+    """Every gate a task will need, checked before a run directory exists."""
+    from ai_dev_orchestrator.review import check_controlled_review_gate
+    from ai_dev_orchestrator.review.models import ReviewRefusedError
+    from ai_dev_orchestrator.supervised_implementer.live import check_supervised_implementer_live_gate
+    from ai_dev_orchestrator.supervised_implementer.models import SupervisedImplementerError
+    from ai_dev_orchestrator.task.doctor import READ_ONLY_CONTENT_REQUIREMENT, read_only_content_enabled
+
+    if sys.platform != "win32":
+        _task_refused("the task workflow uses the Windows-only 5F2C writer. Nothing was written.")
+    problems = []
+    if not read_only_content_enabled(project):
+        problems.append(READ_ONLY_CONTENT_REQUIREMENT)
+    if not project.workspace_write.enabled:
+        problems.append("workspace_write is not enabled")
+    if not project.controlled_verification.enabled:
+        problems.append("controlled_verification is not enabled")
+    try:
+        check_controlled_review_gate(project)
+    except ReviewRefusedError as exc:
+        problems.append(f"controlled_review: {exc}")
+    try:
+        check_supervised_implementer_live_gate(project.supervised_implementer)
+    except SupervisedImplementerError as exc:
+        problems.append(f"supervised_implementer: {exc}")
+    if problems:
+        _task_refused(
+            "this project config cannot run a task: "
+            + "; ".join(problems)
+            + ". Run task-doctor for details. Nothing was written."
+        )
+
+
+def _task_default_runs_root() -> str | None:
+    base = os.environ.get("LOCALAPPDATA")
+    return os.path.join(base, "AIDO", "runs") if base else None
+
+
+def _run_task_start(
+    *,
+    project_config: Path,
+    title: str,
+    issue: int,
+    target_path: str,
+    description: str | None,
+    description_file: Path | None,
+    runs_root: Path | None,
+    _now=None,
+) -> None:
+    """Create one task run and its plan draft. Offline. Extracted for tests."""
+    from ai_dev_orchestrator.config_loader import ConfigError, load_project_config
+    from ai_dev_orchestrator.task.run import (
+        PLAN_DRAFT_FILE,
+        TaskRefused,
+        create_run,
+        derive_stage,
+        require_outside_workspace,
+    )
+
+    try:
+        project = load_project_config(project_config)
+    except ConfigError as exc:
+        _task_refused(f"{exc} Nothing was written.")
+    _task_check_gates(project)
+    if (description is None) == (description_file is None):
+        _task_refused("pass exactly one of --description or --description-file. Nothing was written.")
+    try:
+        if description_file is not None:
+            require_outside_workspace(str(description_file), project.repo.workspace_path, "--description-file")
+            try:
+                description = description_file.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                _task_refused("could not read --description-file as UTF-8 text. Nothing was written.")
+        root = str(runs_root) if runs_root is not None else _task_default_runs_root()
+        if root is None:
+            _task_refused("LOCALAPPDATA is not set; pass --runs-root. Nothing was written.")
+        task = create_run(
+            runs_root=root,
+            project_config_path=str(project_config),
+            project=project,
+            title=title,
+            description=description,
+            issue_number=issue,
+            target_path=target_path,
+            now=_now() if _now is not None else None,
+        )
+    except TaskRefused as exc:
+        _task_refused(f"{exc} Nothing was written.")
+    typer.echo(
+        f"TASK STARTED. AIDO drafted an L1 plan from your inputs (no model was "
+        f"contacted). Review {PLAN_DRAFT_FILE}; nothing is approved yet.",
+        err=True,
+    )
+    _task_echo_stage(task, derive_stage(task), err=True)
+
+
+def _run_task_status(*, run_dir: Path) -> None:
+    """Print a run's derived stage and its next command. Read-only."""
+    from ai_dev_orchestrator.task.run import derive_stage
+
+    task = _task_load(run_dir)
+    _task_echo_stage(task, derive_stage(task), err=False)
+
+
+def _task_refuse_crlf(task, project) -> None:
+    """Refuse a CRLF target before anything is prepared or sent.
+
+    The writer never normalizes line endings, and the implementer refuses a
+    proposal whose endings differ from the file's. A CRLF working-tree copy
+    (Git's ``core.autocrlf=true`` Windows default) therefore cannot take an LF
+    reply. The check uses the implementer's own read and domain rules; any
+    refusal of its own is left for prepare to report.
+    """
+    from ai_dev_orchestrator.handoff.models import parse_approved_l1_plan_artifact
+    from ai_dev_orchestrator.task.preflight import target_uses_crlf
+    from ai_dev_orchestrator.task.run import PLAN_APPROVED_FILE
+
+    with open(task.path(PLAN_APPROVED_FILE), encoding="utf-8") as handle:
+        plan = parse_approved_l1_plan_artifact(handle.read())
+    if target_uses_crlf(project, plan, task.target_path):
+        _task_refused(
+            f"{task.target_path!r} is checked out with CRLF line endings. AIDO never "
+            "normalizes line endings, so an LF reply could never be approved or "
+            "applied. Check the file out with LF (a .gitattributes 'eol=lf' rule, "
+            "or a clone with core.autocrlf=false), then continue. Nothing was "
+            "prepared or sent; the plan approval is kept."
+        )
+
+
+def _run_task_continue(
+    *,
+    run_dir: Path,
+    flags: dict[str, bool],
+    read_implementer_env=_read_supervised_implementer_env,
+    read_reviewer_env=_read_reviewer_env,
+    reviewer_transport_factory=_build_reviewer_network_transport,
+    _implementer_transport_factory=None,
+) -> None:
+    """Advance one run by one stage, then stop at the next human point.
+
+    ``flags`` maps each task-continue flag to whether the human typed it. The
+    stage decides which exact flag set it accepts; anything else refuses with
+    nothing done. ``_implementer_transport_factory`` is the P1B private test
+    seam, passed through unchanged.
+    """
+    from ai_dev_orchestrator.task import run as task_run
+
+    task = _task_load(run_dir)
+    project = _task_project(task)
+    stage = task_run.derive_stage(task)
+    passed = tuple(flag for flag in task_run.ALL_FLAGS if flags.get(flag) is True)
+    if stage.terminal:
+        _task_echo_stage(task, stage, err=True)
+        _task_refused("this run is finished; there is nothing to continue.")
+    action = stage.actions.get(passed)
+    if action is None:
+        accepted = " | ".join(" ".join(option) or "(no flag)" for option in stage.actions)
+        _task_refused(
+            f"stage {stage.name!r} accepts exactly: {accepted}. You passed: "
+            f"{' '.join(passed) or '(no flag)'}. Each flag confirms its own stage. "
+            "Nothing was done."
+        )
+
+    code: int | None = 0
+    try:
+        if action == task_run.ACTION_PREPARE:
+            task_run.freeze_plan_approval(task)
+            _task_refuse_crlf(task, project)
+            code = _task_invoke(
+                task,
+                "prepare",
+                _run_l2_supervised_implementer_prepare,
+                project_config=Path(task.project_config),
+                approved_plan=Path(task.path(task_run.PLAN_APPROVED_FILE)),
+                target_path=task.target_path,
+                evidence_dir=Path(task_run.evidence_dir(task)),
+                out=Path(task_run.next_authorization_path(task)),
+                prepare_flag=True,
+            )
+        elif action == task_run.ACTION_RUN_IMPLEMENTER:
+            code = _task_invoke(
+                task,
+                "implementer-run",
+                _run_l2_supervised_implementer_run,
+                project_config=Path(task.project_config),
+                approved_plan=Path(task.path(task_run.PLAN_APPROVED_FILE)),
+                authorization=Path(task_run.authorization_paths(task)[-1]),
+                evidence_dir=Path(task_run.evidence_dir(task)),
+                transmit_flag=True,
+                real_flag=True,
+                read_env=read_implementer_env,
+                _inner_transport_factory=_implementer_transport_factory,
+            )
+            after = task_run.derive_stage(task)
+            if after.name == "diff_draft_pending":
+                task_run.write_diff_draft(task, after.evidence_run_dir)
+        elif action == task_run.ACTION_WRITE_DIFF_DRAFT:
+            task_run.write_diff_draft(task, stage.evidence_run_dir)
+        elif action in (task_run.ACTION_APPLY_AND_REVIEW, task_run.ACTION_REVIEW):
+            approved = Path(task_run.freeze_diff_approval(task, stage.evidence_run_dir))
+            if action == task_run.ACTION_APPLY_AND_REVIEW:
+                code = _task_invoke(
+                    task,
+                    "apply",
+                    _run_l2_apply_approved_file_edit,
+                    project_config=Path(task.project_config),
+                    approved_diff_proposal=approved,
+                    apply_approved_plan=True,
+                    write_approved_file=True,
+                )
+            if code == 0:
+                code = _task_invoke(
+                    task,
+                    "review",
+                    _run_l2_review_approved_file_edit,
+                    project_config=Path(task.project_config),
+                    approved_diff_proposal=approved,
+                    verify_approved_file_edit_flag=True,
+                    real_reviewer=True,
+                    read_env=read_reviewer_env,
+                    network_transport_factory=reviewer_transport_factory,
+                )
+            if code == 0:
+                # The summary is derived display, never evidence: the review
+                # step's record already holds the packet, so a summary failure
+                # warns instead of failing a review that succeeded.
+                try:
+                    summary = task_run.write_summary(task)
+                except Exception as exc:  # noqa: BLE001
+                    summary = None
+                    typer.echo(
+                        f"WARNING: summary.txt not written ({type(exc).__name__}); "
+                        "the review packet is in the review step's .stdout record.",
+                        err=True,
+                    )
+                if summary is not None:
+                    typer.echo("", err=True)
+                    typer.echo(summary, err=True)
+    except task_run.TaskRefused as exc:
+        _task_refused(f"{exc}")
+
+    typer.echo("", err=True)
+    _task_echo_stage(task, task_run.derive_stage(task), err=True)
+    if code is None:
+        raise typer.Exit(code=_TASK_EXIT_REFUSED)
+    if code != 0:
+        raise typer.Exit(code=code)
+
+
+def _run_task_doctor(*, project_config: Path, target_path: str | None, environ=None) -> None:
+    """Report each gate a task needs; derive the reviewer endpoint block. Read-only."""
+    from ai_dev_orchestrator.config_loader import ConfigError, load_project_config
+    from ai_dev_orchestrator.task.doctor import endpoint_block_yaml, run_doctor
+
+    try:
+        project = load_project_config(project_config)
+    except ConfigError as exc:
+        _task_refused(f"{exc}")
+    lines, derived = run_doctor(
+        project, environ=os.environ if environ is None else environ, target_path=target_path
+    )
+    for line in lines:
+        typer.echo(f"[{'OK' if line.ok else 'FIX'}] {line.text}")
+    if derived is not None:
+        typer.echo("")
+        typer.echo(
+            "Endpoint authorization derived from the environment. If it is the "
+            "reviewer endpoint you intend, it must appear in the project config "
+            "exactly like this (merge it into the existing controlled_review block):"
+        )
+        typer.echo(endpoint_block_yaml(derived), nl=False)
+        # The live implementer is LiteLLM-only (D-2), so its consent values
+        # describe this endpoint only when the reviewer is LiteLLM too.
+        if project.controlled_review.provider == "litellm":
+            typer.echo(
+                "Implementer consent values for the same LiteLLM endpoint: "
+                f"endpoint_scheme {derived.scheme!r}, endpoint_host {derived.host!r}, "
+                f"endpoint_port {derived.port}."
+            )
+    if not all(line.ok for line in lines):
+        raise typer.Exit(code=_TASK_EXIT_REFUSED)
+
+
+@app.command("task-start", short_help="Start one single-file task: draft its plan (offline).")
+def task_start(
+    project_config: Path = typer.Option(
+        ...,
+        "--project-config",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="The project config. It must enable read_only_workspace_content, "
+        "workspace_write, controlled_verification, controlled_review (with its "
+        "endpoint) and the live supervised_implementer; task-doctor checks them. "
+        "A run is pinned to this file's bytes.",
+    ),
+    title: str = typer.Option(..., "--title", help="One-line task title."),
+    issue: int = typer.Option(..., "--issue", help="A positive task or issue number (identity only)."),
+    target_path: str = typer.Option(
+        ...,
+        "--target-path",
+        help="The ONE existing tracked repo-relative file to change. A human's choice.",
+    ),
+    description: str | None = typer.Option(
+        None, "--description", help="What to change, as text. Becomes the plan summary."
+    ),
+    description_file: Path | None = typer.Option(
+        None,
+        "--description-file",
+        help="What to change, from a UTF-8 file outside the workspace.",
+    ),
+    runs_root: Path | None = typer.Option(
+        None,
+        "--runs-root",
+        help="Where run directories go. Default: %LOCALAPPDATA%\\AIDO\\runs. Outside the workspace.",
+    ),
+) -> None:
+    """Create a task run directory and an L1 plan DRAFT for a human to approve.
+
+    Offline: no model, no environment credential, no workspace access. The plan
+    is drafted by AIDO from your inputs; its approval block is empty.
+    """
+    _run_task_start(
+        project_config=project_config,
+        title=title,
+        issue=issue,
+        target_path=target_path,
+        description=description,
+        description_file=description_file,
+        runs_root=runs_root,
+    )
+
+
+@app.command("task-status", short_help="Show a task run's stage and its next command (read-only).")
+def task_status(
+    run_dir: Path = typer.Option(..., "--run-dir", help="The task run directory."),
+) -> None:
+    """Derive the run's stage from its files and print the next command."""
+    _run_task_status(run_dir=run_dir)
+
+
+@app.command("task-continue", short_help="Advance a task run by one stage, then stop at a human.")
+def task_continue(
+    run_dir: Path = typer.Option(..., "--run-dir", help="The task run directory."),
+    prepare_supervised_implementation: bool = typer.Option(
+        False,
+        "--prepare-supervised-implementation",
+        help="Plan stage: freeze the approved plan and prepare the implementer authorization (offline).",
+    ),
+    transmit_approved_source: bool = typer.Option(
+        False,
+        "--transmit-approved-source",
+        help="Consent stage: consent to send the one approved file to the implementer model.",
+    ),
+    real_implementer: bool = typer.Option(
+        False, "--real-implementer", help="Consent stage: consent to contact a real implementer model."
+    ),
+    apply_approved_plan: bool = typer.Option(
+        False, "--apply-approved-plan", help="Diff stage: act on the approved artifact."
+    ),
+    write_approved_file: bool = typer.Option(
+        False, "--write-approved-file", help="Diff stage: write the one approved file."
+    ),
+    verify_approved_file_edit: bool = typer.Option(
+        False,
+        "--verify-approved-file-edit",
+        help="Diff/review stage: run the project's configured verification.",
+    ),
+    real_reviewer: bool = typer.Option(
+        False,
+        "--real-reviewer",
+        help="Diff/review stage: send the approved diff to the real reviewer model.",
+    ),
+) -> None:
+    """Run the current stage's accepted command(s), record their output, stop.
+
+    Each stage accepts exactly its own flags (task-status prints them):
+    plan → --prepare-supervised-implementation; consent →
+    --transmit-approved-source --real-implementer; diff → --apply-approved-plan
+    --write-approved-file --verify-approved-file-edit --real-reviewer; review
+    retry → --verify-approved-file-edit --real-reviewer.
+    """
+    _run_task_continue(
+        run_dir=run_dir,
+        flags={
+            "--prepare-supervised-implementation": prepare_supervised_implementation,
+            "--transmit-approved-source": transmit_approved_source,
+            "--real-implementer": real_implementer,
+            "--apply-approved-plan": apply_approved_plan,
+            "--write-approved-file": write_approved_file,
+            "--verify-approved-file-edit": verify_approved_file_edit,
+            "--real-reviewer": real_reviewer,
+        },
+    )
+
+
+@app.command("task-doctor", short_help="Check a project config for tasks; derive the reviewer endpoint block.")
+def task_doctor(
+    project_config: Path = typer.Option(
+        ..., "--project-config", exists=True, file_okay=True, dir_okay=False, readable=True
+    ),
+    target_path: str | None = typer.Option(
+        None, "--target-path", help="Also check the workspace is wholly clean with this file tracked."
+    ),
+) -> None:
+    """Read-only. Reads one environment value (the reviewer base URL) and no key.
+
+    It checks every gate a task needs, including read_only_workspace_content
+    (the implementer's prepare step reads the target through it). It never
+    writes the config: it prints the endpoint block for a human to
+    paste, because the endpoint authorization must stay a human decision.
+    """
+    _run_task_doctor(project_config=project_config, target_path=target_path)
 
 
 if __name__ == "__main__":

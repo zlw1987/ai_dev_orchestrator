@@ -1,6 +1,7 @@
 """The live supervised implementer (ALPHA-P1B, DEC-SUP-LIVE).
 
-Two entry points, reached only from the two CLI commands:
+Two entry points, reached only from the two CLI commands (whose extracted
+runners ALPHA-2A-T1's ``task-continue`` calls unchanged):
 
 - :func:`prepare_supervised_implementation` re-derives everything one run would
   send, offline, and returns an authorization **draft**. It reads no provider

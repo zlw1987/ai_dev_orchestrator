@@ -13,7 +13,8 @@ writer may do anything.
   accidental live use, not a sandbox (a mock handler is arbitrary trusted
   caller code). No CLI command reaches it.
 - ALPHA-P1B adds the live path in :mod:`.live`, reached only from
-  ``l2-supervised-implementer-prepare`` and ``l2-supervised-implementer-run``.
+  ``l2-supervised-implementer-prepare`` and ``l2-supervised-implementer-run``,
+  whose extracted runners ALPHA-2A-T1's ``task-continue`` calls unchanged.
   It needs ``live_transmission_enabled``, provider ``litellm``, an explicit wait
   bound, and a human-completed, single-use, per-run authorization. It builds
   its own bounded transport and never accepts one from a caller.

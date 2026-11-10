@@ -81,6 +81,10 @@ before doing any work here.
   approved file to `SUP-D` once under a human-completed, single-use, per-run
   consent and stops before human exact-diff approval. See "What the supervised
   implementer can and cannot do" below.
+- **ALPHA-2A-T1 implemented the single-file task coordinator** (`task-start`,
+  `task-status`, `task-continue`, `task-doctor`; it awaits independent review).
+  It runs the accepted stages in a fixed order over one run directory and adds
+  no authority. See "What the task coordinator can and cannot do" below.
 - **The first controlled write → verify → supervised review → human path now
   exists.** **L2 as originally defined is still NOT complete**: there is no
   **autonomous** model-backed implementer, no automatic fixer, no branch
@@ -98,6 +102,7 @@ before doing any work here.
 5F2E-V2        Structured vLLM Reviewer Output      DONE
 ALPHA-P1A      Offline Supervised Implementer       DONE / ACCEPTED
 ALPHA-P1B      Live Supervised Implementer          IMPLEMENTED (awaiting review)
+ALPHA-2A-T1    Single-File Task Coordinator         IMPLEMENTED (awaiting review)
 → bounded write → verify → supervised review → human
 ```
 
@@ -664,6 +669,55 @@ fallback model; a live `vllm` provider; structured output on the live path;
 multi-file transmission; a CLI model, endpoint, key, timeout or provider option;
 automatic H6 approval; or a real endpoint in code or docs.
 
+### What the task coordinator can and cannot do (ALPHA-2A-T1)
+
+See `docs/ALPHA_2A_TASK_COORDINATOR.md`. It is a **thin, fixed sequence**, not
+an orchestration framework and not the DL-4B Alpha driver (which stays offline).
+
+- **One task, one run directory** under a runs root outside the workspace
+  (default `%LOCALAPPDATA%\AIDO\runs`). Every AIDO-written file there is
+  created exclusively and never rewritten. The stage is **derived from the run
+  directory's files every time**; there is no state store and no
+  caller-supplied stage.
+- **It calls the accepted commands' extracted runners in-process, unchanged**:
+  `_run_l2_supervised_implementer_prepare`/`_run`, `_run_l2_apply_approved_file_edit`
+  and `_run_l2_review_approved_file_edit` (which runs 5F2D itself). Every gate,
+  ordering rule and exit code is theirs. It adds **no subprocess**: do not make
+  it spawn `ai-dev-orchestrator`.
+- **Four human pauses**: plan approval, implementer consent, exact-diff
+  approval, and the final decision (AIDO commits nothing). **Each stage accepts
+  exactly its own confirmation flags**, typed by a human on `task-continue`;
+  any other flag set refuses with nothing done. Never let one invocation carry
+  flags for two stages.
+- **It never creates an approval or a consent.** The plan and diff drafts carry
+  four empty approval strings, and the authorization draft is P1B's own. Before
+  freezing, it refuses any change outside the `approval` block, then the accepted
+  strict parser decides; the frozen copy is the human's exact bytes. Do not add
+  terminal approval capture, pre-filled approval values, or an "accept" phrase
+  (D-2: approval stays a human file edit).
+- **The plan draft is deterministic** from the human's title, description and
+  one target path. No model plans here.
+- **A run is pinned to one project config by SHA-256.** A changed config
+  refuses every later step; start a new task.
+- **CRLF targets are refused before prepare.** AIDO never normalizes line
+  endings; do not "fix" this by normalizing.
+- **Single use stays the P1B ledger's.** The coordinator reads the evidence
+  directory for display only; deleting it cannot replay an authorization.
+- **Evidence.** Each runner's stdout and stderr are recorded byte-exact as
+  `steps/NN-<step>.exit-<code>.stdout|.stderr`; the review packet is the review
+  step's stdout. `summary.txt` is derived and says it is not evidence. The raw
+  reviewer response is still not retained (5F2E).
+- **`task-doctor` is read-only.** It reads exactly one environment value (the
+  configured reviewer provider's base URL name) and only the *presence* of the
+  key name, derives the `controlled_review.endpoint` block with the reviewer's
+  own httpx parse, and **prints** it for a human to paste (D-1). It never writes
+  the config, and the endpoint authorization is never derived at run time.
+
+Do **not** add any of the following without an explicit, separate prompt: a
+model planner stage; multi-file tasks; a fixer or review/fix loop; automatic
+approval or consent; config writing; per-run endpoint derivation; Git writes;
+a generic workflow/DAG engine; or DL-4B integration.
+
 ## Role split
 
 - **ChatGPT** = architect / planner / reviewer / prompt writer.
@@ -716,7 +770,9 @@ prompt explicitly asks:
 
 Real model calls exist only behind the four explicitly gated commands
 (`real-llm-smoke-test`, `generate-model-plan`, `l2-review-approved-file-edit`,
-`l2-supervised-implementer-run`); nothing else may call a model, and no model output may ever select a path, a
+`l2-supervised-implementer-run`). `task-continue` (ALPHA-2A-T1) reaches the last
+two only through their own extracted runners, with the same flags typed by a
+human; nothing else may call a model, and no model output may ever select a path, a
 command, an executable, or a file to change.
 
 ## Coding discipline
