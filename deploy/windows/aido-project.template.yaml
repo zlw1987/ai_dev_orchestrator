@@ -1,0 +1,101 @@
+# AIDO project config TEMPLATE for the single-file task workflow (PORTABLE-T1).
+#
+# Copy it to %LOCALAPPDATA%\AIDO\config\<project>.yaml, replace every <...>
+# placeholder, then follow docs/WINDOWS_FRESH_PC_SETUP.md section 6.
+#
+# NO SECRETS belong in this file. Endpoint VALUES and API keys come only from
+# environment variables (AIDO_LITELLM_* / AIDO_VLLM_*), set per window.
+#
+# Paths: absolute, with FORWARD slashes ("C:/work/repo"). A backslash inside
+# double quotes is a YAML escape and breaks the file.
+#
+# EVERY AUTHORITY BELOW SHIPS DISABLED. Each "enabled: false" marked
+# "SWITCH" is a separate decision that you make by editing it to true after
+# reading what it permits. Copying this file enables nothing.
+
+project_id: "<PROJECT_ID>"                 # short id, e.g. "myrepo"
+display_name: "<DISPLAY_NAME>"
+
+repo:
+  workspace_path: "<TARGET_CLONE_FWD>"     # the dedicated LF clone, e.g. "C:/work/myrepo-aido"
+  github_repo: "<OWNER>/<REPO>"            # identity only; AIDO never contacts GitHub here
+  default_base_branch: "main"
+  branch_prefix: "aido"                    # required by the schema; nothing creates branches
+
+workspace_policy:
+  deny_outside_workspace: true             # the writer requires true
+  allow_symlinks: false                    # the writer requires false
+  max_changed_files: 1                     # a task changes exactly one file
+
+# Repo-relative globs a task may name as its ONE target. Keep it narrow.
+allowed_paths:
+  - "<ALLOWED_GLOB>"                       # e.g. "src/**" or one exact file
+# A protected path is refused by the writer outright.
+protected_paths: []
+# Never read or written. Forbidden beats everything.
+forbidden_paths:
+  - ".git"
+  - ".git/**"
+  - ".env"
+  - ".venv"
+  - ".venv/**"
+
+real_model_planning:                       # not used by the task workflow
+  enabled: false
+  allowed_models: []
+
+read_only_workspace_inspection:            # not used by the task workflow
+  enabled: false
+
+# The implementer's prepare step reads the ONE target through this bounded read.
+read_only_workspace_content:
+  enabled: false                           # SWITCH
+  max_files: 1
+  max_file_bytes: 200000
+  max_total_bytes: 200000
+  allow_protected_paths: false
+
+# The 5F2C single-file writer: one approved modify, one tracked file.
+workspace_write:
+  enabled: false                           # SWITCH
+  max_file_bytes: 200000
+
+# UNSANDBOXED EXECUTION of the project's own verification program. It runs
+# with a minimal environment (no HOME/USERPROFILE, no AIDO_* value) and may do
+# anything that program does. It runs once after the write and once more
+# inside the review step.
+controlled_verification:
+  enabled: false                           # SWITCH
+  executable: "<VERIFY_EXECUTABLE_FWD>"    # absolute, existing, OUTSIDE the workspace;
+                                           # NOT AIDO's own venv python (it would test AIDO)
+  args:                                    # exact argv tail, verbatim; no shell syntax, no secrets
+    - "<VERIFY_ARG_1>"
+  timeout_seconds: 300                     # bounds AIDO's wait, not the program's life
+  max_output_bytes: 200000
+
+# Source-derived material (the approved diff, plan prose, redacted verification
+# output) leaves this machine for ONE reviewer model.
+controlled_review:
+  enabled: false                           # SWITCH
+  provider: "litellm"                      # exactly "litellm" or "vllm"
+  model: "<REVIEW_MODEL>"                  # exact model id; there is no default
+  attempt_timeout_seconds: 90              # bounds AIDO's wait only; a stall is terminal
+  compact_retry_on_unusable_output: false
+  vllm_allow_insecure_http: false          # vllm only; true is an acknowledgement, never security
+  vllm_structured_output: false            # vllm only; true with litellm is refused
+  # endpoint:  -> do NOT type this by hand. Run task-doctor with the reviewer
+  #               base URL variable set; it prints the exact block to paste here.
+
+# The supervised, proposal-only implementer (candidate SUP-D). ONE approved
+# file goes to the model once per human-consented, single-use authorization.
+supervised_implementer:
+  enabled: false                           # SWITCH
+  live_transmission_enabled: false         # SWITCH (separate from enabled)
+  candidate: "SUP-D"                       # fixed registry pair; do not change
+  model: "qwen3.8-27b"
+  provider: "litellm"                      # the live path is LiteLLM-only
+  structured_output: false                 # must stay false on the live path
+  allow_insecure_http: false
+  attempt_timeout_seconds: 600.0           # REQUIRED; keep the ".0" (it must be a float)
+  authorization_ledger_dir: "<LEDGER_DIR_FWD>"   # from 'install_aido.py init-home'; NEW and
+                                           # EMPTY on this PC, never copied from another one
