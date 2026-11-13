@@ -85,6 +85,11 @@ before doing any work here.
   `task-status`, `task-continue`, `task-doctor`; it awaits independent review).
   It runs the accepted stages in a fixed order over one run directory and adds
   no authority. See "What the task coordinator can and cannot do" below.
+- **ALPHA-2B-T1 implemented ONE human-supervised bounded correction round**
+  in the task coordinator (Product Owner decisions PO-1, PO-2, PO-3; policy
+  §10; it awaits independent review). See "What the correction round can and
+  cannot do" below. It is the only exception to the fix-loop prohibitions in
+  this file, and it is human-initiated at every step.
 - **The first controlled write → verify → supervised review → human path now
   exists.** **L2 as originally defined is still NOT complete**: there is no
   **autonomous** model-backed implementer, no automatic fixer, no branch
@@ -103,6 +108,7 @@ before doing any work here.
 ALPHA-P1A      Offline Supervised Implementer       DONE / ACCEPTED
 ALPHA-P1B      Live Supervised Implementer          IMPLEMENTED (awaiting review)
 ALPHA-2A-T1    Single-File Task Coordinator         IMPLEMENTED (awaiting review)
+ALPHA-2B-T1    One Human-Supervised Correction Round IMPLEMENTED (awaiting review)
 → bounded write → verify → supervised review → human
 ```
 
@@ -572,7 +578,10 @@ waiting.
 > **A verdict is advisory and terminal.** All three verdicts end at a human.
 > Never add a fixer, a second reviewer, a retry after findings, patch generation
 > from findings, a file edit from findings, a revert or restore, a branch, a
-> commit, a push, or a PR. (RS1's compact retry is not a counter-example: it
+> commit, a push, or a PR. (The one exception is ALPHA-2B-T1's single
+> correction round, below: a verdict may make it *available*, but only a human
+> begins it, restores the file, consents and approves. The reviewer stage
+> itself is unchanged.) (RS1's compact retry is not a counter-example: it
 > exists only when a **completed** response carried no usable review at all,
 > never to revisit a verdict that was produced.)
 >
@@ -664,8 +673,9 @@ authorized.
   repository, clone and file. Implementation authority is offline only.
 
 Do **not** add any of the following without an explicit, separate prompt: an
-autonomous model-backed implementer; a fixer; a retry or a second request; a
-fallback model; a live `vllm` provider; structured output on the live path;
+autonomous model-backed implementer; a fixer; a retry or a second request
+under one authorization (ALPHA-2B-T1's round 2 is a separate request under a
+fresh, separately consented authorization, not a retry); a fallback model; a live `vllm` provider; structured output on the live path;
 multi-file transmission; a CLI model, endpoint, key, timeout or provider option;
 automatic H6 approval; or a real endpoint in code or docs.
 
@@ -714,9 +724,50 @@ an orchestration framework and not the DL-4B Alpha driver (which stays offline).
   the config, and the endpoint authorization is never derived at run time.
 
 Do **not** add any of the following without an explicit, separate prompt: a
-model planner stage; multi-file tasks; a fixer or review/fix loop; automatic
-approval or consent; config writing; per-run endpoint derivation; Git writes;
-a generic workflow/DAG engine; or DL-4B integration.
+model planner stage; multi-file tasks; a fixer or review/fix loop (beyond
+ALPHA-2B-T1's one human-initiated round); automatic approval or consent;
+config writing; per-run endpoint derivation; Git writes; a generic
+workflow/DAG engine; or DL-4B integration.
+
+### What the correction round can and cannot do (ALPHA-2B-T1)
+
+See `docs/ALPHA_2A_TASK_COORDINATOR.md` §9 and policy §10 (PO-1, PO-2, PO-3).
+
+- **Exactly one round, human-initiated.** It is offered only after round 1
+  ends in a valid `changes_requested` packet, or in verification exit 2 with a
+  valid `verification-failed` report and a trusted workspace. Never for
+  `approve`, `needs_human_review`, exit 3, exit 4, a refusal or a malformed
+  record. The offer itself calls nothing; `--begin-correction-round` and
+  `--decline-correction` only record the human's choice. There is no third
+  round and no retry after a completed round-2 verdict.
+- **The human restores, AIDO never does.** No `git restore`, reset, stash,
+  clone, branch or worktree is added; the fixed Git set is unchanged. AIDO
+  prints the restore command with the warning that it discards the uncommitted
+  candidate, and its round-1 evidence stays in the run directory.
+- **Round 2 regenerates the complete file from the original baseline.** The
+  request carries an optional `correction` **data** object (previous approved
+  diff, AIDO-observed verification facts, untrusted reviewer findings). With
+  no correction the request is **byte-identical** to Alpha 2A; keep it so. The
+  correction is in-process only: no CLI option on the P1B commands reaches it.
+- **Bound to round 1, rebuilt from evidence.** The correction is built only
+  from recorded round-1 evidence, pinned by digest in `40-correction.json`,
+  and rebuilt and compared at both the prepare and the run boundary. P1B
+  refuses a correction whose baseline (target, source digest and size, HEAD)
+  is not what it observes, and the authorization's `request_sha256` binds the
+  correction. A round-2 authorization must repeat round 1's identity fields
+  and must be fresh. Never re-baseline a task silently.
+- **Round-scoped records.** Round 2 uses `50-`/`60-`/`61-` files, `-r2` steps
+  and `summary-r2.txt`; a round-1 authorization, approval or review is never
+  round-2 authority.
+- **Redaction is a backstop.** The transmission copy is redacted and has
+  workspace-path spellings replaced; the original evidence is never modified.
+  Never claim the transmitted material is secret-free.
+
+Do **not** add any of the following without an explicit, separate prompt: a
+second correction round; an automatic correction without the human's begin
+decision; an AIDO-performed restore; a correction from anything other than
+recorded evidence; structured output or a token budget for the correction
+request; or a correction for any other result than the two eligible ones.
 
 ## Role split
 
@@ -756,13 +807,16 @@ prompt explicitly asks:
   only other model-backed role is the **supervised, proposal-only** implementer
   (ALPHA-P1B). Two *providers* is not two *reviewers*: exactly one
   project-configured model reviews, over exactly one project-configured backend.
-  There is **no fixer**, no review/fix loop, no second reviewer, no consensus, no
+  There is **no fixer**, no review/fix loop (except ALPHA-2B-T1's one
+  human-initiated correction round), no second reviewer, no consensus, no
   fallback model, no provider failover, and no **autonomous** model-backed
   implementer. A reviewer verdict is advisory and ends
-  at a human. The only application-level second model call anywhere is RS1's
+  at a human. The only application-level second model call **within one
+  authorization or one review** is RS1's
   **one** bounded compact retry, which fires only after a **completed** response
   carried no usable review at all — never after a timeout, and never to revisit a
-  verdict that was produced.
+  verdict that was produced. (ALPHA-2B-T1's round 2 is a separate implementer
+  request under a fresh, human-consented authorization.)
 - No **agent logic** beyond that one reviewer role and its bounded attempt
   policy, and the one-shot supervised implementer request. RS1 is resource-budget supervision of a one-shot reviewer, **not** an
   agent-loop supervisor, and must not grow into one here.

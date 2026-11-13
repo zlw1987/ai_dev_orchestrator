@@ -25,6 +25,7 @@
 | Authorizes | **Nothing** |
 | Amended | 2026-10-14 — §8 DEC-SUP: opens the supervised-implementer branch (`SUP-D`, no qualification credit). Offline, library-only ALPHA-P1A only; nothing live |
 | Amended | 2026-10-15 — §9 DEC-SUP-LIVE: authorizes the two live supervised-implementer commands (ALPHA-P1B), implemented and tested offline only. No live request is authorized by this amendment; the first one needs a separate AUTH-PILOT decision |
+| Amended | 2026-11-10 — §10 ALPHA-2B: PO-1/PO-2/PO-3, one human-initiated correction round (ALPHA-2B-T1), implemented and tested offline only. No live correction round is authorized |
 
 ## 1. Closure discipline
 
@@ -241,3 +242,33 @@ autonomous model-backed implementer; a fixer; a review/fix loop; a fallback
 model; provider failover; a live `vllm` provider; structured output on the live
 path. The first live supervised run needs a separate AUTH-PILOT decision (D-10)
 **and** a human-completed per-run consent.
+
+## 10. ALPHA-2B amendment (2026-11-10) — one human-supervised bounded correction round
+
+> **Appended amendment. §1–§9 above are unchanged and still in force**,
+> including every DEC-SUP (§8) and DEC-SUP-LIVE (§9) decision, except for the
+> three narrow, Alpha 2B-specific exceptions recorded here. It records the
+> Product Owner's acceptance of ALPHA-2B-D1 Option C, at baseline
+> `0ebd9f65034686c4fdc05b39713cd315e0a39b87`, and its decisions PO-1 to PO-3.
+> Implementation: ALPHA-2B-T1 (`docs/ALPHA_2A_TASK_COORDINATOR.md` §9),
+> implemented and tested offline only.
+
+| # | Decision | What it narrows |
+|---|---|---|
+| PO-1 | Exactly **one** human-initiated correction round after an eligible round-1 result: a valid `changes_requested` review packet, or verification exit 2 with a valid `verification-failed` report and a trusted workspace. A reviewer verdict may make the round available; it never authorizes a model call, a file modification or a human approval. | §8's and §9's "Still not authorized: … a fixer; a review/fix loop", for this one round only |
+| PO-2 | The supervised implementer request may carry one optional, bounded `correction` data object: the previous approved diff, AIDO-observed verification facts and the reviewer's findings, labelled untrusted data, never instructions or authority. Absent, the request is byte-identical to Alpha 2A. Round 2 needs a NEW, independently consented, single-use authorization; reusing the original is forbidden. | DEC-SUP item 3 / the P1A request contract (one file per request still holds: the correction describes the same one file) |
+| PO-3 | The human operator may restore the one target file to its original Git baseline between rounds. AIDO never restores. AIDO preserves the round-1 evidence, explains that `git restore` discards uncommitted changes to the target, and independently verifies the clean workspace, original HEAD and original source bytes before preparing the next authorization. | the writer's "no rollback / restore" rules, which stay AIDO-scoped |
+
+**Unchanged.** No autonomous approval, consent or write; no automatic retry
+after a completed verdict; no third implementer round; DEC-SUP item 7 (zero
+semantic and transport retries per authorization) still holds, because round
+2 is a separately consented request, not a retry; one HTTP request per
+authorization; the P1B ledger alone decides single use; the authorization,
+writer, verifier, reviewer and RS1 contracts are unchanged; `SUP-D` earns no
+qualification credit. No automatic Git write, commit, push, branch, reset,
+stash, clone or deployment is authorized.
+
+**Still not authorized:** a fixer that runs without a human decision; any
+review/fix loop beyond the one round; patch generation by AIDO from findings;
+an AIDO-performed restore; a second reviewer or fallback model; any live
+correction round, which needs its own separately authorized live acceptance.

@@ -4,7 +4,8 @@ Status: **ACCEPTED — Personal Alpha 2A Live Integrated Acceptance.** The
 Product Owner accepted the ALPHA-2A-T2 live run `20261110T181352Z-e7cc70f6`
 (§7). The ALPHA-2A-T3 preflight correction (§6: `task-doctor` and `task-start`
 now check `read_only_workspace_content`) is implemented and **independently
-reviewed and ACCEPTED**.
+reviewed and ACCEPTED**. ALPHA-2B-T1 (§9) adds one human-initiated correction
+round; it is implemented and offline-tested only and awaits independent review.
 
 ## 1. What it is
 
@@ -45,8 +46,8 @@ Making it live would reopen frozen S0/S1. It stays offline and untouched.
 Retry stages: `prepare_pending` and, before consumption, a fresh authorization
 (`--prepare-supervised-implementation` at `implementer_consent`, since a consent
 expires after 60 minutes); `apply_pending` after a write refused before writing
-(exit 1); `review_pending` after a review attempt exited 1, 2 or 4
-(`--verify-approved-file-edit --real-reviewer`). Terminal stages:
+(exit 1); `review_pending` after a ROUND-1 review attempt exited 1, 2 or 4
+(`--verify-approved-file-edit --real-reviewer`; in round 2 exit 1 or 4 is terminal, see §9). Terminal stages:
 `no_change_proposed`, `implementer_failed`, `implementer_evidence_incomplete`,
 `write_needs_inspection`, `workspace_untrusted`, `review_needs_inspection`,
 `awaiting_human_decision`.
@@ -170,7 +171,176 @@ unstaged change; no commit or push.
 
 ## 8. Deferred
 
-Model-backed planning, multi-file tasks, a fixer or review/fix loop, raw
-reviewer-response retention, terminal approval capture, an implementer other
-than SUP-D, config writing, HTTP transport security review before team use,
-and DL-4B/E-12 for multi-user deployment.
+Model-backed planning, multi-file tasks, an automatic fixer or any
+review/fix loop beyond §9's one human-initiated round, raw reviewer-response
+retention, terminal approval capture, an implementer other than SUP-D, config
+writing, HTTP transport security review before team use, and DL-4B/E-12 for
+multi-user deployment.
+
+## 9. ALPHA-2B-T1 — one human-supervised bounded correction round
+
+Status: **IMPLEMENTED, offline-tested only, awaiting independent review.** No
+live correction round has been run or is authorized. Baseline `0ebd9f65`.
+
+Product Owner decisions (accepting ALPHA-2B-D1 Option C):
+
+- **PO-1, governance exception.** Exactly ONE human-initiated correction round
+  after an eligible round-1 result. A reviewer verdict may make a correction
+  *available*; it never authorizes a model call, a write or an approval.
+- **PO-2, implementer request extension.** The supervised implementer request
+  may carry one optional, bounded `correction` data object: the previous
+  approved diff, AIDO-observed verification facts and, for
+  `changes_requested`, the reviewer's findings, all labelled untrusted data.
+  Round 2 needs a NEW, independently consented, single-use authorization.
+- **PO-3, human restoration.** The human restores the target to its Git
+  baseline between rounds. AIDO never restores, and it verifies the clean
+  tree, the round-1 HEAD and the round-1 source bytes itself before it
+  prepares the round-2 authorization.
+
+### 9.1 Eligibility
+
+A correction is **offered** (stage `correction_offered`) only after round 1,
+and only when the recorded evidence cross-checks (§9.3) and either:
+
+- the review exited 0 with a valid packet whose verdict is `changes_requested`; or
+- the review exited 2 with a valid `verification-failed` report whose
+  postconditions say the workspace is still provably the approved state.
+
+It is never offered for `approve`, `needs_human_review`, a workspace-untrusted
+result (exit 3), a reviewer failure or stall (exit 4), a refusal (exit 1) or a
+malformed or mismatched record; those keep their Alpha 2A stages, and the stage
+message says why nothing is offered. At an offer the human chooses:
+
+| Flags | Effect |
+|---|---|
+| `--begin-correction-round` | writes `40-correction.json` (the decision plus digests of every round-1 record it relies on) and prints the restore instruction. Sends, writes and approves nothing. |
+| `--decline-correction` | writes `40-correction.declined.json`; terminal `awaiting_human_decision`. |
+| `--verify-approved-file-edit --real-reviewer` | (exit-2 offers only) the unchanged Alpha 2A review retry. |
+
+### 9.2 Round 2
+
+```text
+round2_restore_pending      the HUMAN runs: git restore -- "<target>"
+                            ('git restore' DISCARDS the uncommitted round-1 candidate;
+                            its records stay in the run directory)
+  --prepare-supervised-implementation   P1B prepare WITH the correction (offline)
+round2_implementer_consent  the human fills 'consent' in 50-authorization-<n>.json
+  --transmit-approved-source --real-implementer   ONE request: original file + correction
+round2_diff_approval        the human reads 60-proposed.diff, fills 60-diff.draft.json
+  --apply-approved-plan --write-approved-file --verify-approved-file-edit --real-reviewer
+round2_awaiting_human_decision | round2_verification_failed     (terminal; summary-r2.txt)
+round2_review_failed | round2_evidence_inconsistent             (terminal; human inspection)
+```
+
+Round 2 regenerates the **complete** final file from the ORIGINAL baseline:
+`current_file_text` is the baseline, the previous candidate is context only,
+and `60-proposed.diff` is the whole change against the baseline. The writer,
+verifier, reviewer, RS1 supervision, the P1B ledger and the authorization
+schema are unchanged. Every round-2 outcome is terminal: there is no third
+round, no retry after a completed verdict, and a round-2 verification failure
+does not reopen the review retry. Only a **pre-write** writer refusal (apply
+exit 1) keeps its Alpha 2A retry within round 2. A completed round-2 review
+step that exited 1 or 4 is **terminal** (`round2_review_failed`): the reviewer
+is never invoked again for round 2, no valid review is claimed, the change
+stays written and unreviewed, and a human inspects. (ALPHA-2B-T1-FU1; round 1's
+`review_pending` retry is unchanged.)
+
+**Terminal evidence is validated, not inferred.** On every status read, before
+`round2_awaiting_human_decision` or `round2_verification_failed` is reported,
+AIDO strictly parses the recorded round-2 write report and review packet (exit
+0) or verification report (exit 2) and binds them to round 2's frozen diff
+approval, the original baseline, the target and the post-image size; the
+review step must follow the write; the postconditions must be trusted; a
+packet requires `verified`, a verification failure requires
+`verification-failed`. Anything absent, malformed, mismatched or changed gives
+the terminal `round2_evidence_inconsistent` (human inspection, nothing more
+runs). The derived `summary-r2.txt` is not consulted and not authority.
+
+**Byte-exact integrity of the round-2 write and review records
+(ALPHA-2B-T1-FU2).** When AIDO records an `apply-r2` or `review-r2` step it
+also creates, exclusively and last,
+`steps/NN-<step>.exit-<code>.integrity.json`, holding the step name, sequence,
+exit code and the SHA-256 and length of the exact stdout and stderr bytes.
+Terminal consumption recomputes both and requires an exact match, so a
+schema-valid, identity-preserving edit of the reviewer verdict, summary or
+findings, the write report or the verification report is detected on the next
+status read. A missing, partial, unreadable or disagreeing integrity record
+(for example after an interruption) gives `round2_evidence_inconsistent`:
+nothing more runs, no model is called and nothing is written. Round 1 records
+get no integrity record.
+
+**Crash-safe attempt accounting (ALPHA-2B-T1-FU3).** Before the coordinator
+invokes a round-2 apply or review runner, it durably creates (exclusive,
+fsynced) `steps/<step>.begun-NN`. If it cannot, nothing is run. After that, a
+crash at any point (before the reviewer request, during it, or before the step
+record is complete) leaves a begun marker with no complete record. Every
+begun attempt must be matched by exactly one complete stdout+stderr record, and
+every record by a marker; any mismatch gives the terminal
+`round2_attempt_incomplete` (no actions, human repository inspection, treat the
+change as possibly written and the diff as possibly sent). A completed, safely
+refused round-2 write (apply exit 1 with a valid integrity record) is still
+retryable; a round-2 review exit 1/4 is still terminal. Round 1 writes no
+markers. A round-2 run begun before FU3 has records without markers and is
+refused as incomplete.
+
+**The accounting is checked FIRST.** It runs before any nonterminal round-2
+stage can offer a draft, an approval, an apply or a review, so a begun attempt
+cannot be made executable again by losing the evidence it consumed. Once any
+round-2 attempt trace exists (a begun marker or any round-2 apply/review step
+file), a missing `60-diff.draft.json` or `61-diff.approved.json`, a missing
+round-2 authorization draft, or a missing round-2 implementer evidence
+directory all give the same terminal `round2_attempt_incomplete`. Before any
+attempt begins, none of this applies, and a pre-write refusal retry (which
+keeps `61-diff.approved.json`) is unchanged.
+
+**Limit:** the digests live in the same operator-controlled run directory as
+the bytes they cover. They detect accidental, partial and content-only edits,
+not a deliberate actor who can rewrite both a step file and its integrity
+record; there is no signature, key or ACL. Treat the run directory as
+trusted-operator storage.
+
+### 9.3 Evidence provenance and binding
+
+- The correction is built **only from recorded evidence**: the round-1
+  consumed authorization (its evidence copy must equal the draft the human
+  completed), the frozen round-1 diff approval (it must be this run's
+  proposal with only the approval filled in, and its pre-image must be the
+  baseline), the round-1 write report, and the round-1 review record, which
+  must follow that write and name the same approval, target and post-image
+  size. The verdict and findings are parsed from the recorded packet.
+- `40-correction.json` pins those records' SHA-256 digests and an evidence
+  digest. The round-2 prepare and run rebuild the evidence and refuse any
+  difference (`round2_correction_evidence_mismatch`, terminal).
+- P1B's `_derive` checks the correction's baseline (target path, source
+  digest and size, HEAD) against what it observes on a clean tree, at both
+  prepare and run, and refuses any mismatch (`correction_baseline_mismatch`)
+  before an issuance record or a request exists. The correction enters the
+  request, so the authorization's `request_sha256` binds it: a missing,
+  changed or added correction refuses as `authorization_mismatch`, unconsumed.
+- Before consent is offered, and again before the run, the round-2 draft must
+  repeat round 1's role, candidate, model, provider, project, repo, issue,
+  plan and config digests, target, change type, source digest and size, HEAD,
+  Git state, and evidence and ledger directory digests, and must differ in
+  `run_id`, `issuance_sha256`, `binding_sha256` and `request_sha256`. Anything
+  else is `round2_correction_baseline_mismatch` (terminal). A consumed
+  round-2 run must not be round 1's run and must record the same
+  authorization bytes, or it is `round2_evidence_inconsistent`.
+- The transmission copy is redacted with the shared secret-like redactor and
+  has literal workspace-path spellings replaced by `<workspace>`; P1B refuses
+  a correction that still names the workspace. The original evidence is never
+  modified. Redaction is a backstop, not a guarantee.
+- Round 2's records have their own names (`50-`, `60-`, `61-`, `-r2` steps,
+  `summary-r2.txt`). A frozen diff approval is re-checked against its own
+  round's draft on every use, so a round-1 approval cannot authorize the
+  round-2 write. Any correction record without the round-1 result it needs, or
+  both a begin and a decline record, is `correction_records_inconsistent`
+  (terminal).
+
+`summary-r2.txt` is the derived final summary. It separates round-2
+AIDO-observed facts (including the workspace state as last observed at the end
+of round-2 verification) from reviewer-model claims, says round 1 was
+superseded, and never claims the correction succeeded because a model
+proposed new code. `summary.txt` from round 1 is kept and does not block it.
+
+Offline tests: `tests/test_task_correction_round.py`, alongside the unchanged
+Alpha 2A suite in `tests/test_task_coordinator.py`.

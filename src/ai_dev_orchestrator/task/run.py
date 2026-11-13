@@ -18,6 +18,25 @@ steps/NN-<step>.exit-<c>.stderr AIDO   exactly what it wrote to stderr
 summary.txt                     AIDO   a DERIVED summary; not evidence
 ```
 
+ALPHA-2B-T1 adds ONE optional, human-initiated correction round (PO-1/2/3).
+Round 1 keeps every name above. Round 2 has its own, so no round-1 record can
+ever be read as a round-2 one:
+
+```text
+40-correction.json              AIDO   the human started the correction round (+ evidence digests)
+40-correction.declined.json     AIDO   the human declined it (terminal)
+50-authorization-<n>.json       AIDO   round-2 P1B draft (fresh, single-use) -> human fills "consent"
+60-proposed.diff                AIDO   the round-2 diff, against the ORIGINAL baseline
+60-diff.draft.json              AIDO   round-2 approved-diff-proposal.v2 + EMPTY approval
+61-diff.approved.json           AIDO   byte-exact freeze of the human's round-2 approval
+steps/NN-<step>-r2.exit-...     AIDO   round-2 step records
+summary-r2.txt                  AIDO   the DERIVED final summary; not evidence
+```
+
+Between the rounds a HUMAN restores the target (AIDO never does); round 2's
+prepare and run then observe the clean tree, the round-1 HEAD and the round-1
+source bytes themselves. There is never a third round.
+
 **The stage is derived, every time, from these files.** There is no state
 machine store and no caller-supplied stage. A file's presence says which step
 ran; the accepted commands' own records say how it ended.
@@ -57,10 +76,72 @@ DIFF_APPROVED_FILE = "31-diff.approved.json"
 STEPS_DIR = "steps"
 SUMMARY_FILE = "summary.txt"
 
+CORRECTION_FILE = "40-correction.json"
+CORRECTION_DECLINED_FILE = "40-correction.declined.json"
+CORRECTION_SCHEMA_VERSION = "aido-task-correction.v1"
+CORRECTION_DECLINED_SCHEMA_VERSION = "aido-task-correction-declined.v1"
+
+STEP_INTEGRITY_SCHEMA_VERSION = "aido-task-step-integrity.v1"
+INTEGRITY_SUFFIX = ".integrity.json"
+#: Round-2 terminal evidence steps (ALPHA-2B-T1-FU2). Round 1 gets no integrity record.
+ROUND2_INTEGRITY_STEPS = ("apply-r2", "review-r2")
+ATTEMPT_BEGUN_SCHEMA_VERSION = "aido-task-attempt-begun.v1"
+BEGUN_INFIX = ".begun-"
+
 _AUTHORIZATION_RE = re.compile(r"^20-authorization-([1-9][0-9]*)\.json$")
 _STEP_RE = re.compile(
-    r"^([0-9]{2,})-(prepare|implementer-run|apply|review)\.exit-([0-9]+|error)\.(stdout|stderr)$"
+    r"^([0-9]{2,})-((?:prepare|implementer-run|apply|review)(?:-r2)?)"
+    r"\.exit-([0-9]+|error)\.(stdout|stderr)$"
 )
+
+
+@dataclass(frozen=True)
+class Round:
+    """Every file and step name one round uses. Round 1 is exactly Alpha 2A's."""
+
+    number: int
+    authorization_re: re.Pattern
+    authorization_name: str
+    diff_text_file: str
+    diff_draft_file: str
+    diff_approved_file: str
+    step_prepare: str
+    step_implementer: str
+    step_apply: str
+    step_review: str
+    summary_file: str
+    stage_prefix: str
+
+
+ROUND_1 = Round(
+    number=1,
+    authorization_re=_AUTHORIZATION_RE,
+    authorization_name="20-authorization-{n}.json",
+    diff_text_file=DIFF_TEXT_FILE,
+    diff_draft_file=DIFF_DRAFT_FILE,
+    diff_approved_file=DIFF_APPROVED_FILE,
+    step_prepare="prepare",
+    step_implementer="implementer-run",
+    step_apply="apply",
+    step_review="review",
+    summary_file=SUMMARY_FILE,
+    stage_prefix="",
+)
+ROUND_2 = Round(
+    number=2,
+    authorization_re=re.compile(r"^50-authorization-([1-9][0-9]*)\.json$"),
+    authorization_name="50-authorization-{n}.json",
+    diff_text_file="60-proposed.diff",
+    diff_draft_file="60-diff.draft.json",
+    diff_approved_file="61-diff.approved.json",
+    step_prepare="prepare-r2",
+    step_implementer="implementer-run-r2",
+    step_apply="apply-r2",
+    step_review="review-r2",
+    summary_file="summary-r2.txt",
+    stage_prefix="round2_",
+)
+ROUNDS = {1: ROUND_1, 2: ROUND_2}
 
 #: The plan and diff approval stubs: four EMPTY strings a human must type.
 EMPTY_APPROVAL = {"approved_by": "", "approved_at": "", "approval_text": "", "source": ""}
@@ -79,7 +160,17 @@ APPLY_AND_REVIEW_FLAGS = (
     "--real-reviewer",
 )
 REVIEW_FLAGS = ("--verify-approved-file-edit", "--real-reviewer")
-ALL_FLAGS = PREPARE_FLAGS + IMPLEMENTER_FLAGS + APPLY_AND_REVIEW_FLAGS
+#: ALPHA-2B-T1: the human's choice at a correction offer. Neither sends,
+#: writes or approves anything; each only records the human's decision.
+BEGIN_CORRECTION_FLAGS = ("--begin-correction-round",)
+DECLINE_CORRECTION_FLAGS = ("--decline-correction",)
+ALL_FLAGS = (
+    PREPARE_FLAGS
+    + IMPLEMENTER_FLAGS
+    + APPLY_AND_REVIEW_FLAGS
+    + BEGIN_CORRECTION_FLAGS
+    + DECLINE_CORRECTION_FLAGS
+)
 
 DIFF_NEXT_AUTHORIZATION = (
     "task-continue with --apply-approved-plan, --write-approved-file, "
@@ -384,6 +475,14 @@ def _freeze_approval(
     decides nothing about whether an approval is valid.
     """
     data = _read_bytes(source_path, label)
+    _check_only_approval_filled(data, expected_draft, label)
+    parse(data.decode("utf-8"))
+    create_exclusive(frozen_path, data)
+    return data
+
+
+def _check_only_approval_filled(data: bytes, expected_draft: dict, label: str) -> None:
+    """The human changed nothing outside ``approval`` and typed every approval value."""
     document = _strict_json_object(data, label)
     if set(document) != set(expected_draft):
         raise TaskRefused(f"{label} has missing or unexpected top-level fields.")
@@ -405,9 +504,6 @@ def _freeze_approval(
             f"{label}: the approval block is not filled in. A human must type "
             "every value. Nothing was recorded."
         )
-    parse(data.decode("utf-8"))
-    create_exclusive(frozen_path, data)
-    return data
 
 
 def freeze_plan_approval(task: TaskRecord) -> str:
@@ -435,18 +531,18 @@ def freeze_plan_approval(task: TaskRecord) -> str:
 # -- the implementer authorizations ---------------------------------------------------
 
 
-def authorization_paths(task: TaskRecord) -> list[str]:
-    """The run's authorization drafts, oldest first."""
+def authorization_paths(task: TaskRecord, rnd: Round = ROUND_1) -> list[str]:
+    """One round's authorization drafts, oldest first. Never another round's."""
     numbered = []
     for name in os.listdir(task.run_dir):
-        match = _AUTHORIZATION_RE.match(name)
+        match = rnd.authorization_re.match(name)
         if match:
             numbered.append((int(match.group(1)), os.path.join(task.run_dir, name)))
     return [path for _, path in sorted(numbered)]
 
 
-def next_authorization_path(task: TaskRecord) -> str:
-    return task.path(f"20-authorization-{len(authorization_paths(task)) + 1}.json")
+def next_authorization_path(task: TaskRecord, rnd: Round = ROUND_1) -> str:
+    return task.path(rnd.authorization_name.format(n=len(authorization_paths(task, rnd)) + 1))
 
 
 def evidence_dir(task: TaskRecord) -> str:
@@ -466,18 +562,24 @@ def authorization_run_id(path: str) -> str | None:
     return run_id
 
 
-def consumed_implementer_run(task: TaskRecord) -> str | None:
-    """The P1B evidence directory of a consumed authorization, if any.
+def consumed_implementer_run(task: TaskRecord, rnd: Round = ROUND_1) -> str | None:
+    """The P1B evidence directory of one round's consumed authorization, if any.
 
     Display only. Single use is decided by the P1B ledger, never by this.
     """
-    for path in authorization_paths(task):
+    found = consumed_authorization(task, rnd)
+    return None if found is None else found[1]
+
+
+def consumed_authorization(task: TaskRecord, rnd: Round = ROUND_1) -> tuple[str, str] | None:
+    """``(authorization draft path, evidence run dir)`` of one round's consumed run."""
+    for path in authorization_paths(task, rnd):
         run_id = authorization_run_id(path)
         if run_id is None:
             continue
         candidate = os.path.join(evidence_dir(task), run_id)
         if os.path.isdir(candidate):
-            return candidate
+            return path, candidate
     return None
 
 
@@ -524,28 +626,33 @@ def build_diff_draft(task: TaskRecord, proposal: dict) -> dict:
     }
 
 
-def write_diff_draft(task: TaskRecord, evidence_run_dir: str) -> None:
-    """Write ``30-proposed.diff`` and ``30-diff.draft.json``, both exclusively."""
+def write_diff_draft(task: TaskRecord, evidence_run_dir: str, rnd: Round = ROUND_1) -> None:
+    """Write one round's diff text and diff draft, both exclusively."""
     proposal = read_implementer_diff_proposal(evidence_run_dir)
     draft = build_diff_draft(task, proposal)
     diff_text = proposal["changes"][0].get("unified_diff")
     if type(diff_text) is not str:
         raise TaskRefused("the implementer's diff proposal carries no unified diff.")
-    if not os.path.lexists(task.path(DIFF_TEXT_FILE)):
-        create_exclusive(task.path(DIFF_TEXT_FILE), (diff_text + "\n").encode("utf-8"))
-    create_exclusive(task.path(DIFF_DRAFT_FILE), _json_bytes(draft))
+    expected_text = (diff_text + "\n").encode("utf-8")
+    if not os.path.lexists(task.path(rnd.diff_text_file)):
+        create_exclusive(task.path(rnd.diff_text_file), expected_text)
+    elif rnd.number != 1 and _read_bytes(task.path(rnd.diff_text_file), rnd.diff_text_file) != expected_text:
+        # An interrupted earlier attempt may have left the text; it must be THIS
+        # round's diff, or the human would read one diff and approve another.
+        raise TaskRefused(f"{rnd.diff_text_file} is not this round's proposed diff. Nothing was drafted.")
+    create_exclusive(task.path(rnd.diff_draft_file), _json_bytes(draft))
 
 
-def freeze_diff_approval(task: TaskRecord, evidence_run_dir: str) -> str:
-    """Freeze the human-approved diff. Returns the frozen path."""
+def freeze_diff_approval(task: TaskRecord, evidence_run_dir: str, rnd: Round = ROUND_1) -> str:
+    """Freeze one round's human-approved diff. Returns the frozen path.
+
+    An already-frozen file is re-checked against THIS round's draft, so no
+    other round's approval (or a copied file) can stand in for it.
+    """
     from ai_dev_orchestrator.file_editing import (
         FileEditingApprovalError,
         parse_approved_diff_proposal_artifact,
     )
-
-    frozen = task.path(DIFF_APPROVED_FILE)
-    if os.path.lexists(frozen):
-        return frozen
 
     def parse(text: str) -> None:
         try:
@@ -553,11 +660,19 @@ def freeze_diff_approval(task: TaskRecord, evidence_run_dir: str) -> str:
         except FileEditingApprovalError as exc:
             raise TaskRefused(f"the diff approval was refused by the accepted parser: {exc}") from None
 
+    frozen = task.path(rnd.diff_approved_file)
+    expected = build_diff_draft(task, read_implementer_diff_proposal(evidence_run_dir))
+    if os.path.lexists(frozen):
+        data = _read_bytes(frozen, rnd.diff_approved_file)
+        _check_only_approval_filled(data, expected, rnd.diff_approved_file)
+        parse(data.decode("utf-8"))
+        return frozen
+
     _freeze_approval(
-        source_path=task.path(DIFF_DRAFT_FILE),
+        source_path=task.path(rnd.diff_draft_file),
         frozen_path=frozen,
-        expected_draft=build_diff_draft(task, read_implementer_diff_proposal(evidence_run_dir)),
-        label=DIFF_DRAFT_FILE,
+        expected_draft=expected,
+        label=rnd.diff_draft_file,
         parse=parse,
     )
     return frozen
@@ -604,9 +719,123 @@ def record_step(task: TaskRecord, step: str, exit_code: int | None, stdout: str,
     sequence = 1 + max((record.sequence for record in step_records(task)), default=0)
     code = "error" if exit_code is None else str(exit_code)
     base = os.path.join(task.path(STEPS_DIR), f"{sequence:02d}-{step}.exit-{code}")
-    create_exclusive(base + ".stdout", stdout.encode("utf-8", "surrogatepass"))
-    create_exclusive(base + ".stderr", stderr.encode("utf-8", "surrogatepass"))
+    out_bytes = stdout.encode("utf-8", "surrogatepass")
+    err_bytes = stderr.encode("utf-8", "surrogatepass")
+    create_exclusive(base + ".stdout", out_bytes)
+    create_exclusive(base + ".stderr", err_bytes)
+    if step in ROUND2_INTEGRITY_STEPS:
+        # Written LAST: a crash before it leaves a round-2 record with no
+        # integrity record, which terminal consumption refuses (fail closed).
+        create_exclusive(
+            base + INTEGRITY_SUFFIX,
+            _json_bytes(
+                {
+                    "schema_version": STEP_INTEGRITY_SCHEMA_VERSION,
+                    "step": step,
+                    "sequence": sequence,
+                    "exit_code": code,
+                    "stdout_sha256": sha256_bytes(out_bytes),
+                    "stdout_bytes": len(out_bytes),
+                    "stderr_sha256": sha256_bytes(err_bytes),
+                    "stderr_bytes": len(err_bytes),
+                }
+            ),
+        )
     return StepRecord(sequence, step, exit_code, base + ".stdout", base + ".stderr")
+
+
+def _begun_markers(task: TaskRecord, step: str) -> list[str]:
+    prefix = f"{step}{BEGUN_INFIX}"
+    return sorted(name for name in os.listdir(task.path(STEPS_DIR)) if name.startswith(prefix))
+
+
+def begin_attempt(task: TaskRecord, step: str) -> None:
+    """Durably record that a round-2 apply/review attempt is about to begin.
+
+    Created exclusively and fsynced BEFORE the runner is invoked, so a crash
+    anywhere afterwards (before any model request, mid-request, or before the
+    step record is complete) still leaves proof that the attempt began. Raises
+    on any failure, and the caller then invokes nothing.
+    """
+    if step not in ROUND2_INTEGRITY_STEPS:
+        return
+    ordinal = 1 + len(_begun_markers(task, step))
+    create_exclusive(
+        os.path.join(task.path(STEPS_DIR), f"{step}{BEGUN_INFIX}{ordinal:02d}"),
+        _json_bytes({"schema_version": ATTEMPT_BEGUN_SCHEMA_VERSION, "step": step, "ordinal": ordinal}),
+    )
+
+
+def attempt_accounting_problem(task: TaskRecord) -> str | None:
+    """Why round 2's begun attempts are not all accounted for by records, or None.
+
+    Every begun attempt must have exactly one complete (stdout + stderr) step
+    record, and no record may exist without a begun marker. Anything else means
+    a runner may have run (and a reviewer may have been contacted) without a
+    trustworthy outcome record; no further attempt may be authorized.
+    """
+    records = step_records(task)
+    for step in ROUND2_INTEGRITY_STEPS:
+        begun = len(_begun_markers(task, step))
+        complete = sum(1 for record in records if record.step == step)
+        if begun > complete:
+            return (
+                f"a {step} attempt began but has no complete step record "
+                f"({begun} begun, {complete} recorded); AIDO cannot tell whether the "
+                "runner, the workspace write or the reviewer model call happened."
+            )
+        if complete > begun:
+            return f"{step} has {complete} step records but only {begun} begun-attempt markers."
+    return None
+
+
+def round2_attempt_exists(task: TaskRecord) -> bool:
+    """True if ANY trace of a round-2 apply/review attempt exists.
+
+    A begun marker or any step file (even a lone stdout/stderr) counts. This is
+    deliberately broader than complete records: it decides whether the attempt
+    gate applies, never whether an attempt succeeded.
+    """
+    for name in os.listdir(task.path(STEPS_DIR)):
+        if any(name.startswith(f"{step}{BEGUN_INFIX}") for step in ROUND2_INTEGRITY_STEPS):
+            return True
+        match = _STEP_RE.match(name)
+        if match and match.group(2) in ROUND2_INTEGRITY_STEPS:
+            return True
+    return False
+
+
+def step_integrity_problem(record: StepRecord) -> str | None:
+    """Why a round-2 step's bytes are not the ones AIDO recorded, or None.
+
+    The integrity record sits in the same operator-controlled run directory as
+    the bytes it covers. It detects partial recording and content edits that
+    leave the record alone; it is NOT tamper-proof — whoever can rewrite the
+    step files can rewrite this record too (no signature, no key, no ACL).
+    """
+    name = os.path.basename(record.stdout_path)
+    path = record.stdout_path[: -len(".stdout")] + INTEGRITY_SUFFIX
+    if not os.path.isfile(path):
+        return f"{name} has no integrity record (an interrupted or incomplete recording)."
+    try:
+        doc = _strict_json_object(_read_bytes(path, "integrity record"), "integrity record")
+        out_bytes = _read_bytes(record.stdout_path, name)
+        err_bytes = _read_bytes(record.stderr_path, os.path.basename(record.stderr_path))
+    except TaskRefused as exc:
+        return str(exc)
+    expected = {
+        "schema_version": STEP_INTEGRITY_SCHEMA_VERSION,
+        "step": record.step,
+        "sequence": record.sequence,
+        "exit_code": "error" if record.exit_code is None else str(record.exit_code),
+        "stdout_sha256": sha256_bytes(out_bytes),
+        "stdout_bytes": len(out_bytes),
+        "stderr_sha256": sha256_bytes(err_bytes),
+        "stderr_bytes": len(err_bytes),
+    }
+    if doc != expected:
+        return f"{name} no longer matches the integrity record AIDO made when it recorded it."
+    return None
 
 
 def _last(task: TaskRecord, step: str) -> StepRecord | None:
@@ -619,13 +848,17 @@ def _last(task: TaskRecord, step: str) -> StepRecord | None:
 
 @dataclass(frozen=True)
 class Stage:
-    """Where a run stands. ``actions`` maps each accepted flag set to its action."""
+    """Where a run stands. ``actions`` maps each accepted flag set to its action.
+
+    ``round_number`` says which round's files and step names the actions use.
+    """
 
     name: str
     terminal: bool
     message: str
     actions: dict[tuple[str, ...], str] = field(default_factory=dict)
     evidence_run_dir: str | None = None
+    round_number: int = 1
 
 
 # Action names the CLI dispatches on.
@@ -634,6 +867,8 @@ ACTION_RUN_IMPLEMENTER = "run_implementer"
 ACTION_WRITE_DIFF_DRAFT = "write_diff_draft"
 ACTION_APPLY_AND_REVIEW = "apply_and_review"
 ACTION_REVIEW = "review"
+ACTION_BEGIN_CORRECTION = "begin_correction"
+ACTION_DECLINE_CORRECTION = "decline_correction"
 
 
 def _implementer_outcome(evidence_run_dir: str) -> dict | None:
@@ -646,6 +881,238 @@ def _implementer_outcome(evidence_run_dir: str) -> dict | None:
         return _strict_json_object(_read_bytes(path, "outcome.json"), "outcome.json")
     except TaskRefused:
         return None
+
+
+@dataclass(frozen=True)
+class _Reviewed:
+    """One round whose review step ended with a reviewable result (exit 0 or 2)."""
+
+    rnd: Round
+    authorization_path: str
+    evidence_run_dir: str
+    apply_record: StepRecord
+    review_record: StepRecord
+
+
+def _stage(rnd: Round, name: str, terminal: bool, message: str, actions=None, evidence_run_dir=None) -> Stage:
+    return Stage(
+        rnd.stage_prefix + name, terminal, message, dict(actions or {}), evidence_run_dir, rnd.number
+    )
+
+
+def _review_pending(rnd: Round, review_record: StepRecord | None, run_dir: str, note: str = "") -> Stage:
+    retry = (
+        ""
+        if review_record is None
+        else f" The last review attempt exited {review_record.exit_code}; see "
+        f"{os.path.basename(review_record.stderr_path)}. It may be run again."
+    )
+    return _stage(
+        rnd,
+        "review_pending",
+        False,
+        "The change is written. The next step runs the project's verification "
+        "and, only if it passes, SENDS the diff to the reviewer model." + retry + note,
+        {REVIEW_FLAGS: ACTION_REVIEW},
+        run_dir,
+    )
+
+
+def _derive_round(task: TaskRecord, rnd: Round, consumed: tuple[str, str]) -> Stage | _Reviewed:
+    """One round, from its consumed authorization to a finished review.
+
+    Reads only that round's files and step records. Returns a :class:`Stage`
+    for every point before a reviewable result, else a :class:`_Reviewed`.
+    """
+    authorization_path, run_dir = consumed
+    final_round = rnd.number == 2
+    restart = (
+        " This was the one correction round; no further round exists."
+        if final_round
+        else " Start a new task to try again."
+    )
+    outcome = _implementer_outcome(run_dir)
+    if outcome is None:
+        return _stage(
+            rnd,
+            "implementer_evidence_incomplete",
+            True,
+            "The implementer authorization was consumed, but its outcome record is "
+            "missing. Treat the source as sent. Inspect the implementer evidence. "
+            + ("No further round exists." if final_round else "This task cannot continue; start a new task."),
+            evidence_run_dir=run_dir,
+        )
+    state = outcome.get("state")
+    if state == "no_change_proposed":
+        return _stage(
+            rnd,
+            "no_change_proposed",
+            True,
+            "The implementer proposed no change. Nothing is left to approve or apply."
+            + (" The workspace holds the restored original baseline." if final_round else ""),
+            evidence_run_dir=run_dir,
+        )
+    if state != "diff_proposed":
+        return _stage(
+            rnd,
+            "implementer_failed",
+            True,
+            f"The implementer run ended as {state!r} "
+            f"({outcome.get('failure_category')!r}). The authorization is spent." + restart,
+            evidence_run_dir=run_dir,
+        )
+    if final_round:
+        # BEFORE any nonterminal stage: once a round-2 attempt has begun, no
+        # missing or inconsistent preceding evidence may make another apply,
+        # review, draft or approval action available again.
+        unaccounted = attempt_accounting_problem(task)
+        if unaccounted is None and round2_attempt_exists(task):
+            missing = [
+                name
+                for name in (rnd.diff_draft_file, rnd.diff_approved_file)
+                if not os.path.lexists(task.path(name))
+            ]
+            if missing:
+                unaccounted = (
+                    f"a round-2 apply/review attempt exists but {', '.join(missing)} is "
+                    "missing, so what that attempt consumed can no longer be shown."
+                )
+        if unaccounted is not None:
+            return _stage(
+                rnd,
+                "attempt_incomplete",
+                True,
+                f"{unaccounted[0].upper()}{unaccounted[1:]} Treat the change as possibly "
+                "written and the diff as possibly sent to the reviewer. This was the one "
+                "correction round: nothing more will run, and AIDO restores nothing. HUMAN "
+                "REPOSITORY INSPECTION IS REQUIRED.",
+                evidence_run_dir=run_dir,
+            )
+
+    if not os.path.lexists(task.path(rnd.diff_draft_file)):
+        return _stage(
+            rnd,
+            "diff_draft_pending",
+            False,
+            "The implementer proposed a diff. The next step only writes the diff "
+            "approval draft; it needs no flag.",
+            {(): ACTION_WRITE_DIFF_DRAFT},
+            run_dir,
+        )
+    if not os.path.lexists(task.path(rnd.diff_approved_file)):
+        return _stage(
+            rnd,
+            "diff_approval",
+            False,
+            f"A human must read {rnd.diff_text_file} and, to approve it, fill in the "
+            f"'approval' block of {rnd.diff_draft_file} (the exact file-edit "
+            "approval_text). The next step WRITES the change into the workspace, "
+            "runs the project's verification, and SENDS the diff to the reviewer model."
+            + (
+                " This diff is against the ORIGINAL baseline; round 1's approval "
+                "does not carry over."
+                if final_round
+                else ""
+            ),
+            {APPLY_AND_REVIEW_FLAGS: ACTION_APPLY_AND_REVIEW},
+            run_dir,
+        )
+
+    apply_record = _last(task, rnd.step_apply)
+    if final_round and apply_record is not None and apply_record.exit_code == 1:
+        broken = step_integrity_problem(apply_record)
+        if broken is not None:
+            return _stage(
+                rnd,
+                "evidence_inconsistent",
+                True,
+                f"The round-2 write record cannot be trusted: {broken} HUMAN INSPECTION IS "
+                "REQUIRED. Nothing more will run.",
+                evidence_run_dir=run_dir,
+            )
+    if apply_record is None or apply_record.exit_code == 1:
+        retry ="" if apply_record is None else " The last write was refused before writing; fix what it named, then retry."
+        return _stage(
+            rnd,
+            "apply_pending",
+            False,
+            "The diff is approved. The next step WRITES it, verifies, and reviews." + retry,
+            {APPLY_AND_REVIEW_FLAGS: ACTION_APPLY_AND_REVIEW},
+            run_dir,
+        )
+    if apply_record.exit_code != 0:
+        return _stage(
+            rnd,
+            "write_needs_inspection",
+            True,
+            "The write ended in an indeterminate or unexpected state. HUMAN "
+            "REPOSITORY INSPECTION IS REQUIRED. See "
+            f"{os.path.basename(apply_record.stderr_path)}.",
+            evidence_run_dir=run_dir,
+        )
+
+    review_record = _last(task, rnd.step_review)
+    if final_round and review_record is not None and review_record.exit_code in (1, 4):
+        # Round 2 is the last round: a completed reviewer invocation is never
+        # repeated. No valid review exists; none is claimed.
+        return _stage(
+            rnd,
+            "review_failed",
+            True,
+            f"The round-2 review step exited {review_record.exit_code} "
+            f"({'refused' if review_record.exit_code == 1 else 'reviewer stage failed'}); see "
+            f"{os.path.basename(review_record.stderr_path)}. NO valid round-2 review exists. "
+            "This was the one correction round: AIDO will not run the reviewer again "
+            "for it, and offers no retry or further round. The change is written and "
+            "unreviewed. HUMAN INSPECTION IS REQUIRED. AIDO committed nothing.",
+            evidence_run_dir=run_dir,
+        )
+    if review_record is None or review_record.exit_code in (1, 4):
+        return _review_pending(rnd, review_record, run_dir)
+    if review_record.exit_code == 3:
+        return _stage(
+            rnd,
+            "workspace_untrusted",
+            True,
+            "Verification ran and the repository is no longer provably the "
+            "approved state. HUMAN REPOSITORY INSPECTION IS REQUIRED.",
+            evidence_run_dir=run_dir,
+        )
+    if review_record.exit_code not in (0, 2):
+        return _stage(
+            rnd,
+            "review_needs_inspection",
+            True,
+            "The review step ended unexpectedly. See "
+            f"{os.path.basename(review_record.stderr_path)}.",
+            evidence_run_dir=run_dir,
+        )
+    return _Reviewed(rnd, authorization_path, run_dir, apply_record, review_record)
+
+
+_AWAITING_DECISION = (
+    f"AIDO is done. Read {SUMMARY_FILE} and the review packet, then decide. "
+    "AIDO committed nothing and pushed nothing; if you accept the change, "
+    "commit it yourself."
+)
+
+
+def _inconsistent(message: str, run_dir: str | None = None) -> Stage:
+    return Stage(
+        "correction_records_inconsistent",
+        True,
+        message + " HUMAN INSPECTION OF THE RUN DIRECTORY IS REQUIRED. Nothing more will run.",
+        evidence_run_dir=run_dir,
+    )
+
+
+def _round2_files_exist(task: TaskRecord) -> bool:
+    return bool(authorization_paths(task, ROUND_2)) or round2_attempt_exists(task) or any(
+        record.step.endswith("-r2") for record in step_records(task)
+    ) or any(
+        os.path.lexists(task.path(name))
+        for name in (ROUND_2.diff_text_file, ROUND_2.diff_draft_file, ROUND_2.diff_approved_file, ROUND_2.summary_file)
+    )
 
 
 def derive_stage(task: TaskRecord) -> Stage:
@@ -661,8 +1128,12 @@ def derive_stage(task: TaskRecord) -> Stage:
             {PREPARE_FLAGS: ACTION_PREPARE},
         )
 
-    consumed = consumed_implementer_run(task)
+    begun = os.path.lexists(task.path(CORRECTION_FILE))
+    declined = os.path.lexists(task.path(CORRECTION_DECLINED_FILE))
+    consumed = consumed_authorization(task, ROUND_1)
     if consumed is None:
+        if begun or declined or _round2_files_exist(task):
+            return _inconsistent("Correction-round records exist, but round 1 never ran.")
         if not authorization_paths(task):
             return Stage(
                 "prepare_pending",
@@ -682,114 +1153,225 @@ def derive_stage(task: TaskRecord) -> Stage:
             {IMPLEMENTER_FLAGS: ACTION_RUN_IMPLEMENTER, PREPARE_FLAGS: ACTION_PREPARE},
         )
 
-    outcome = _implementer_outcome(consumed)
-    if outcome is None:
-        return Stage(
-            "implementer_evidence_incomplete",
-            True,
-            "The implementer authorization was consumed, but its outcome record is "
-            "missing. Treat the source as sent. Inspect the implementer evidence. "
-            "This task cannot continue; start a new task.",
-            evidence_run_dir=consumed,
-        )
-    state = outcome.get("state")
-    if state == "no_change_proposed":
-        return Stage(
-            "no_change_proposed",
-            True,
-            "The implementer proposed no change. Nothing is left to approve or apply.",
-            evidence_run_dir=consumed,
-        )
-    if state != "diff_proposed":
-        return Stage(
-            "implementer_failed",
-            True,
-            f"The implementer run ended as {state!r} "
-            f"({outcome.get('failure_category')!r}). The authorization is spent. "
-            "Start a new task to try again.",
-            evidence_run_dir=consumed,
-        )
-    if not os.path.lexists(task.path(DIFF_DRAFT_FILE)):
-        return Stage(
-            "diff_draft_pending",
-            False,
-            "The implementer proposed a diff. The next step only writes the diff "
-            "approval draft; it needs no flag.",
-            {(): ACTION_WRITE_DIFF_DRAFT},
-            evidence_run_dir=consumed,
-        )
-    if not os.path.lexists(task.path(DIFF_APPROVED_FILE)):
-        return Stage(
-            "diff_approval",
-            False,
-            f"A human must read {DIFF_TEXT_FILE} and, to approve it, fill in the "
-            f"'approval' block of {DIFF_DRAFT_FILE} (the exact file-edit "
-            "approval_text). The next step WRITES the change into the workspace, "
-            "runs the project's verification, and SENDS the diff to the reviewer model.",
-            {APPLY_AND_REVIEW_FLAGS: ACTION_APPLY_AND_REVIEW},
-            evidence_run_dir=consumed,
-        )
+    first = _derive_round(task, ROUND_1, consumed)
+    if isinstance(first, Stage):
+        if begun or declined or _round2_files_exist(task):
+            return _inconsistent(
+                "Correction-round records exist, but round 1 has no reviewable result.",
+                first.evidence_run_dir,
+            )
+        return first
 
-    apply_record = _last(task, "apply")
-    if apply_record is None or apply_record.exit_code == 1:
-        retry = "" if apply_record is None else " The last write was refused before writing; fix what it named, then retry."
-        return Stage(
-            "apply_pending",
-            False,
-            "The diff is approved. The next step WRITES it, verifies, and reviews." + retry,
-            {APPLY_AND_REVIEW_FLAGS: ACTION_APPLY_AND_REVIEW},
-            evidence_run_dir=consumed,
-        )
-    if apply_record.exit_code != 0:
-        return Stage(
-            "write_needs_inspection",
-            True,
-            "The write ended in an indeterminate or unexpected state. HUMAN "
-            "REPOSITORY INSPECTION IS REQUIRED. See "
-            f"{os.path.basename(apply_record.stderr_path)}.",
-            evidence_run_dir=consumed,
-        )
+    from ai_dev_orchestrator.task import correction as corr
 
-    review_record = _last(task, "review")
-    if review_record is None or review_record.exit_code in (1, 2, 4):
-        retry = (
-            ""
-            if review_record is None
-            else f" The last review attempt exited {review_record.exit_code}; see "
-            f"{os.path.basename(review_record.stderr_path)}. It may be run again."
+    if begun and declined:
+        return _inconsistent("The correction round was both begun and declined.", first.evidence_run_dir)
+    if declined:
+        if _round2_files_exist(task):
+            return _inconsistent("The correction round was declined, but round-2 records exist.")
+        try:
+            corr.check_declined_record(task)
+        except TaskRefused as exc:
+            return _inconsistent(str(exc), first.evidence_run_dir)
+        decided = (
+            _AWAITING_DECISION
+            if first.review_record.exit_code == 0
+            else "Verification did not pass; read the review step's record "
+            f"({os.path.basename(first.review_record.stdout_path)}), then decide. "
+            "AIDO committed nothing and pushed nothing."
         )
         return Stage(
-            "review_pending",
+            "awaiting_human_decision",
+            True,
+            "You declined the correction round. " + decided,
+            evidence_run_dir=first.evidence_run_dir,
+        )
+    if begun:
+        return _derive_correction(task, first)
+    if _round2_files_exist(task):
+        return _inconsistent("Round-2 records exist, but no correction round was begun.")
+
+    evidence, why_not = corr.correction_eligibility(task, first)
+    offer = (
+        "A ONE-TIME correction round is available. To take it, pass "
+        "--begin-correction-round: AIDO records your decision and tells you how to "
+        "restore the target yourself; it sends, writes and approves nothing. Round "
+        "2 then needs a fresh implementer consent and its own exact-diff approval, "
+        "and it is the last round. To end the task at your own decision instead, "
+        "pass --decline-correction."
+    )
+    if first.review_record.exit_code == 2:
+        if evidence is None:
+            return _review_pending(
+                ROUND_1,
+                first.review_record,
+                first.evidence_run_dir,
+                f" No correction round is offered: {why_not}",
+            )
+        return Stage(
+            "correction_offered",
             False,
-            "The change is written. The next step runs the project's verification "
-            "and, only if it passes, SENDS the diff to the reviewer model." + retry,
-            {REVIEW_FLAGS: ACTION_REVIEW},
-            evidence_run_dir=consumed,
+            "Verification ran and did not pass; the workspace is still provably the "
+            "approved state. The review may be run again with "
+            "--verify-approved-file-edit --real-reviewer. " + offer,
+            {
+                REVIEW_FLAGS: ACTION_REVIEW,
+                BEGIN_CORRECTION_FLAGS: ACTION_BEGIN_CORRECTION,
+                DECLINE_CORRECTION_FLAGS: ACTION_DECLINE_CORRECTION,
+            },
+            first.evidence_run_dir,
         )
-    if review_record.exit_code == 3:
+    if evidence is None:
         return Stage(
-            "workspace_untrusted",
+            "awaiting_human_decision",
             True,
-            "Verification ran and the repository is no longer provably the "
-            "approved state. HUMAN REPOSITORY INSPECTION IS REQUIRED.",
-            evidence_run_dir=consumed,
-        )
-    if review_record.exit_code != 0:
-        return Stage(
-            "review_needs_inspection",
-            True,
-            "The review step ended unexpectedly. See "
-            f"{os.path.basename(review_record.stderr_path)}.",
-            evidence_run_dir=consumed,
+            _AWAITING_DECISION + f" No correction round is offered: {why_not}",
+            evidence_run_dir=first.evidence_run_dir,
         )
     return Stage(
-        "awaiting_human_decision",
-        True,
-        f"AIDO is done. Read {SUMMARY_FILE} and the review packet, then decide. "
-        "AIDO committed nothing and pushed nothing; if you accept the change, "
-        "commit it yourself.",
-        evidence_run_dir=consumed,
+        "correction_offered",
+        False,
+        f"The reviewer requested changes (a model claim; read {SUMMARY_FILE}). " + offer,
+        {
+            BEGIN_CORRECTION_FLAGS: ACTION_BEGIN_CORRECTION,
+            DECLINE_CORRECTION_FLAGS: ACTION_DECLINE_CORRECTION,
+        },
+        first.evidence_run_dir,
     )
+
+
+def _derive_correction(task: TaskRecord, first: _Reviewed) -> Stage:
+    """Round 2. Every step re-checks round 1's pinned evidence first."""
+    from ai_dev_orchestrator.task import correction as corr
+
+    try:
+        evidence = corr.checked_correction_evidence(task, first)
+    except TaskRefused as exc:
+        return Stage(
+            "round2_correction_evidence_mismatch",
+            True,
+            f"Round 2 cannot use round 1's evidence: {exc} HUMAN INSPECTION IS REQUIRED.",
+            evidence_run_dir=first.evidence_run_dir,
+            round_number=2,
+        )
+    first_bound = evidence.round1_bound
+    consumed = consumed_authorization(task, ROUND_2)
+    if consumed is None and round2_attempt_exists(task):
+        # An attempt already began, so losing its consumed authorization or
+        # evidence directory must never reopen restore/prepare/consent.
+        return Stage(
+            "round2_attempt_incomplete",
+            True,
+            "A round-2 apply/review attempt exists, but its consumed authorization or "
+            "implementer evidence is missing, so what it consumed can no longer be shown. "
+            "Treat the change as possibly written and the diff as possibly sent to the "
+            "reviewer. This was the one correction round: nothing more will run, and AIDO "
+            "restores nothing. HUMAN REPOSITORY INSPECTION IS REQUIRED.",
+            round_number=2,
+        )
+    if consumed is None:
+        drafts = authorization_paths(task, ROUND_2)
+        if not drafts:
+            return Stage(
+                "round2_restore_pending",
+                False,
+                f"The correction round is begun. YOU must restore {task.target_path} to its "
+                f"original baseline first: {corr.restore_instruction(task)} "
+                f"WARNING: {corr.RESTORE_WARNING} AIDO never restores it. Then pass "
+                "--prepare-supervised-implementation: AIDO observes the clean tree, the "
+                "round-1 HEAD and the round-1 source bytes itself and refuses any "
+                "difference. Preparing is offline and sends nothing.",
+                {PREPARE_FLAGS: ACTION_PREPARE},
+                round_number=2,
+            )
+        problem = corr.round2_binding_problem(drafts[-1], first_bound)
+        if problem is not None:
+            return Stage(
+                "round2_correction_baseline_mismatch",
+                True,
+                f"{problem} No consent is offered and nothing will be sent.",
+                round_number=2,
+            )
+        latest = os.path.basename(drafts[-1])
+        return Stage(
+            "round2_implementer_consent",
+            False,
+            f"A human must complete the 'consent' block of {latest}, a FRESH single-use "
+            "authorization (it expires 60 minutes after it was prepared; round 1's is "
+            "spent and never reused). The next step SENDS the original file plus the "
+            "correction data (the previous approved diff, AIDO-observed verification "
+            "facts and any reviewer findings, as untrusted data) to the supervised "
+            "implementer model, once. To issue another fresh authorization instead, "
+            "pass --prepare-supervised-implementation.",
+            {IMPLEMENTER_FLAGS: ACTION_RUN_IMPLEMENTER, PREPARE_FLAGS: ACTION_PREPARE},
+            round_number=2,
+        )
+    authorization_path, run_dir = consumed
+    problem = corr.round2_consumed_problem(authorization_path, run_dir, first_bound)
+    if problem is not None:
+        return Stage(
+            "round2_evidence_inconsistent",
+            True,
+            f"{problem} HUMAN INSPECTION IS REQUIRED. Nothing more will run.",
+            evidence_run_dir=run_dir,
+            round_number=2,
+        )
+    second = _derive_round(task, ROUND_2, consumed)
+    if isinstance(second, Stage):
+        return second
+    problem = corr.round2_terminal_problem(
+        task, run_dir, first_bound, second.apply_record, second.review_record
+    )
+    if problem is not None:
+        return Stage(
+            "round2_evidence_inconsistent",
+            True,
+            f"The round-2 terminal records are not trustworthy: {problem} HUMAN "
+            "INSPECTION IS REQUIRED. No result is claimed. Nothing more will run.",
+            evidence_run_dir=run_dir,
+            round_number=2,
+        )
+    if second.review_record.exit_code == 2:
+        return Stage(
+            "round2_verification_failed",
+            True,
+            f"Round-2 verification ran and did not pass. Read {ROUND_2.summary_file}. "
+            "This was the one correction round; AIDO offers no further round and no "
+            "retry. The decision is yours: AIDO committed nothing.",
+            evidence_run_dir=run_dir,
+            round_number=2,
+        )
+    return Stage(
+        "round2_awaiting_human_decision",
+        True,
+        f"AIDO is done. Read {ROUND_2.summary_file} and the round-2 review packet, then "
+        "decide. This was the one correction round; whatever the verdict, AIDO offers "
+        "no further round. AIDO committed nothing and pushed nothing; if you accept "
+        "the change, commit it yourself.",
+        evidence_run_dir=run_dir,
+        round_number=2,
+    )
+
+
+def round2_context(task: TaskRecord):
+    """``(evidence, round-1 reviewed)`` for a begun correction, re-checked. For the CLI."""
+    from ai_dev_orchestrator.task import correction as corr
+
+    consumed = consumed_authorization(task, ROUND_1)
+    if consumed is None:
+        raise TaskRefused("round 1 never ran.")
+    first = _derive_round(task, ROUND_1, consumed)
+    if not isinstance(first, _Reviewed):
+        raise TaskRefused("round 1 has no reviewable result.")
+    return corr.checked_correction_evidence(task, first), first
+
+
+def round1_reviewed(task: TaskRecord) -> _Reviewed:
+    consumed = consumed_authorization(task, ROUND_1)
+    first = None if consumed is None else _derive_round(task, ROUND_1, consumed)
+    if not isinstance(first, _Reviewed):
+        raise TaskRefused("round 1 has no reviewable result.")
+    return first
 
 
 # -- the derived summary ---------------------------------------------------------------------------

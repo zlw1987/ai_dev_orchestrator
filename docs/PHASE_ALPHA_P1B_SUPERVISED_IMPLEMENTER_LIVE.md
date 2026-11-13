@@ -339,6 +339,31 @@ Residual limits, none of them material to B-1:
 - **Growth.** Tombstones and the issuance records of unused authorizations
   accumulate. Pruning is safe except in the F-4 state.
 
+## 8. ALPHA-2B-T1 — optional correction data (PO-2, policy §10)
+
+`prepare_supervised_implementation`, `run_supervised_implementation` and the
+two extracted CLI runners accept one optional keyword, `correction`, reachable
+**in-process only** from the task coordinator's one correction round. The two
+commands gained no option.
+
+- Absent (every round-1 and standalone request), nothing changes: the system
+  instruction, user message, wire payload and `request_sha256` are
+  byte-identical to Alpha 2A (golden digests in
+  `tests/test_task_correction_round.py`), and so is the transmission notice.
+- Present, `_derive` checks the correction's baseline (target path, source
+  SHA-256 and size, workspace HEAD) against its own clean-tree observations
+  and 5D2 read, and refuses `correction_baseline_mismatch` before an issuance
+  record or request exists. It refuses a correction that still names the
+  workspace path. The request uses a separate fixed system instruction and
+  adds the correction's transmission copy under `correction`; the baseline is
+  never transmitted. Because the correction is part of the request,
+  `request_sha256` binds it: a run with a missing, changed or added
+  correction refuses `authorization_mismatch`, unconsumed.
+- The authorization schema, the ledger, the bounded transport, the one
+  request, the wait deadline, the strict parser, the 5E3 generator and the
+  provenance record are unchanged. The notice adds one ROUND 2 line only when
+  a correction is present. No token budget is introduced.
+
 ---
 
 **Status: ALPHA-P1B IMPLEMENTED; FU1 (B-1) IMPLEMENTED — READY FOR INDEPENDENT

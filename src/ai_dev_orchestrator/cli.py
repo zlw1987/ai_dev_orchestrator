@@ -4603,9 +4603,14 @@ def _run_l2_supervised_implementer_prepare(
     evidence_dir: Path,
     out: Path,
     prepare_flag: bool,
+    correction=None,
     _now=None,
 ) -> None:
-    """Write one authorization DRAFT. Extracted for tests. Reads no provider env."""
+    """Write one authorization DRAFT. Extracted for tests. Reads no provider env.
+
+    ``correction`` is reachable only in-process, from ALPHA-2B-T1's
+    ``task-continue``; the CLI command never passes one.
+    """
     if prepare_flag is not True:
         typer.echo(
             "Error: l2-supervised-implementer-prepare requires the explicit "
@@ -4643,6 +4648,7 @@ def _run_l2_supervised_implementer_prepare(
                 approved_plan=plan,
                 target_path=target_path,
                 evidence_dir=str(evidence_dir),
+                correction=correction,
                 _now=_now,
             )
         except SupervisedImplementerError as exc:
@@ -4715,10 +4721,14 @@ def _run_l2_supervised_implementer_run(
     transmit_flag: bool,
     real_flag: bool,
     read_env=_read_supervised_implementer_env,
+    correction=None,
     _now=None,
     _inner_transport_factory=None,
 ) -> None:
     """Consume one authorization; at most one request. Extracted for tests.
+
+    ``correction`` is reachable only in-process (ALPHA-2B-T1); it must be the
+    one the authorization was prepared with, or the run refuses unconsumed.
 
     ``read_env`` is called at most once, with the configured provider, and only
     after every offline check. ``_now`` and ``_inner_transport_factory`` are
@@ -4770,6 +4780,7 @@ def _run_l2_supervised_implementer_run(
                 evidence_dir=str(evidence_dir),
                 read_env=read_env,
                 announce=_supimpl_echo_notice,
+                correction=correction,
                 _now=_now,
                 _inner_transport_factory=_inner_transport_factory,
             )
@@ -5041,8 +5052,15 @@ def _task_invoke(task, step: str, function, **kwargs) -> int | None:
     Returns the runner's exit code, or ``None`` if it raised instead of exiting
     (recorded as ``exit-error``; the run then needs inspection).
     """
-    from ai_dev_orchestrator.task.run import record_step
+    from ai_dev_orchestrator.task.run import TaskRefused, begin_attempt, record_step
 
+    try:
+        begin_attempt(task, step)  # round-2 apply/review only; BEFORE any runner action
+    except (OSError, TaskRefused):
+        _task_refused(
+            f"could not durably record that the {step} attempt is beginning, so it was "
+            "not started. Nothing was run, sent or written."
+        )
     out, err = _StreamTee(sys.stdout), _StreamTee(sys.stderr)
     saved = sys.stdout, sys.stderr
     sys.stdout, sys.stderr = out, err
@@ -5075,7 +5093,8 @@ def _task_next_command(task, stage) -> list[str]:
         if flags:
             command += " " + " ".join(flags)
         label = "re-issue a fresh authorization" if (
-            action == ACTION_PREPARE and stage.name == "implementer_consent"
+            action == ACTION_PREPARE
+            and stage.name in ("implementer_consent", "round2_implementer_consent")
         ) else "continue"
         lines.append(f"  {label}: {command}")
     return lines
@@ -5239,6 +5258,26 @@ def _task_refuse_crlf(task, project) -> None:
         )
 
 
+def _task_write_summary(task_run, task, rnd):
+    """Round 1: the Alpha 2A summary. Round 2: the separate final summary."""
+    if rnd.number == 1:
+        return task_run.write_summary(task)
+    from ai_dev_orchestrator.task import correction as task_correction
+
+    stage = task_run.derive_stage(task)
+    if stage.name not in ("round2_awaiting_human_decision", "round2_verification_failed"):
+        return None
+    evidence, _first = task_run.round2_context(task)
+    authorization_path, _run_dir = task_run.consumed_authorization(task, rnd)
+    return task_correction.write_round2_summary(
+        task,
+        evidence,
+        task_correction.read_bound(authorization_path),
+        task_run._last(task, rnd.step_apply),
+        task_run._last(task, rnd.step_review),
+    )
+
+
 def _run_task_continue(
     *,
     run_dir: Path,
@@ -5273,47 +5312,88 @@ def _run_task_continue(
             "Nothing was done."
         )
 
+    rnd = task_run.ROUNDS[stage.round_number]
     code: int | None = 0
     try:
+        # ALPHA-2B-T1: round 2's correction data is rebuilt from round 1's
+        # recorded evidence, and checked against the digests pinned when the
+        # human began the round, at BOTH the prepare and the run boundary.
+        correction = None
+        if rnd.number == 2 and action in (task_run.ACTION_PREPARE, task_run.ACTION_RUN_IMPLEMENTER):
+            from ai_dev_orchestrator.task import correction as task_correction
+
+            evidence, _first = task_run.round2_context(task)
+            correction = task_correction.correction_input(evidence, project.repo.workspace_path)
+            if action == task_run.ACTION_RUN_IMPLEMENTER:
+                problem = task_correction.round2_binding_problem(
+                    task_run.authorization_paths(task, rnd)[-1], evidence.round1_bound
+                )
+                if problem is not None:
+                    raise task_run.TaskRefused(f"{problem} Nothing was sent.")
+
         if action == task_run.ACTION_PREPARE:
             task_run.freeze_plan_approval(task)
             _task_refuse_crlf(task, project)
             code = _task_invoke(
                 task,
-                "prepare",
+                rnd.step_prepare,
                 _run_l2_supervised_implementer_prepare,
                 project_config=Path(task.project_config),
                 approved_plan=Path(task.path(task_run.PLAN_APPROVED_FILE)),
                 target_path=task.target_path,
                 evidence_dir=Path(task_run.evidence_dir(task)),
-                out=Path(task_run.next_authorization_path(task)),
+                out=Path(task_run.next_authorization_path(task, rnd)),
                 prepare_flag=True,
+                **({"correction": correction} if correction is not None else {}),
             )
         elif action == task_run.ACTION_RUN_IMPLEMENTER:
             code = _task_invoke(
                 task,
-                "implementer-run",
+                rnd.step_implementer,
                 _run_l2_supervised_implementer_run,
                 project_config=Path(task.project_config),
                 approved_plan=Path(task.path(task_run.PLAN_APPROVED_FILE)),
-                authorization=Path(task_run.authorization_paths(task)[-1]),
+                authorization=Path(task_run.authorization_paths(task, rnd)[-1]),
                 evidence_dir=Path(task_run.evidence_dir(task)),
                 transmit_flag=True,
                 real_flag=True,
                 read_env=read_implementer_env,
                 _inner_transport_factory=_implementer_transport_factory,
+                **({"correction": correction} if correction is not None else {}),
             )
             after = task_run.derive_stage(task)
-            if after.name == "diff_draft_pending":
-                task_run.write_diff_draft(task, after.evidence_run_dir)
+            if after.name == rnd.stage_prefix + "diff_draft_pending":
+                task_run.write_diff_draft(task, after.evidence_run_dir, rnd)
         elif action == task_run.ACTION_WRITE_DIFF_DRAFT:
-            task_run.write_diff_draft(task, stage.evidence_run_dir)
+            task_run.write_diff_draft(task, stage.evidence_run_dir, rnd)
+        elif action == task_run.ACTION_BEGIN_CORRECTION:
+            from ai_dev_orchestrator.task import correction as task_correction
+
+            task_correction.begin_correction(task, task_run.round1_reviewed(task))
+            for line in (
+                "CORRECTION ROUND BEGUN (the one round AIDO allows). Recorded in "
+                f"{task_run.CORRECTION_FILE}. Nothing was sent, written or approved.",
+                f"Round-1 evidence is preserved in {task.run_dir} and pinned by digest.",
+                f"NEXT, YOU restore the target yourself: {task_correction.restore_instruction(task)}",
+                f"WARNING: {task_correction.RESTORE_WARNING}",
+                "AIDO never restores, resets or stashes anything.",
+            ):
+                typer.echo(line, err=True)
+        elif action == task_run.ACTION_DECLINE_CORRECTION:
+            from ai_dev_orchestrator.task import correction as task_correction
+
+            task_correction.decline_correction(task, task_run.round1_reviewed(task))
+            typer.echo(
+                f"Correction round declined; recorded in {task_run.CORRECTION_DECLINED_FILE}. "
+                "The decision is yours. Nothing was sent, written or approved.",
+                err=True,
+            )
         elif action in (task_run.ACTION_APPLY_AND_REVIEW, task_run.ACTION_REVIEW):
-            approved = Path(task_run.freeze_diff_approval(task, stage.evidence_run_dir))
+            approved = Path(task_run.freeze_diff_approval(task, stage.evidence_run_dir, rnd))
             if action == task_run.ACTION_APPLY_AND_REVIEW:
                 code = _task_invoke(
                     task,
-                    "apply",
+                    rnd.step_apply,
                     _run_l2_apply_approved_file_edit,
                     project_config=Path(task.project_config),
                     approved_diff_proposal=approved,
@@ -5323,7 +5403,7 @@ def _run_task_continue(
             if code == 0:
                 code = _task_invoke(
                     task,
-                    "review",
+                    rnd.step_review,
                     _run_l2_review_approved_file_edit,
                     project_config=Path(task.project_config),
                     approved_diff_proposal=approved,
@@ -5332,17 +5412,17 @@ def _run_task_continue(
                     read_env=read_reviewer_env,
                     network_transport_factory=reviewer_transport_factory,
                 )
-            if code == 0:
+            if code == 0 or (rnd.number == 2 and code == 2):
                 # The summary is derived display, never evidence: the review
                 # step's record already holds the packet, so a summary failure
                 # warns instead of failing a review that succeeded.
                 try:
-                    summary = task_run.write_summary(task)
+                    summary = _task_write_summary(task_run, task, rnd)
                 except Exception as exc:  # noqa: BLE001
                     summary = None
                     typer.echo(
-                        f"WARNING: summary.txt not written ({type(exc).__name__}); "
-                        "the review packet is in the review step's .stdout record.",
+                        f"WARNING: {rnd.summary_file} not written ({type(exc).__name__}); "
+                        "the review record is in the review step's .stdout record.",
                         err=True,
                     )
                 if summary is not None:
@@ -5484,6 +5564,17 @@ def task_continue(
         "--real-reviewer",
         help="Diff/review stage: send the approved diff to the real reviewer model.",
     ),
+    begin_correction_round: bool = typer.Option(
+        False,
+        "--begin-correction-round",
+        help="Correction offer: begin the ONE correction round. Records your "
+        "decision only; you then restore the target yourself.",
+    ),
+    decline_correction: bool = typer.Option(
+        False,
+        "--decline-correction",
+        help="Correction offer: decline it and end the task at your own decision.",
+    ),
 ) -> None:
     """Run the current stage's accepted command(s), record their output, stop.
 
@@ -5491,7 +5582,9 @@ def task_continue(
     plan → --prepare-supervised-implementation; consent →
     --transmit-approved-source --real-implementer; diff → --apply-approved-plan
     --write-approved-file --verify-approved-file-edit --real-reviewer; review
-    retry → --verify-approved-file-edit --real-reviewer.
+    retry → --verify-approved-file-edit --real-reviewer; correction offer →
+    --begin-correction-round or --decline-correction. Round 2 (at most one)
+    uses the same stage flags again, with a fresh consent and approval.
     """
     _run_task_continue(
         run_dir=run_dir,
@@ -5503,6 +5596,8 @@ def task_continue(
             "--write-approved-file": write_approved_file,
             "--verify-approved-file-edit": verify_approved_file_edit,
             "--real-reviewer": real_reviewer,
+            "--begin-correction-round": begin_correction_round,
+            "--decline-correction": decline_correction,
         },
     )
 

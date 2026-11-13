@@ -148,6 +148,10 @@ from ai_dev_orchestrator.supervised_implementer.models import (
     SupervisedImplementerRefused,
     check_diff_agrees_with_content_provenance,
 )
+from ai_dev_orchestrator.supervised_implementer.correction import (
+    CorrectionInput,
+    correction_mentions_workspace,
+)
 from ai_dev_orchestrator.supervised_implementer.request import (
     build_supervised_implementer_request,
 )
@@ -490,6 +494,41 @@ class _Derived:
     request_sha256: str
     approved_plan_sha256: str
     project_config_sha256: str
+    correction_included: bool = False
+
+
+def _check_correction(
+    correction: CorrectionInput, *, project: ProjectConfig, source: _ApprovedSource, head: str
+) -> None:
+    """ALPHA-2B-T1: a correction is only ever sent against its own baseline.
+
+    Checked after AIDO's own clean-tree observations and 5D2 read, at both the
+    prepare and the run boundary. Any difference refuses; nothing re-baselines.
+    """
+    baseline = correction.baseline
+    mismatched = [
+        name
+        for name, observed in (
+            ("target_path", source.target_path),
+            ("source_sha256", source.source_sha256),
+            ("source_bytes", source.source_bytes),
+            ("workspace_head_object_id", head),
+        )
+        if getattr(baseline, name) != observed
+    ]
+    if mismatched:
+        raise _refuse(
+            "correction_baseline_mismatch",
+            "the workspace does not hold the correction's original baseline; "
+            "mismatched: " + ", ".join(mismatched) + ". The correction round "
+            "needs the target restored by a human to the round-1 baseline at "
+            "the same HEAD. AIDO restores nothing. Nothing was sent.",
+        )
+    if correction_mentions_workspace(correction, project.repo.workspace_path):
+        raise _refuse(
+            "correction_contains_workspace_path",
+            "the correction data still names the workspace path. Nothing was sent.",
+        )
 
 
 def _derive(
@@ -497,8 +536,11 @@ def _derive(
     approved_plan: ApprovedL1PlanArtifact,
     target_path: object,
     settings: LiveSettings,
+    correction: CorrectionInput | None = None,
 ) -> _Derived:
     """Identity, target, Git observation, 5D2 read, Git observation, request, digests."""
+    if correction is not None and type(correction) is not CorrectionInput:
+        raise _refuse("correction_invalid", "the correction data is not a CorrectionInput.")
     _check_identity(approved_plan, project)
     target = _check_target_path(target_path, approved_plan, project)
     head_before = observe_clean_workspace_head(project, target)
@@ -510,6 +552,8 @@ def _derive(
             "the workspace HEAD changed while the approved file was being read. "
             "Nothing was sent.",
         )
+    if correction is not None:
+        _check_correction(correction, project=project, source=source, head=head_before)
     request = build_supervised_implementer_request(
         approved_plan=approved_plan,
         target_path=source.target_path,
@@ -517,6 +561,7 @@ def _derive(
         model=settings.base.model,
         max_output_tokens=settings.base.max_output_tokens,
         structured_output=False,
+        correction=correction,
     )
     payload = wire_payload(request)
     return _Derived(
@@ -527,6 +572,7 @@ def _derive(
         request_sha256=sha256_hex(canonical_json_bytes(payload)),
         approved_plan_sha256=sha256_hex(canonical_json_bytes(approved_plan.model_dump(mode="json"))),
         project_config_sha256=sha256_hex(canonical_json_bytes(project.model_dump(mode="json"))),
+        correction_included=correction is not None,
     )
 
 
@@ -596,6 +642,7 @@ def prepare_supervised_implementation(
     approved_plan: ApprovedL1PlanArtifact,
     target_path: str,
     evidence_dir: str,
+    correction: CorrectionInput | None = None,
     _now: Callable[[], datetime] | None = None,
 ) -> PreparedAuthorization:
     """Re-derive one run's exact request and return an authorization draft.
@@ -603,6 +650,11 @@ def prepare_supervised_implementation(
     Reads the project's approved files through the 5D2 reader and observes the
     Git state read-only. Reads **no** provider environment variable, builds no
     client, and contacts nothing (acceptance criterion 1).
+
+    ``correction`` (ALPHA-2B-T1, in-process only; no CLI option reaches it) is
+    checked against the observed baseline and enters the request, so the
+    authorization's ``request_sha256`` binds it. The authorization schema is
+    unchanged.
 
     Its one write is the ledger's issuance record (ALPHA-P1B-FU1), created
     exclusively as the last step. That record is what later proves the
@@ -614,7 +666,7 @@ def prepare_supervised_implementation(
     _require_windows()
     evidence_root, evidence_dir_sha256 = _canonical_evidence_dir(evidence_dir, project)
     ledger_root, ledger_dir_sha256 = _canonical_ledger_dir(settings, project, evidence_root)
-    derived = _derive(project, approved_plan, target_path, settings)
+    derived = _derive(project, approved_plan, target_path, settings, correction)
 
     moment = (_now or _utc_now)().astimezone(timezone.utc).replace(microsecond=0)
     nonce, issuance_sha256 = new_issuance_nonce()
@@ -835,12 +887,23 @@ class LiveTransmissionNotice:
     endpoint_host: str
     endpoint_port: int
     attempt_timeout_seconds: float
+    correction_included: bool = False
 
     def render(self) -> str:
         transport = (
             "TLS (https)"
             if self.endpoint_scheme == "https"
             else "PLAINTEXT HTTP — NOT TLS-ENCRYPTED (project and operator acknowledged)"
+        )
+        correction = (
+            [
+                "  correction:    ROUND 2 — also sends the previous approved diff "
+                "(redacted copy),",
+                "                 AIDO-observed verification facts and any reviewer "
+                "findings, as untrusted data",
+            ]
+            if self.correction_included
+            else []
         )
         return "\n".join(
             [
@@ -856,6 +919,7 @@ class LiveTransmissionNotice:
                 f"  transport:     {transport}",
                 f"  AIDO wait:     at most {self.attempt_timeout_seconds:g} s (AIDO's own "
                 "deadline; not a cancellation)",
+                *correction,
                 "  ONE request, zero retries, no fallback. The reply is untrusted "
                 "proposed content;",
                 "  nothing is written without a separate exact human diff approval.",
@@ -1078,10 +1142,16 @@ def run_supervised_implementation(
     evidence_dir: str,
     read_env: Callable[[str], Mapping[str, str]],
     announce: Callable[[LiveTransmissionNotice], None],
+    correction: CorrectionInput | None = None,
     _now: Callable[[], datetime] | None = None,
     _inner_transport_factory: Callable[[], httpx.BaseTransport] | None = None,
 ) -> LiveRunReport:
     """Consume one authorization and issue at most one request. Stops before H6.
+
+    ``correction`` (ALPHA-2B-T1) must be the same correction the authorization
+    was prepared with: the request is re-derived with it and compared by
+    ``request_sha256`` before anything is consumed, so a missing, changed or
+    added correction refuses as ``authorization_mismatch``.
 
     Raises:
         SupervisedImplementerRefused: refused **before consumption**. Nothing
@@ -1153,7 +1223,7 @@ def run_supervised_implementation(
         )
 
     # d. Re-derive everything in-process and compare exactly.
-    derived = _derive(project, approved_plan, bound.target_path, settings)
+    derived = _derive(project, approved_plan, bound.target_path, settings, correction)
     mismatched = _bound_mismatches(
         bound, project=project, approved_plan=approved_plan, settings=settings, derived=derived
     )
@@ -1318,6 +1388,7 @@ def _consumed_run(
         endpoint_host=endpoint.host,
         endpoint_port=endpoint.port,
         attempt_timeout_seconds=settings.attempt_timeout_seconds,
+        correction_included=derived.correction_included,
     )
     try:
         announce(notice)
