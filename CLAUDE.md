@@ -90,6 +90,11 @@ before doing any work here.
   §10; it awaits independent review). See "What the correction round can and
   cannot do" below. It is the only exception to the fix-loop prohibitions in
   this file, and it is human-initiated at every step.
+- **P0-UX1-T1 + FU1 added `task-approve`, the interactive approval interface**
+  (Product Owner decision D-2′, amending D-2; policy §11 PO-UX-1..3; accepted
+  by independent review in offline scope). It records separate, explicit human
+  decisions and executes nothing. See "How a human approves (P0-UX1, D-2′)"
+  below.
 - **The first controlled write → verify → supervised review → human path now
   exists.** **L2 as originally defined is still NOT complete**: there is no
   **autonomous** model-backed implementer, no automatic fixer, no branch
@@ -109,6 +114,7 @@ ALPHA-P1A      Offline Supervised Implementer       DONE / ACCEPTED
 ALPHA-P1B      Live Supervised Implementer          IMPLEMENTED (awaiting review)
 ALPHA-2A-T1    Single-File Task Coordinator         IMPLEMENTED (awaiting review)
 ALPHA-2B-T1    One Human-Supervised Correction Round IMPLEMENTED (awaiting review)
+P0-UX1-T1      Interactive Human Approval (D-2′)    ACCEPTED (offline scope)
 → bounded write → verify → supervised review → human
 ```
 
@@ -627,7 +633,9 @@ authorized.
   environment variable and builds no client, and it writes an authorization
   **draft** that grants nothing. `l2-supervised-implementer-run` consumes one
   human-completed, **single-use, per-run** `supervised-implementer-authorization.v1`
-  that binds the plan, the config, the target, the exact source bytes, the
+  (completed by the human's file edit, or serialized by AIDO only from the
+  human's explicit interactive H2 decision — see P0-UX1 below) that binds the
+  plan, the config, the target, the exact source bytes, the
   AIDO-observed clean Git HEAD, the exact wire payload, the model, the provider,
   the human-typed endpoint scheme, host and port, the wait bound, the
   evidence directory and the authorization ledger. It expires after 60 minutes.
@@ -698,13 +706,15 @@ an orchestration framework and not the DL-4B Alpha driver (which stays offline).
   approval, and the final decision (AIDO commits nothing). **Each stage accepts
   exactly its own confirmation flags**, typed by a human on `task-continue`;
   any other flag set refuses with nothing done. Never let one invocation carry
-  flags for two stages.
-- **It never creates an approval or a consent.** The plan and diff drafts carry
-  four empty approval strings, and the authorization draft is P1B's own. Before
-  freezing, it refuses any change outside the `approval` block, then the accepted
-  strict parser decides; the frozen copy is the human's exact bytes. Do not add
-  terminal approval capture, pre-filled approval values, or an "accept" phrase
-  (D-2: approval stays a human file edit).
+  flags for two stages. **`task-continue` is the sole executor**; `task-approve`
+  (below) only records decisions.
+- **It never approves or consents on a human's behalf.** The plan and diff
+  drafts carry four empty approval strings, and the authorization draft is
+  P1B's own. A decision is made either interactively at `task-approve` (the
+  normal path) or by the human editing the draft's block (the manual,
+  compatible path); see "How a human approves" below. Either way, before
+  freezing it refuses any change outside the block, then the accepted strict
+  parser decides.
 - **The plan draft is deterministic** from the human's title, description and
   one target path. No model plans here.
 - **A run is pinned to one project config by SHA-256.** A changed config
@@ -728,6 +738,60 @@ model planner stage; multi-file tasks; a fixer or review/fix loop (beyond
 ALPHA-2B-T1's one human-initiated round); automatic approval or consent;
 config writing; per-run endpoint derivation; Git writes; a generic
 workflow/DAG engine; or DL-4B integration.
+
+### How a human approves (P0-UX1, D-2′)
+
+See `docs/ALPHA_2A_TASK_COORDINATOR.md` §4 and §10, and policy §11 (PO-UX-1,
+PO-UX-2, PO-UX-3). D-2′ amends D-2 ("approval stays a human file edit") and
+nothing else.
+
+- **`task-approve --run-dir <run>` is the normal interactive interface.** It
+  works only at `plan_approval` (H1), `implementer_consent` (H2),
+  `diff_approval` (H3), `round2_implementer_consent` and `round2_diff_approval`,
+  only on a terminal, only with the pinned config digest unchanged, only on
+  AIDO's untouched draft, and only when no decision exists for it yet. It shows
+  the complete artifact, escaped, and what approving it leads to.
+- **Each is a separate human decision about one exact artifact.** H1 plan, H2
+  source transmission, H3 exact diff, and round 2's own H2 and H3 never satisfy
+  one another; a decision for one stage, round, run or draft never satisfies
+  another.
+- **Approve / Reject / Cancel are explicit.** The human types `approve` or
+  `reject`; anything else — an empty line, EOF, Ctrl-C — cancels and records
+  nothing. `reject` is a recorded, terminal decision: it ends the task in round
+  1 (`rejected`) or the correction round in round 2 (`round2_rejected`).
+- **H2 needs more than `approve`.** After `approve` the human independently
+  types the expected endpoint as `scheme://host:port`; AIDO never displays,
+  prefills or derives it (DEC-SUP-LIVE A-2 is preserved). `task-approve` reads
+  exactly one environment value, `AIDO_LITELLM_BASE_URL` — never the key, and it
+  never displays the URL — and compares it by P1B's own `check_live_endpoint`;
+  a mismatch records nothing. The human then confirms the transmission
+  separately (`transmit`), and for `http` the plaintext risk separately
+  (`plaintext`, under a `NOT TLS-ENCRYPTED` banner).
+- **AIDO generates the block only after explicit human approval.** From a
+  re-validated decision, and only inside that stage's own `task-continue`, AIDO
+  serializes the block the strict parser requires: the stage's fixed approval or
+  consent text, AIDO's own clock as the timestamp, `source: "manual"`, the
+  observed local account name (an observation, **not** an authenticated
+  identity), and for H2 the displayed `binding_sha256`, the human-typed endpoint
+  and the plaintext acknowledgement only if it was confirmed. The unchanged
+  strict parsers and P1B's run-time checks (endpoint comparison, TTL, ledger
+  single use) still decide.
+- **Decision records are write-once** (`12-plan.decision.json`,
+  `20-/50-authorization-<n>.decision.json` and `.consented.json`,
+  `32-/62-diff.decision.json`), created atomically and bound to the run, the
+  config, the round, the stage and the exact draft bytes displayed. They are
+  re-validated before every consequential action; a stale, mismatched, replayed,
+  unaccounted-for or unreadable record derives `decision_record_invalid` (or
+  `round2_decision_record_invalid`) and is never repaired or replaced.
+- **The manual JSON edit remains a compatibility option.** One decision cannot
+  mix the two paths.
+- **No inferred, default, pre-selected, carried-over, reused or model-generated
+  approval or consent — ever.** No model output reaches a decision.
+- **No automatic Git commit, push or deployment.** The final decision stays a
+  human's, done by hand.
+- **Not claimed:** that the account name identifies a person, that a TTY proves
+  a human is present, or that a same-account process cannot forge a decision
+  (A-19).
 
 ### What the correction round can and cannot do (ALPHA-2B-T1)
 
@@ -826,7 +890,8 @@ Real model calls exist only behind the four explicitly gated commands
 (`real-llm-smoke-test`, `generate-model-plan`, `l2-review-approved-file-edit`,
 `l2-supervised-implementer-run`). `task-continue` (ALPHA-2A-T1) reaches the last
 two only through their own extracted runners, with the same flags typed by a
-human; nothing else may call a model, and no model output may ever select a path, a
+human; `task-approve` (P0-UX1) calls no model and executes nothing; nothing
+else may call a model, and no model output may ever select a path, a
 command, an executable, or a file to change.
 
 ## Coding discipline

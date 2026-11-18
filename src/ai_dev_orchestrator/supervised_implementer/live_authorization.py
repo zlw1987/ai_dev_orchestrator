@@ -259,7 +259,13 @@ def compute_binding_sha256(bound: AuthorizationBound | dict) -> str:
 
 
 class AuthorizationConsent(_Strict):
-    """The human's per-run consent. Never inferred from config or flags."""
+    """The human's per-run consent. Never inferred from config or flags.
+
+    The consent act is a human's: either an edit of this block, or an explicit
+    terminal decision (D-2′, ``task-approve``) in which the human typed the
+    endpoint scheme, host and port they expect and confirmed the transmission,
+    from which AIDO serializes this block. AIDO never writes it otherwise.
+    """
 
     consented_by: StrictStr = Field(min_length=1, max_length=200)
     consented_at: AwareTimestamp

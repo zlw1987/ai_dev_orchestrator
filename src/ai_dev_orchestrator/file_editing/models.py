@@ -194,8 +194,10 @@ class DiffEditApproval(_Strict):
     list, a raw response, and a workspace path all have **no field here**, so a
     payload carrying one is rejected as an extra rather than being stored.
 
-    A model may never populate any field here. The orchestrator does not write
-    this block either — writing it *is* the approval act, and it is a human's.
+    A model may never populate any field here. The approval act is a human's:
+    either an edit of this block, or an explicit terminal ``approve`` decision
+    from which AIDO serializes this block (D-2′, ``task-approve``). AIDO never
+    writes this block without that recorded decision.
     """
 
     approved_by: str

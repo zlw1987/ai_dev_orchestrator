@@ -1914,6 +1914,10 @@ EXPECTED_COMMANDS = [
     # stays a human file edit and the human still commits by hand.
     "task-start",
     "task-status",
+    # P0-UX1 (D-2′). Shows the pending plan, consent or diff and records the
+    # human's approve/reject decision; it runs nothing. task-continue, with its
+    # own flags, stays the only executor.
+    "task-approve",
     "task-continue",
     "task-doctor",
 ]

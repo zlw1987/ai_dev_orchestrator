@@ -122,8 +122,10 @@ class PlanApproval(_Strict):
     value today is ``"manual"``, so a future automated source has to be added
     deliberately rather than slipping in as an unrecognized string.
 
-    A model may never populate any field here. The orchestrator does not write
-    this block either — writing it is the approval act, and it is a human's.
+    A model may never populate any field here. The approval act is a human's:
+    either an edit of this block, or an explicit terminal ``approve`` decision
+    from which AIDO serializes this block (D-2′, ``task-approve``). AIDO never
+    writes this block without that recorded decision.
     """
 
     approved_by: str

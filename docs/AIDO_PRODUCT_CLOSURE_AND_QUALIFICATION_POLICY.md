@@ -272,3 +272,45 @@ stash, clone or deployment is authorized.
 review/fix loop beyond the one round; patch generation by AIDO from findings;
 an AIDO-performed restore; a second reviewer or fallback model; any live
 correction round, which needs its own separately authorized live acceptance.
+
+
+## 11. P0-UX amendment (D-2′) — interactive approval and consent
+
+> **Appended amendment. §1–§10 above are unchanged and still in force,**
+> except for the narrow exceptions recorded here.
+>
+> It records the Product Owner's acceptance of D-2′ (P0-UX1-FU1), subject to
+> the H2 rule that the operator independently types the expected endpoint, at
+> baseline `dc2222d2cebdf504a0362f7e7fb8e5457ab35090`.
+>
+> Implementation: P0-UX1-T1 (`docs/ALPHA_2A_TASK_COORDINATOR.md` §10). It is
+> implemented and tested offline only.
+
+| # | Decision | What it narrows |
+|---|---|---|
+| PO-UX-1 | The per-run consent may be made interactively at `task-approve` (D-2′).<br><br>**What the human does.** The human types `approve`, then the endpoint they expect as `scheme://host:port`. AIDO never displays it, prefills it, or derives it from the environment. `task-approve` reads exactly one environment value, `AIDO_LITELLM_BASE_URL`. It never reads the key and never displays the URL. It compares the typed value with P1B's own `check_live_endpoint`, and a mismatch records nothing.<br><br>**What AIDO serializes.** Only after every confirmation succeeds, and only inside `task-continue`, AIDO serializes the consent block:<br>- `consented_by`: the observed local account, not an authenticated identity;<br>- `consented_at`: AIDO's clock at the decision;<br>- `source: "manual"`;<br>- `binding_sha256`: from the bound section displayed, replacing the human echo;<br>- `consent_text`: the fixed phrase;<br>- the human-typed endpoint;<br>- `plaintext_acknowledgement`: if and only if it was separately confirmed. | §9 (P1B design §11): "human-completed consent", the typed consent phrase and the echoed binding digest. The endpoint stays typed by the human (A-2 unchanged). |
+| PO-UX-2 | H2 needs separate explicit confirmations, in order:<br>- the consent decision, made on a disclosure of provider, model, the one file's path, size, digest and HEAD, the request's contents (including round-2 correction data), the request digest and the expiry;<br>- the typed endpoint;<br>- `transmit`, after the resolved destination and TLS status are shown;<br>- for `http`, `plaintext`, under a `NOT TLS-ENCRYPTED` banner.<br><br>Cancelling any of them records nothing. Transmission still happens only in `task-continue --transmit-approved-source --real-implementer`. | — |
+| PO-UX-3 | Plan (H2 in DEC-SUP numbering, H1 in the coordinator) and diff (H6 / H3) approvals may be decided the same way. AIDO serializes `approved_by` (the observed account), `approved_at` (AIDO's clock), the fixed `approval_text` and `source: "manual"`.<br><br>`reject` is a recorded decision. It ends the task in round 1, or the correction round in round 2. Cancel records nothing. | D-2 ("approval stays a human file edit") and the docstring sentence "the orchestrator does not write this block" |
+
+**Unchanged:**
+- every strict parser, `Literal` and phrase constant;
+- P1B's single environment read at run, and its run-time comparison of the
+  endpoint with the consented one, which refuses before consumption;
+- the 60-minute TTL and the `consented_at` window;
+- single use, decided by the ledger;
+- one request per authorization;
+- `allow_insecure_http`;
+- every PO-1 to PO-3 rule. Round 2 needs its own fresh authorization and its
+  own decisions;
+- the manual file-edit path;
+- each stage's `task-continue` flags.
+
+Decision records are write-once. They are bound to the run, the config, the
+round, the stage and the exact draft bytes displayed, and they are
+re-validated before any consequential action. A stale, mismatched, replayed
+or unreadable record fails closed.
+
+**Not claimed:**
+- that the account name identifies a person;
+- that a TTY proves a human is present;
+- that a same-account process cannot forge a decision (A-19).

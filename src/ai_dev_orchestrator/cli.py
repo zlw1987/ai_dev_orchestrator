@@ -5233,6 +5233,121 @@ def _run_task_status(*, run_dir: Path) -> None:
     _task_echo_stage(task, derive_stage(task), err=False)
 
 
+def _task_approve_subject(task, stage):
+    """``(kind, round, subject)`` for the decision ``stage`` waits on."""
+    from ai_dev_orchestrator.task import approve
+    from ai_dev_orchestrator.task import run as task_run
+
+    rnd = task_run.ROUNDS[stage.round_number]
+    kinds = {approve.stage_name(kind, rnd): kind for kind in (approve.KIND_PLAN, approve.KIND_CONSENT, approve.KIND_DIFF)}
+    kind = kinds.get(stage.name) if not stage.terminal else None
+    if kind is None or (kind == approve.KIND_PLAN and rnd.number != 1):
+        raise task_run.TaskRefused(
+            f"stage {stage.name!r} has no approval or consent to decide. Nothing was recorded."
+        )
+    if kind == approve.KIND_PLAN:
+        return kind, rnd, approve.plan_subject(task)
+    if kind == approve.KIND_DIFF:
+        return kind, rnd, approve.diff_subject(task, rnd, stage.evidence_run_dir)
+    latest = task_run.authorization_paths(task, rnd)[-1]
+    if os.path.lexists(task_run.consented_path(latest)):
+        raise task_run.TaskRefused(
+            f"{os.path.basename(task_run.consented_path(latest))} already exists. Nothing was recorded."
+        )
+    return kind, rnd, approve.consent_subject(task, rnd, latest)
+
+
+def _run_task_approve(
+    *,
+    run_dir: Path,
+    prompt=input,
+    is_tty=None,
+    clock=None,
+    account=None,
+    read_base_url=None,
+    encoding: str | None = None,
+) -> None:
+    """Show one pending decision's complete artifact; record the human's answer.
+
+    Records exactly one write-once decision file, or nothing. It never prepares,
+    sends, calls a model, writes the workspace or runs verification: the stage's
+    own task-continue validates the decision again and is the only executor.
+    The seams exist for tests; the command passes none of them.
+    """
+    from ai_dev_orchestrator.task import approve
+    from ai_dev_orchestrator.task import run as task_run
+
+    clock = clock or task_run.utc_now
+    account = account or approve.observed_account
+    read_base_url = read_base_url or approve.default_read_base_url
+    is_tty = is_tty or (lambda: sys.stdin.isatty() and sys.stdout.isatty())
+    encoding = encoding or approve.default_encoding()
+
+    task = _task_load(run_dir)
+    try:
+        stage = task_run.derive_stage(task)
+        kind, rnd, subject = _task_approve_subject(task, stage)
+        if not is_tty():
+            raise task_run.TaskRefused(
+                "task-approve needs an interactive terminal on stdin and stdout. Nothing was recorded."
+            )
+        if os.path.lexists(subject.decision_path):
+            raise task_run.TaskRefused(
+                f"{os.path.basename(subject.decision_path)} already records a decision; it is "
+                "recorded once and never replaced. Nothing new was recorded."
+            )
+        now = clock()
+        # Display input only: the pinned config's workspace, verification and
+        # reviewer settings, read from bytes matching the run's digest.
+        project = approve.pinned_project(task)
+        if kind == approve.KIND_CONSENT:
+            expires = approve._aware(subject.binding["expires_at"], "expires_at")
+            prepared = approve._aware(subject.binding["prepared_at"], "prepared_at")
+            if not prepared <= now < expires:
+                raise task_run.TaskRefused(
+                    f"{subject.binding['authorization_file']} is expired or not yet valid. Issue a "
+                    "fresh one with task-continue --prepare-supervised-implementation. Nothing was recorded."
+                )
+            text = approve.render_consent(task, subject, encoding, now, project)
+            what = "this implementer consent"
+        elif kind == approve.KIND_PLAN:
+            text, what = approve.render_plan(task, subject, encoding, project), "this plan"
+        else:
+            text, what = approve.render_diff(task, subject, encoding, project), "this exact diff"
+        typer.echo(text)
+        typer.echo("")
+        try:
+            answer = approve.ask_decision(prompt, what)
+            answers = None
+            if answer == approve.APPROVE and kind == approve.KIND_CONSENT:
+                answers = approve.consent_answers(
+                    subject,
+                    prompt=prompt,
+                    echo=lambda line: typer.echo(approve.escape_terminal_text(line, encoding)[0]),
+                    read_base_url=read_base_url,
+                )
+        except approve.Cancelled:
+            typer.echo("Cancelled. No decision was recorded and nothing was run.", err=True)
+            raise typer.Exit(code=_TASK_EXIT_REFUSED)
+        # The draft must still be exactly what was displayed.
+        _, _, fresh = _task_approve_subject(task, task_run.derive_stage(task))
+        if fresh.draft_bytes != subject.draft_bytes or fresh.binding != subject.binding:
+            raise task_run.TaskRefused(
+                f"{os.path.basename(subject.draft_path)} changed while it was displayed. Nothing was recorded."
+            )
+        path = approve.record_decision(task, subject, answer, now=clock(), account=account(), answers=answers)
+    except task_run.TaskRefused as exc:
+        _task_refused(f"{exc}")
+    label = "APPROVED" if answer == approve.APPROVE else "REJECTED"
+    typer.echo(
+        f"{label}: recorded in {os.path.basename(path)}. Recording runs nothing: nothing was "
+        "prepared, sent, written or verified.",
+        err=True,
+    )
+    typer.echo("", err=True)
+    _task_echo_stage(task, task_run.derive_stage(task), err=True)
+
+
 def _task_refuse_crlf(task, project) -> None:
     """Refuse a CRLF target before anything is prepared or sent.
 
@@ -5347,13 +5462,19 @@ def _run_task_continue(
                 **({"correction": correction} if correction is not None else {}),
             )
         elif action == task_run.ACTION_RUN_IMPLEMENTER:
+            from ai_dev_orchestrator.task import approve as task_approve
+
+            # D-2′: an interactive consent decision is re-validated and
+            # serialized here, before anything is read from the environment or
+            # sent; without one, the hand-edited draft is consumed as before.
+            authorization = task_approve.authorization_for_run(task, rnd, now=task_run.utc_now())
             code = _task_invoke(
                 task,
                 rnd.step_implementer,
                 _run_l2_supervised_implementer_run,
                 project_config=Path(task.project_config),
                 approved_plan=Path(task.path(task_run.PLAN_APPROVED_FILE)),
-                authorization=Path(task_run.authorization_paths(task, rnd)[-1]),
+                authorization=Path(authorization),
                 evidence_dir=Path(task_run.evidence_dir(task)),
                 transmit_flag=True,
                 real_flag=True,
@@ -5530,6 +5651,23 @@ def task_status(
 ) -> None:
     """Derive the run's stage from its files and print the next command."""
     _run_task_status(run_dir=run_dir)
+
+
+@app.command("task-approve", short_help="Decide the pending plan, consent or diff interactively (runs nothing).")
+def task_approve(
+    run_dir: Path = typer.Option(..., "--run-dir", help="The task run directory."),
+) -> None:
+    """Show the complete pending artifact and record approve, reject or cancel.
+
+    For the plan (H1), the implementer consent (H2) and the exact diff (H3),
+    and their round-2 equivalents. Approving records one write-once decision
+    bound to the exact draft shown; AIDO generates the fixed approval text, the
+    timestamp and the binding fields from it. For H2 you also type the endpoint
+    you expect (scheme://host:port) and confirm the transmission separately.
+    It never sends, writes, verifies or calls a model: task-continue, with its
+    own flags, does that after validating the decision again.
+    """
+    _run_task_approve(run_dir=run_dir)
 
 
 @app.command("task-continue", short_help="Advance a task run by one stage, then stop at a human.")

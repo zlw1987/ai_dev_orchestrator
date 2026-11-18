@@ -6,6 +6,8 @@ Product Owner accepted the ALPHA-2A-T2 live run `20261110T181352Z-e7cc70f6`
 now check `read_only_workspace_content`) is implemented and **independently
 reviewed and ACCEPTED**. ALPHA-2B-T1 (§9) adds one human-initiated correction
 round; it is implemented and offline-tested only and awaits independent review.
+P0-UX1-T1 (§10) adds `task-approve`, the interactive D-2′ approval path; it is
+implemented and offline-tested only and awaits independent review.
 
 ## 1. What it is
 
@@ -20,6 +22,7 @@ task-start     human task inputs -> run dir + deterministic L1 plan draft     (o
 task-status    derived stage + the exact next command                          (read-only)
 task-continue  run the current stage's accepted runner(s), record, stop        (per-stage flags)
 task-doctor    gate check + reviewer endpoint block derived from the env       (read-only)
+task-approve   show the pending artifact; record approve/reject (P0-UX1, §10)  (runs nothing)
 ```
 
 It is a **thin, fixed sequence**, not an orchestration framework. It adds no
@@ -38,9 +41,9 @@ Making it live would reopen frozen S0/S1. It stays offline and untouched.
 
 | Stage | Human does | `task-continue` flags | Runs (unchanged runner) |
 |---|---|---|---|
-| `plan_approval` | fills `approval` in `10-plan.draft.json` | `--prepare-supervised-implementation` | freeze plan, CRLF check, `_run_l2_supervised_implementer_prepare` |
-| `implementer_consent` | fills `consent` in `20-authorization-<n>.json` | `--transmit-approved-source --real-implementer` | `_run_l2_supervised_implementer_run`, then writes the diff draft |
-| `diff_approval` | reads `30-proposed.diff`, fills `approval` in `30-diff.draft.json` | `--apply-approved-plan --write-approved-file --verify-approved-file-edit --real-reviewer` | freeze diff, `_run_l2_apply_approved_file_edit`, then `_run_l2_review_approved_file_edit` |
+| `plan_approval` | decides at `task-approve`, or fills `approval` in `10-plan.draft.json` | `--prepare-supervised-implementation` | freeze plan, CRLF check, `_run_l2_supervised_implementer_prepare` |
+| `implementer_consent` | decides at `task-approve` (typing the endpoint), or fills `consent` in `20-authorization-<n>.json` | `--transmit-approved-source --real-implementer` | `_run_l2_supervised_implementer_run`, then writes the diff draft |
+| `diff_approval` | decides at `task-approve`, or reads `30-proposed.diff` and fills `approval` in `30-diff.draft.json` | `--apply-approved-plan --write-approved-file --verify-approved-file-edit --real-reviewer` | freeze diff, `_run_l2_apply_approved_file_edit`, then `_run_l2_review_approved_file_edit` |
 | `awaiting_human_decision` | reads `summary.txt` and the packet; commits **by hand** or reverts | — | nothing |
 
 Retry stages: `prepare_pending` and, before consumption, a fresh authorization
@@ -50,7 +53,8 @@ expires after 60 minutes); `apply_pending` after a write refused before writing
 (`--verify-approved-file-edit --real-reviewer`; in round 2 exit 1 or 4 is terminal, see §9). Terminal stages:
 `no_change_proposed`, `implementer_failed`, `implementer_evidence_incomplete`,
 `write_needs_inspection`, `workspace_untrusted`, `review_needs_inspection`,
-`awaiting_human_decision`.
+`awaiting_human_decision`, and (P0-UX1) `rejected` / `round2_rejected` and
+`decision_record_invalid` / `round2_decision_record_invalid`.
 
 **Each stage accepts exactly its own flag set.** Any other set, including a
 superset carrying another stage's flags, refuses with nothing done, so a flag
@@ -58,11 +62,42 @@ always confirms the stage it is typed for.
 
 ## 4. Authority rules (unchanged contracts it relies on)
 
-- **Approvals stay human file edits (D-2).** Drafts carry four empty approval
-  strings; P1B's authorization draft carries P1B's empty consent. Freezing
-  refuses duplicate keys and any change outside the `approval` block, then the
-  accepted strict parser decides. The frozen file is the human's exact bytes.
-  `PlanApproval`'s "the orchestrator does not write this block" holds.
+- **Approvals and consents are separate human decisions (D-2′, amending D-2).**
+  H1 (plan), H2 (implementer consent), H3 (exact diff), and round 2's H2 and H3
+  are each one decision about one exact presented artifact, made in one of two
+  ways.
+
+  (a) **Interactive (normal).** `task-approve` derives the stage and displays
+  the complete artifact on the local terminal, with control, bidi and
+  zero-width characters escaped. The human types `approve`, `reject`, or
+  anything else, which cancels. For H2, after `approve` the human also types
+  the endpoint they expect as `scheme://host:port`, which AIDO never shows or
+  prefills. It must match the environment by P1B's own endpoint rules. The
+  human then confirms the transmission (`transmit`) and, for `http`, the
+  plaintext risk (`plaintext`), each separately.
+
+  Only then does AIDO record a write-once decision, bound to the run, the
+  config, the round, the stage and the exact draft bytes displayed. From it
+  AIDO generates the block the strict parser requires: the stage's fixed
+  phrase, AIDO's clock, `source: "manual"`, the observed local account name
+  (not an authenticated identity), and for H2 the bound `binding_sha256`, the
+  human-typed endpoint and the plaintext acknowledgement if it was confirmed.
+  It does so only inside that stage's own `task-continue`, after re-validating
+  the record. `reject` is recorded the same way and ends the task (round 1)
+  or the correction round (round 2). Cancel records nothing.
+
+  (b) **Manual (compatible).** The human edits the block of AIDO's draft, as
+  before; freezing refuses duplicate keys and any change outside the block, and
+  the frozen file is the human's exact bytes. One decision cannot mix (a) and
+  (b).
+
+  In both, the unchanged strict parsers and P1B's run-time checks decide. AIDO
+  never approves, consents, infers, defaults, pre-selects, carries over,
+  reuses or repairs a decision. A decision for one stage, round, run or draft
+  never satisfies another. `task-approve` executes nothing; `task-continue`,
+  with its unchanged per-stage flags, remains the only executor. A TTY check
+  guards only against an accidental scripted approval; it does not prove a
+  human is present (A-19).
 - **Endpoint authority stays project config (D-1, ALPHA-1A-FU1).** `task-doctor`
   derives the `controlled_review.endpoint` block from the reviewer base URL
   with the reviewer's own httpx parse and the accepted destination check, and
@@ -93,12 +128,16 @@ always confirms the stage it is typed for.
 <runs_root>/<UTC-time>-<8 hex>/
   task.json                     inputs + pinned config digest      (AIDO, write-once)
   10-plan.draft.json            plan + empty approval              (human edits approval)
-  11-plan.approved.json         frozen human bytes                 (AIDO, write-once)
-  20-authorization-<n>.json     P1B draft                          (human edits consent)
+  11-plan.approved.json         frozen human bytes, or serialized from 12- (AIDO, write-once)
+  12-plan.decision.json         interactive H1 decision (P0-UX1)   (AIDO, write-once)
+  20-authorization-<n>.json     P1B draft                          (human edits consent, or never edited)
+  20-authorization-<n>.decision.json   interactive H2 decision     (AIDO, write-once)
+  20-authorization-<n>.consented.json  consent serialized from it, consumed by P1B (AIDO, write-once)
   implementer-evidence/<run_id>/  P1B's own evidence
   30-proposed.diff              the diff to read                   (AIDO, write-once)
   30-diff.draft.json            approved-diff-proposal.v2 + empty approval
-  31-diff.approved.json         frozen human bytes                 (AIDO, write-once)
+  31-diff.approved.json         frozen human bytes, or serialized from 32- (AIDO, write-once)
+  32-diff.decision.json         interactive H3 decision (round 2: 62-) (AIDO, write-once)
   steps/NN-<step>.exit-<c>.stdout|.stderr   exact runner output    (AIDO, write-once)
   summary.txt                   DERIVED, labeled not-evidence      (AIDO, write-once)
 ```
@@ -173,7 +212,7 @@ unstaged change; no commit or push.
 
 Model-backed planning, multi-file tasks, an automatic fixer or any
 review/fix loop beyond §9's one human-initiated round, raw reviewer-response
-retention, terminal approval capture, an implementer other than SUP-D, config
+retention, an implementer other than SUP-D, config
 writing, HTTP transport security review before team use, and DL-4B/E-12 for
 multi-user deployment.
 
@@ -303,7 +342,8 @@ trusted-operator storage.
 
 - The correction is built **only from recorded evidence**: the round-1
   consumed authorization (its evidence copy must equal the draft the human
-  completed), the frozen round-1 diff approval (it must be this run's
+  completed, or the `.consented.json` copy serialized from an interactive
+  decision), the frozen round-1 diff approval (it must be this run's
   proposal with only the approval filled in, and its pre-image must be the
   baseline), the round-1 write report, and the round-1 review record, which
   must follow that write and name the same approval, target and post-image
@@ -344,3 +384,92 @@ proposed new code. `summary.txt` from round 1 is kept and does not block it.
 
 Offline tests: `tests/test_task_correction_round.py`, alongside the unchanged
 Alpha 2A suite in `tests/test_task_coordinator.py`.
+
+## 10. P0-UX1-T1 — interactive human approval (D-2′)
+
+Status: **IMPLEMENTED, offline-tested only, awaiting independent review.** No
+live run used it. Baseline `dc2222d`. Product Owner: D-2′ accepted, with the H2
+rule that the human types the endpoint (DEC-SUP-LIVE A-2 preserved); policy
+§11.
+
+```text
+ai-dev-orchestrator task-approve --run-dir "<run>"
+```
+
+1. **Refusals.** Before showing anything, it refuses unless:
+   - the stage is `plan_approval`, `implementer_consent`, `diff_approval`,
+     `round2_implementer_consent` or `round2_diff_approval`;
+   - stdin and stdout are terminals;
+   - the config digest is unchanged;
+   - the draft is AIDO's untouched original;
+   - no decision exists for it yet;
+   - for H2, the authorization is within its validity window.
+2. **Display.** It shows the complete escaped artifact and what approving it
+   leads to. Workspace, verification and reviewer facts come from the run's
+   pinned project config, read from bytes that match the pinned digest; they
+   are shown, never granted, and no credential is read (P0-UX1-T1-FU1):
+   - **H1:** the configured Windows workspace root, the repository and issue,
+     the target (and its on-disk path), the task title, and every plan field.
+   - **H2:** the configured workspace and the source scope (exactly one file,
+     with its on-disk path), provider, model, the file's size, digest and HEAD,
+     what the one request carries (in round 2, including the correction data),
+     the request digest, the expiry, and whether plaintext HTTP is permitted.
+     The endpoint is deliberately not shown; it is still typed independently.
+   - **H3:** the configured workspace, the target and its on-disk path, the
+     complete diff with its pre-image and post-image digests, and the three
+     consequences of the next step: the write; the configured verification
+     (executable, each argument, its wait bound, not sandboxed); and the
+     reviewer (provider, model, the configured endpoint's scheme, host and port
+     with its TLS state, the request count, and what is sent).
+3. **The decision.** Typing `approve` approves and `reject` rejects. Anything
+   else cancels, including an empty line, EOF or Ctrl-C.
+4. **H2 confirmations, after `approve`.** In order:
+   - the human types `scheme://host:port`, with an explicit effective port;
+   - AIDO reads exactly `AIDO_LITELLM_BASE_URL`, never the key, and compares
+     it with P1B's `check_live_endpoint`. A mismatch is refused without
+     revealing the environment's endpoint;
+   - on a match, it shows the resolved destination, and the human types
+     `transmit`;
+   - for `http`, a banner follows and the human types `plaintext`.
+5. **Recording.** It re-reads the draft and refuses if its bytes changed since
+   they were displayed. It then creates the decision atomically (temporary file
+   plus hard link, so it is whole or absent) and prints the next
+   `task-continue` command.
+
+At `task-continue`:
+- The plan and diff freeze, and the implementer step, re-validate the decision
+  before anything else: run, config, round, stage, kind, presented draft
+  digest, binding data, timestamps, the consent answers, and the authorization
+  window.
+- They serialize the block, run the same "only the block changed" check and
+  the unchanged strict parser, and write the frozen or `.consented.json` file.
+  If the file already exists, they require byte equality, which is how an
+  interrupted serialization resumes. A mismatch is refused, never replaced.
+- P1B then consumes `.consented.json` and still compares the run-time endpoint
+  with the consented one.
+- `consumed_authorization` returns the file P1B consumed, so the correction
+  round's evidence checks hold for both paths.
+
+A `reject` decision derives the terminal `rejected` (or `round2_rejected`)
+stage. A rejection contradicted by later records, and any unreadable or
+mismatched decision record, derives the terminal `decision_record_invalid`
+(or `round2_decision_record_invalid`) stage. Records are never repaired.
+
+Every authorization-named file of a round is accounted for by its own name,
+not reached through a draft (P0-UX1-T1-FU1). The round fails closed if a name
+is not one AIDO writes, the drafts are not numbered 1..n, a decision has no
+draft, a `.consented.json` has no decision, or more prepare steps succeeded
+than drafts exist. So removing a rejected authorization's draft, with or
+without its decision, cannot hide the rejection or make an earlier approved
+authorization the latest again. A round-2 authorization file before the round
+was begun is inconsistent.
+
+Offline tests: `tests/test_task_approve.py`, alongside the unchanged
+`tests/test_task_coordinator.py` and `tests/test_task_correction_round.py`.
+
+**Residual limits:**
+- The account name is an observation, not an identity.
+- A same-account process can forge a decision exactly as it can hand-edit a
+  draft (A-19).
+- P1B's own expiry check at run time stays the authority.
+- `task-doctor` still prints the implementer endpoint values.

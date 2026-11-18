@@ -18,6 +18,18 @@ steps/NN-<step>.exit-<c>.stderr AIDO   exactly what it wrote to stderr
 summary.txt                     AIDO   a DERIVED summary; not evidence
 ```
 
+P0-UX1 (D-2′) adds an interactive alternative to the hand edit. ``task-approve``
+records one write-once decision per approval or consent, bound to the exact
+draft it displayed; the block is serialized from it only inside that stage's
+own ``task-continue`` (see :mod:`ai_dev_orchestrator.task.approve`):
+
+```text
+12-plan.decision.json                AIDO   the human's H1 decision (approve or reject)
+20-authorization-<n>.decision.json   AIDO   the human's H2 decision (round 2: 50-...)
+20-authorization-<n>.consented.json  AIDO   the consent serialized from it, consumed by P1B
+32-diff.decision.json                AIDO   the human's H3 decision (round 2: 62-diff.decision.json)
+```
+
 ALPHA-2B-T1 adds ONE optional, human-initiated correction round (PO-1/2/3).
 Round 1 keeps every name above. Round 2 has its own, so no round-1 record can
 ever be read as a round-2 one:
@@ -42,9 +54,11 @@ machine store and no caller-supplied stage. A file's presence says which step
 ran; the accepted commands' own records say how it ended.
 
 **Nothing here creates an approval or a consent.** Drafts carry empty approval
-stubs; a human types every value. Freezing only checks that the human changed
-nothing outside the approval block, then copies their bytes; the accepted
-strict parser decides whether the approval is valid. Nothing here reads an
+stubs. On the manual path a human types every value; freezing only checks that
+the human changed nothing outside the approval block, then copies their bytes.
+On the interactive path the block is serialized from the human's recorded
+decision by :mod:`ai_dev_orchestrator.task.approve`, never invented here. Either
+way the accepted strict parser decides whether the approval is valid. Nothing here reads an
 environment variable, calls a model, runs a process or touches the workspace.
 """
 
@@ -69,6 +83,7 @@ TASK_SCHEMA_VERSION = "aido-task.v1"
 TASK_FILE = "task.json"
 PLAN_DRAFT_FILE = "10-plan.draft.json"
 PLAN_APPROVED_FILE = "11-plan.approved.json"
+PLAN_DECISION_FILE = "12-plan.decision.json"
 EVIDENCE_DIR = "implementer-evidence"
 DIFF_TEXT_FILE = "30-proposed.diff"
 DIFF_DRAFT_FILE = "30-diff.draft.json"
@@ -105,6 +120,7 @@ class Round:
     diff_text_file: str
     diff_draft_file: str
     diff_approved_file: str
+    diff_decision_file: str
     step_prepare: str
     step_implementer: str
     step_apply: str
@@ -120,6 +136,7 @@ ROUND_1 = Round(
     diff_text_file=DIFF_TEXT_FILE,
     diff_draft_file=DIFF_DRAFT_FILE,
     diff_approved_file=DIFF_APPROVED_FILE,
+    diff_decision_file="32-diff.decision.json",
     step_prepare="prepare",
     step_implementer="implementer-run",
     step_apply="apply",
@@ -134,6 +151,7 @@ ROUND_2 = Round(
     diff_text_file="60-proposed.diff",
     diff_draft_file="60-diff.draft.json",
     diff_approved_file="61-diff.approved.json",
+    diff_decision_file="62-diff.decision.json",
     step_prepare="prepare-r2",
     step_implementer="implementer-run-r2",
     step_apply="apply-r2",
@@ -258,6 +276,16 @@ def require_outside_workspace(path: str, workspace_path: str, label: str) -> Non
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def consent_decision_path(authorization_path: str) -> str:
+    """``20-authorization-<n>.json`` -> ``20-authorization-<n>.decision.json``."""
+    return authorization_path[: -len(".json")] + ".decision.json"
+
+
+def consented_path(authorization_path: str) -> str:
+    """``20-authorization-<n>.json`` -> ``20-authorization-<n>.consented.json``."""
+    return authorization_path[: -len(".json")] + ".consented.json"
 
 
 # -- the task record --------------------------------------------------------------
@@ -507,10 +535,13 @@ def _check_only_approval_filled(data: bytes, expected_draft: dict, label: str) -
 
 
 def freeze_plan_approval(task: TaskRecord) -> str:
-    """Freeze the human-approved plan. Returns the frozen path."""
+    """Freeze the human-approved plan. Returns the frozen path.
+
+    With an interactive decision (``12-plan.decision.json``) the frozen bytes
+    are serialized from it; otherwise they are the human's hand-edited bytes.
+    An already-frozen file is re-checked either way.
+    """
     frozen = task.path(PLAN_APPROVED_FILE)
-    if os.path.lexists(frozen):
-        return frozen
 
     def parse(text: str) -> None:
         try:
@@ -518,10 +549,24 @@ def freeze_plan_approval(task: TaskRecord) -> str:
         except ApprovedPlanError as exc:
             raise TaskRefused(f"the plan approval was refused by the accepted parser: {exc}") from None
 
+    expected = build_plan_draft(task)
+    if os.path.lexists(task.path(PLAN_DECISION_FILE)):
+        from ai_dev_orchestrator.task import approve
+
+        data = approve.approved_bytes(task, approve.plan_subject(task), now=utc_now())
+        _check_only_approval_filled(data, expected, PLAN_APPROVED_FILE)
+        parse(data.decode("utf-8"))
+        approve.write_or_match(frozen, data)
+        return frozen
+    if os.path.lexists(frozen):
+        data = _read_bytes(frozen, PLAN_APPROVED_FILE)
+        _check_only_approval_filled(data, expected, PLAN_APPROVED_FILE)
+        parse(data.decode("utf-8"))
+        return frozen
     _freeze_approval(
         source_path=task.path(PLAN_DRAFT_FILE),
         frozen_path=frozen,
-        expected_draft=build_plan_draft(task),
+        expected_draft=expected,
         label=PLAN_DRAFT_FILE,
         parse=parse,
     )
@@ -572,14 +617,19 @@ def consumed_implementer_run(task: TaskRecord, rnd: Round = ROUND_1) -> str | No
 
 
 def consumed_authorization(task: TaskRecord, rnd: Round = ROUND_1) -> tuple[str, str] | None:
-    """``(authorization draft path, evidence run dir)`` of one round's consumed run."""
+    """``(consumed authorization path, evidence run dir)`` of one round's consumed run.
+
+    The path is the file whose bytes P1B consumed: the hand-edited draft, or
+    (D-2′) the ``.consented.json`` copy serialized from an interactive decision.
+    """
     for path in authorization_paths(task, rnd):
         run_id = authorization_run_id(path)
         if run_id is None:
             continue
         candidate = os.path.join(evidence_dir(task), run_id)
         if os.path.isdir(candidate):
-            return path, candidate
+            consented = consented_path(path)
+            return (consented if os.path.lexists(consented) else path), candidate
     return None
 
 
@@ -662,6 +712,14 @@ def freeze_diff_approval(task: TaskRecord, evidence_run_dir: str, rnd: Round = R
 
     frozen = task.path(rnd.diff_approved_file)
     expected = build_diff_draft(task, read_implementer_diff_proposal(evidence_run_dir))
+    if os.path.lexists(task.path(rnd.diff_decision_file)):
+        from ai_dev_orchestrator.task import approve
+
+        data = approve.approved_bytes(task, approve.diff_subject(task, rnd, evidence_run_dir), now=utc_now())
+        _check_only_approval_filled(data, expected, rnd.diff_approved_file)
+        parse(data.decode("utf-8"))
+        approve.write_or_match(frozen, data)
+        return frozen
     if os.path.lexists(frozen):
         data = _read_bytes(frozen, rnd.diff_approved_file)
         _check_only_approval_filled(data, expected, rnd.diff_approved_file)
@@ -1000,13 +1058,18 @@ def _derive_round(task: TaskRecord, rnd: Round, consumed: tuple[str, str]) -> St
             run_dir,
         )
     if not os.path.lexists(task.path(rnd.diff_approved_file)):
+        decided = _decided(task, rnd.diff_decision_file, "The diff decision")
         return _stage(
             rnd,
             "diff_approval",
             False,
-            f"A human must read {rnd.diff_text_file} and, to approve it, fill in the "
-            f"'approval' block of {rnd.diff_draft_file} (the exact file-edit "
-            "approval_text). The next step WRITES the change into the workspace, "
+            (
+                decided
+                or f"A human must read {rnd.diff_text_file} and, to approve it, fill in the "
+                f"'approval' block of {rnd.diff_draft_file} (the exact file-edit "
+                "approval_text), or decide interactively with task-approve. "
+            )
+            + "The next step WRITES the change into the workspace, "
             "runs the project's verification, and SENDS the diff to the reviewer model."
             + (
                 " This diff is against the ORIGINAL baseline; round 1's approval "
@@ -1107,24 +1170,53 @@ def _inconsistent(message: str, run_dir: str | None = None) -> Stage:
 
 
 def _round2_files_exist(task: TaskRecord) -> bool:
-    return bool(authorization_paths(task, ROUND_2)) or round2_attempt_exists(task) or any(
+    # Any round-2 authorization-named file counts, not only drafts: a round-2
+    # decision or consent whose draft is gone is still a round-2 record.
+    prefix = ROUND_2.authorization_name.split("{n}")[0]
+    if any(name.startswith(prefix) for name in os.listdir(task.run_dir)):
+        return True
+    return round2_attempt_exists(task) or any(
         record.step.endswith("-r2") for record in step_records(task)
     ) or any(
         os.path.lexists(task.path(name))
-        for name in (ROUND_2.diff_text_file, ROUND_2.diff_draft_file, ROUND_2.diff_approved_file, ROUND_2.summary_file)
+        for name in (
+            ROUND_2.diff_text_file,
+            ROUND_2.diff_draft_file,
+            ROUND_2.diff_approved_file,
+            ROUND_2.diff_decision_file,
+            ROUND_2.summary_file,
+        )
     )
+
+
+def _decided(task: TaskRecord, name: str, what: str) -> str | None:
+    """A stage-message prefix when an interactive decision is already recorded."""
+    if os.path.lexists(task.path(name)):
+        return (
+            f"{what} is recorded in {name} (task-approve). It runs nothing by itself; "
+            "the next step validates it again first. "
+        )
+    return None
 
 
 def derive_stage(task: TaskRecord) -> Stage:
     """Derive the run's stage from its files. Reads only the run directory."""
+    from ai_dev_orchestrator.task import approve
+
+    rejected = approve.rejection_stage(task, ROUND_1)
+    if rejected is not None:
+        return rejected
     if not os.path.lexists(task.path(PLAN_APPROVED_FILE)):
+        decided = _decided(task, PLAN_DECISION_FILE, "The plan decision")
         return Stage(
             "plan_approval",
             False,
-            f"A human must approve the plan: fill in the 'approval' block of {PLAN_DRAFT_FILE} "
+            (decided + "The next step prepares the implementer authorization; it is offline and sends nothing.")
+            if decided
+            else f"A human must approve the plan: fill in the 'approval' block of {PLAN_DRAFT_FILE} "
             "(approved_by, approved_at as ISO-8601 with offset, the exact approval_text, "
-            "source \"manual\"). The next step then prepares the implementer authorization; "
-            "it is offline and sends nothing.",
+            "source \"manual\"), or decide interactively with task-approve. The next step "
+            "then prepares the implementer authorization; it is offline and sends nothing.",
             {PREPARE_FLAGS: ACTION_PREPARE},
         )
 
@@ -1143,11 +1235,16 @@ def derive_stage(task: TaskRecord) -> Stage:
                 {PREPARE_FLAGS: ACTION_PREPARE},
             )
         latest = os.path.basename(authorization_paths(task)[-1])
+        decided = _decided(task, os.path.basename(consent_decision_path(latest)), "The consent decision")
         return Stage(
             "implementer_consent",
             False,
-            f"A human must complete the 'consent' block of {latest} (it expires 60 "
-            "minutes after it was prepared). The next step SENDS the one approved "
+            (
+                decided
+                or f"A human must complete the 'consent' block of {latest} (it expires 60 "
+                "minutes after it was prepared), or decide interactively with task-approve. "
+            )
+            + "The next step SENDS the one approved "
             "file to the supervised implementer model, once. To start over with a "
             "fresh authorization instead, pass --prepare-supervised-implementation.",
             {IMPLEMENTER_FLAGS: ACTION_RUN_IMPLEMENTER, PREPARE_FLAGS: ACTION_PREPARE},
@@ -1187,6 +1284,16 @@ def derive_stage(task: TaskRecord) -> Stage:
             evidence_run_dir=first.evidence_run_dir,
         )
     if begun:
+        rejected = approve.rejection_stage(task, ROUND_2)
+        if rejected is not None:
+            if round2_attempt_exists(task) and approve.authorization_records_problem(task, ROUND_2) is not None:
+                # Both are terminal. Once a round-2 apply/review attempt has
+                # begun, its own stage says more: the change may be written and
+                # the diff may be sent (ALPHA-2B-T1-FU2).
+                attempt = _derive_correction(task, first)
+                if attempt.name == "round2_attempt_incomplete":
+                    return attempt
+            return rejected
         return _derive_correction(task, first)
     if _round2_files_exist(task):
         return _inconsistent("Round-2 records exist, but no correction round was begun.")
@@ -1293,12 +1400,17 @@ def _derive_correction(task: TaskRecord, first: _Reviewed) -> Stage:
                 round_number=2,
             )
         latest = os.path.basename(drafts[-1])
+        decided = _decided(task, os.path.basename(consent_decision_path(latest)), "The round-2 consent decision")
         return Stage(
             "round2_implementer_consent",
             False,
-            f"A human must complete the 'consent' block of {latest}, a FRESH single-use "
-            "authorization (it expires 60 minutes after it was prepared; round 1's is "
-            "spent and never reused). The next step SENDS the original file plus the "
+            (
+                decided
+                or f"A human must complete the 'consent' block of {latest}, a FRESH single-use "
+                "authorization (it expires 60 minutes after it was prepared; round 1's is "
+                "spent and never reused), or decide interactively with task-approve. "
+            )
+            + "The next step SENDS the original file plus the "
             "correction data (the previous approved diff, AIDO-observed verification "
             "facts and any reviewer findings, as untrusted data) to the supervised "
             "implementer model, once. To issue another fresh authorization instead, "
