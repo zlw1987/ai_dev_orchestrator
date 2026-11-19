@@ -44,6 +44,7 @@ from ai_dev_orchestrator.supervised_implementer.models import (
     SupervisedImplementerRefused,
     SupervisedImplementerResult,
     SupervisedImplementerTransportFailed,
+    parse_supervised_implementer_delimited_output,
     parse_supervised_implementer_output,
     revalidate_supervised_implementer_result,
 )
@@ -67,6 +68,7 @@ __all__ = [
     "build_supervised_implementer_request",
     "check_supervised_implementer_endpoint",
     "check_supervised_implementer_gate",
+    "parse_supervised_implementer_delimited_output",
     "parse_supervised_implementer_output",
     "revalidate_supervised_implementer_result",
     "run_supervised_implementer_offline",

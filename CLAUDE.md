@@ -95,6 +95,12 @@ before doing any work here.
   by independent review in offline scope). It records separate, explicit human
   decisions and executes nothing. See "How a human approves (P0-UX1, D-2′)"
   below.
+- **P0-RECOVERY-T2 added an optional plain-text reply envelope** for the
+  supervised implementer (policy §12, REC-1 to REC-3). It is a narrow,
+  prospective amendment and awaits independent review. The default
+  `json_content_text` stays byte-identical; `delimited_file` is opt-in by
+  project config. See "What the supervised implementer can and cannot do"
+  below.
 - **The first controlled write → verify → supervised review → human path now
   exists.** **L2 as originally defined is still NOT complete**: there is no
   **autonomous** model-backed implementer, no automatic fixer, no branch
@@ -115,6 +121,7 @@ ALPHA-P1B      Live Supervised Implementer          IMPLEMENTED (awaiting review
 ALPHA-2A-T1    Single-File Task Coordinator         IMPLEMENTED (awaiting review)
 ALPHA-2B-T1    One Human-Supervised Correction Round IMPLEMENTED (awaiting review)
 P0-UX1-T1      Interactive Human Approval (D-2′)    ACCEPTED (offline scope)
+P0-RECOVERY-T2 Optional Plain-Text Reply Envelope   IMPLEMENTED (awaiting review)
 → bounded write → verify → supervised review → human
 ```
 
@@ -626,6 +633,24 @@ authorized.
   in-memory writer-reachability proof, then **stops before human exact-diff
   approval (H6)**. No write, no approval, no apply, no verification, no Git
   write, no commit, push or PR.
+- **Exactly two reply envelopes (P0-RECOVERY-T2, policy §12).**
+  `supervised_implementer.output_envelope` selects one, matched exactly.
+  - `json_content_text` is the default when the field is absent. It is the
+    `{"content_text": ...}` object above. Its instructions, golden request
+    digests and default config serialization are byte-identical; keep them so.
+  - `delimited_file` is opt-in: the complete file as plain text between
+    `<<<AIDO_FILE_BEGIN>>>` and `<<<AIDO_FILE_END>>>` lines.
+  - Its strict parser extracts the text exactly. It never trims, normalizes,
+    repairs or appends. The text must end in the target's own line ending,
+    final newline included, and it yields the same `SupervisedImplementerOutput`.
+    Diff generation, reachability, the writer and every human approval are
+    unchanged.
+  - `delimited_file` cannot be combined with `structured_output`, and a marker
+    already in the request refuses before anything is sent.
+  - The envelope is bound at H2 through `project_config_sha256` and
+    `request_sha256`. It is named on the H2 display and in the banner, and
+    recorded as provenance `output_envelope`, which is serialized only when it
+    is not the default.
 - **ALPHA-P1A** is the offline library runner. It accepts exactly
   `httpx.MockTransport`, and no CLI command reaches it.
 - **ALPHA-P1B** adds the only live entry points.
@@ -684,8 +709,9 @@ Do **not** add any of the following without an explicit, separate prompt: an
 autonomous model-backed implementer; a fixer; a retry or a second request
 under one authorization (ALPHA-2B-T1's round 2 is a separate request under a
 fresh, separately consented authorization, not a retry); a fallback model; a live `vllm` provider; structured output on the live path;
-multi-file transmission; a CLI model, endpoint, key, timeout or provider option;
-automatic H6 approval; or a real endpoint in code or docs.
+multi-file transmission; a CLI model, endpoint, key, timeout, provider or
+envelope option; a third reply envelope, or any trimming, normalization or
+repair of a reply; automatic H6 approval; or a real endpoint in code or docs.
 
 ### What the task coordinator can and cannot do (ALPHA-2A-T1)
 
@@ -811,7 +837,9 @@ See `docs/ALPHA_2A_TASK_COORDINATOR.md` §9 and policy §10 (PO-1, PO-2, PO-3).
 - **Round 2 regenerates the complete file from the original baseline.** The
   request carries an optional `correction` **data** object (previous approved
   diff, AIDO-observed verification facts, untrusted reviewer findings). With
-  no correction the request is **byte-identical** to Alpha 2A; keep it so. The
+  no correction, a default-envelope (`json_content_text`) request is
+  **byte-identical** to Alpha 2A; keep it so. A `delimited_file` project uses
+  the delimited instruction for both rounds. The
   correction is in-process only: no CLI option on the P1B commands reaches it.
 - **Bound to round 1, rebuilt from evidence.** The correction is built only
   from recorded round-1 evidence, pinned by digest in `40-correction.json`,

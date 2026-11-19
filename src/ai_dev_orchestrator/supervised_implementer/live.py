@@ -52,10 +52,12 @@ from pydantic import (
     AfterValidator,
     BaseModel,
     ConfigDict,
+    SerializerFunctionWrapHandler,
     StrictBool,
     StrictInt,
     StrictStr,
     ValidationError,
+    model_serializer,
     model_validator,
 )
 
@@ -80,7 +82,13 @@ from ai_dev_orchestrator.llm.config import (
     load_llm_client_config_from_env,
 )
 from ai_dev_orchestrator.llm.models import LLMClientConfig, LLMRequest, LLMResponse
-from ai_dev_orchestrator.models import ProjectConfig, SupervisedImplementerConfig
+from ai_dev_orchestrator.models import (
+    DEFAULT_SUPERVISED_OUTPUT_ENVELOPE,
+    ProjectConfig,
+    SupervisedImplementerConfig,
+    SupervisedOutputEnvelope,
+    omit_default_output_envelope,
+)
 from ai_dev_orchestrator.supervised_implementer.identity import (
     QUALIFICATION_CREDIT,
     SUPERVISED_IMPLEMENTER_ROLE,
@@ -143,6 +151,7 @@ from ai_dev_orchestrator.supervised_implementer.live_workspace import (
 from ai_dev_orchestrator.supervised_implementer.models import (
     MODEL_SOURCE,
     NEXT_STEP,
+    OUTPUT_ENVELOPE_DELIMITED,
     ReportedUsage,
     SupervisedImplementerOutputRejected,
     SupervisedImplementerRefused,
@@ -562,6 +571,7 @@ def _derive(
         max_output_tokens=settings.base.max_output_tokens,
         structured_output=False,
         correction=correction,
+        output_envelope=settings.base.output_envelope,
     )
     payload = wire_payload(request)
     return _Derived(
@@ -720,6 +730,16 @@ class AidoRequested(_Frozen):
     max_response_body_bytes: StrictInt
     client_max_retries: ExactZero
     http_transport_retries: ExactZero
+    #: P0-RECOVERY-T2. The reply envelope AIDO asked for. Serialized only when it
+    #: is not the default, so a default-mode v2 record is byte-identical to the
+    #: pre-amendment form and an absent field means ``json_content_text``. A
+    #: c6e992c4 reader (extra="forbid") refuses a delimited record rather than
+    #: misreading it as JSON-envelope evidence.
+    output_envelope: SupervisedOutputEnvelope = DEFAULT_SUPERVISED_OUTPUT_ENVELOPE
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict:
+        return omit_default_output_envelope(handler(self), self.output_envelope)
 
 
 class TransportObserved(_Frozen):
@@ -888,6 +908,7 @@ class LiveTransmissionNotice:
     endpoint_port: int
     attempt_timeout_seconds: float
     correction_included: bool = False
+    output_envelope: str = DEFAULT_SUPERVISED_OUTPUT_ENVELOPE
 
     def render(self) -> str:
         transport = (
@@ -905,6 +926,16 @@ class LiveTransmissionNotice:
             if self.correction_included
             else []
         )
+        # P0-RECOVERY-T2: shown only for the opt-in envelope, so the default
+        # banner is unchanged.
+        envelope = (
+            [
+                "  reply format:  delimited_file — the complete file as plain text "
+                "between AIDO marker lines",
+            ]
+            if self.output_envelope == OUTPUT_ENVELOPE_DELIMITED
+            else []
+        )
         return "\n".join(
             [
                 "=" * 78,
@@ -920,6 +951,7 @@ class LiveTransmissionNotice:
                 f"  AIDO wait:     at most {self.attempt_timeout_seconds:g} s (AIDO's own "
                 "deadline; not a cancellation)",
                 *correction,
+                *envelope,
                 "  ONE request, zero retries, no fallback. The reply is untrusted "
                 "proposed content;",
                 "  nothing is written without a separate exact human diff approval.",
@@ -1389,6 +1421,7 @@ def _consumed_run(
         endpoint_port=endpoint.port,
         attempt_timeout_seconds=settings.attempt_timeout_seconds,
         correction_included=derived.correction_included,
+        output_envelope=settings.base.output_envelope,
     )
     try:
         announce(notice)
@@ -1536,6 +1569,7 @@ def _consumed_run(
                     max_response_body_bytes=MAX_RESPONSE_BODY_BYTES,
                     client_max_retries=TRANSPORT_MAX_RETRIES,
                     http_transport_retries=0,
+                    output_envelope=settings.base.output_envelope,
                 ),
                 transport_observed=TransportObserved(
                     endpoint_scheme=observation.observed_scheme,

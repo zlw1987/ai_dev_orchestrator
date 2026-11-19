@@ -965,6 +965,13 @@ def render_consent(task: TaskRecord, subject: Subject, encoding: str | None, now
         f"{bound['workspace_head_object_id']}"
     )
     display.add("  - the approved plan's prose and AIDO's fixed implementer instructions")
+    if project.supervised_implementer.output_envelope == "delimited_file":
+        # P0-RECOVERY-T2: the opt-in envelope is named at H2; the default
+        # display is unchanged. The request sha256 below binds the instruction.
+        display.add(
+            "  - reply format: delimited_file — the model is asked for the complete file "
+            "as plain text between AIDO marker lines (opt-in; not the default JSON envelope)"
+        )
     if subject.rnd.number == 2:
         display.add(
             "  - the correction data: the previous approved diff, AIDO-observed "

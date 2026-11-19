@@ -26,6 +26,7 @@
 | Amended | 2026-10-14 — §8 DEC-SUP: opens the supervised-implementer branch (`SUP-D`, no qualification credit). Offline, library-only ALPHA-P1A only; nothing live |
 | Amended | 2026-10-15 — §9 DEC-SUP-LIVE: authorizes the two live supervised-implementer commands (ALPHA-P1B), implemented and tested offline only. No live request is authorized by this amendment; the first one needs a separate AUTH-PILOT decision |
 | Amended | 2026-11-10 — §10 ALPHA-2B: PO-1/PO-2/PO-3, one human-initiated correction round (ALPHA-2B-T1), implemented and tested offline only. No live correction round is authorized |
+| Amended | 2026-11-18 — §12 P0-RECOVERY-T2: the supervised implementer's reply may use one of exactly two envelopes, the default `json_content_text` or the opt-in `delimited_file`; PO-2's byte-identity applies to the default. Prospective, implemented and tested offline only. No live request is authorized |
 
 ## 1. Closure discipline
 
@@ -314,3 +315,38 @@ or unreadable record fails closed.
 - that the account name identifies a person;
 - that a TTY proves a human is present;
 - that a same-account process cannot forge a decision (A-19).
+
+
+## 12. P0-RECOVERY-T2 amendment (2026-11-18) — supervised implementer reply envelope
+
+> **Appended, prospective amendment. §1–§11 above are unchanged and still in
+> force,** except for the narrow output-format exception recorded here. It
+> records the Product Owner's approval, given with the P0-RECOVERY-T2 task at
+> baseline `c6e992c4c4989118cabd0ebcd3e2e28b2df31e5d`, after the P0-RECOVERY-T1
+> diagnosis. That diagnosis found the two live P0-UX3 failures at the end of
+> the JSON-escaped `content_text` string. With one missing escaped quote
+> restored, the A2 logic passed every trusted test.
+>
+> Implementation: P0-RECOVERY-T2
+> ([PHASE_ALPHA_P1B_SUPERVISED_IMPLEMENTER_LIVE.md](PHASE_ALPHA_P1B_SUPERVISED_IMPLEMENTER_LIVE.md)
+> §"Reply envelope"). It is implemented and tested offline only.
+>
+> It rewrites no historical result: the A1/A2 runs, every qualification record
+> and every earlier decision keep their recorded meaning.
+
+| # | Decision | What it narrows |
+|---|---|---|
+| REC-1 | The supervised implementer's reply may use one of **exactly two** envelopes, chosen only by the project config field `supervised_implementer.output_envelope`. The match is exact and case-sensitive.<br>- `json_content_text` (default when absent) is the accepted one-key JSON object.<br>- `delimited_file` (opt-in) is the complete file as plain text between two fixed AIDO marker lines.<br><br>Both are strictly parsed and **rejected, never repaired**. The delimited parser trims, normalizes and appends nothing inside the markers. It tolerates whitespace only outside them, as the JSON parser does around its object.<br><br>The extracted text must end in the target's own uniform line ending, so an LF file needs its final LF. `delimited_file` cannot be combined with `structured_output`. A marker already present in the request refuses the run before anything is sent. | the DEC-SUP / P1A output contract ("exactly `{"content_text": ...}`") |
+| REC-2 | PO-2's guarantee ("absent, the request is byte-identical to Alpha 2A") applies to the **default** `json_content_text` envelope. In that mode the JSON-mode instructions, the golden request digests and the default project-config serialization are unchanged. So the P1B project-config digest, and every authorization binding derived from it, is unchanged too.<br><br>The `delimited_file` envelope is explicitly identified and separately authorized:<br>- by the project config;<br>- through the existing H2 binding, since both `project_config_sha256` and `request_sha256` cover it;<br>- by the H2 display and the run banner, which name it;<br>- by the provenance, which records it. | §10 PO-2 (scope clarification only) |
+| REC-3 | Evidence change is the smallest truthful one. Both provenance records gain one field, `output_envelope`: offline v1 at top level, and live v2 under `aido_requested`. The field is serialized **only** when it is not the default, so a default-mode record is byte-identical to its pre-amendment form, and an absent field means `json_content_text`.<br><br>No schema version is bumped. The run-outcome record is unchanged. A rejected reply is still recorded by digest and length only, with its failure category. | DEC-SUP item 6 / D-5 records |
+
+**Unchanged:**
+- `SUP-D` = `qwen3.8-27b` and its zero qualification credit;
+- one request per authorization;
+- zero semantic and transport retries, and no fallback;
+- no token cap by default;
+- D-9: no structured output on the live path;
+- `SupervisedImplementerOutput`, the 5E3 diff generator, the post-image reachability proof, the 5F2C writer and every human approval (H1, H2, H3, and round 2's own);
+- the ledger, the TTL and every PO-1 to PO-3 and PO-UX rule.
+
+**Still not authorized:** any live request, including a smoke test; a new P0-UX3 run; a new model candidate or model substitution; retries, fallback or automatic code repair; output normalization; a third envelope; a CLI option for the envelope; structured output on the live path.

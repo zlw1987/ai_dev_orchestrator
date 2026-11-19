@@ -346,7 +346,8 @@ two extracted CLI runners accept one optional keyword, `correction`, reachable
 **in-process only** from the task coordinator's one correction round. The two
 commands gained no option.
 
-- Absent (every round-1 and standalone request), nothing changes: the system
+- Absent (every round-1 and standalone request), nothing changes in the
+  default `json_content_text` envelope (§9): the system
   instruction, user message, wire payload and `request_sha256` are
   byte-identical to Alpha 2A (golden digests in
   `tests/test_task_correction_round.py`), and so is the transmission notice.
@@ -363,6 +364,60 @@ commands gained no option.
   request, the wait deadline, the strict parser, the 5E3 generator and the
   provenance record are unchanged. The notice adds one ROUND 2 line only when
   a correction is present. No token budget is introduced.
+
+## 9. P0-RECOVERY-T2 — Reply envelope (policy §12, REC-1 to REC-3)
+
+The reply envelope is chosen by one project-config field,
+`supervised_implementer.output_envelope`, matched exactly. There is no CLI
+option, and the two commands are unchanged.
+
+- **`json_content_text`** is the accepted default, and applies when the field
+  is absent. It is unchanged:
+  - `SYSTEM_INSTRUCTION`, `CORRECTION_SYSTEM_INSTRUCTION`, the golden request
+    digests and the default banner are byte-identical;
+  - the default project-config serialization is byte-identical too, so
+    `project_config_sha256` and every `binding_sha256` are unchanged. This is
+    pinned in `tests/test_supervised_implementer_delimited.py` against the
+    value the baseline `c6e992c4` computes.
+- **`delimited_file`** is opt-in. The model is asked for
+  `<<<AIDO_FILE_BEGIN>>>`{E}*file text*`<<<AIDO_FILE_END>>>`, where {E} is the
+  target's own line ending. This happens through two separate fixed
+  instructions, one for round 1 and one for the correction round. The user
+  message is identical to the JSON mode's.
+- **Parsing.** `parse_supervised_implementer_delimited_output` extracts the
+  text between the markers exactly.
+  - It tolerates whitespace only outside the markers, as the JSON parser does
+    around its object. Nothing inside is ever trimmed, normalized or
+    appended.
+  - It refuses, with a typed category:
+    - a missing, repeated or out-of-order marker;
+    - other text outside the markers, such as a markdown fence or prose;
+    - a begin marker not followed by exactly {E};
+    - an end marker not on its own line (a dropped final newline);
+    - empty text;
+    - text that is not uniformly {E}, by the 5F2C writer's own rule.
+  - The result is the same `SupervisedImplementerOutput`. The 5E3 generator
+    and the post-image reachability proof then run unchanged and stay
+    authoritative.
+- **Fail closed before sending.**
+  - `delimited_file` combined with `structured_output` is refused at the gate.
+  - If the serialized user message (file, plan prose or correction) already
+    contains a marker, the run is refused as `delimited_marker_in_request`. In
+    `prepare` that happens before the ledger issuance; in `run`, before the
+    environment read or consumption.
+  - Changing the envelope after `prepare` changes `project_config_sha256` and
+    `request_sha256`, so it is refused as `authorization_mismatch`, unsent and
+    unconsumed.
+- **Identification.**
+  - H2 (`task-approve`) and the transmission banner add one `reply format`
+    line, only for `delimited_file`.
+  - The provenance gains `output_envelope`: v2 under `aido_requested`, v1 at
+    top level. It is serialized only when it is not the default, so there is
+    no schema version bump.
+  - A `c6e992c4` reader refuses a delimited record (`extra="forbid"`) rather
+    than misreading it.
+  - The outcome record is unchanged; a rejected reply is still recorded by
+    digest and length only.
 
 ---
 

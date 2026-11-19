@@ -11,7 +11,36 @@ from __future__ import annotations
 import re
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+)
+
+#: P0-RECOVERY-T2. The two reply envelopes the supervised implementer may ask
+#: for. ``json_content_text`` is the accepted default; ``delimited_file`` is the
+#: opt-in plain-text envelope.
+SupervisedOutputEnvelope = Literal["json_content_text", "delimited_file"]
+DEFAULT_SUPERVISED_OUTPUT_ENVELOPE = "json_content_text"
+
+
+def omit_default_output_envelope(
+    data: dict, value: str, field_name: str = "output_envelope"
+) -> dict:
+    """Drop ``output_envelope`` from a serialized record when it holds the default.
+
+    P0-RECOVERY-T2 keeps every default-mode serialization byte-identical to the
+    accepted pre-amendment form, so digests over it (the P1B project-config
+    digest, and through it each authorization's ``binding_sha256``) do not
+    change. Absence means the default, ``json_content_text``: the only envelope
+    that existed before. A ``delimited_file`` value is always serialized.
+    """
+    if value == DEFAULT_SUPERVISED_OUTPUT_ENVELOPE:
+        data.pop(field_name, None)
+    return data
 
 
 class _Strict(BaseModel):
@@ -843,6 +872,18 @@ class SupervisedImplementerConfig(BaseModel):
         "constrains generation only; the strict parser stays final, and a "
         "server rejection is terminal with no unstructured fallback.",
     )
+    # P0-RECOVERY-T2. Absent means the accepted JSON envelope, and a config that
+    # leaves it absent serializes exactly as before (see the serializer below).
+    output_envelope: SupervisedOutputEnvelope = Field(
+        default=DEFAULT_SUPERVISED_OUTPUT_ENVELOPE,
+        description="P0-RECOVERY-T2. The reply envelope the model is asked for, "
+        "matched exactly. 'json_content_text' (the default) is the accepted "
+        "one-key JSON object. 'delimited_file' asks for the complete file as "
+        "plain text between two fixed AIDO marker lines, so no JSON-string "
+        "escaping is needed. Either reply is strictly parsed, rejected and "
+        "never repaired. 'delimited_file' cannot be combined with "
+        "structured_output.",
+    )
     max_output_tokens: int | None = Field(
         default=None,
         description="OPTIONAL operator-requested output cap. Absent or null — "
@@ -887,6 +928,10 @@ class SupervisedImplementerConfig(BaseModel):
         return _validate_optional_output_token_cap(
             value, "supervised_implementer.max_output_tokens"
         )
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict:
+        return omit_default_output_envelope(handler(self), self.output_envelope)
 
 
 class ProjectConfig(_Strict):

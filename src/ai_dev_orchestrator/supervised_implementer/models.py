@@ -8,7 +8,9 @@ Four things live here:
 - :class:`SupervisedImplementerOutput` and its strict parser, the only shape a
   model reply may take — exactly ``{"content_text": "<final file text>"}``. The
   model cannot name a path, a change type, a review flag, a rationale or
-  anything else;
+  anything else. P0-RECOVERY-T2 adds one opt-in alternative envelope,
+  ``delimited_file`` (the complete file as plain text between two fixed marker
+  lines), with its own strict parser yielding the same model;
 - :class:`SourceTransmissionNotice`, announced to the operator **before** the
   request is handed to the transport;
 - :class:`SupervisedImplementerProvenance` and
@@ -27,12 +29,25 @@ import json
 from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    SerializerFunctionWrapHandler,
+    ValidationError,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from ai_dev_orchestrator.diff_proposal.generator import MAX_PROPOSED_CONTENT_CHARS
 from ai_dev_orchestrator.diff_proposal.models import (
     DiffProposalArtifact,
     _summarize_validation_error,
+)
+from ai_dev_orchestrator.models import (
+    DEFAULT_SUPERVISED_OUTPUT_ENVELOPE,
+    SupervisedOutputEnvelope,
+    omit_default_output_envelope,
 )
 
 PROVENANCE_SCHEMA_VERSION = "supervised-implementer-provenance.v1"
@@ -169,6 +184,142 @@ def parse_supervised_implementer_output(text: str) -> SupervisedImplementerOutpu
         ) from None
 
 
+# -- P0-RECOVERY-T2: the opt-in plain-text envelope --------------------------------
+
+#: The two reply envelopes, matched exactly. The first is the accepted default.
+OUTPUT_ENVELOPE_JSON = "json_content_text"
+OUTPUT_ENVELOPE_DELIMITED = "delimited_file"
+OUTPUT_ENVELOPES = (OUTPUT_ENVELOPE_JSON, OUTPUT_ENVELOPE_DELIMITED)
+
+#: The fixed marker lines of the ``delimited_file`` envelope. Neither is a
+#: substring of the other, and neither contains a character JSON escapes, so a
+#: plain substring test over the serialized request finds them exactly.
+DELIMITED_BEGIN_MARKER = "<<<AIDO_FILE_BEGIN>>>"
+DELIMITED_END_MARKER = "<<<AIDO_FILE_END>>>"
+
+
+def _only_whitespace(text: str) -> bool:
+    return text == "" or text.isspace()
+
+
+def parse_supervised_implementer_delimited_output(
+    text: str, *, line_ending: str
+) -> SupervisedImplementerOutput:
+    """Parse a ``delimited_file`` reply. Rejects, never repairs, trims or appends.
+
+    The only accepted shape is::
+
+        [whitespace]<<<AIDO_FILE_BEGIN>>>{E}<file text>{E}<<<AIDO_FILE_END>>>[whitespace]
+
+    where ``{E}`` is ``line_ending``, the target file's own uniform line
+    ending (``"\\n"`` or ``"\\r\\n"``). The file text is extracted **exactly**:
+    every character after the begin marker's line terminator, up to the first
+    character of the end marker. Its final line terminator is therefore the one
+    immediately before the end marker, so a file that does not end in
+    ``line_ending`` cannot be expressed and is refused.
+
+    Whitespace is tolerated only *outside* the markers, matching the JSON
+    parser's tolerance of whitespace around its object. Nothing inside them is
+    ever touched. Refused: a missing, repeated or out-of-order marker, any
+    other text outside the markers (a markdown fence, prose), a begin marker
+    not followed by exactly ``line_ending``, an end marker not on its own line,
+    empty file text, and file text that is not uniformly ``line_ending``.
+
+    The extracted text is then validated by :class:`SupervisedImplementerOutput`,
+    exactly as a JSON ``content_text`` is, and the downstream diff generator and
+    post-image reachability proof remain authoritative.
+
+    Raises:
+        SupervisedImplementerOutputRejected: the reply is not acceptable. The
+            reply text is never echoed.
+    """
+    if line_ending not in ("\n", "\r\n"):
+        raise ValueError("line_ending must be exactly '\\n' or '\\r\\n'.")
+    if not isinstance(text, str):
+        raise SupervisedImplementerOutputRejected(
+            "output_not_text", "the reply content was not a string."
+        )
+    if _only_whitespace(text):
+        raise SupervisedImplementerOutputRejected(
+            "output_empty", "the reply content was empty."
+        )
+    for marker, name in ((DELIMITED_BEGIN_MARKER, "begin"), (DELIMITED_END_MARKER, "end")):
+        count = text.count(marker)
+        if count == 0:
+            raise SupervisedImplementerOutputRejected(
+                f"delimited_{name}_marker_missing",
+                f"the reply has no {name} marker line. It was rejected, not repaired.",
+            )
+        if count > 1:
+            raise SupervisedImplementerOutputRejected(
+                "delimited_marker_repeated",
+                f"the reply contains the {name} marker more than once, so the file "
+                "text is ambiguous. It was rejected, not repaired.",
+            )
+    begin = text.index(DELIMITED_BEGIN_MARKER)
+    end = text.index(DELIMITED_END_MARKER)
+    if end < begin:
+        raise SupervisedImplementerOutputRejected(
+            "delimited_markers_out_of_order",
+            "the end marker comes before the begin marker. It was rejected, not repaired.",
+        )
+    if not _only_whitespace(text[:begin]) or not _only_whitespace(
+        text[end + len(DELIMITED_END_MARKER) :]
+    ):
+        raise SupervisedImplementerOutputRejected(
+            "delimited_text_outside_markers",
+            "the reply has text other than whitespace before the begin marker or "
+            "after the end marker (for example a markdown fence or prose). It was "
+            "rejected, not repaired.",
+        )
+    after_begin = begin + len(DELIMITED_BEGIN_MARKER)
+    if not text.startswith(line_ending, after_begin):
+        raise SupervisedImplementerOutputRejected(
+            "delimited_begin_marker_line_invalid",
+            "the begin marker is not followed by exactly the file's line ending, "
+            "so it is not on a line of its own. It was rejected, not repaired.",
+        )
+    content = text[after_begin + len(line_ending) : end]
+    if content == "":
+        raise SupervisedImplementerOutputRejected(
+            "delimited_content_empty",
+            "there is no file text between the markers. It was rejected, not repaired.",
+        )
+    if not content.endswith("\n"):
+        raise SupervisedImplementerOutputRejected(
+            "delimited_end_marker_not_on_own_line",
+            "the end marker does not start a new line, so the file text does not "
+            "end in a newline. It was rejected, not repaired; nothing is appended.",
+        )
+    if _uniform_line_ending_or_none(content) != line_ending:
+        raise SupervisedImplementerOutputRejected(
+            "delimited_line_ending_mismatch",
+            "the file text's line endings are not uniformly the target file's "
+            "own. It was rejected, not normalized.",
+        )
+    try:
+        return SupervisedImplementerOutput(content_text=content)
+    except ValidationError as exc:
+        raise SupervisedImplementerOutputRejected(
+            "output_schema_violation",
+            "the reply failed the output contract: "
+            + _summarize_validation_error(exc),
+        ) from None
+
+
+def _uniform_line_ending_or_none(text: str) -> str | None:
+    """The 5F2C writer's own uniform-line-ending rule, as a value. Never normalizes."""
+    from ai_dev_orchestrator.file_editing.writer import (
+        WorkspaceWriteRefusedError,
+        _detect_uniform_line_ending,
+    )
+
+    try:
+        return _detect_uniform_line_ending(text)
+    except WorkspaceWriteRefusedError:
+        return None
+
+
 @dataclass(frozen=True)
 class SourceTransmissionNotice:
     """What is about to be sent, and where. Announced before the request is handed over.
@@ -273,6 +424,15 @@ class SupervisedImplementerProvenance(_Frozen):
     orchestrator_approval_created: Literal[False]
     orchestrator_workspace_written: Literal[False]
     next_step: Literal["human_exact_diff_approval_required"]
+
+    #: P0-RECOVERY-T2. The reply envelope AIDO asked for. Serialized only when
+    #: it is not the default, so a default-mode record is byte-identical to the
+    #: pre-amendment form; an absent field means ``json_content_text``.
+    output_envelope: SupervisedOutputEnvelope = DEFAULT_SUPERVISED_OUTPUT_ENVELOPE
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict:
+        return omit_default_output_envelope(handler(self), self.output_envelope)
 
 
 class SupervisedImplementerResult(_Frozen):

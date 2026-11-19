@@ -69,6 +69,9 @@ from ai_dev_orchestrator.supervised_implementer.identity import (
 from ai_dev_orchestrator.supervised_implementer.models import (
     MODEL_SOURCE,
     NEXT_STEP,
+    OUTPUT_ENVELOPE_DELIMITED,
+    OUTPUT_ENVELOPE_JSON,
+    OUTPUT_ENVELOPES,
     PROVENANCE_SCHEMA_VERSION,
     ReportedUsage,
     SourceTransmissionNotice,
@@ -77,6 +80,7 @@ from ai_dev_orchestrator.supervised_implementer.models import (
     SupervisedImplementerRefused,
     SupervisedImplementerResult,
     SupervisedImplementerTransportFailed,
+    parse_supervised_implementer_delimited_output,
     parse_supervised_implementer_output,
 )
 from ai_dev_orchestrator.supervised_implementer.request import (
@@ -134,6 +138,8 @@ class SupervisedImplementerSettings:
     allow_insecure_http: bool
     structured_output: bool
     max_output_tokens: int | None
+    #: P0-RECOVERY-T2. Exactly one of OUTPUT_ENVELOPES; the default changes nothing.
+    output_envelope: str = OUTPUT_ENVELOPE_JSON
 
 
 def _refuse(category: str, message: str) -> SupervisedImplementerRefused:
@@ -186,6 +192,20 @@ def check_supervised_implementer_gate(
             "config_wrong_type",
             "supervised_implementer.max_output_tokens must be null or a positive integer.",
         )
+    envelope = config.output_envelope
+    if type(envelope) is not str or envelope not in OUTPUT_ENVELOPES:
+        raise _refuse(
+            "unsupported_output_envelope",
+            "supervised_implementer.output_envelope must be exactly "
+            "'json_content_text' or 'delimited_file'.",
+        )
+    if envelope == OUTPUT_ENVELOPE_DELIMITED and config.structured_output is True:
+        raise _refuse(
+            "output_envelope_conflicts_with_structured_output",
+            "supervised_implementer.output_envelope 'delimited_file' asks for a "
+            "plain-text reply, so it cannot be combined with structured_output "
+            "(a JSON response_format). Nothing was read or sent.",
+        )
     return SupervisedImplementerSettings(
         candidate=candidate,
         model=expected_model,
@@ -193,6 +213,7 @@ def check_supervised_implementer_gate(
         allow_insecure_http=config.allow_insecure_http,
         structured_output=config.structured_output,
         max_output_tokens=cap,
+        output_envelope=envelope,
     )
 
 
@@ -505,7 +526,12 @@ def _proposal_from_reply(
             f"the reply's finish_reason was {response.finish_reason!r}, not "
             "'stop', so it may be truncated. It was rejected, not retried.",
         )
-    output = parse_supervised_implementer_output(response.content)
+    if settings.output_envelope == OUTPUT_ENVELOPE_DELIMITED:
+        output = parse_supervised_implementer_delimited_output(
+            response.content, line_ending=source.ending
+        )
+    else:
+        output = parse_supervised_implementer_output(response.content)
     proposed_text = output.content_text
     target_path = source.target_path
 
@@ -697,6 +723,7 @@ def run_supervised_implementer_offline(
         model=settings.model,
         max_output_tokens=settings.max_output_tokens,
         structured_output=settings.structured_output,
+        output_envelope=settings.output_envelope,
     )
     messages_sha256 = request_messages_sha256(request)
     announce(
@@ -779,6 +806,7 @@ def run_supervised_implementer_offline(
                 orchestrator_approval_created=False,
                 orchestrator_workspace_written=False,
                 next_step=NEXT_STEP,
+                output_envelope=settings.output_envelope,
             ),
         )
     except ValidationError as exc:
