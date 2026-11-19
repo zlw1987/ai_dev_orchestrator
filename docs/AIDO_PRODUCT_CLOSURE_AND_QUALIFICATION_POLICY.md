@@ -323,9 +323,12 @@ or unreadable record fails closed.
 > force,** except for the narrow output-format exception recorded here. It
 > records the Product Owner's approval, given with the P0-RECOVERY-T2 task at
 > baseline `c6e992c4c4989118cabd0ebcd3e2e28b2df31e5d`, after the P0-RECOVERY-T1
-> diagnosis. That diagnosis found the two live P0-UX3 failures at the end of
-> the JSON-escaped `content_text` string. With one missing escaped quote
-> restored, the A2 logic passed every trusted test.
+> diagnosis. A1 was rejected as `post_image_unreachable`, but its exact cause
+> is unknown because the rejected response content was not retained. A2
+> produced an applicable diff containing a missing closing quote. The
+> JSON-escaped full-file envelope is a plausible contributor, not a confirmed
+> common root cause. Restoring the missing quote in A2 allowed its logic to
+> pass the independent tests.
 >
 > Implementation: P0-RECOVERY-T2
 > ([PHASE_ALPHA_P1B_SUPERVISED_IMPLEMENTER_LIVE.md](PHASE_ALPHA_P1B_SUPERVISED_IMPLEMENTER_LIVE.md)
