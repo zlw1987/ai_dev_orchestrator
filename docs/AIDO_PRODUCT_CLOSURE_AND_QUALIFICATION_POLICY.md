@@ -353,3 +353,53 @@ or unreadable record fails closed.
 - the ledger, the TTL and every PO-1 to PO-3 and PO-UX rule.
 
 **Still not authorized:** any live request, including a smoke test; a new P0-UX3 run; a new model candidate or model substitution; retries, fallback or automatic code repair; output normalization; a third envelope; a CLI option for the envelope; structured output on the live path.
+
+
+## 13. P0-MODEL-1 amendment (2026-11-23) — a second supervised candidate and explicit reviewer choice
+
+> **Appended, prospective amendment. §1–§12 above are unchanged and still in
+> force,** except for the narrow identity exception recorded here. It records
+> the Product Owner's P0-MODEL-1 assignment at baseline
+> `55239e1ac035e0c280ed309a6b55bace4f413d4f`. That assignment asked for
+> MiniMax M3 as a separately identified implementer candidate and a separately
+> selectable reviewer, with no automatic fallback or substitution.
+>
+> Implementation:
+> [PHASE_ALPHA_P1B_SUPERVISED_IMPLEMENTER_LIVE.md](PHASE_ALPHA_P1B_SUPERVISED_IMPLEMENTER_LIVE.md)
+> §10, with the handoff in [P0_MODEL_1_HANDOFF.md](P0_MODEL_1_HANDOFF.md). It is
+> implemented and tested offline only.
+>
+> It rewrites no historical result. §2's autonomous candidate table, every
+> qualification record and every earlier run keep their recorded meaning.
+
+| # | Decision | What it narrows |
+|---|---|---|
+| MOD-1 | The supervised candidate registry is **append-only**. It now holds `SUP-D` = `qwen3.8-27b` (unchanged) and `SUP-M3` = `minimax-m3` (exact served id, matched exactly and case-sensitively).<br><br>`SUP-M3`:<br>- is outside `CANDIDATE_MODEL_IDS`;<br>- earns no qualification credit in either direction;<br>- is never an alias, substitute or fallback for `SUP-D`. | §8 item 2 and §9 "Unchanged" (`SUP-D` as the only supervised candidate) |
+| MOD-2 | A project selects exactly one candidate by naming both `candidate` and `model` in its own `supervised_implementer` block. A mixed pair is refused.<br><br>The pair is bound at H2, through `project_config_sha256`, the bound `candidate`/`model` and `request_sha256`, and it is the `model` the one request carries.<br><br>Every strict record (authorization, offline and live provenance) refuses a mixed pair. A reply naming another model is rejected as `model_substitution`. | — |
+| MOD-3 | The reviewer may be explicitly configured as `minimax-m3` through the existing `controlled_review.model`. Nothing about the reviewer contract changes, including its strict parser, RS1 and egress authority. `gpt-oss-20b` stays the operational default until role evidence supports a change. | — |
+
+**Unchanged:**
+- every DEC-SUP, DEC-SUP-LIVE, PO, PO-UX and REC decision;
+- the `litellm`-only live provider (D-2);
+- D-9: no structured output on the live path;
+- one request per authorization, with zero semantic and transport retries;
+- no token cap by default;
+- the ledger and the TTL;
+- every human approval;
+- every schema version.
+
+A `SUP-D` config, request or record serializes byte-identically.
+
+**Not claimed:**
+- that `minimax-m3` is qualified for any role;
+- that listing an alias proves the backend's weights, quantization or
+  reasoning configuration.
+
+**Still not authorized:**
+- any live request with either model;
+- using one model as both implementer and reviewer on an initial acceptance
+  task;
+- automatic model selection, fallback, failover or substitution;
+- a CLI model option;
+- streaming;
+- any change to LiteLLM, Run:AI or cluster settings.

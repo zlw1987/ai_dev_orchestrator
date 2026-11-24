@@ -101,6 +101,11 @@ before doing any work here.
   `json_content_text` stays byte-identical; `delimited_file` is opt-in by
   project config. See "What the supervised implementer can and cannot do"
   below.
+- **P0-MODEL-1 appended a second, separately identified supervised candidate**,
+  `SUP-M3` = `minimax-m3` (policy §13). It also proved that the reviewer
+  accepts an explicitly configured `minimax-m3`. It is implemented offline and
+  awaits independent review. `SUP-D` is byte-identical, and nothing selects,
+  substitutes or fails over between models.
 - **The first controlled write → verify → supervised review → human path now
   exists.** **L2 as originally defined is still NOT complete**: there is no
   **autonomous** model-backed implementer, no automatic fixer, no branch
@@ -122,6 +127,7 @@ ALPHA-2A-T1    Single-File Task Coordinator         IMPLEMENTED (awaiting review
 ALPHA-2B-T1    One Human-Supervised Correction Round IMPLEMENTED (awaiting review)
 P0-UX1-T1      Interactive Human Approval (D-2′)    ACCEPTED (offline scope)
 P0-RECOVERY-T2 Optional Plain-Text Reply Envelope   IMPLEMENTED (awaiting review)
+P0-MODEL-1     SUP-M3 Candidate + M3 Reviewer Choice IMPLEMENTED (awaiting review)
 → bounded write → verify → supervised review → human
 ```
 
@@ -625,6 +631,14 @@ authorized.
   `qwen3.8-27b`. It is outside `CANDIDATE_MODEL_IDS`, earns **no** qualification
   credit in either direction, and is not Candidate D's autonomous
   qualification. Never imply that Qwen 3.8 is qualified.
+- **A second candidate (P0-MODEL-1, policy §13).** The registry is
+  append-only and also holds `SUP-M3` = exactly `minimax-m3`, with the same
+  zero credit. A project names exactly one pair, `candidate` **and** `model`.
+  - A mixed pair is refused at the gate and by every strict record.
+  - H2 and `request_sha256` bind the pair.
+  - A reply naming another model is rejected as `model_substitution`.
+  - Never add an alias, an automatic choice, a fallback or failover between
+    candidates, or a CLI model option.
 - **The model proposes file content and nothing else.** It returns the complete
   final text of ONE approved file as `{"content_text": ...}`. AIDO owns the path,
   scope, change type, candidate identity and every word of prose in the approval

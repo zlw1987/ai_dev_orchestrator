@@ -52,6 +52,11 @@ from pydantic import (
 )
 
 from ai_dev_orchestrator.diff_proposal.models import _summarize_validation_error
+from ai_dev_orchestrator.supervised_implementer.identity import (
+    SupervisedCandidateId,
+    SupervisedModelId,
+    require_registered_candidate_pair,
+)
 from ai_dev_orchestrator.supervised_implementer.models import SupervisedImplementerRefused
 
 AUTHORIZATION_SCHEMA_VERSION = "supervised-implementer-authorization.v1"
@@ -168,8 +173,9 @@ class AuthorizationBound(_Strict):
     authorized_semantic_requests: ExactOne
 
     role: Literal["supervised_implementer"]
-    candidate: Literal["SUP-D"]
-    model: Literal["qwen3.8-27b"]
+    #: P0-MODEL-1: exactly one registry pair (checked below), never a mix.
+    candidate: SupervisedCandidateId
+    model: SupervisedModelId
     provider: Literal["litellm"]
 
     project_id: StrictStr
@@ -238,6 +244,7 @@ class AuthorizationBound(_Strict):
 
     @model_validator(mode="after")
     def _binding_and_expiry_agree(self) -> AuthorizationBound:
+        require_registered_candidate_pair(self.candidate, self.model)
         if parse_timestamp(self.expires_at) != parse_timestamp(self.prepared_at) + AUTH_TTL:
             raise ValueError("expires_at must be exactly prepared_at plus the fixed TTL.")
         if compute_binding_sha256(self) != self.binding_sha256:

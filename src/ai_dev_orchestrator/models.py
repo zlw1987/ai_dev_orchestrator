@@ -831,7 +831,9 @@ class SupervisedImplementerConfig(BaseModel):
     with the supervised-candidate registry
     (:data:`ai_dev_orchestrator.supervised_implementer.identity.SUPERVISED_CANDIDATE_MODEL_IDS`).
     Requiring both is the point: a config that names candidate ``SUP-D`` with
-    any other model is refused, so no candidate can be silently substituted.
+    any other model (or ``SUP-M3`` with anything but ``minimax-m3``) is refused,
+    so no candidate can be silently substituted. P0-MODEL-1 appended ``SUP-M3``;
+    it is selected only by naming it here, never by fallback.
     """
 
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
@@ -843,7 +845,8 @@ class SupervisedImplementerConfig(BaseModel):
     )
     candidate: str | None = Field(
         default=None,
-        description="The supervised candidate id, matched exactly (e.g. 'SUP-D'). "
+        description="The supervised candidate id, matched exactly ('SUP-D' or "
+        "'SUP-M3'). "
         "No default; an enabled block without one is refused at the gate.",
     )
     provider: str = Field(

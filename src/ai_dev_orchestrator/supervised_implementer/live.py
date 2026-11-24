@@ -92,6 +92,9 @@ from ai_dev_orchestrator.models import (
 from ai_dev_orchestrator.supervised_implementer.identity import (
     QUALIFICATION_CREDIT,
     SUPERVISED_IMPLEMENTER_ROLE,
+    SupervisedCandidateId,
+    SupervisedModelId,
+    require_registered_candidate_pair,
 )
 from ai_dev_orchestrator.supervised_implementer.implementer import (
     TRANSPORT_MAX_RETRIES,
@@ -722,7 +725,8 @@ def _non_negative(value: float) -> float:
 
 
 class AidoRequested(_Frozen):
-    model: Literal["qwen3.8-27b"]
+    #: P0-MODEL-1: must equal the record's own ``model`` (checked by the record).
+    model: SupervisedModelId
     provider: Literal["litellm"]
     requested_max_output_tokens: StrictInt | None
     structured_output_mode: Literal["none"]
@@ -784,8 +788,9 @@ class SupervisedImplementerLiveProvenance(_Frozen):
 
     schema_version: Literal["supervised-implementer-provenance.v2"]
     role: Literal["supervised_implementer"]
-    candidate: Literal["SUP-D"]
-    model: Literal["qwen3.8-27b"]
+    #: P0-MODEL-1: exactly one registry pair (checked below), never a mix.
+    candidate: SupervisedCandidateId
+    model: SupervisedModelId
     model_source: Literal["project_config.supervised_implementer.model"]
     transport_kind: Literal["live_http"]
     qualification_credit: Literal["none"]
@@ -814,6 +819,13 @@ class SupervisedImplementerLiveProvenance(_Frozen):
     orchestrator_retries_issued: ExactZero
     orchestrator_cancellation_requested: StrictFalse
     next_step: Literal["human_exact_diff_approval_required"]
+
+    @model_validator(mode="after")
+    def _registered_candidate_pair(self) -> SupervisedImplementerLiveProvenance:
+        require_registered_candidate_pair(self.candidate, self.model)
+        if self.aido_requested.model != self.model:
+            raise ValueError("aido_requested.model must equal the record's model.")
+        return self
 
 
 class SupervisedImplementerLiveResult(_Frozen):

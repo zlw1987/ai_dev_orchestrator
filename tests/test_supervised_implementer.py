@@ -273,7 +273,12 @@ def _rejected(tmp_path, category, fake, **kwargs):
 
 
 def test_sup_d_is_bound_to_exactly_one_model_and_the_registry_is_read_only():
-    assert dict(sup.SUPERVISED_CANDIDATE_MODEL_IDS) == {"SUP-D": "qwen3.8-27b"}
+    # P0-MODEL-1 appended SUP-M3; SUP-D's binding is unchanged.
+    assert sup.SUPERVISED_CANDIDATE_MODEL_IDS["SUP-D"] == "qwen3.8-27b"
+    assert dict(sup.SUPERVISED_CANDIDATE_MODEL_IDS) == {
+        "SUP-D": "qwen3.8-27b",
+        "SUP-M3": "minimax-m3",
+    }
     assert sup.SUPERVISED_IMPLEMENTER_ROLE == "supervised_implementer"
     assert sup.QUALIFICATION_CREDIT == "none"
     with pytest.raises(TypeError):

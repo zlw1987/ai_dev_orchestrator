@@ -210,10 +210,13 @@ unstaged change; no commit or push.
 
 ## 8. Deferred
 
+(P0-MODEL-1 removed "an implementer other than SUP-D" from this list. A project
+may now name the separately identified `SUP-M3` = `minimax-m3` instead. The
+coordinator itself is unchanged; see policy §13.)
+
 Model-backed planning, multi-file tasks, an automatic fixer or any
 review/fix loop beyond §9's one human-initiated round, raw reviewer-response
-retention, an implementer other than SUP-D, config
-writing, HTTP transport security review before team use, and DL-4B/E-12 for
+retention, config writing, HTTP transport security review before team use, and DL-4B/E-12 for
 multi-user deployment.
 
 ## 9. ALPHA-2B-T1 — one human-supervised bounded correction round

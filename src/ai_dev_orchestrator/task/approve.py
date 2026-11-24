@@ -954,7 +954,7 @@ def render_consent(task: TaskRecord, subject: Subject, encoding: str | None, now
         f"{_on_disk(workspace, binding['target_path'])}. No other file, listing, tree or git "
         "history is sent."
     )
-    display.add(f"provider {binding['provider']}, model {binding['model']} (supervised implementer SUP-D)")
+    display.add(f"provider {binding['provider']}, model {binding['model']} (supervised implementer {bound['candidate']})")
     display.add(
         f"WHAT WILL BE SENT, in exactly one model request with zero transport retries "
         f"(wait bound {bound['attempt_timeout_seconds']} s):"

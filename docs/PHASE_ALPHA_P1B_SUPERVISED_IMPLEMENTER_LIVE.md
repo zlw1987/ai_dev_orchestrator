@@ -29,7 +29,7 @@
 | Baseline | `4e02380` (P1A accepted at `12f728c`) |
 | Design | [PHASE_ALPHA_P1B_LIVE_IMPLEMENTER_AUTHORITY_DESIGN.md](PHASE_ALPHA_P1B_LIVE_IMPLEMENTER_AUTHORITY_DESIGN.md), §11 authoritative |
 | Policy | [§9 DEC-SUP-LIVE](AIDO_PRODUCT_CLOSURE_AND_QUALIFICATION_POLICY.md) |
-| Identity | `supervised_implementer` / `SUP-D` / `qwen3.8-27b`, **no qualification credit** |
+| Identity | `supervised_implementer` / `SUP-D` / `qwen3.8-27b`, **no qualification credit** (P0-MODEL-1 appended `SUP-M3` / `minimax-m3`, §10) |
 | Authorizes | Nothing beyond the offline implementation. The first live run needs AUTH-PILOT (D-10) plus a human-completed per-run consent |
 
 The corporate endpoint is deliberately not written in this document, the code
@@ -418,6 +418,35 @@ option, and the two commands are unchanged.
     than misreading it.
   - The outcome record is unchanged; a rejected reply is still recorded by
     digest and length only.
+
+## 10. P0-MODEL-1 — a second, separately identified candidate (policy §13)
+
+- **Registry.** `SUPERVISED_CANDIDATE_MODEL_IDS` is append-only and now holds
+  `SUP-D` = `qwen3.8-27b` (unchanged) and `SUP-M3` = `minimax-m3`. Matching is
+  exact: `minimax-m3-thinking`, `MiniMax-M3` or `sup-m3` are refused.
+- **Selection.** A project selects one candidate by naming **both**
+  `supervised_implementer.candidate` and `.model`. A mixed pair is refused at
+  the gate as `candidate_model_mismatch`. There is no CLI option, environment
+  default, fallback or failover between candidates.
+- **Binding.** The pair goes into `project_config_sha256`, into the bound
+  `candidate`/`model` fields and into `request_sha256` (the wire `model`).
+  - An authorization prepared for one candidate is refused as
+    `authorization_mismatch` under a config naming the other. Nothing is sent
+    and nothing is consumed.
+  - The H2 display and the transmission banner name the bound candidate.
+- **Strict records.** `AuthorizationBound`, provenance v1 and provenance v2
+  accept either registry literal, and each validates that its pair is exactly
+  one registry entry. A record pairing `SUP-D` with `minimax-m3` is invalid
+  even with a recomputed binding. Provenance v2 also requires
+  `aido_requested.model` to equal its `model`.
+- **Substitution.** The shipped check is unchanged: a reply whose `model`
+  field names another model is rejected once as `model_substitution`.
+- **Unchanged for SUP-D.** The schema versions stay as they were. A `SUP-D`
+  record, request or config serializes byte-identically, which the existing
+  pinned golden digests prove. Every gate, the provider (`litellm` only), the
+  ledger, the TTL, the one request, the zero retries and the strict parsers
+  are unchanged.
+- **Tests:** `tests/test_p0_model1_model_choice.py`.
 
 ---
 

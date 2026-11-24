@@ -6,8 +6,9 @@ diff proposal with the unchanged deterministic generator. Then it **stops**:
 a human must approve the exact diff (Phase 5F0) before the unchanged 5F2C
 writer may do anything.
 
-- Candidate ``SUP-D`` = ``qwen3.8-27b``. It is not in ``CANDIDATE_MODEL_IDS``
-  and carries no qualification credit.
+- Candidate ``SUP-D`` = ``qwen3.8-27b``, and (P0-MODEL-1) the separately
+  identified ``SUP-M3`` = ``minimax-m3``. Neither is in ``CANDIDATE_MODEL_IDS``
+  and neither carries qualification credit. A project names exactly one.
 - ALPHA-P1A's library runner is offline: it accepts exactly
   ``httpx.MockTransport`` and rejects any other transport type, a guard against
   accidental live use, not a sandbox (a mock handler is arbitrary trusted
@@ -27,6 +28,7 @@ See ``docs/PHASE_ALPHA_P1A_SUPERVISED_IMPLEMENTER_OFFLINE.md`` and
 from ai_dev_orchestrator.supervised_implementer.identity import (
     QUALIFICATION_CREDIT,
     SUPERVISED_CANDIDATE_ID,
+    SUPERVISED_CANDIDATE_M3_ID,
     SUPERVISED_CANDIDATE_MODEL_IDS,
     SUPERVISED_IMPLEMENTER_ROLE,
 )
@@ -55,6 +57,7 @@ from ai_dev_orchestrator.supervised_implementer.request import (
 __all__ = [
     "QUALIFICATION_CREDIT",
     "SUPERVISED_CANDIDATE_ID",
+    "SUPERVISED_CANDIDATE_M3_ID",
     "SUPERVISED_CANDIDATE_MODEL_IDS",
     "SUPERVISED_IMPLEMENTER_ROLE",
     "SourceTransmissionNotice",

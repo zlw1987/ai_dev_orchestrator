@@ -49,6 +49,11 @@ from ai_dev_orchestrator.models import (
     SupervisedOutputEnvelope,
     omit_default_output_envelope,
 )
+from ai_dev_orchestrator.supervised_implementer.identity import (
+    SupervisedCandidateId,
+    SupervisedModelId,
+    require_registered_candidate_pair,
+)
 
 PROVENANCE_SCHEMA_VERSION = "supervised-implementer-provenance.v1"
 
@@ -384,8 +389,9 @@ class SupervisedImplementerProvenance(_Frozen):
 
     schema_version: Literal["supervised-implementer-provenance.v1"]
     role: Literal["supervised_implementer"]
-    candidate: Literal["SUP-D"]
-    model: Literal["qwen3.8-27b"]
+    #: P0-MODEL-1: exactly one registry pair (checked below), never a mix.
+    candidate: SupervisedCandidateId
+    model: SupervisedModelId
     model_source: Literal["project_config.supervised_implementer.model"]
     #: The ``model`` field of the normalized reply. The shipped client falls
     #: back to the requested name when a server omits it, so equality here does
@@ -429,6 +435,11 @@ class SupervisedImplementerProvenance(_Frozen):
     #: it is not the default, so a default-mode record is byte-identical to the
     #: pre-amendment form; an absent field means ``json_content_text``.
     output_envelope: SupervisedOutputEnvelope = DEFAULT_SUPERVISED_OUTPUT_ENVELOPE
+
+    @model_validator(mode="after")
+    def _registered_candidate_pair(self) -> SupervisedImplementerProvenance:
+        require_registered_candidate_pair(self.candidate, self.model)
+        return self
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict:

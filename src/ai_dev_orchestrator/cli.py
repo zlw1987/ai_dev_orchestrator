@@ -110,8 +110,9 @@ an unstructured request, and no CLI option was added for any of it.
 ALPHA-P1B (DEC-SUP-LIVE) added the **supervised, proposal-only implementer**:
 `l2-supervised-implementer-prepare` writes an offline authorization draft, and
 `l2-supervised-implementer-run` consumes one human-completed, single-use,
-per-run consent to send ONE approved file to candidate SUP-D (`qwen3.8-27b`)
-once, over the `litellm` provider, with zero retries, AIDO's own wait deadline
+per-run consent to send ONE approved file to the project's configured
+supervised candidate (`SUP-D` = `qwen3.8-27b`, or since P0-MODEL-1 `SUP-M3` =
+`minimax-m3`) once, over the `litellm` provider, with zero retries, AIDO's own wait deadline
 and a response byte bound. Its reply is untrusted proposed content, turned into
 a diff proposal by the unchanged deterministic generator, and the command stops
 before human exact-diff approval. It writes nothing to the workspace, earns no
@@ -4861,7 +4862,7 @@ def _supimpl_report(report) -> None:
 
 @app.command(
     "l2-supervised-implementer-prepare",
-    short_help="Write a per-run SUP-D source-transmission authorization DRAFT (offline).",
+    short_help="Write a per-run supervised-implementer authorization DRAFT (offline).",
 )
 def l2_supervised_implementer_prepare(
     project_config: Path = typer.Option(
@@ -4925,7 +4926,7 @@ def l2_supervised_implementer_prepare(
 
 @app.command(
     "l2-supervised-implementer-run",
-    short_help="Send ONE consented approved file to SUP-D once; stop before diff approval.",
+    short_help="Send ONE consented approved file to the bound candidate once; stop before diff approval.",
 )
 def l2_supervised_implementer_run(
     project_config: Path = typer.Option(
@@ -4964,7 +4965,7 @@ def l2_supervised_implementer_run(
         help="Required: consent to contact a real model.",
     ),
 ) -> None:
-    """Consume ONE authorization and send ONE approved file to SUP-D, once.
+    """Consume ONE authorization and send ONE approved file to its bound candidate, once.
 
     It re-derives everything the authorization binds and refuses any mismatch
     before reading the AIDO_LITELLM_* environment. The endpoint must equal the
