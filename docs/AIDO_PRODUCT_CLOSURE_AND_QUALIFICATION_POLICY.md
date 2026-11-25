@@ -403,3 +403,58 @@ A `SUP-D` config, request or record serializes byte-identically.
 - a CLI model option;
 - streaming;
 - any change to LiteLLM, Run:AI or cluster settings.
+
+
+## 14. P0-UX-H2-SIMPLE amendment (2026-11-24) — one-confirmation H2 consent
+
+> **Appended, prospective amendment. §1–§13 above are unchanged and still in
+> force,** except for the narrow, opt-in H2 exception recorded here. It records
+> the Product Owner's P0-UX-H2-SIMPLE assignment at baseline
+> `7c63544f7e33a3a392095a4bfab695974c0af790`, which amends DEC-SUP-LIVE A-2
+> and PO-UX-1/PO-UX-2 for projects that pin their implementer destination.
+>
+> Implementation: `docs/ALPHA_2A_TASK_COORDINATOR.md` §11. It is implemented
+> and tested offline only.
+>
+> It rewrites no historical result: every earlier decision record, consent,
+> run and evidence file keeps its recorded meaning and its typed contract.
+
+| # | Decision | What it narrows |
+|---|---|---|
+| H2S-1 | A project may pin its implementer destination in trusted project config as `supervised_implementer.endpoint` (scheme, host, explicit port, base path), in the same representation as `controlled_review.endpoint`. It is an **authorization**, not a connection setting: the base URL still comes only from `AIDO_LITELLM_BASE_URL`. A pinned `http` destination requires `allow_insecure_http: true`; the live gate refuses the mismatch (`endpoint_plaintext_not_permitted`). The pin is bound into every authorization through `project_config_sha256`. Absent, the config serializes byte-identically to its pre-amendment form. | P1B's "no endpoint field" rule for the supervised implementer block |
+| H2S-2 | **Presence of the pin is the opt-in.** For a run whose pinned config carries it, H2 is **one** informed decision. Before showing anything, `task-approve` reads exactly `AIDO_LITELLM_BASE_URL` (never the key) and requires it to resolve, by P1B's `check_live_endpoint` and the reviewer's accepted egress comparison, to exactly the pinned scheme, host, effective port and path `<base_path>/chat/completions`. A mismatch refuses with nothing shown or recorded, and the URL is never echoed. The screen then shows the complete destination, its environment match, its TLS state (with a `NOT TLS-ENCRYPTED` banner for `http`), the candidate, model, the one file with its size, digest and HEAD, what the one request carries (including round-2 correction data), the request digest and the one-time authorization's expiry. The human types `approve` once, which consents to that whole disclosed transmission including a displayed plaintext risk, or `reject`. Anything else cancels and records nothing. The environment is checked again before the decision is recorded. | DEC-SUP-LIVE A-2 and PO-UX-1 ("the human types the endpoint; AIDO never displays it") and PO-UX-2 (separate `transmit` and `plaintext` confirmations), for pinned projects only |
+| H2S-3 | **Truthful audit.** The write-once decision record carries `confirmation: "single_approval"`, the pinned destination with `endpoint_source: "project_config.supervised_implementer.endpoint"`, `transport_tls`, `endpoint_matched_environment: true`, and the exact screen shown with its SHA-256. It claims no separately typed `transmit`, `plaintext` or endpoint. At `task-continue`, AIDO serializes the unchanged P1B consent block from that record: the pinned endpoint, the fixed consent phrase and, for `http`, the fixed plaintext acknowledgement phrase, which is P1B's schema representation of the risk the screen showed and the one approval accepted. The decision record, not the consent block, is the audit of how consent was given. | PO-UX-1's "plaintext_acknowledgement: if and only if it was separately confirmed", for pinned projects only |
+| H2S-4 | **Transmission stays separate and re-checked.** `task-approve` sends nothing. Only `task-continue --transmit-approved-source --real-implementer` sends, and P1B's run checks the environment against the pinned destination in full (`endpoint_not_authorized`), in addition to its unchanged comparison with the consented scheme, host and port, before anything is consumed or sent. | — |
+
+**The mode belongs to the run's pinned config, never to a record.** A run
+started under a config without the pin keeps the typed contract (PO-UX-1/2)
+from start to end; a typed record is refused in a pinned run and a
+single-approval record in an unpinned one. A changed config refuses every later
+step, as before.
+
+**Unchanged:**
+- every DEC-SUP, DEC-SUP-LIVE, PO, PO-UX, REC and MOD decision for projects
+  without the pin, including the typed endpoint and the separate `transmit`
+  and `plaintext` confirmations;
+- H1 and H3 as separate human decisions, and round 2's own H2 and H3;
+- every strict parser, phrase constant and schema version, including
+  `supervised-implementer-authorization.v1` and `aido-task-decision.v1`;
+- the 60-minute TTL, the `consented_at` window, single use by the ledger, one
+  request per authorization with zero semantic and transport retries;
+- `SUP-D` and `SUP-M3`, model selection, generation parameters, transport
+  retry behaviour and every reviewer rule;
+- the manual file-edit path. In a pinned project a hand-edited consent is still
+  accepted, and P1B still requires the environment to match the pin.
+
+**Not claimed:**
+- that the account name identifies a person, that a TTY proves a human is
+  present, or that a same-account process cannot forge a decision (A-19);
+- that the destination host is authenticated over `http`, or that DNS,
+  routing or name resolution is observed: the host is authorized as text;
+- that a pinned config makes a destination secure, private or approved.
+
+**Still not authorized:** automatic or inferred consent; deriving the
+authorized destination from the environment value being checked (including
+writing the pin from `task-doctor` or at run time); a fallback to another
+destination or to weaker checks; any live request or real source transmission
+as part of this amendment.

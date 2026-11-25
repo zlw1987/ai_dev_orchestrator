@@ -5309,6 +5309,9 @@ def _run_task_approve(
                     f"{subject.binding['authorization_file']} is expired or not yet valid. Issue a "
                     "fresh one with task-continue --prepare-supervised-implementation. Nothing was recorded."
                 )
+            if approve.is_single_approval(subject):
+                # P0-UX-H2-SIMPLE: verify the pinned destination BEFORE showing it.
+                approve.check_pinned_environment(subject, read_base_url)
             text = approve.render_consent(task, subject, encoding, now, project)
             what = "this implementer consent"
         elif kind == approve.KIND_PLAN:
@@ -5320,7 +5323,12 @@ def _run_task_approve(
         try:
             answer = approve.ask_decision(prompt, what)
             answers = None
-            if answer == approve.APPROVE and kind == approve.KIND_CONSENT:
+            if approve.is_single_approval(subject):
+                # The one typed answer. The environment is checked once more
+                # before anything is recorded; the record holds the exact screen.
+                approve.check_pinned_environment(subject, read_base_url)
+                answers = approve.single_approval_answers(subject, text)
+            elif answer == approve.APPROVE and kind == approve.KIND_CONSENT:
                 answers = approve.consent_answers(
                     subject,
                     prompt=prompt,
@@ -5664,8 +5672,10 @@ def task_approve(
     and their round-2 equivalents. Approving records one write-once decision
     bound to the exact draft shown; AIDO generates the fixed approval text, the
     timestamp and the binding fields from it. For H2 you also type the endpoint
-    you expect (scheme://host:port) and confirm the transmission separately.
-    It never sends, writes, verifies or calls a model: task-continue, with its
+    you expect (scheme://host:port) and confirm the transmission separately,
+    unless the project pins supervised_implementer.endpoint: then the screen
+    shows that destination, already checked against the environment, and one
+    'approve' consents to the whole disclosed transmission. It never sends, writes, verifies or calls a model: task-continue, with its
     own flags, does that after validating the decision again.
     """
     _run_task_approve(run_dir=run_dir)

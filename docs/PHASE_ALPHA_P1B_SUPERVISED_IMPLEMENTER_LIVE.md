@@ -452,3 +452,26 @@ option, and the two commands are unchanged.
 
 **Status: ALPHA-P1B IMPLEMENTED; FU1 (B-1) IMPLEMENTED — READY FOR INDEPENDENT
 RECHECK.** Not accepted.
+
+## 11. P0-UX-H2-SIMPLE — optional pinned implementer destination (policy §14)
+
+One optional config field, `supervised_implementer.endpoint` (the
+`controlled_review.endpoint` representation: scheme, host, explicit port, base
+path). Absent, nothing in this document changes, and the config serializes
+byte-identically, so `project_config_sha256` and every binding are unchanged.
+
+Present:
+- the live gate refuses a pinned `http` destination unless
+  `allow_insecure_http` is true (`endpoint_plaintext_not_permitted`);
+- the pin is bound into the authorization through `project_config_sha256`;
+- `run`, after reading the environment and before consumption, requires
+  `AIDO_LITELLM_BASE_URL` to be exactly the pinned destination
+  (`check_pinned_endpoint`, which reuses the reviewer's
+  `check_reviewer_destination` on the httpx-parsed request URL). It refuses as
+  `endpoint_not_authorized` without echoing the URL. The existing comparison
+  with the consented scheme, host and port is unchanged and still runs.
+
+The authorization schema, its consent block, the ledger, the TTL, the wire
+payload, the transport, the request count and the provenance are unchanged.
+The coordinator's one-confirmation H2 that the pin enables is described in
+`docs/ALPHA_2A_TASK_COORDINATOR.md` §11.

@@ -476,3 +476,111 @@ Offline tests: `tests/test_task_approve.py`, alongside the unchanged
   draft (A-19).
 - P1B's own expiry check at run time stays the authority.
 - `task-doctor` still prints the implementer endpoint values.
+
+## 11. P0-UX-H2-SIMPLE — one-confirmation H2 (opt-in)
+
+Status: **IMPLEMENTED, offline-tested only, awaiting independent review.** No
+live run used it. Baseline `7c63544`. Product Owner decision: policy §14
+(H2S-1 to H2S-4). §10 is unchanged for every project that does not opt in.
+
+**Opt-in.** Pin the implementer destination once in the project config. It is
+the same representation as `controlled_review.endpoint`, and it authorizes
+`AIDO_LITELLM_BASE_URL`; it does not replace it:
+
+```yaml
+supervised_implementer:
+  # ... the existing fields, unchanged ...
+  allow_insecure_http: true   # required when the pinned scheme is http
+  endpoint:
+    scheme: http
+    host: gateway.example.invalid
+    port: 8080                # always explicit
+    base_path: /v1
+```
+
+A run is pinned to its config by SHA-256, so a run started without this block
+keeps the typed H2 of §10 to its end, and adding the block means starting a new
+task. Write the block by hand from the destination you intend; nothing
+derives it from the environment.
+
+**What changes at H2.**
+1. Before showing anything, `task-approve` reads exactly
+   `AIDO_LITELLM_BASE_URL` (never the key) and requires it to be the pinned
+   destination: P1B's `check_live_endpoint`, then the reviewer's accepted egress
+   comparison on the URL the client will request (scheme, host, effective port,
+   exact path `<base_path>/chat/completions`, no userinfo, query or fragment).
+   A trailing `/` is the same request and matches. A mismatch, including a
+   missing or different `/v1`, refuses with nothing shown or recorded, and the
+   URL is never echoed.
+2. The screen shows the complete pinned destination, its environment match and
+   its TLS state, plus everything §10 already showed. Sample (a synthetic
+   offline run; the host is a test value, and digests are shortened here):
+
+   ```text
+   H2 IMPLEMENTER CONSENT — run 20261124T185235Z-448a25b5, round 1, 20-authorization-1.json
+   workspace:  C:\...\workspace   (configured Windows workspace root)
+   source scope: exactly ONE file, src/mod.py — on disk C:\...\workspace\src\mod.py. No other file, listing, tree or git history is sent.
+   provider litellm, model qwen3.8-27b (supervised implementer SUP-D)
+   WHAT WILL BE SENT, in exactly one model request with zero transport retries (wait bound 30.0 s):
+     - the COMPLETE current content of exactly one file: src/mod.py (27 bytes, sha256 747b576e…f4f1f0) at HEAD 3b6f9fd2…c8d47d04
+     - the approved plan's prose and AIDO's fixed implementer instructions
+   request sha256 eb50a3a3…f198a190d31
+   authorization 74930df0…bee93dd801, prepared 2026-11-24T18:52:35+00:00, expires 2026-11-24T19:52:35+00:00 (59 min left), single use
+
+   DESTINATION (pinned by the project config, project_config.supervised_implementer.endpoint):
+     http://fake-gateway.invalid:8080/v1
+     scheme http, host fake-gateway.invalid, port 8080, base path /v1
+     the one request goes to exactly http://fake-gateway.invalid:8080/v1/chat/completions
+     environment: AIDO_LITELLM_BASE_URL matches this destination exactly (scheme, host, effective port and path; checked just now, again before your answer is recorded, and again by task-continue immediately before sending)
+     transport: NOT TLS-ENCRYPTED (plaintext http)
+   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+   !!  PLAINTEXT HTTP: this source will be sent NOT TLS-ENCRYPTED.        !!
+   !!  Anyone on the network path can read it. This is not secure.        !!
+   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+   Typing 'approve' consents to this ENTIRE transmission as shown above, including sending it NOT TLS-ENCRYPTED. It is the only confirmation. It records the decision only and sends nothing: the transmission happens only when you run task-continue --transmit-approved-source --real-implementer, within the authorization's validity.
+
+   Type 'approve' to approve this implementer consent, 'reject' to reject it, anything else to cancel: approve
+   APPROVED: recorded in 20-authorization-1.decision.json. Recording runs nothing: nothing was prepared, sent, written or verified.
+   ```
+
+   For `https` the transport line reads `TLS (https)` and there is no banner.
+3. The human types `approve` once, or `reject`; anything else cancels and
+   records nothing. There is no endpoint, `transmit` or `plaintext` prompt.
+4. The environment is checked once more, the draft is re-read, and the
+   write-once decision is recorded. Its binding carries
+   `confirmation: "single_approval"`, the pinned destination with
+   `endpoint_source`, `transport_tls`, `endpoint_matched_environment: true`,
+   and `presented_screen` with `presented_screen_sha256`, the exact screen
+   shown. It carries no `transmission_confirmed` or `plaintext_confirmed`,
+   because nothing of the kind was typed.
+
+**At `task-continue`.** The record is re-validated: run, config, round, stage,
+kind, draft digest, every recomputed binding field (now also the candidate and
+the pinned destination, from the pinned config), the screen digest and the
+authorization window. A record whose shape is not the run's mode is refused.
+AIDO then serializes the unchanged P1B consent block: the pinned scheme, host
+and port, the fixed consent phrase and, for `http`, the fixed plaintext
+acknowledgement phrase. P1B's run additionally checks the environment against
+the pinned destination in full (`endpoint_not_authorized`, before
+consumption) and keeps its unchanged comparison with the consented scheme,
+host and port.
+
+**Round 2.** A correction round in a pinned run uses the same one-confirmation
+H2, on its own fresh authorization (`50-authorization-<n>.decision.json`).
+Round 1's decision never satisfies it.
+
+Offline tests: `tests/test_task_approve_single_h2.py`, alongside the unchanged
+`tests/test_task_approve.py`, `tests/test_task_coordinator.py` and
+`tests/test_task_correction_round.py`.
+
+**Residual limits:**
+- The host is authorized as text; DNS and routing are not observed, and over
+  `http` nothing authenticates the server.
+- The recorded screen is the text AIDO printed. It is not proof that a person
+  read it (A-19).
+- A hand-edited consent (§4 (b)) remains possible in a pinned project; P1B
+  still requires the environment to match the pin.
+- A malformed pin is refused with the shared validator's
+  `controlled_review.endpoint` wording; the error location names
+  `supervised_implementer.endpoint`.

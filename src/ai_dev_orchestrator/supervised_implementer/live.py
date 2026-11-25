@@ -10,7 +10,9 @@ runners ALPHA-2A-T1's ``task-continue`` calls unchanged):
 - :func:`run_supervised_implementation` consumes one human-completed,
   single-use authorization. It re-derives every bound value in-process and
   compares each one exactly; only then reads the configured provider's
-  environment, checks the endpoint against the human-typed consent, consumes
+  environment, checks the endpoint against the human-typed consent (and,
+  when the project pins ``supervised_implementer.endpoint``, P0-UX-H2-SIMPLE,
+  against that pinned destination in full), consumes
   the authorization in the durable ledger (:mod:`.live_ledger`, ALPHA-P1B-FU1)
   by one exclusive create, records a pending state, announces the
   transmission, and issues **exactly one** request through AIDO's own bounded
@@ -84,6 +86,7 @@ from ai_dev_orchestrator.llm.config import (
 from ai_dev_orchestrator.llm.models import LLMClientConfig, LLMRequest, LLMResponse
 from ai_dev_orchestrator.models import (
     DEFAULT_SUPERVISED_OUTPUT_ENVELOPE,
+    ControlledReviewEndpointConfig,
     ProjectConfig,
     SupervisedImplementerConfig,
     SupervisedOutputEnvelope,
@@ -290,6 +293,14 @@ def check_supervised_implementer_live_gate(config: SupervisedImplementerConfig) 
             "supervised_implementer.authorization_ledger_dir must be an absolute "
             "path. Nothing was read or sent.",
         )
+    pinned = config.endpoint
+    if pinned is not None and pinned.scheme == "http" and base.allow_insecure_http is not True:
+        raise _refuse(
+            "endpoint_plaintext_not_permitted",
+            "supervised_implementer.endpoint pins a plaintext http destination, "
+            "but supervised_implementer.allow_insecure_http is not true. The two "
+            "must agree; nothing is inferred. Nothing was read or sent.",
+        )
     return LiveSettings(
         base=base, attempt_timeout_seconds=timeout, authorization_ledger_dir=ledger
     )
@@ -378,6 +389,41 @@ def check_live_endpoint(base_url: object, *, allow_insecure_http: bool) -> LiveE
         path_sha256=sha256_hex(parts.path.encode("utf-8")),
         chat_url=f"{base_url.rstrip('/')}/chat/completions",
     )
+
+
+def check_pinned_endpoint(base_url: object, pinned: ControlledReviewEndpointConfig) -> None:
+    """P0-UX-H2-SIMPLE: the environment's base URL must be exactly the pinned one.
+
+    ``pinned`` is the project config's ``supervised_implementer.endpoint``: the
+    authority never comes from the environment value being checked. The
+    comparison reuses the reviewer's accepted egress check (ALPHA-1A-FU1) on
+    the URL the client will actually request, parsed by httpx: scheme, host,
+    effective port and the exact path ``<base_path>/chat/completions``, with no
+    userinfo, query or fragment. Called by ``task-approve`` before a consent is
+    recorded and by :func:`run_supervised_implementation` before anything is
+    consumed or sent. The URL is never echoed; only the mismatched component
+    is named.
+    """
+    from ai_dev_orchestrator.review.egress import (
+        ReviewerEndpointAuthority,
+        check_reviewer_destination,
+        reviewer_request_url,
+    )
+    from ai_dev_orchestrator.review.models import ReviewerEgressRefused
+
+    if type(base_url) is not str:
+        raise _refuse("endpoint_invalid", "the endpoint base URL is not a string.")
+    try:
+        check_reviewer_destination(
+            reviewer_request_url(base_url), ReviewerEndpointAuthority.from_config(pinned)
+        )
+    except ReviewerEgressRefused as exc:
+        raise _refuse(
+            "endpoint_not_authorized",
+            f"the environment's implementer base URL does not match "
+            f"supervised_implementer.endpoint (mismatched: {exc.component}). It is "
+            "not echoed. Nothing was sent, and the authorization was not consumed.",
+        ) from None
 
 
 # -- The exact request ---------------------------------------------------------
@@ -1287,6 +1333,10 @@ def run_supervised_implementation(
     endpoint = check_live_endpoint(
         client_config.base_url, allow_insecure_http=settings.base.allow_insecure_http
     )
+    if project.supervised_implementer.endpoint is not None:
+        # P0-UX-H2-SIMPLE: the pinned destination, in full, from the project
+        # config the authorization is bound to (project_config_sha256).
+        check_pinned_endpoint(client_config.base_url, project.supervised_implementer.endpoint)
     if endpoint.scheme == "http" and consent.plaintext_acknowledgement != PLAINTEXT_ACKNOWLEDGEMENT:
         raise _refuse("plaintext_not_acknowledged", "plaintext HTTP was not acknowledged.")
     if (endpoint.scheme, endpoint.host, endpoint.port) != (

@@ -22,6 +22,17 @@ local account name, only inside the stage's own ``task-continue`` invocation,
 after the record is re-validated. ``reject`` is recorded the same way and ends
 the task (or the correction round). A cancel records nothing.
 
+**Single-approval H2 (P0-UX-H2-SIMPLE).** When the run's pinned project config
+pins ``supervised_implementer.endpoint``, H2 is one informed decision instead:
+AIDO checks the environment's base URL against the pinned destination by P1B's
+rules, shows the complete destination (scheme, host, explicit port, base path),
+its TLS state with a ``NOT TLS-ENCRYPTED`` banner for http, and everything the
+one request carries, and the human types ``approve`` (or ``reject``) once. The
+record says so (``confirmation: "single_approval"``) and holds the exact screen
+shown; it claims no separately typed ``transmit`` or ``plaintext``. The mode is
+the pinned config's, never the record's, so an existing run keeps its typed
+contract.
+
 **What this module never does.** It sends nothing, calls no model, runs no
 process, writes nothing to the workspace and runs no verification. The only
 environment value it reads is the implementer's base URL, for H2, to compare
@@ -133,6 +144,41 @@ class ConsentBinding(_Strict):
     plaintext_confirmed: StrictBool
 
 
+class SingleApprovalConsentBinding(_Strict):
+    """P0-UX-H2-SIMPLE: an H2 decided by ONE typed answer on a full disclosure.
+
+    Used only when the run's pinned project config pins
+    ``supervised_implementer.endpoint``. The destination fields come from that
+    config, never from the human or the environment; the record says how the
+    decision was made (``confirmation``), that the environment matched before
+    it was recorded, and exactly what screen the human was shown. It records
+    no ``transmit`` or ``plaintext`` answer, because none was typed.
+    """
+
+    authorization_file: StrictStr
+    p1b_run_id: StrictStr
+    binding_sha256: StrictStr
+    request_sha256: StrictStr
+    prepared_at: StrictStr
+    expires_at: StrictStr
+    provider: StrictStr
+    candidate: StrictStr
+    model: StrictStr
+    target_path: StrictStr
+    source_sha256: StrictStr
+    source_bytes: StrictInt
+    confirmation: Literal["single_approval"]
+    endpoint_source: Literal["project_config.supervised_implementer.endpoint"]
+    endpoint_scheme: Literal["http", "https"]
+    endpoint_host: StrictStr
+    endpoint_port: StrictInt
+    endpoint_base_path: StrictStr
+    transport_tls: StrictBool
+    endpoint_matched_environment: StrictBool
+    presented_screen_sha256: StrictStr
+    presented_screen: StrictStr
+
+
 class DiffBinding(_Strict):
     diff_text_file: StrictStr
     diff_text_sha256: StrictStr
@@ -145,6 +191,10 @@ class DiffBinding(_Strict):
 
 _BINDINGS = {KIND_PLAN: PlanBinding, KIND_CONSENT: ConsentBinding, KIND_DIFF: DiffBinding}
 
+#: P0-UX-H2-SIMPLE. The one value of ``confirmation`` a single-approval H2 binds.
+SINGLE_APPROVAL = "single_approval"
+PINNED_ENDPOINT_SOURCE = "project_config.supervised_implementer.endpoint"
+
 #: The binding fields the human's answers set, for H2; every other binding
 #: field is recomputed from the run directory at consumption and must match.
 _CONSENT_ANSWER_FIELDS = (
@@ -155,6 +205,24 @@ _CONSENT_ANSWER_FIELDS = (
     "transmission_confirmed",
     "plaintext_confirmed",
 )
+#: The same, for a single-approval H2: the destination is recomputed from the
+#: pinned config, so only the observation and the presented screen are answers.
+_SINGLE_ANSWER_FIELDS = (
+    "endpoint_matched_environment",
+    "presented_screen_sha256",
+    "presented_screen",
+)
+
+
+def _binding_model(kind: str, binding: object) -> type[_Strict]:
+    if kind == KIND_CONSENT and isinstance(binding, dict) and "confirmation" in binding:
+        return SingleApprovalConsentBinding
+    return _BINDINGS[kind]
+
+
+def is_single_approval(subject: "Subject") -> bool:
+    """Whether ``subject`` is an H2 the run's pinned config decides by one approval."""
+    return subject.kind == KIND_CONSENT and subject.binding.get("confirmation") == SINGLE_APPROVAL
 
 
 class Decision(_Strict):
@@ -214,12 +282,15 @@ def parse_decision(data: bytes, label: str) -> Decision:
     document = _strict_json_object(data, label)
     try:
         decision = Decision.model_validate(document)
-        _BINDINGS[decision.kind].model_validate(decision.binding)
+        _binding_model(decision.kind, decision.binding).model_validate(decision.binding)
     except ValidationError:
         raise TaskRefused(f"{label} is not a valid {DECISION_SCHEMA_VERSION} record.") from None
     _aware(decision.recorded_at, f"{label} recorded_at")
     _check_account(decision.account)
-    for value in (decision.project_config_sha256, decision.presented.sha256):
+    digests = [decision.project_config_sha256, decision.presented.sha256]
+    if "presented_screen_sha256" in decision.binding:
+        digests.append(decision.binding["presented_screen_sha256"])
+    for value in digests:
         if not _HEX64.fullmatch(value):
             raise TaskRefused(f"{label} carries a malformed digest.")
     return decision
@@ -371,6 +442,21 @@ def consent_subject(task: TaskRecord, rnd: Round, authorization_path: str) -> Su
         "source_sha256": bound.source_sha256,
         "source_bytes": bound.source_bytes,
     }
+    # P0-UX-H2-SIMPLE: the mode and the destination come from the run's pinned
+    # project config (checked against task.json's digest), never from a record.
+    pinned = pinned_project(task).supervised_implementer.endpoint
+    if pinned is not None:
+        binding = {
+            **binding,
+            "candidate": bound.candidate,
+            "confirmation": SINGLE_APPROVAL,
+            "endpoint_source": PINNED_ENDPOINT_SOURCE,
+            "endpoint_scheme": pinned.scheme,
+            "endpoint_host": pinned.host,
+            "endpoint_port": pinned.port,
+            "endpoint_base_path": pinned.base_path,
+            "transport_tls": pinned.scheme == "https",
+        }
     return Subject(
         KIND_CONSENT,
         rnd,
@@ -403,6 +489,11 @@ def _build_record(task: TaskRecord, subject: Subject, decision: str, now: dateti
 def record_decision(task: TaskRecord, subject: Subject, decision: str, *, now: datetime, account: str, answers: dict | None = None) -> str:
     """Write the one decision record for ``subject``. Write-once."""
     answers = dict(answers or {})
+    if is_single_approval(subject) and not answers:
+        raise TaskRefused(
+            "a single-approval H2 decision needs the environment check and the presented "
+            "screen. Nothing was recorded."
+        )
     if subject.kind == KIND_CONSENT and not answers:
         answers = {
             "endpoint_scheme": None,
@@ -439,7 +530,9 @@ def _check_consistent(task: TaskRecord, subject: Subject, decision: Decision, no
             "than the file holds now. The decision is stale and is refused."
         )
     binding = dict(decision.binding)
-    answers = {name: binding.pop(name) for name in _CONSENT_ANSWER_FIELDS if name in binding}
+    single = is_single_approval(subject)
+    answer_fields = _SINGLE_ANSWER_FIELDS if single else _CONSENT_ANSWER_FIELDS
+    answers = {name: binding.pop(name) for name in answer_fields if name in binding}
     if _canonical(binding) != _canonical(subject.binding):
         raise TaskRefused(f"{label} binds different data than this run now holds. It is refused.")
     recorded = _aware(decision.recorded_at, f"{label} recorded_at")
@@ -451,6 +544,22 @@ def _check_consistent(task: TaskRecord, subject: Subject, decision: Decision, no
     expires = _aware(subject.binding["expires_at"], "expires_at")
     if not prepared <= recorded <= expires:
         raise TaskRefused(f"{label} was not recorded while its authorization was valid. It is refused.")
+    if single:
+        # One typed answer, approve or reject, on a screen that showed the pinned
+        # destination after the environment matched it. Nothing else is claimed.
+        screen = answers.get("presented_screen")
+        if (
+            set(answers) != set(_SINGLE_ANSWER_FIELDS)
+            or answers["endpoint_matched_environment"] is not True
+            or type(screen) is not str
+            or not screen
+            or answers["presented_screen_sha256"] != sha256_bytes(screen.encode("utf-8"))
+        ):
+            raise TaskRefused(
+                f"{label} lacks the environment match or its presented screen does not match "
+                "its digest. It is refused."
+            )
+        return
     if decision.decision == REJECT:
         if any(answers[name] not in (None, False) for name in _CONSENT_ANSWER_FIELDS):
             raise TaskRefused(f"{label} is a rejection that carries consent answers. It is refused.")
@@ -515,6 +624,15 @@ def consent_bytes(task: TaskRecord, subject: Subject, *, now: datetime) -> bytes
     if decision.decision != APPROVE:
         raise TaskRefused(f"{os.path.basename(subject.decision_path)} records a rejection. Nothing is sent.")
     binding = decision.binding
+    if is_single_approval(subject):
+        # P0-UX-H2-SIMPLE: P1B's consent schema is unchanged, so the one approval
+        # is serialized into its fixed fields: the pinned destination (from the
+        # validated binding, i.e. the pinned config) and, for http, the fixed
+        # acknowledgement phrase of the NOT TLS-ENCRYPTED risk the screen showed.
+        # The decision record, not this block, says that ONE answer was typed.
+        plaintext = binding["endpoint_scheme"] == "http"
+    else:
+        plaintext = binding["plaintext_confirmed"]
     consent = {
         "consented_by": decision.account,
         "consented_at": decision.recorded_at,
@@ -524,7 +642,7 @@ def consent_bytes(task: TaskRecord, subject: Subject, *, now: datetime) -> bytes
         "endpoint_host": binding["endpoint_host"],
         "endpoint_port": binding["endpoint_port"],
         "consent_text": CONSENT_TEXT,
-        "plaintext_acknowledgement": PLAINTEXT_ACKNOWLEDGEMENT if binding["plaintext_confirmed"] else None,
+        "plaintext_acknowledgement": PLAINTEXT_ACKNOWLEDGEMENT if plaintext else None,
     }
     data = (
         json.dumps({"bound": subject.draft["bound"], "consent": consent}, ensure_ascii=True, indent=2) + "\n"
@@ -982,6 +1100,9 @@ def render_consent(task: TaskRecord, subject: Subject, encoding: str | None, now
         f"authorization {binding['p1b_run_id']}, prepared {binding['prepared_at']}, expires "
         f"{binding['expires_at']} ({remaining} min left), single use"
     )
+    if is_single_approval(subject):
+        _add_pinned_destination(display, binding)
+        return display.text()
     if bound["allow_insecure_http"]:
         display.add(
             "This project permits plaintext HTTP. If the endpoint is http, the source will "
@@ -996,6 +1117,89 @@ def render_consent(task: TaskRecord, subject: Subject, encoding: str | None, now
         "happens only when you run task-continue with its own flags."
     )
     return display.text()
+
+
+def pinned_destination_url(binding: dict) -> str:
+    """The pinned destination as ``scheme://host:port<base_path>``, from config values only."""
+    return f"{binding['endpoint_scheme']}://{binding['endpoint_host']}:{binding['endpoint_port']}{binding['endpoint_base_path']}"
+
+
+def _add_pinned_destination(display: Display, binding: dict) -> None:
+    """P0-UX-H2-SIMPLE: the complete destination, its environment match, the TLS state."""
+    from ai_dev_orchestrator.llm.config import ENV_BASE_URL
+
+    url = pinned_destination_url(binding)
+    display.add("")
+    display.add(f"DESTINATION (pinned by the project config, {PINNED_ENDPOINT_SOURCE}):")
+    display.add(f"  {url}")
+    display.add(
+        f"  scheme {binding['endpoint_scheme']}, host {binding['endpoint_host']}, port "
+        f"{binding['endpoint_port']}, base path {binding['endpoint_base_path'] or '(none)'}"
+    )
+    display.add(f"  the one request goes to exactly {url}/chat/completions")
+    display.add(
+        f"  environment: {ENV_BASE_URL} matches this destination exactly (scheme, host, "
+        "effective port and path; checked just now, again before your answer is recorded, "
+        "and again by task-continue immediately before sending)"
+    )
+    if binding["transport_tls"]:
+        display.add("  transport: TLS (https)")
+    else:
+        display.add("  transport: NOT TLS-ENCRYPTED (plaintext http)")
+        display.add("!" * 72)
+        display.add("!!  PLAINTEXT HTTP: this source will be sent NOT TLS-ENCRYPTED.        !!")
+        display.add("!!  Anyone on the network path can read it. This is not secure.        !!")
+        display.add("!" * 72)
+    risk = ", including sending it NOT TLS-ENCRYPTED" if not binding["transport_tls"] else ""
+    display.add("")
+    display.add(
+        f"Typing 'approve' consents to this ENTIRE transmission as shown above{risk}. It is "
+        "the only confirmation. It records the decision only and sends nothing: the "
+        "transmission happens only when you run task-continue --transmit-approved-source "
+        "--real-implementer, within the authorization's validity."
+    )
+
+
+def check_pinned_environment(subject: Subject, read_base_url: Callable[[], object]) -> None:
+    """P0-UX-H2-SIMPLE: the environment must resolve to the pinned destination.
+
+    Reads exactly one environment value, the implementer base URL (never a key),
+    and applies P1B's own rules: ``check_live_endpoint`` and the full pinned
+    comparison ``check_pinned_endpoint``, which the run repeats before sending.
+    The authority is the pinned config, never the value being checked. The URL
+    is never displayed.
+    """
+    from ai_dev_orchestrator.models import ControlledReviewEndpointConfig
+    from ai_dev_orchestrator.supervised_implementer.live import check_live_endpoint, check_pinned_endpoint
+    from ai_dev_orchestrator.supervised_implementer.models import SupervisedImplementerRefused
+
+    binding = subject.binding
+    pinned = ControlledReviewEndpointConfig(
+        scheme=binding["endpoint_scheme"],
+        host=binding["endpoint_host"],
+        port=binding["endpoint_port"],
+        base_path=binding["endpoint_base_path"],
+    )
+    base_url = read_base_url()
+    if base_url is None:
+        raise TaskRefused("the implementer base URL is not set in the environment. Nothing was recorded.")
+    try:
+        check_live_endpoint(base_url, allow_insecure_http=subject.draft["bound"]["allow_insecure_http"])
+        check_pinned_endpoint(base_url, pinned)
+    except SupervisedImplementerRefused as exc:
+        raise TaskRefused(
+            f"the environment does not resolve to the pinned implementer destination: {exc} "
+            "Fix the environment, or the project config in a new task. Nothing was recorded."
+        ) from None
+
+
+def single_approval_answers(subject: Subject, screen: str) -> dict:
+    """The answer fields of a single-approval H2: the observation and what was shown."""
+    return {
+        "endpoint_matched_environment": True,
+        "presented_screen_sha256": sha256_bytes(screen.encode("utf-8")),
+        "presented_screen": screen,
+    }
 
 
 # -- the interaction ----------------------------------------------------------------------------

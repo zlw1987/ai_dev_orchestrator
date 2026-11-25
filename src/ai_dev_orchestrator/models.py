@@ -43,6 +43,20 @@ def omit_default_output_envelope(
     return data
 
 
+def omit_absent_implementer_endpoint(data: dict, value: object) -> dict:
+    """Drop ``endpoint`` from a serialized supervised-implementer block when absent.
+
+    P0-UX-H2-SIMPLE, by the same rule as :func:`omit_default_output_envelope`:
+    a config without a pinned implementer endpoint serializes byte-identically
+    to its pre-amendment form, so the P1B project-config digest, and every
+    authorization binding derived from it, is unchanged. A pinned endpoint is
+    always serialized, so the digest binds it.
+    """
+    if value is None:
+        data.pop("endpoint", None)
+    return data
+
+
 class _Strict(BaseModel):
     """Base model that rejects unknown fields, so typos fail loudly."""
 
@@ -823,8 +837,9 @@ class SupervisedImplementerConfig(BaseModel):
     The block is ``strict`` (``"yes"`` is not ``true``, and ``1`` is not a
     string) and ``frozen``. It fails closed by construction: an absent block is
     identical to a disabled one. It deliberately has **no field** for an
-    endpoint, base URL, API key or environment-variable name (connection details
-    stay out of project config), a prompt, a retry count, a fallback model, a
+    endpoint value, base URL, API key or environment-variable name (connection
+    details stay out of project config; P0-UX-H2-SIMPLE's ``endpoint`` below
+    only authorizes the environment's value), a prompt, a retry count, a fallback model, a
     second candidate, a protected-path override, or a multi-file switch.
 
     ``candidate`` and ``model`` are both required and must agree **exactly**
@@ -834,6 +849,16 @@ class SupervisedImplementerConfig(BaseModel):
     any other model (or ``SUP-M3`` with anything but ``minimax-m3``) is refused,
     so no candidate can be silently substituted. P0-MODEL-1 appended ``SUP-M3``;
     it is selected only by naming it here, never by fallback.
+
+    P0-UX-H2-SIMPLE added one field, ``endpoint``: the ONE implementer
+    destination (scheme, host, explicit port, base path) the project
+    authorizes, in the same representation as ``controlled_review.endpoint``.
+    Like that block it is an AUTHORIZATION, not a connection setting: the base
+    URL still comes only from ``AIDO_LITELLM_BASE_URL``, which must match it
+    exactly. Its presence is the opt-in to the single-approval H2: the human
+    sees the pinned destination and types ``approve`` once, instead of typing
+    the endpoint, ``transmit`` and ``plaintext``. Absent (the default), H2 and
+    the serialized config are exactly as before.
     """
 
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
@@ -925,6 +950,20 @@ class SupervisedImplementerConfig(BaseModel):
         "never treated as unused. It holds no source text and no credential.",
     )
 
+    # P0-UX-H2-SIMPLE. Absent means the typed-confirmation H2 (PO-UX-1/2), and a
+    # config that leaves it absent serializes exactly as before.
+    endpoint: ControlledReviewEndpointConfig | None = Field(
+        default=None,
+        description="P0-UX-H2-SIMPLE. The one implementer destination this "
+        "project authorizes (scheme, host, explicit port, base path), in the "
+        "controlled_review.endpoint representation. Present: H2 is one informed "
+        "'approve' on a screen showing this destination, and every live run "
+        "refuses unless AIDO_LITELLM_BASE_URL matches it exactly (scheme, host, "
+        "effective port and path), both when consent is recorded and again "
+        "before transmission. Absent (default): the typed H2 is unchanged. It "
+        "holds no credential and no base URL string.",
+    )
+
     @field_validator("max_output_tokens", mode="before")
     @classmethod
     def _check_max_output_tokens(cls, value: object) -> object:
@@ -934,7 +973,8 @@ class SupervisedImplementerConfig(BaseModel):
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict:
-        return omit_default_output_envelope(handler(self), self.output_envelope)
+        data = omit_default_output_envelope(handler(self), self.output_envelope)
+        return omit_absent_implementer_endpoint(data, self.endpoint)
 
 
 class ProjectConfig(_Strict):
