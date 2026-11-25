@@ -42,7 +42,7 @@ from ai_dev_orchestrator.review import (
     REVIEWER_ATTEMPT_THREAD_NAME,
     ReviewPacket,
 )
-from review_fixtures import DIFF_MARKER, TARGET, UNCHANGED_MARKER, UNRELATED_MARKER
+from review_fixtures import assert_preserved_verification_only, DIFF_MARKER, TARGET, UNCHANGED_MARKER, UNRELATED_MARKER
 from test_cli_l2_review_approved_file_edit import (
     CHANGES_REQUESTED_JSON,
     ENDPOINT_LINES,
@@ -207,7 +207,7 @@ def test_a_timeout_costs_exactly_one_request_even_with_compact_retry_enabled(
     assert len(seen) == 1, seen
 
     captured = capsys.readouterr()
-    assert captured.out == ""
+    assert_preserved_verification_only(captured.out)
 
     err = captured.err
     assert "=== REVIEW STALLED ===" in err
@@ -369,7 +369,7 @@ def test_unusable_then_timeout_costs_two_requests_then_unavailable(tmp_path, cap
     assert len(seen) == 2
 
     captured = capsys.readouterr()
-    assert captured.out == ""
+    assert_preserved_verification_only(captured.out)
     assert "REVIEW UNUSABLE — compact retry authorized" in captured.err
     assert "=== REVIEW STALLED ===" in captured.err
     assert "REVIEWER UNAVAILABLE FOR THIS REVIEW" in captured.err
@@ -454,7 +454,7 @@ def test_a_retry_with_more_than_five_findings_is_unusable_with_no_third_request(
     assert len(seen) == 2
 
     captured = capsys.readouterr()
-    assert captured.out == ""
+    assert_preserved_verification_only(captured.out)
     assert "review_retry_finding_cap_exceeded" in captured.err
 
 

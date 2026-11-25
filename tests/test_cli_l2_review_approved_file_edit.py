@@ -47,6 +47,7 @@ from ai_dev_orchestrator.review import (
     ReviewPacket,
 )
 from review_fixtures import (
+    assert_preserved_verification_only,
     APPROVER,
     DIFF_MARKER,
     ISSUE_NUMBER,
@@ -1107,7 +1108,7 @@ def test_a_bad_reviewer_reply_exits_four_without_a_second_request(
     # No re-prompt, no re-review: exactly one semantic request was ever made.
     assert len(seen) == 1
     captured = capsys.readouterr()
-    assert captured.out == ""
+    assert_preserved_verification_only(captured.out)
     assert "reviewer" in captured.err.lower()
 
 

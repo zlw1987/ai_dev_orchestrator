@@ -472,9 +472,11 @@ def read_review_claim(data: bytes) -> ReviewClaimFacts:
     - a bare ``verification-result.v1`` supporting ``verification-failed``
       (exit 2) or ``workspace-state-untrusted`` (exit 3).
 
-    Anything else is refused: a bare ``verified`` report (the command never
-    prints one), a contradiction inside a packet, an unsupported outcome, a
-    second document, or empty stdout (exits 1 and 4 print nothing on stdout).
+    Anything else is refused: a bare ``verified`` report (since
+    P0-STABILIZATION FU-A exit 4 prints one, the report of a verification
+    that passed before the reviewer stage failed; it is not a review claim), a
+    contradiction inside a packet, an unsupported outcome, a second document,
+    or empty stdout (exit 1 prints nothing on stdout).
     What it returns is what the execution identity **claims**.
     """
     document = strict_json_object(data, MAX_REVIEW_CLAIM_BYTES, "review claim")
@@ -484,7 +486,7 @@ def read_review_claim(data: bytes) -> ReviewClaimFacts:
             document, "the verification report")
         if outcome == "verified":
             raise ClaimReadError(
-                "unexpected_shape", "a bare verified report is not a shape the review command prints."
+                "unexpected_shape", "a bare verified report (exit 4, the reviewer stage failed) is not a review claim."
             )
         shape = next(name for name, value in REVIEW_CLAIM_OUTCOMES.items() if value == outcome)
         return ReviewClaimFacts(shape, outcome, path, size, approved_by, approved_at, identity, None)

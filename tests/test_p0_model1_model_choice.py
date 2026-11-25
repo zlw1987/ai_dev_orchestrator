@@ -34,6 +34,7 @@ import sys
 
 import httpx
 import pytest
+from review_fixtures import assert_preserved_verification_only
 import yaml
 from pydantic import ValidationError
 
@@ -418,7 +419,8 @@ class TestReviewer:
         )
         assert code == 4
         assert len(seen) == 1 and seen[0]["model"] == M3_MODEL
-        assert capsys.readouterr().out == ""
+        # FU-A: exit 4 keeps the verified report on stdout; still no packet.
+        assert_preserved_verification_only(capsys.readouterr().out)
 
 
 # -- 5. the task coordinator, end to end, with role pairings --------------------------------

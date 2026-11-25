@@ -29,6 +29,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from review_fixtures import assert_preserved_verification_only
 
 from ai_dev_orchestrator.llm.client import LLMClient
 from ai_dev_orchestrator.llm.models import LLMClientConfig
@@ -451,7 +452,8 @@ def test_a_mismatched_environment_url_is_refused_after_verification(
     assert reads == ["litellm"]
     assert built == []
     captured = capsys.readouterr()
-    assert captured.out == ""
+    # FU-A: exit 4 keeps the verified report on stdout; still no packet.
+    assert_preserved_verification_only(captured.out)
     assert "reviewer-egress-refused" in captured.err
     assert "refused before it reached any network transport" in captured.err
     assert base_url not in captured.err
@@ -539,7 +541,8 @@ def test_a_post_validation_mutation_is_refused_at_the_transport(
     assert code == 4
     assert inner_calls == []
     captured = capsys.readouterr()
-    assert captured.out == ""
+    # FU-A: exit 4 keeps the verified report on stdout; still no packet.
+    assert_preserved_verification_only(captured.out)
     assert "reviewer-egress-refused" in captured.err
     assert MISMATCHED_BASE_URL not in captured.err
 

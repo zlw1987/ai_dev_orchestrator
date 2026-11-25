@@ -165,6 +165,7 @@ from ai_dev_orchestrator.supervised_implementer.models import (
 )
 from ai_dev_orchestrator.supervised_implementer.correction import (
     CorrectionInput,
+    correction_mentions_local_path,
     correction_mentions_workspace,
 )
 from ai_dev_orchestrator.supervised_implementer.request import (
@@ -586,6 +587,18 @@ def _check_correction(
         raise _refuse(
             "correction_contains_workspace_path",
             "the correction data still names the workspace path. Nothing was sent.",
+        )
+    verification = project.controlled_verification
+    if correction_mentions_local_path(
+        correction,
+        project.repo.workspace_path,
+        verification.executable,
+        tuple(verification.args),
+    ):
+        raise _refuse(
+            "correction_contains_local_path",
+            "the correction data still names a configured verification "
+            "directory or user-profile path. Nothing was sent.",
         )
 
 

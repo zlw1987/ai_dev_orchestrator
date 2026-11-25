@@ -421,3 +421,24 @@ def verification_report(
             "next_step": NEXT_STEP_REQUIRES_HUMAN_REVIEW,
         }
     )
+
+
+def assert_preserved_verification_only(stdout: str) -> dict:
+    """P0-STABILIZATION FU-A: an exit-4 stdout is the verified report, never a packet.
+
+    Since FU-A a reviewer-stage failure after a passed verification prints the
+    verifier's own report on stdout (exactly as exit 2 and 3 do). It must parse
+    as a ``verification-result.v1`` report with outcome ``verified`` and must
+    not be, or contain, a review packet.
+    """
+    import json as _json
+
+    from ai_dev_orchestrator.verification import VerificationResultReport
+
+    document = _json.loads(stdout)
+    report = VerificationResultReport.model_validate(document)
+    assert report.outcome == "verified"
+    assert report.execution.passed is True
+    assert "review" not in document and "reviewer" not in document
+    assert "review-packet" not in stdout
+    return document

@@ -940,6 +940,7 @@ def run_controlled_review(
     on_before_model_call: Callable[[ReviewerCallNotice], None] | None = None,
     on_supervision_event: Callable[[ReviewSupervisionEvent], None] | None = None,
     monotonic: Callable[[], float] | None = None,
+    on_verification_passed: Callable[[VerificationResultReport], None] | None = None,
 ) -> ControlledReviewOutcome:
     """Verify one applied approved change, then review it — in that order.
 
@@ -987,6 +988,16 @@ def run_controlled_review(
         monotonic: Optional injected monotonic clock for attempt timing, so unit
             tests can assert durations deterministically. It measures AIDO's own
             wait and is never presented as backend inference time.
+        on_verification_passed: Optional callback (P0-STABILIZATION FU-A),
+            invoked exactly once with the verifier's own
+            :class:`VerificationResultReport` object — the one this function
+            embeds in a packet — as soon as it returns ``verified`` and BEFORE
+            ``read_env`` is called. It lets a caller keep that original report
+            when the reviewer stage later fails, so the verification evidence
+            does not depend on the reviewer producing a packet. The callback
+            receives no credential, endpoint, prompt or model output: none
+            exists in this process yet. It is not called for any other
+            verification outcome (those are returned in the outcome anyway).
 
     Returns:
         A :class:`ControlledReviewOutcome`. A ``packet`` of ``None`` means a
@@ -1036,6 +1047,13 @@ def run_controlled_review(
     #    preserves its exit semantics.
     if verification.outcome != "verified":
         return ControlledReviewOutcome(verification=verification, packet=None)
+
+    # 3a. P0-STABILIZATION FU-A. Hand the verifier's own report to the caller
+    #     now, before any reviewer step can fail, so a stalled, refused or
+    #     unusable review can no longer take the verification evidence with it.
+    #     Still before the environment read: no reviewer credential exists yet.
+    if on_verification_passed is not None:
+        on_verification_passed(verification)
 
     # 4. Only now may reviewer credentials enter this process — and only the
     #    configured provider's names. The provider is handed to the reader, which

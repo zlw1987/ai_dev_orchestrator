@@ -442,8 +442,18 @@ def checked_correction_evidence(task: TaskRecord, reviewed: _Reviewed) -> Correc
     return evidence
 
 
-def correction_input(evidence: CorrectionEvidence, workspace_path: str):
-    """The in-memory transmission copy for round 2. Never written over evidence."""
+def correction_input(evidence: CorrectionEvidence, project):
+    """The in-memory transmission copy for round 2. Never written over evidence.
+
+    ``project`` is the run's pinned :class:`~ai_dev_orchestrator.models.ProjectConfig`.
+    FU-B: besides ``repo.workspace_path``, its ``controlled_verification``
+    executable and args are passed to the scrubber, so the copy also replaces
+    those directories and their user-profile roots. It takes the whole config,
+    not loose paths, so no caller can derive a copy without them. The prepare
+    and the run boundary both call this with the same pinned config, so both
+    derive the same request; ``40-correction.json`` pins the RAW evidence, not
+    this copy, so a begun correction stays valid.
+    """
     from pydantic import ValidationError
 
     from ai_dev_orchestrator.supervised_implementer.correction import (
@@ -458,7 +468,9 @@ def correction_input(evidence: CorrectionEvidence, workspace_path: str):
             previous_approved_diff=evidence.previous_approved_diff,
             verification=evidence.verification,
             review=evidence.review,
-            workspace_path=workspace_path,
+            workspace_path=project.repo.workspace_path,
+            verification_executable=project.controlled_verification.executable,
+            verification_args=tuple(project.controlled_verification.args),
         )
     except ValidationError:
         raise _refuse("the round-1 evidence does not form a valid correction.") from None

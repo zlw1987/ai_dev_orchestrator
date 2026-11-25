@@ -422,10 +422,17 @@ def test_the_reader_classifies_every_frozen_stdout_shape(tmp_path: Path, review_
 def test_exits_1_and_4_print_no_claim(tmp_path: Path, review_env, name, flags, fail) -> None:
     review_env.fail = fail
     data = _frozen_stdout(tmp_path, review_env, PASSING, flags=flags)
-    assert data == b""
     with pytest.raises(ClaimReadError) as raised:
         claim_readers.read_review_claim(data)
-    assert raised.value.category == "empty"
+    if fail:
+        # P0-STABILIZATION FU-A: exit 4 now prints the bare verified report it
+        # produced before the reviewer failed. The reader still refuses it, so
+        # exit 4 still yields no claim (fail closed), only under another category.
+        assert json.loads(data)["outcome"] == "verified"
+        assert raised.value.category == "unexpected_shape"
+    else:
+        assert data == b""
+        assert raised.value.category == "empty"
 
 
 def _mutated(data: bytes, mutate) -> bytes:

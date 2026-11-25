@@ -370,8 +370,11 @@ trusted-operator storage.
   authorization bytes, or it is `round2_evidence_inconsistent`.
 - The transmission copy is redacted with the shared secret-like redactor and
   has literal workspace-path spellings replaced by `<workspace>`; P1B refuses
-  a correction that still names the workspace. The original evidence is never
-  modified. Redaction is a backstop, not a guarantee.
+  a correction that still names the workspace. Since P0-STABILIZATION FU-B
+  (§12) it also replaces the configured verification executable and argument
+  directories and their user-profile root, and P1B also refuses a copy that
+  still names one (`correction_contains_local_path`). The original evidence is
+  never modified. Redaction is a backstop, not a guarantee.
 - Round 2's records have their own names (`50-`, `60-`, `61-`, `-r2` steps,
   `summary-r2.txt`). A frozen diff approval is re-checked against its own
   round's draft on every use, so a round-1 approval cannot authorize the
@@ -584,3 +587,96 @@ Offline tests: `tests/test_task_approve_single_h2.py`, alongside the unchanged
 - A malformed pin is refused with the shared validator's
   `controlled_review.endpoint` wording; the error location names
   `supervised_implementer.endpoint`.
+
+## 12. P0-STABILIZATION-FINAL — verification evidence and correction paths
+
+Two reliability fixes observed in P0-M3-LIVE-1 round 2. Both are prospective;
+no historical record changes meaning. Policy §15 records them.
+
+### 12.1 FU-A — verification evidence survives a reviewer failure
+
+**Root cause.** `run_controlled_review` returned the verification report only
+inside a review packet, or alone for a non-`verified` outcome. When the
+reviewer stage failed after verification passed (a stall, a transport or
+provider error, an unusable or malformed reply, an egress refusal), it raised
+`ReviewerStageError` and the CLI exited 4 with an empty stdout, so the report
+AIDO had just produced was discarded. The coordinator recorded that empty
+stdout as `steps/NN-review.exit-4.stdout`.
+
+**Fix.** `run_controlled_review` takes an optional `on_verification_passed`
+callback. It is called once with the verifier's own report object, as soon as
+the verifier returns `verified` and before the reviewer environment is read,
+so no credential exists when it runs. `l2-review-approved-file-edit` keeps that
+object and, on exit 4, prints it on stdout exactly as exit 2 and exit 3
+already print theirs (`verification-result.v1`, the same serializer), followed
+on stderr by `VERIFICATION EVIDENCE PRESERVED ... It is NOT a review packet`.
+An unexpected exception after verification still propagates unchanged; the
+report is printed first.
+
+The stdout contract is therefore one rule: **exit 0 → a review packet; exit 2,
+3 or 4 → the verification-result report of the verification that ran; exit 1 →
+nothing.** A successful-packet consumer is unaffected, and a reader must still
+use the exit code: exit 4 is never a review.
+
+**In the coordinator.** The exit-4 step record now holds that report
+byte-exact. Stage derivation and every action are unchanged: round 1 exit 4 is
+still `review_pending` (retry with the review flags only, no correction offer)
+and round 2 exit 4 is still the terminal `round2_review_failed`. The stage
+message now says whether the record holds a report attributable to that
+attempt: it must follow the round's successful write (round 2: and match its
+integrity record), parse, say `verified`, name the round's frozen diff
+approval and target, match the write report's post-image size, and record a
+re-established workspace state. A record from an AIDO before FU-A (empty
+stdout), or one that fails a check, is reported as not attributable, never as
+evidence.
+
+The report itself carries no digests, by 5F2D design ("identities matched,
+not what they were"). Attribution to the exact approved diff and post-image is
+through the frozen approval it names, the write report beside it and the
+verifier's own pre- and post-execution post-image proof; attribution to the
+attempt is the step record's sequence (and, in round 2, its integrity and
+begun-attempt records).
+
+### 12.2 FU-B — configured local paths removed from the correction copy
+
+**Root cause.** The round-2 transmission copy replaced only spellings of
+`repo.workspace_path`. The verification script is configured OUTSIDE the
+workspace, so every traceback frame naming it (13 in P0-M3-LIVE-1) went out
+with its absolute path, including the Windows account name.
+
+**Fix.** `build_correction_input` also receives the pinned config's
+`controlled_verification.executable` and `args`. `local_path_redaction_table`
+derives, from trusted config only (no environment, no scrubbed text):
+
+| Replaced | Placeholder |
+|---|---|
+| the workspace path (unchanged) | `<workspace>` |
+| the directory of the configured verification executable | `<verification-executable-dir>` |
+| the directory of each drive-absolute argument, or of a `--name=<path>` value, unless inside the workspace | `<verification-arg-dir>` |
+| the `X:\Users\<account>` root of any of those paths | `<user-profile>` |
+
+Each in its backslash, forward-slash and doubled-backslash spelling, of both
+its `abspath` and `realpath`, matched case-insensitively, longest first. Only
+directories are replaced, so file names, relative paths, line numbers, test
+names, inputs and exception messages remain. Drive roots and `X:\Users`
+itself are never replaced. The copy now carries
+`supervised-implementer-correction.v2` with a `local_path_replacements` count,
+and its `redaction_note` reports all three counts. P1B's prepare and run
+boundary refuse a copy that still contains any of these spellings
+(`correction_contains_local_path`).
+
+`task_correction.correction_input` takes the pinned `ProjectConfig` itself, so
+prepare and run derive the same copy. `40-correction.json` pins the RAW
+evidence, so a begun correction stays valid. A round-2 authorization prepared
+under the old derivation binds a different `request_sha256`; P1B refuses it as
+`authorization_mismatch` before consumption and nothing is sent; the human
+re-prepares and consents again.
+
+**Not claimed.** This is a configuration-derived backstop, not data-loss
+prevention. A path the config does not name and that is not under a named
+profile root (another drive, an 8.3 short name such as `NAME~1`, a temp
+directory outside the profile, a UNC path), a bare account name, and anything
+in the reviewer request (5F2E, unchanged) pass through. The transmitted
+material is never claimed to be secret-free.
+
+Offline tests: `tests/test_p0_stabilization_final.py`.

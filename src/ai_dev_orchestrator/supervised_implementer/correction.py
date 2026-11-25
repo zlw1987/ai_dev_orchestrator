@@ -25,7 +25,10 @@ it against what it observes at both the prepare and the run boundary, so a
 correction can only ever be sent against the exact baseline it was built from.
 
 Redaction is the repository's shared secret-like backstop plus a literal
-replacement of the configured workspace path. Neither guarantees that the
+replacement of configured local paths: the workspace path, and since
+P0-STABILIZATION FU-B the directories of the configured verification
+executable and of absolute verification arguments (the external test script),
+plus the user-profile root those paths sit under. Neither guarantees that the
 transmitted material is secret-free, and nothing here claims so.
 """
 
@@ -47,7 +50,9 @@ from pydantic import (
 
 from ai_dev_orchestrator.redaction import redact_secret_like_text
 
-CORRECTION_SCHEMA_VERSION = "supervised-implementer-correction.v1"
+# v2 (P0-STABILIZATION FU-B): adds ``local_path_replacements``; the transmission
+# copy now also replaces configured verification directories and profile roots.
+CORRECTION_SCHEMA_VERSION = "supervised-implementer-correction.v2"
 CORRECTION_ROUND = 2
 WORKSPACE_PLACEHOLDER = "<workspace>"
 
@@ -131,6 +136,8 @@ class CorrectionInput(_Frozen):
     review: CorrectionReview | None
     redaction_count: Annotated[StrictInt, AfterValidator(_non_negative)]
     workspace_path_replacements: Annotated[StrictInt, AfterValidator(_non_negative)]
+    #: FU-B: verification executable/argument directories and user-profile roots.
+    local_path_replacements: Annotated[StrictInt, AfterValidator(_non_negative)]
 
     @model_validator(mode="after")
     def _reason_matches_evidence(self) -> CorrectionInput:
@@ -190,10 +197,12 @@ class CorrectionInput(_Frozen):
             },
             "untrusted_reviewer_findings": None,
             "redaction_note": (
-                f"{self.redaction_count} secret-like substring(s) and "
+                f"{self.redaction_count} secret-like substring(s), "
                 f"{self.workspace_path_replacements} workspace path occurrence(s) "
-                "were replaced in this object before transmission. Redaction is "
-                "a backstop, not a guarantee."
+                f"and {self.local_path_replacements} other configured local path "
+                "occurrence(s) (verification executable or argument directories, "
+                "user-profile roots) were replaced in this object before "
+                "transmission. Redaction is a backstop, not a guarantee."
             ),
         }
         if self.review is not None:
@@ -235,32 +244,163 @@ class CorrectionInput(_Frozen):
 # -- building one, from values the caller read out of recorded evidence ---------
 
 
-def workspace_path_variants(workspace_path: str) -> tuple[str, ...]:
-    """Spellings of the workspace path that output text commonly contains."""
+def _path_spellings(path: str) -> set[str]:
+    """The spellings of one absolute path that output text commonly contains.
+
+    Its ``abspath`` and ``realpath`` forms, each with backslashes, forward
+    slashes, and doubled backslashes (a Python ``repr`` or a JSON string).
+    Matching is case-insensitive at the call site, which covers drive-letter
+    and directory-name case differences.
+    """
     variants: set[str] = set()
-    for base in (os.path.abspath(workspace_path), os.path.realpath(workspace_path)):
+    for base in (os.path.abspath(path), os.path.realpath(path)):
         base = base.rstrip("\\/")
         if not base:
             continue
         variants.add(base)
         variants.add(base.replace("\\", "/"))
         variants.add(base.replace("\\", "\\\\"))
-    return tuple(sorted(variants, key=len, reverse=True))
+    return variants
+
+
+def workspace_path_variants(workspace_path: str) -> tuple[str, ...]:
+    """Spellings of the workspace path that output text commonly contains."""
+    return tuple(sorted(_path_spellings(workspace_path), key=len, reverse=True))
+
+
+# -- P0-STABILIZATION FU-B: machine-specific paths from trusted verification config ----
+
+VERIFICATION_EXECUTABLE_DIR_PLACEHOLDER = "<verification-executable-dir>"
+VERIFICATION_ARG_DIR_PLACEHOLDER = "<verification-arg-dir>"
+USER_PROFILE_PLACEHOLDER = "<user-profile>"
+
+_DRIVE_ABSOLUTE_RE = re.compile(r"^[A-Za-z]:[\\/]")
+# A profile root is only taken from a path BELOW it (``X:\Users\<account>\...``),
+# so a file sitting directly in ``X:\Users`` is not mistaken for an account.
+_PROFILE_ROOT_RE = re.compile(r"^([A-Za-z]:\\Users\\[^\\]+)\\", re.IGNORECASE)
+
+
+def _is_drive_absolute(value: str) -> bool:
+    return bool(_DRIVE_ABSOLUTE_RE.match(value))
+
+
+def _same_or_under(candidate: str, root: str) -> bool:
+    candidate, root = os.path.normcase(candidate), os.path.normcase(root)
+    return candidate == root or candidate.startswith(root.rstrip("\\") + "\\")
+
+
+def _usable_directory(directory: str) -> bool:
+    """False for a directory too general to replace: a drive root or ``X:\\Users``.
+
+    Replacing either would rewrite every unrelated absolute path in the text,
+    and replacing ``X:\\Users`` would keep the account-name component that
+    follows it. The profile root rule below covers what lies under it.
+    """
+    normalized = os.path.normpath(directory).rstrip("\\")
+    drive, rest = os.path.splitdrive(normalized)
+    parts = [part for part in rest.split("\\") if part]
+    if not drive or not parts:
+        return False
+    return not (len(parts) == 1 and parts[0].casefold() == "users")
+
+
+def _verification_arg_paths(arg: str) -> list[str]:
+    """The drive-absolute path an argument names: the whole argument or ``--x=<path>``."""
+    found = []
+    if _is_drive_absolute(arg):
+        found.append(arg)
+    elif arg.startswith("-") and "=" in arg:
+        value = arg.split("=", 1)[1]
+        if _is_drive_absolute(value):
+            found.append(value)
+    return found
+
+
+def local_path_redaction_table(
+    workspace_path: str,
+    verification_executable: str | None = None,
+    verification_args: tuple[str, ...] | list[str] = (),
+) -> tuple[tuple[str, str], ...]:
+    """Every ``(spelling, placeholder)`` the transmission copy replaces, longest first.
+
+    Derived only from trusted configuration, never from the text being
+    scrubbed and never from the environment:
+
+    - the workspace path → ``<workspace>`` (unchanged since ALPHA-2B-T1);
+    - the DIRECTORY of the configured verification executable →
+      ``<verification-executable-dir>``;
+    - the DIRECTORY of each drive-absolute verification argument (the whole
+      argument, or the value of ``--name=<path>``) → ``<verification-arg-dir>``,
+      unless it is inside the workspace, where ``<workspace>\\...`` already
+      keeps the relative path;
+    - the user-profile root (``X:\\Users\\<account>``) of any of those paths →
+      ``<user-profile>``, so the account name does not survive in sibling
+      paths such as a base interpreter's or a virtual environment's
+      ``site-packages`` frames.
+
+    Only directories are replaced, so file names, relative paths and line
+    numbers stay readable (``<verification-arg-dir>\\test_semver.py", line 42``).
+    Longest spellings are replaced first, so the most specific placeholder
+    wins. Drive roots and ``X:\\Users`` itself are never replaced.
+
+    This is a narrow, configuration-derived backstop, not data-loss
+    prevention: a path the configuration does not name and that is not under
+    a named profile root (another drive, an 8.3 short name such as
+    ``LEVIN-~1``, an environment-derived temp path outside the profile)
+    passes through unchanged.
+    """
+    workspace = os.path.abspath(workspace_path)
+    entries: list[tuple[str, str]] = [(workspace, WORKSPACE_PLACEHOLDER)]
+    configured: list[str] = [workspace]
+    if verification_executable and _is_drive_absolute(verification_executable):
+        configured.append(verification_executable)
+        directory = os.path.dirname(os.path.normpath(verification_executable))
+        if _usable_directory(directory) and not _same_or_under(directory, workspace):
+            entries.append((directory, VERIFICATION_EXECUTABLE_DIR_PLACEHOLDER))
+    for arg in verification_args:
+        for path in _verification_arg_paths(arg):
+            configured.append(path)
+            directory = os.path.dirname(os.path.normpath(path))
+            if _usable_directory(directory) and not _same_or_under(directory, workspace):
+                entries.append((directory, VERIFICATION_ARG_DIR_PLACEHOLDER))
+    for path in configured:
+        for spelling in (os.path.normpath(path), os.path.realpath(path)):
+            match = _PROFILE_ROOT_RE.match(spelling)
+            if match:
+                entries.append((match.group(1), USER_PROFILE_PLACEHOLDER))
+
+    chosen: dict[str, tuple[str, str]] = {}
+    for path, placeholder in entries:  # earlier entries win a tie: workspace first
+        for spelling in _path_spellings(path):
+            chosen.setdefault(spelling.casefold(), (spelling, placeholder))
+    return tuple(sorted(chosen.values(), key=lambda item: len(item[0]), reverse=True))
 
 
 class _Scrubber:
-    def __init__(self, workspace_path: str) -> None:
+    def __init__(
+        self,
+        workspace_path: str,
+        verification_executable: str | None = None,
+        verification_args: tuple[str, ...] | list[str] = (),
+    ) -> None:
         self._patterns = [
-            re.compile(re.escape(variant), re.IGNORECASE)
-            for variant in workspace_path_variants(workspace_path)
+            (re.compile(re.escape(spelling), re.IGNORECASE), placeholder)
+            for spelling, placeholder in local_path_redaction_table(
+                workspace_path, verification_executable, verification_args
+            )
         ]
         self.redactions = 0
         self.workspace_replacements = 0
+        self.local_path_replacements = 0
 
     def text(self, value: str) -> str:
-        for pattern in self._patterns:
-            value, count = pattern.subn(WORKSPACE_PLACEHOLDER, value)
-            self.workspace_replacements += count
+        for pattern, placeholder in self._patterns:
+            # A lambda, so a placeholder is never read as a backreference template.
+            value, count = pattern.subn(lambda _match, text=placeholder: text, value)
+            if placeholder == WORKSPACE_PLACEHOLDER:
+                self.workspace_replacements += count
+            else:
+                self.local_path_replacements += count
         value, kinds = redact_secret_like_text(value)
         self.redactions += len(kinds)
         return value
@@ -274,6 +414,8 @@ def build_correction_input(
     verification: dict,
     review: dict | None,
     workspace_path: str,
+    verification_executable: str | None = None,
+    verification_args: tuple[str, ...] | list[str] = (),
 ) -> CorrectionInput:
     """Assemble the transmission copy. Every free-text value is scrubbed here.
 
@@ -281,8 +423,13 @@ def build_correction_input(
     with the RAW recorded ``output_text``; ``review`` holds ``summary`` and
     ``findings`` (each a mapping of :class:`CorrectionFinding` fields). Raises
     ``pydantic.ValidationError`` for anything outside the typed shape.
+
+    ``verification_executable`` and ``verification_args`` are the trusted
+    project config's ``controlled_verification`` values (FU-B); see
+    :func:`local_path_redaction_table` for what they add. Pure apart from
+    ``os.path.realpath``: no environment read.
     """
-    scrub = _Scrubber(workspace_path)
+    scrub = _Scrubber(workspace_path, verification_executable, verification_args)
     diff = scrub.text(previous_approved_diff)
     facts = dict(verification)
     facts["output_text"] = scrub.text(facts["output_text"])
@@ -313,6 +460,7 @@ def build_correction_input(
             "review": review_value,
             "redaction_count": scrub.redactions,
             "workspace_path_replacements": scrub.workspace_replacements,
+            "local_path_replacements": scrub.local_path_replacements,
         }
     )
 
@@ -324,4 +472,29 @@ def correction_mentions_workspace(correction: CorrectionInput, workspace_path: s
         variant in value.casefold()
         for value in correction.transmitted_strings()
         for variant in variants
+    )
+
+
+def correction_mentions_local_path(
+    correction: CorrectionInput,
+    workspace_path: str,
+    verification_executable: str | None = None,
+    verification_args: tuple[str, ...] | list[str] = (),
+) -> bool:
+    """True if any transmitted string still contains a spelling FU-B replaces.
+
+    The run-boundary check that the transmission copy holds none of the
+    configured local paths :func:`build_correction_input` removes
+    (case-insensitive). It is not a claim that no other local path remains.
+    """
+    spellings = [
+        spelling.casefold()
+        for spelling, _placeholder in local_path_redaction_table(
+            workspace_path, verification_executable, verification_args
+        )
+    ]
+    return any(
+        spelling in value.casefold()
+        for value in correction.transmitted_strings()
+        for spelling in spellings
     )

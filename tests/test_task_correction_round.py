@@ -628,7 +628,7 @@ def _library_inputs(env):
 
 def _correction(env, **baseline_overrides):
     evidence, _ = task_run.round2_context(_task(env))
-    correction = task_correction.correction_input(evidence, env.project().repo.workspace_path)
+    correction = task_correction.correction_input(evidence, env.project())
     if baseline_overrides:
         baseline = correction.baseline.model_copy(update=baseline_overrides)
         correction = correction.model_copy(update={"baseline": baseline})

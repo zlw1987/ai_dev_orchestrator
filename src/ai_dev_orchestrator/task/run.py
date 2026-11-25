@@ -976,6 +976,105 @@ def _review_pending(rnd: Round, review_record: StepRecord | None, run_dir: str, 
     )
 
 
+def preserved_verification_problem(
+    task: TaskRecord, rnd: Round, apply_record: StepRecord, review_record: StepRecord
+) -> str | None:
+    """Why an exit-4 review record holds no verification report of THIS round, or None.
+
+    P0-STABILIZATION FU-A. Since FU-A, a review step that exits 4 (the reviewer
+    stage failed after verification passed) prints the verifier's own
+    ``verified`` report on stdout, so it is recorded byte-exact in the step's
+    ``.stdout`` file. This checks, from recorded files only and with the
+    accepted parsers, that the report is attributable to this round's attempt:
+    the step record follows this round's successful write (round 2: and its
+    integrity record still matches), the report parses, says ``verified``, names
+    this round's frozen diff approval and target, matches the write report's
+    post-image size, and re-established the workspace state.
+
+    Display only. It changes no stage, offers no action and never makes an
+    exit-4 record a review: no review exists for that attempt. A record made by
+    an AIDO before FU-A has an empty stdout and is reported as such.
+    """
+    from pydantic import ValidationError
+
+    from ai_dev_orchestrator.file_editing import (
+        FileEditingApprovalError,
+        WorkspaceWriteReport,
+        parse_approved_diff_proposal_artifact,
+    )
+    from ai_dev_orchestrator.verification import VerificationResultReport
+
+    try:
+        if review_record.exit_code != 4 or apply_record.exit_code != 0:
+            return "it is not a reviewer-stage failure that follows a successful write."
+        if review_record.sequence <= apply_record.sequence:
+            return "it does not follow this round's write."
+        if rnd.step_review in ROUND2_INTEGRITY_STEPS:
+            broken = step_integrity_problem(review_record)
+            if broken is not None:
+                return broken
+        stdout = _read_bytes(review_record.stdout_path, os.path.basename(review_record.stdout_path))
+        if not stdout.strip():
+            return "its stdout is empty (recorded by an AIDO version before FU-A)."
+        try:
+            report = VerificationResultReport.model_validate_json(stdout)
+            write = WorkspaceWriteReport.model_validate_json(
+                _read_bytes(apply_record.stdout_path, "the write report")
+            )
+            artifact = parse_approved_diff_proposal_artifact(
+                _read_bytes(task.path(rnd.diff_approved_file), rnd.diff_approved_file).decode("utf-8")
+            )
+        except (ValidationError, FileEditingApprovalError, UnicodeDecodeError):
+            return "its stdout, the write report or the frozen diff approval does not parse."
+        approval = artifact.approval
+        identity = (
+            (report.approved_by, approval.approved_by),
+            (report.approved_at, approval.approved_at),
+            (report.project_id, artifact.project_id),
+            (report.repo, artifact.repo),
+            (report.issue_number, artifact.issue_number),
+            (report.title, artifact.title),
+        )
+        if any(left != right for left, right in identity):
+            return f"its report does not name {rnd.diff_approved_file}."
+        if report.outcome != "verified":
+            return f"its report's outcome is {report.outcome!r}, not 'verified'."
+        if report.target.path != task.target_path or write.target.path != task.target_path:
+            return "its report is for a different target."
+        if report.target.post_image_bytes != write.target.post_image_bytes:
+            return "its report does not match this round's written post-image."
+        post = report.workspace_postcondition
+        if not all(
+            (
+                post.git_state_reestablished,
+                post.exact_approved_target_still_present,
+                post.exact_post_image_still_matches,
+                post.head_unchanged,
+                post.only_approved_target_git_dirty,
+                post.no_additional_git_visible_changes,
+            )
+        ):
+            return "its report does not establish a trusted workspace state."
+    except TaskRefused as exc:
+        return str(exc)
+    return None
+
+
+def _preserved_verification_note(
+    task: TaskRecord, rnd: Round, apply_record: StepRecord, review_record: StepRecord
+) -> str:
+    """The FU-A sentence for an exit-4 review record. Display only."""
+    name = os.path.basename(review_record.stdout_path)
+    problem = preserved_verification_problem(task, rnd, apply_record, review_record)
+    if problem is None:
+        return (
+            f" The verification report AIDO produced in that attempt (outcome "
+            f"'verified') is preserved unchanged in {name}; it names this round's "
+            "approved diff and written post-image. It is NOT a review."
+        )
+    return f" {name} holds no verification report attributable to this round: {problem}"
+
+
 def _derive_round(task: TaskRecord, rnd: Round, consumed: tuple[str, str]) -> Stage | _Reviewed:
     """One round, from its consumed authorization to a finished review.
 
@@ -1127,11 +1226,21 @@ def _derive_round(task: TaskRecord, rnd: Round, consumed: tuple[str, str]) -> St
             f"{os.path.basename(review_record.stderr_path)}. NO valid round-2 review exists. "
             "This was the one correction round: AIDO will not run the reviewer again "
             "for it, and offers no retry or further round. The change is written and "
-            "unreviewed. HUMAN INSPECTION IS REQUIRED. AIDO committed nothing.",
+            "unreviewed. HUMAN INSPECTION IS REQUIRED. AIDO committed nothing."
+            + (
+                _preserved_verification_note(task, rnd, apply_record, review_record)
+                if review_record.exit_code == 4
+                else ""
+            ),
             evidence_run_dir=run_dir,
         )
     if review_record is None or review_record.exit_code in (1, 4):
-        return _review_pending(rnd, review_record, run_dir)
+        note = (
+            _preserved_verification_note(task, rnd, apply_record, review_record)
+            if review_record is not None and review_record.exit_code == 4
+            else ""
+        )
+        return _review_pending(rnd, review_record, run_dir, note)
     if review_record.exit_code == 3:
         return _stage(
             rnd,

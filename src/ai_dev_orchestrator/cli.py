@@ -4198,6 +4198,13 @@ def _run_l2_review_approved_file_edit(
     # 10. Verify first, review second. The composition lives in the review
     #     package; the accepted Phase 5F2D verifier is CALLED there, not copied,
     #     and `read_env` is invoked only after it returns `verified`.
+    #
+    #     P0-STABILIZATION FU-A: the verifier's own `verified` report is handed
+    #     back here before any reviewer step runs, so a reviewer-stage failure
+    #     (exit 4) can still print it. It is the same object a packet would
+    #     embed, serialized the same way exit 2 and exit 3 print theirs; it is
+    #     never rebuilt from an exception message or a later run.
+    passed_verification: list = []
     try:
         outcome = run_controlled_review(
             approved_diff=artifact,
@@ -4206,6 +4213,7 @@ def _run_l2_review_approved_file_edit(
             network_transport_factory=network_transport_factory,
             on_before_model_call=_echo_reviewer_banner,
             on_supervision_event=_echo_supervision_event,
+            on_verification_passed=passed_verification.append,
         )
     except VerificationRefusedError as exc:
         typer.echo(f"Error: refused-before-execution: {exc}", err=True)
@@ -4222,12 +4230,25 @@ def _run_l2_review_approved_file_edit(
     except ReviewerStageError as exc:
         name = type(exc).__name__
         category = _REVIEWER_FAILURE_CATEGORIES.get(name, "reviewer failure")
+        # FU-A: the verification that passed is evidence in its own right. Its
+        # report is stdout, exactly as for exit 2 and 3; there is no packet.
+        if passed_verification:
+            _echo_json_model(passed_verification[0])
         typer.echo(
             "=== REAL REVIEWER MODEL CALL FAILED (verification had already "
             "passed) ===",
             err=True,
         )
         typer.echo(f"Error: {name}: {category}. {exc}", err=True)
+        if passed_verification:
+            typer.echo(
+                "VERIFICATION EVIDENCE PRESERVED: stdout holds the unchanged "
+                "verification-result report (outcome 'verified') that AIDO "
+                "produced before the reviewer stage failed. It is NOT a review "
+                "packet: no review packet exists for this run, and a passed "
+                "verification is not a passed review.",
+                err=True,
+            )
         # Every claim below is scoped, because by this point the unsandboxed
         # Phase 5F2D verification child has already run. An unscoped "no file was
         # written / no Git state was changed / no push happened" would be a claim
@@ -4268,6 +4289,13 @@ def _run_l2_review_approved_file_edit(
         ):
             typer.echo(line, err=True)
         raise typer.Exit(code=_REVIEW_EXIT_REVIEWER_FAILED)
+    except Exception:
+        # FU-A: an unexpected failure after verification passed keeps its exit
+        # semantics (the exception propagates unchanged), but the verification
+        # report is still printed first so it is not lost with it.
+        if passed_verification:
+            _echo_json_model(passed_verification[0])
+        raise
 
     # 11. Verification ran but did not produce a reviewable state. The Phase
     #     5F2D report is printed as-is and its exit semantics are preserved
@@ -5447,7 +5475,7 @@ def _run_task_continue(
             from ai_dev_orchestrator.task import correction as task_correction
 
             evidence, _first = task_run.round2_context(task)
-            correction = task_correction.correction_input(evidence, project.repo.workspace_path)
+            correction = task_correction.correction_input(evidence, project)
             if action == task_run.ACTION_RUN_IMPLEMENTER:
                 problem = task_correction.round2_binding_problem(
                     task_run.authorization_paths(task, rnd)[-1], evidence.round1_bound

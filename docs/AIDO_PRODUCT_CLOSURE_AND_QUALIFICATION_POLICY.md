@@ -458,3 +458,51 @@ authorized destination from the environment value being checked (including
 writing the pin from `task-doctor` or at run time); a fallback to another
 destination or to weaker checks; any live request or real source transmission
 as part of this amendment.
+
+## 15. P0-STABILIZATION-FINAL amendment (2026-11-24) — verification evidence and correction paths
+
+> **Appended, prospective amendment. §1–§14 above are unchanged and still in
+> force.** It records the Product Owner's P0-STABILIZATION-FINAL assignment at
+> baseline `76f6ccb54df27257caa8240dbc74ac0ba84b7bc3`, which authorizes the
+> implementation and offline testing of FU-A and FU-B observed in
+> P0-M3-LIVE-1 round 2.
+>
+> Implementation: `docs/ALPHA_2A_TASK_COORDINATOR.md` §12. It is implemented
+> and tested offline only.
+>
+> It rewrites no historical result. P0-M3-LIVE-1 stays `round2_review_failed`,
+> its empty exit-4 record stays what it is, and no earlier correction request,
+> authorization or packet is reinterpreted.
+
+| # | Decision | What it narrows |
+|---|---|---|
+| STB-1 | **Verification evidence is independent of the reviewer's outcome.** Once the verifier returns `verified`, `l2-review-approved-file-edit` keeps the verifier's own report object and, if the reviewer stage then fails (exit 4), prints that report on stdout with the serializer exit 2 and 3 use. stdout is a review packet on exit 0 only, and the verification-result report on exit 2, 3 and 4. A stderr line states that the report is not a review packet. The report is never rebuilt from an exception message or a later run. | The 5F2E/RS1 statement that exit 4 emits nothing on stdout. It still emits **no packet** |
+| STB-2 | **Ordering and exit semantics are unchanged.** The report is handed over before the reviewer environment is read, so no credential exists at that point. Exit codes, the terminal stall, the RS1 attempt bounds, strict parsing, correction eligibility (exit 0 `changes_requested` or exit 2 only) and every coordinator stage and action are unchanged. A passed verification is never presented as a passed review. | — |
+| STB-3 | **The coordinator says whether an exit-4 record is attributable**, from recorded files only: it follows the round's successful write (round 2: and its integrity record matches), parses, says `verified`, names the round's frozen diff approval and target, matches the written post-image size and re-established the workspace state. This is display only and grants nothing. | — |
+| STB-4 | **The correction copy also removes configured local paths.** Besides the workspace path, the round-2 transmission copy replaces the directories of the configured verification executable and of drive-absolute verification arguments (outside the workspace) and the `X:\Users\<account>` root of those paths. All of these come from trusted project config only. They are replaced in backslash, forward-slash and doubled-backslash spellings, case-insensitively, and only directories are replaced. P1B refuses a copy that still names one (`correction_contains_local_path`). The copy's schema is `supervised-implementer-correction.v2`. | ALPHA-2B-T1's "workspace-path spellings replaced" rule, widened |
+| STB-5 | **No silent reuse.** The prepare and the run boundary derive the copy from the same pinned config. A round-2 authorization prepared under the earlier derivation binds a different `request_sha256`; P1B refuses it as `authorization_mismatch` before consumption, nothing is sent, and fresh preparation and consent are required. `40-correction.json` pins the raw evidence and stays valid. | — |
+
+**Recommended pilot configuration (not a default).** For the next supervised
+Personal Alpha pilot in a newly authorized disposable project:
+
+- implementer `SUP-M3` / `minimax-m3` over `litellm`, with
+  `output_envelope: delimited_file`;
+- reviewer `gpt-oss-20b` over `litellm`;
+- `supervised_implementer.endpoint` pinned, which gives one-confirmation H2
+  (§14).
+
+Nothing changes a default. `SUP-D` / `qwen3.8-27b` and every model-selection
+rule stay as they are, and there is no fallback model. The Qwen 3.8
+non-streaming ~300 s cutoff remains a separate operational backlog item.
+
+**Not claimed:**
+- that the transmitted correction is secret-free or free of every local path.
+  Paths the config does not name and that sit outside a named profile root
+  pass through: other drives, 8.3 short names, UNC paths, bare account names;
+- that the reviewer request is path-scrubbed beyond its accepted 5F2E rules;
+- that the verification report carries digests. It states that identities
+  matched (5F2D).
+
+**Still not authorized:** reconstructing a lost historical report; re-running
+or re-reviewing P0-M3-LIVE-1; a general data-loss-prevention framework;
+environment-derived redaction; any live request as part of this amendment.

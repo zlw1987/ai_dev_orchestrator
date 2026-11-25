@@ -86,7 +86,7 @@ from ai_dev_orchestrator.review import (
 from ai_dev_orchestrator.review import request as review_request_module
 from ai_dev_orchestrator.review import models as review_models_module
 
-from review_fixtures import approved_diff_artifact, verification_report
+from review_fixtures import assert_preserved_verification_only, approved_diff_artifact, verification_report
 from test_cli_l2_review_approved_file_edit import (
     FAKE_API_KEY,
     FAKE_BASE_URL,
@@ -863,7 +863,7 @@ def test_a_structured_run_still_rejects_an_aido_invalid_reply(tmp_path, capsys):
     # One request: the compact retry was not enabled, and nothing was repaired.
     assert len(seen) == 1
     assert "response_format" in seen[0]
-    assert capsys.readouterr().out == ""
+    assert_preserved_verification_only(capsys.readouterr().out)
 
 
 # =============================================================================
@@ -905,7 +905,7 @@ def test_a_structured_output_4xx_is_terminal_with_no_unstructured_retry(
     # The one request carried the schema, and NOTHING re-issued it without one.
     assert "response_format" in seen[0]
     assert all("response_format" in body for body in seen)
-    assert capsys.readouterr().out == ""
+    assert_preserved_verification_only(capsys.readouterr().out)
 
 
 @windows_only
@@ -935,7 +935,7 @@ def test_a_structured_decoding_5xx_is_terminal_with_no_unstructured_retry(
     # on the wire is the end-to-end proof of the forced zero (ALPHA-1A-FU1:
     # there is no client configuration to inspect any more).
     assert REVIEWER_TRANSPORT_MAX_RETRIES == 0
-    assert capsys.readouterr().out == ""
+    assert_preserved_verification_only(capsys.readouterr().out)
 
 
 @windows_only
@@ -960,7 +960,7 @@ def test_an_unusable_structured_reply_gets_no_retry_unless_the_project_enabled_i
 
     assert code == 4
     assert len(seen) == 1
-    assert capsys.readouterr().out == ""
+    assert_preserved_verification_only(capsys.readouterr().out)
 
 
 @windows_only
@@ -1038,7 +1038,7 @@ def test_a_structured_timeout_remains_terminal_at_one_request(tmp_path, capsys):
     assert code == 4
     assert len(seen) == 1
     captured = capsys.readouterr()
-    assert captured.out == ""
+    assert_preserved_verification_only(captured.out)
     assert "REVIEW STALLED" in captured.err
     # A stall never says a compact retry was authorized.
     assert "compact retry authorized" not in captured.err
